@@ -42,7 +42,7 @@ fn main() {
     if let Some(filename) = args.get(1) {
         process_file(filename);
     } else {
-        eprintln!("Usage: rust-simfile-hash <simfile.sm>");
+        eprintln!("Usage: rssp <simfile.sm>");
     }
 }
 
