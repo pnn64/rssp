@@ -1,11 +1,22 @@
 use std::collections::HashMap;
-use std::env;
 use std::fs;
 use std::path::Path;
 use sha1::{Digest, Sha1};
 use regex::Regex;
 use serde_json::json;
 use lazy_static::lazy_static;
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Path to the simfile (.sm)
+    simfile: String,
+
+    /// Strip ECS/SRPG tags from the title
+    #[arg(short, long)]
+    strip_tags: bool,
+}
 
 lazy_static! {
     static ref BPM_PATTERN: Regex = Regex::new(r"(?i)(?s)#BPMS\s*:\s*(.*?);").unwrap();
@@ -22,6 +33,7 @@ lazy_static! {
         m.insert("artisttranslit", Regex::new(r"(?i)#ARTISTTRANSLIT\s*:\s*(.*?);").unwrap());
         m
     };
+    static ref TITLE_TAGS_RE: Regex = Regex::new(r"^(?:\[\d+(?:\.\d+)?\]\s*|\d+-\s*)+").unwrap();
 }
 
 struct Simfile {
@@ -38,17 +50,13 @@ struct Chart {
 }
 
 fn main() {
-    let args = env::args().collect::<Vec<_>>();
-    if let Some(filename) = args.get(1) {
-        process_file(filename);
-    } else {
-        eprintln!("Usage: rssp <simfile.sm>");
-    }
+    let args = Args::parse();
+    process_file(&args.simfile, args.strip_tags);
 }
 
-fn process_file(filename: &str) {
+fn process_file(filename: &str, strip_tags: bool) {
     if let Some(content) = get_simfile_content(filename) {
-        match parse_simfile(&content) {
+        match parse_simfile(&content, strip_tags) {
             Ok(simfile) => {
                 for chart in simfile.charts {
                     let notes = clean_note_data(&chart.note_data);
@@ -96,13 +104,20 @@ fn get_simfile_content(filename: &str) -> Option<String> {
         .ok()
 }
 
-fn parse_simfile(content: &str) -> Result<Simfile, Box<dyn std::error::Error>> {
-    let metadata = METADATA_RE
+fn parse_simfile(content: &str, strip_tags: bool) -> Result<Simfile, Box<dyn std::error::Error>> {
+    let mut metadata = METADATA_RE
         .iter()
         .filter_map(|(key, pattern)| {
             get_first_match(content, pattern).map(|value| (key.to_string(), value))
         })
-        .collect();
+        .collect::<HashMap<String, String>>();
+
+    if strip_tags {
+        if let Some(title) = metadata.get("title") {
+            let cleaned_title = strip_title_tags(title);
+            metadata.insert("title".to_string(), cleaned_title);
+        }
+    }
 
     let bpms = if let Some(caps) = BPM_PATTERN.captures(content) {
         let bpm_data = caps.get(1).unwrap().as_str().replace("\n", "").replace("\r", "");
@@ -139,6 +154,10 @@ fn parse_simfile(content: &str) -> Result<Simfile, Box<dyn std::error::Error>> {
         charts,
         bpms,
     })
+}
+
+fn strip_title_tags(title: &str) -> String {
+    TITLE_TAGS_RE.replace(title, "").to_string()
 }
 
 fn clean_note_data(note_data: &str) -> String {
