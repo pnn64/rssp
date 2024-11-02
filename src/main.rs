@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use sha1::{Digest, Sha1};
-use regex::Regex;
 use serde_json::json;
-use lazy_static::lazy_static;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
@@ -18,23 +16,14 @@ struct Args {
     strip_tags: bool,
 }
 
-lazy_static! {
-    static ref BPM_PATTERN: Regex = Regex::new(r"(?i)(?s)#BPMS\s*:\s*(.*?);").unwrap();
-    static ref NOTES_PATTERN: Regex = Regex::new(r"(?i)(?s)#NOTES\s*:(.*?);").unwrap();
-    static ref COMMENT_PATTERN: Regex = Regex::new(r"//[^\n]*").unwrap();
-    static ref WHITESPACE_RE: Regex = Regex::new(r"[\r\t\f\v ]+").unwrap();
-    static ref METADATA_RE: HashMap<&'static str, Regex> = {
-        let mut m = HashMap::new();
-        m.insert("title", Regex::new(r"(?i)#TITLE\s*:\s*(.*?);").unwrap());
-        m.insert("titletranslit", Regex::new(r"(?i)#TITLETRANSLIT\s*:\s*(.*?);").unwrap());
-        m.insert("subtitle", Regex::new(r"(?i)#SUBTITLE\s*:\s*(.*?);").unwrap());
-        m.insert("subtitletranslit", Regex::new(r"(?i)#SUBTITLETRANSLIT\s*:\s*(.*?);").unwrap());
-        m.insert("artist", Regex::new(r"(?i)#ARTIST\s*:\s*(.*?);").unwrap());
-        m.insert("artisttranslit", Regex::new(r"(?i)#ARTISTTRANSLIT\s*:\s*(.*?);").unwrap());
-        m
-    };
-    static ref TITLE_TAGS_RE: Regex = Regex::new(r"^(?:\[\d+(?:\.\d+)?\]\s*|\d+-\s*)+").unwrap();
-}
+const METADATA_KEYS: &[&str] = &[
+    "#TITLE",
+    "#TITLETRANSLIT",
+    "#SUBTITLE",
+    "#SUBTITLETRANSLIT",
+    "#ARTIST",
+    "#ARTISTTRANSLIT",
+];
 
 struct Simfile {
     metadata: HashMap<String, String>,
@@ -105,12 +94,10 @@ fn get_simfile_content(filename: &str) -> Option<String> {
 }
 
 fn parse_simfile(content: &str, strip_tags: bool) -> Result<Simfile, Box<dyn std::error::Error>> {
-    let mut metadata = METADATA_RE
-        .iter()
-        .filter_map(|(key, pattern)| {
-            get_first_match(content, pattern).map(|value| (key.to_string(), value))
-        })
-        .collect::<HashMap<String, String>>();
+    let content = remove_comments(content);
+    let directives = parse_directives(&content);
+
+    let mut metadata = parse_metadata(&directives);
 
     if strip_tags {
         if let Some(title) = metadata.get("title") {
@@ -119,35 +106,9 @@ fn parse_simfile(content: &str, strip_tags: bool) -> Result<Simfile, Box<dyn std
         }
     }
 
-    let bpms = if let Some(caps) = BPM_PATTERN.captures(content) {
-        let bpm_data = caps.get(1).unwrap().as_str().replace("\n", "").replace("\r", "");
-        normalize_float_digits(&bpm_data)
-    } else {
-        "0.000=0.000".to_string()
-    };
+    let bpms = parse_bpms(&content);
 
-    let charts = NOTES_PATTERN
-        .captures_iter(content)
-        .filter_map(|caps| {
-            let note_data = caps.get(1)?.as_str();
-            let normalized = normalize_line_endings(note_data);
-            let parts: Vec<String> = normalized.splitn(7, ':')
-                .map(|s| s.trim().to_string())
-                .collect();
-
-            if parts.len() >= 6 {
-                let diff_number = parts[3].parse::<i32>().unwrap_or(0);
-                Some(Chart {
-                    steps_type: parts[0].clone(),
-                    difficulty: parts[2].clone(),
-                    difficulty_num: diff_number,
-                    note_data: parts[5].clone(),
-                })
-            } else {
-                None
-            }
-        })
-        .collect();
+    let charts = parse_charts(&content);
 
     Ok(Simfile {
         metadata,
@@ -156,14 +117,207 @@ fn parse_simfile(content: &str, strip_tags: bool) -> Result<Simfile, Box<dyn std
     })
 }
 
+fn remove_comments(s: &str) -> String {
+    s.lines()
+        .map(|line| {
+            if let Some(idx) = line.find("//") {
+                &line[..idx]
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn parse_directives(content: &str) -> Vec<String> {
+    content
+        .split(';')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("{};", s)) // Add back the ';' at the end
+        .collect()
+}
+
+fn parse_metadata(directives: &[String]) -> HashMap<String, String> {
+    let mut metadata = HashMap::new();
+    for directive in directives {
+        for &key in METADATA_KEYS {
+            if directive.to_uppercase().starts_with(key) {
+                if let Some(value) = parse_value(directive, key) {
+                    metadata.insert(key[1..].to_lowercase(), value);
+                }
+                break;
+            }
+        }
+    }
+    metadata
+}
+
+fn parse_value(directive: &str, key: &str) -> Option<String> {
+    let rest = &directive[key.len()..].trim_start();
+    if rest.starts_with(':') {
+        let rest = &rest[1..];
+        let value = rest.trim_end_matches(';').trim();
+        Some(value.to_string())
+    } else {
+        None
+    }
+}
+
+fn parse_bpms(content: &str) -> String {
+    if let Some(value) = extract_value(content, "#BPMS") {
+        let bpm_data = value.replace("\n", "").replace("\r", "");
+        normalize_float_digits(&bpm_data)
+    } else {
+        "0.000=0.000".to_string()
+    }
+}
+
+fn extract_value(content: &str, key: &str) -> Option<String> {
+    let upper_key = key.to_uppercase();
+    let mut idx = 0;
+    let content_upper = content.to_uppercase();
+
+    while let Some(pos) = content_upper[idx..].find(&upper_key) {
+        idx += pos;
+        let next_char_idx = idx + key.len();
+        if content_upper[next_char_idx..].trim_start().starts_with(':') {
+            let rest = &content[next_char_idx..];
+            let rest = rest.trim_start();
+            if rest.starts_with(':') {
+                let rest = &rest[1..];
+                if let Some(end_idx) = rest.find(';') {
+                    let value = &rest[..end_idx];
+                    return Some(value.trim().to_string());
+                }
+            }
+        }
+        idx += key.len();
+    }
+    None
+}
+
+fn parse_charts(content: &str) -> Vec<Chart> {
+    let mut charts = Vec::new();
+    let mut idx = 0;
+
+    let content_upper = content.to_uppercase();
+    while let Some(pos) = content_upper[idx..].find("#NOTES") {
+        idx += pos;
+        let rest = &content[idx + 6..]; // skip past "#NOTES"
+        let rest = rest.trim_start();
+        if rest.starts_with(':') {
+            let rest = &rest[1..];
+            // Now, we need to extract until the matching ';'
+            if let Some(end_idx) = rest.find(';') {
+                let notes_data = &rest[..end_idx];
+                let normalized = normalize_line_endings(notes_data);
+                let parts: Vec<String> = normalized
+                    .splitn(7, ':')
+                    .map(|s| s.trim().to_string())
+                    .collect();
+
+                if parts.len() >= 6 {
+                    let diff_number = parts[3].parse::<i32>().unwrap_or(0);
+                    charts.push(Chart {
+                        steps_type: parts[0].clone(),
+                        difficulty: parts[2].clone(),
+                        difficulty_num: diff_number,
+                        note_data: parts[5].clone(),
+                    });
+                }
+                idx += 6 + rest[..end_idx + 1].len();
+            } else {
+                break; // No matching ';'
+            }
+        } else {
+            idx += 6;
+        }
+    }
+    charts
+}
+
+fn normalize_line_endings(s: &str) -> String {
+    s.replace("\r\n", "\n").replace('\r', "\n")
+}
+
 fn strip_title_tags(title: &str) -> String {
-    TITLE_TAGS_RE.replace(title, "").to_string()
+    let mut chars = title.chars().peekable();
+    loop {
+        // Check for '['
+        if let Some(&c) = chars.peek() {
+            if c == '[' {
+                // Consume '['
+                chars.next();
+                // Read digits and possible '.'
+                while let Some(&c) = chars.peek() {
+                    if c.is_digit(10) || c == '.' {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                // Expect ']'
+                if chars.peek() == Some(&']') {
+                    chars.next();
+                    // Consume any whitespace
+                    while let Some(&c) = chars.peek() {
+                        if c.is_whitespace() {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    continue;
+                } else {
+                    // No matching ']', break
+                    break;
+                }
+            } else if c.is_digit(10) {
+                // Consume digits
+                while let Some(&c) = chars.peek() {
+                    if c.is_digit(10) {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                // Expect '-'
+                if chars.peek() == Some(&'-') {
+                    chars.next();
+                    // Consume any whitespace
+                    while let Some(&c) = chars.peek() {
+                        if c.is_whitespace() {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    continue;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    chars.collect()
 }
 
 fn clean_note_data(note_data: &str) -> String {
-    let note_data = COMMENT_PATTERN.replace_all(note_data, "");
-    let note_data = WHITESPACE_RE.replace_all(&note_data, "");
+    let note_data = remove_comments(note_data);
+    let note_data = remove_whitespace(&note_data);
     minimize_chart(&note_data)
+}
+
+fn remove_whitespace(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_whitespace() || *c == '\n') // Keep newlines
+        .collect()
 }
 
 fn minimize_chart(chart_string: &str) -> String {
@@ -194,7 +348,12 @@ fn minimize_measure(measure: &[String]) -> Vec<String> {
         if measure.len() % 2 != 0 {
             break;
         }
-        if measure.iter().skip(1).step_by(2).all(|line| line.chars().all(|c| c == '0')) {
+        if measure
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .all(|line| line.chars().all(|c| c == '0'))
+        {
             measure = measure.iter().step_by(2).cloned().collect();
         } else {
             break;
@@ -202,10 +361,6 @@ fn minimize_measure(measure: &[String]) -> Vec<String> {
     }
 
     measure
-}
-
-fn normalize_line_endings(s: &str) -> String {
-    s.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 fn normalize_float_digits(param: &str) -> String {
@@ -240,10 +395,4 @@ fn remove_control_characters(s: &str) -> String {
     s.chars()
         .filter(|&c| !c.is_control() || c == '\n')
         .collect()
-}
-
-fn get_first_match(s: &str, pattern: &Regex) -> Option<String> {
-    pattern
-        .captures(s)
-        .and_then(|caps| caps.get(1).map(|m| m.as_str().to_string()))
 }
