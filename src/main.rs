@@ -118,16 +118,29 @@ fn parse_simfile(content: &str, strip_tags: bool) -> Result<Simfile, Box<dyn std
 }
 
 fn remove_comments(s: &str) -> String {
-    s.lines()
-        .map(|line| {
-            if let Some(idx) = line.find("//") {
-                &line[..idx]
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '/' {
+            if let Some(&'/') = chars.peek() {
+                chars.next(); // consume second '/'
+                // Skip until newline or end of input
+                while let Some(c) = chars.next() {
+                    if c == '\n' {
+                        result.push(c);
+                        break;
+                    }
+                }
             } else {
-                line
+                result.push(c);
             }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
 }
 
 fn parse_directives(content: &str) -> Vec<String> {
@@ -135,15 +148,40 @@ fn parse_directives(content: &str) -> Vec<String> {
         .split(';')
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
-        .map(|s| format!("{};", s)) // Add back the ';' at the end
+        .map(|s| {
+            let mut directive = s.to_string();
+            if !directive.ends_with(';') {
+                directive.push(';');
+            }
+            directive
+        })
         .collect()
+}
+
+fn starts_with_case_insensitive(s: &str, prefix: &str) -> bool {
+    let mut s_chars = s.chars();
+    let mut prefix_chars = prefix.chars();
+
+    loop {
+        match prefix_chars.next() {
+            Some(pc) => match s_chars.next() {
+                Some(sc) => {
+                    if !sc.eq_ignore_ascii_case(&pc) {
+                        return false;
+                    }
+                }
+                None => return false,
+            },
+            None => return true,
+        }
+    }
 }
 
 fn parse_metadata(directives: &[String]) -> HashMap<String, String> {
     let mut metadata = HashMap::new();
     for directive in directives {
         for &key in METADATA_KEYS {
-            if directive.to_uppercase().starts_with(key) {
+            if starts_with_case_insensitive(directive, key) {
                 if let Some(value) = parse_value(directive, key) {
                     metadata.insert(key[1..].to_lowercase(), value);
                 }
@@ -165,24 +203,13 @@ fn parse_value(directive: &str, key: &str) -> Option<String> {
     }
 }
 
-fn parse_bpms(content: &str) -> String {
-    if let Some(value) = extract_value(content, "#BPMS") {
-        let bpm_data = value.replace("\n", "").replace("\r", "");
-        normalize_float_digits(&bpm_data)
-    } else {
-        "0.000=0.000".to_string()
-    }
-}
-
 fn extract_value(content: &str, key: &str) -> Option<String> {
-    let upper_key = key.to_uppercase();
     let mut idx = 0;
-    let content_upper = content.to_uppercase();
 
-    while let Some(pos) = content_upper[idx..].find(&upper_key) {
+    while let Some(pos) = find_case_insensitive(&content[idx..], key) {
         idx += pos;
         let next_char_idx = idx + key.len();
-        if content_upper[next_char_idx..].trim_start().starts_with(':') {
+        if content[next_char_idx..].trim_start().starts_with(':') {
             let rest = &content[next_char_idx..];
             let rest = rest.trim_start();
             if rest.starts_with(':') {
@@ -198,18 +225,55 @@ fn extract_value(content: &str, key: &str) -> Option<String> {
     None
 }
 
+fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    let haystack = haystack.as_bytes();
+    let needle = needle.as_bytes();
+    let needle_len = needle.len();
+    if needle_len == 0 {
+        return Some(0);
+    }
+    let first = needle[0].to_ascii_lowercase();
+    let mut i = 0;
+    while i <= haystack.len().saturating_sub(needle_len) {
+        let hc = haystack[i].to_ascii_lowercase();
+        if hc == first {
+            let mut matched = true;
+            for j in 1..needle_len {
+                let hc = haystack[i + j].to_ascii_lowercase();
+                let nc = needle[j].to_ascii_lowercase();
+                if hc != nc {
+                    matched = false;
+                    break;
+                }
+            }
+            if matched {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn parse_bpms(content: &str) -> String {
+    if let Some(value) = extract_value(content, "#BPMS") {
+        let bpm_data = value.replace('\n', "").replace('\r', "");
+        normalize_float_digits(&bpm_data)
+    } else {
+        "0.000=0.000".to_string()
+    }
+}
+
 fn parse_charts(content: &str) -> Vec<Chart> {
     let mut charts = Vec::new();
     let mut idx = 0;
 
-    let content_upper = content.to_uppercase();
-    while let Some(pos) = content_upper[idx..].find("#NOTES") {
+    while let Some(pos) = find_case_insensitive(&content[idx..], "#NOTES") {
         idx += pos;
         let rest = &content[idx + 6..]; // skip past "#NOTES"
         let rest = rest.trim_start();
         if rest.starts_with(':') {
             let rest = &rest[1..];
-            // Now, we need to extract until the matching ';'
             if let Some(end_idx) = rest.find(';') {
                 let notes_data = &rest[..end_idx];
                 let normalized = normalize_line_endings(notes_data);
@@ -243,81 +307,49 @@ fn normalize_line_endings(s: &str) -> String {
 }
 
 fn strip_title_tags(title: &str) -> String {
-    let mut chars = title.chars().peekable();
+    let mut result = title.trim_start();
+
     loop {
-        // Check for '['
-        if let Some(&c) = chars.peek() {
-            if c == '[' {
-                // Consume '['
-                chars.next();
-                // Read digits and possible '.'
-                while let Some(&c) = chars.peek() {
-                    if c.is_digit(10) || c == '.' {
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                // Expect ']'
-                if chars.peek() == Some(&']') {
-                    chars.next();
-                    // Consume any whitespace
-                    while let Some(&c) = chars.peek() {
-                        if c.is_whitespace() {
-                            chars.next();
-                        } else {
-                            break;
-                        }
-                    }
+        // Remove tags like [19], [19.3], etc.
+        if let Some(rest) = result.strip_prefix('[') {
+            if let Some(end_bracket) = rest.find(']') {
+                // Ensure everything inside is digits or '.'
+                let tag_content = &rest[..end_bracket];
+                if tag_content.chars().all(|c| c.is_digit(10) || c == '.') {
+                    result = rest[end_bracket + 1..].trim_start();
                     continue;
-                } else {
-                    // No matching ']', break
-                    break;
                 }
-            } else if c.is_digit(10) {
-                // Consume digits
-                while let Some(&c) = chars.peek() {
-                    if c.is_digit(10) {
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                // Expect '-'
-                if chars.peek() == Some(&'-') {
-                    chars.next();
-                    // Consume any whitespace
-                    while let Some(&c) = chars.peek() {
-                        if c.is_whitespace() {
-                            chars.next();
-                        } else {
-                            break;
-                        }
-                    }
-                    continue;
-                } else {
-                    break;
-                }
-            } else {
-                break;
             }
-        } else {
-            break;
         }
+
+        // Remove tags like '19- ', '19.3- '
+        if let Some(hyphen_pos) = result.find("- ") {
+            let tag_content = &result[..hyphen_pos];
+            if tag_content.chars().all(|c| c.is_digit(10) || c == '.') {
+                result = result[hyphen_pos + 2..].trim_start();
+                continue;
+            }
+        }
+
+        break;
     }
-    chars.collect()
+
+    result.to_string()
 }
 
 fn clean_note_data(note_data: &str) -> String {
-    let note_data = remove_comments(note_data);
-    let note_data = remove_whitespace(&note_data);
+    let note_data = remove_whitespace(note_data);
     minimize_chart(&note_data)
 }
 
 fn remove_whitespace(s: &str) -> String {
-    s.chars()
-        .filter(|c| !c.is_whitespace() || *c == '\n') // Keep newlines
-        .collect()
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        if !c.is_whitespace() || c == '\n' {
+            result.push(c);
+        }
+    }
+    result
 }
 
 fn minimize_chart(chart_string: &str) -> String {
