@@ -49,18 +49,18 @@ fn process_file(filename: &str, strip_tags: bool) {
             Ok(simfile) => {
                 for chart in simfile.charts {
                     let notes = clean_note_data(&chart.note_data);
-                    let data_to_hash = format!("{}{}", notes, simfile.bpms);
+                    let data_to_hash = [notes.as_str(), &simfile.bpms].concat();
 
                     let hash_result = Sha1::digest(data_to_hash.as_bytes());
                     let hash_hex = hex::encode(hash_result)[..16].to_string();
 
                     let chart_info = json!({
-                        "title": simfile.metadata.get("title").cloned().unwrap_or_default(),
-                        "titletranslit": simfile.metadata.get("titletranslit").cloned().unwrap_or_default(),
-                        "subtitle": simfile.metadata.get("subtitle").cloned().unwrap_or_default(),
-                        "subtitletranslit": simfile.metadata.get("subtitletranslit").cloned().unwrap_or_default(),
-                        "artist": simfile.metadata.get("artist").cloned().unwrap_or_default(),
-                        "artisttranslit": simfile.metadata.get("artisttranslit").cloned().unwrap_or_default(),
+                        "title": simfile.metadata.get("title").map(|s| s.as_str()).unwrap_or_default(),
+                        "titletranslit": simfile.metadata.get("titletranslit").map(|s| s.as_str()).unwrap_or_default(),
+                        "subtitle": simfile.metadata.get("subtitle").map(|s| s.as_str()).unwrap_or_default(),
+                        "subtitletranslit": simfile.metadata.get("subtitletranslit").map(|s| s.as_str()).unwrap_or_default(),
+                        "artist": simfile.metadata.get("artist").map(|s| s.as_str()).unwrap_or_default(),
+                        "artisttranslit": simfile.metadata.get("artisttranslit").map(|s| s.as_str()).unwrap_or_default(),
                         "bpms": simfile.bpms,
                         "steps_type": chart.steps_type,
                         "diff": chart.difficulty,
@@ -123,8 +123,8 @@ fn remove_comments(s: &str) -> String {
 
     while let Some(c) = chars.next() {
         if c == '/' {
-            if let Some(&'/') = chars.peek() {
-                chars.next(); // consume second '/'
+            if let Some('/') = chars.peek() {
+                chars.next(); // Consume second '/'
                 // Skip until newline or end of input
                 while let Some(c) = chars.next() {
                     if c == '\n' {
@@ -146,7 +146,7 @@ fn remove_comments(s: &str) -> String {
 fn parse_directives(content: &str) -> Vec<String> {
     content
         .split(';')
-        .map(|s| s.trim())
+        .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| {
             let mut directive = s.to_string();
@@ -159,22 +159,9 @@ fn parse_directives(content: &str) -> Vec<String> {
 }
 
 fn starts_with_case_insensitive(s: &str, prefix: &str) -> bool {
-    let mut s_chars = s.chars();
-    let mut prefix_chars = prefix.chars();
-
-    loop {
-        match prefix_chars.next() {
-            Some(pc) => match s_chars.next() {
-                Some(sc) => {
-                    if !sc.eq_ignore_ascii_case(&pc) {
-                        return false;
-                    }
-                }
-                None => return false,
-            },
-            None => return true,
-        }
-    }
+    s.chars()
+        .zip(prefix.chars())
+        .all(|(sc, pc)| sc.eq_ignore_ascii_case(&pc))
 }
 
 fn parse_metadata(directives: &[String]) -> HashMap<String, String> {
@@ -226,38 +213,14 @@ fn extract_value(content: &str, key: &str) -> Option<String> {
 }
 
 fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
-    let haystack = haystack.as_bytes();
-    let needle = needle.as_bytes();
-    let needle_len = needle.len();
-    if needle_len == 0 {
-        return Some(0);
-    }
-    let first = needle[0].to_ascii_lowercase();
-    let mut i = 0;
-    while i <= haystack.len().saturating_sub(needle_len) {
-        let hc = haystack[i].to_ascii_lowercase();
-        if hc == first {
-            let mut matched = true;
-            for j in 1..needle_len {
-                let hc = haystack[i + j].to_ascii_lowercase();
-                let nc = needle[j].to_ascii_lowercase();
-                if hc != nc {
-                    matched = false;
-                    break;
-                }
-            }
-            if matched {
-                return Some(i);
-            }
-        }
-        i += 1;
-    }
-    None
+    haystack
+        .to_lowercase()
+        .find(&needle.to_lowercase())
 }
 
 fn parse_bpms(content: &str) -> String {
     if let Some(value) = extract_value(content, "#BPMS") {
-        let bpm_data = value.replace('\n', "").replace('\r', "");
+        let bpm_data = value.replace(['\n', '\r'], "");
         normalize_float_digits(&bpm_data)
     } else {
         "0.000=0.000".to_string()
@@ -277,18 +240,18 @@ fn parse_charts(content: &str) -> Vec<Chart> {
             if let Some(end_idx) = rest.find(';') {
                 let notes_data = &rest[..end_idx];
                 let normalized = normalize_line_endings(notes_data);
-                let parts: Vec<String> = normalized
+                let parts: Vec<&str> = normalized
                     .splitn(7, ':')
-                    .map(|s| s.trim().to_string())
+                    .map(str::trim)
                     .collect();
 
                 if parts.len() >= 6 {
                     let diff_number = parts[3].parse::<i32>().unwrap_or(0);
                     charts.push(Chart {
-                        steps_type: parts[0].clone(),
-                        difficulty: parts[2].clone(),
+                        steps_type: parts[0].to_string(),
+                        difficulty: parts[2].to_string(),
                         difficulty_num: diff_number,
-                        note_data: parts[5].clone(),
+                        note_data: parts[5].to_string(),
                     });
                 }
                 idx += 6 + rest[..end_idx + 1].len();
@@ -315,7 +278,7 @@ fn strip_title_tags(title: &str) -> String {
             if let Some(end_bracket) = rest.find(']') {
                 // Ensure everything inside is digits or '.'
                 let tag_content = &rest[..end_bracket];
-                if tag_content.chars().all(|c| c.is_digit(10) || c == '.') {
+                if tag_content.chars().all(|c| c.is_ascii_digit() || c == '.') {
                     result = rest[end_bracket + 1..].trim_start();
                     continue;
                 }
@@ -325,7 +288,7 @@ fn strip_title_tags(title: &str) -> String {
         // Remove tags like '19- ', '19.3- '
         if let Some(hyphen_pos) = result.find("- ") {
             let tag_content = &result[..hyphen_pos];
-            if tag_content.chars().all(|c| c.is_digit(10) || c == '.') {
+            if tag_content.chars().all(|c| c.is_ascii_digit() || c == '.') {
                 result = result[hyphen_pos + 2..].trim_start();
                 continue;
             }
@@ -338,18 +301,11 @@ fn strip_title_tags(title: &str) -> String {
 }
 
 fn clean_note_data(note_data: &str) -> String {
-    let note_data = remove_whitespace(note_data);
+    let note_data: String = note_data
+        .chars()
+        .filter(|&c| !c.is_whitespace() || c == '\n')
+        .collect();
     minimize_chart(&note_data)
-}
-
-fn remove_whitespace(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    for c in s.chars() {
-        if !c.is_whitespace() || c == '\n' {
-            result.push(c);
-        }
-    }
-    result
 }
 
 fn minimize_chart(chart_string: &str) -> String {
