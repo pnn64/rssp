@@ -270,34 +270,36 @@ fn normalize_line_endings(s: &str) -> String {
 }
 
 fn strip_title_tags(title: &str) -> String {
-    let mut result = title.trim_start();
+    let mut s = title.trim_start();
 
     loop {
-        // Remove tags like [19], [19.3], etc.
-        if let Some(rest) = result.strip_prefix('[') {
-            if let Some(end_bracket) = rest.find(']') {
-                // Ensure everything inside is digits or '.'
-                let tag_content = &rest[..end_bracket];
+        if s.starts_with('[') {
+            if let Some(end_bracket) = s.find(']') {
+                let tag_content = &s[1..end_bracket];
                 if tag_content.chars().all(|c| c.is_ascii_digit() || c == '.') {
-                    result = rest[end_bracket + 1..].trim_start();
+                    s = s[end_bracket + 1..].trim_start();
                     continue;
                 }
             }
-        }
-
-        // Remove tags like '19- ', '19.3- '
-        if let Some(hyphen_pos) = result.find("- ") {
-            let tag_content = &result[..hyphen_pos];
-            if tag_content.chars().all(|c| c.is_ascii_digit() || c == '.') {
-                result = result[hyphen_pos + 2..].trim_start();
+        } else {
+            let mut chars = s.char_indices();
+            let mut pos = 0;
+            while let Some((i, c)) = chars.next() {
+                if c.is_ascii_digit() || c == '.' {
+                    pos = i + c.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            if pos > 0 && s[pos..].starts_with("- ") {
+                s = s[pos + 2..].trim_start();
                 continue;
             }
         }
-
         break;
     }
 
-    result.to_string()
+    s.to_string()
 }
 
 fn clean_note_data(note_data: &str) -> String {
