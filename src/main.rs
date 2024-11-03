@@ -1,9 +1,9 @@
+use clap::Parser;
+use serde_json::json;
+use sha1::{Digest, Sha1};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use sha1::{Digest, Sha1};
-use serde_json::json;
-use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -38,6 +38,33 @@ struct Chart {
     note_data: String,
 }
 
+struct NoteCounts {
+    notes: usize,
+    mines: usize,
+    holds: usize,
+    rolls: usize,
+    jumps: usize,
+    hands: usize,
+}
+
+#[derive(Debug, Clone)]
+struct BreakdownToken {
+    length: usize,
+    is_run: bool,
+    density: Option<RunDensity>,
+    original: String,
+    run_symbol: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum RunDensity {
+    Run32,
+    Run24,
+    Run20,
+    Run16,
+    Break,
+}
+
 fn main() {
     let args = Args::parse();
     process_file(&args.simfile, args.strip_tags);
@@ -54,6 +81,10 @@ fn process_file(filename: &str, strip_tags: bool) {
                     let hash_result = Sha1::digest(data_to_hash.as_bytes());
                     let hash_hex = hex::encode(hash_result)[..16].to_string();
 
+                    // Process the chart to get counts and breakdowns
+                    let (counts, detailed_breakdown, partially_simplified, simplified) =
+                        process_chart(&notes);
+
                     let chart_info = json!({
                         "title": simfile.metadata.get("title").map(|s| s.as_str()).unwrap_or_default(),
                         "titletranslit": simfile.metadata.get("titletranslit").map(|s| s.as_str()).unwrap_or_default(),
@@ -66,6 +97,15 @@ fn process_file(filename: &str, strip_tags: bool) {
                         "diff": chart.difficulty,
                         "diff_number": chart.difficulty_num.to_string(),
                         "hash": hash_hex,
+                        "notes": counts.notes,
+                        "mines": counts.mines,
+                        "holds": counts.holds,
+                        "rolls": counts.rolls,
+                        "jumps": counts.jumps,
+                        "hands": counts.hands,
+                        "detailed_breakdown": detailed_breakdown,
+                        "partially_simplified_breakdown": partially_simplified,
+                        "simplified_breakdown": simplified,
                     });
 
                     println!("\nChart Info:");
@@ -93,7 +133,10 @@ fn get_simfile_content(filename: &str) -> Option<String> {
         .ok()
 }
 
-fn parse_simfile(content: &str, strip_tags: bool) -> Result<Simfile, Box<dyn std::error::Error>> {
+fn parse_simfile(
+    content: &str,
+    strip_tags: bool,
+) -> Result<Simfile, Box<dyn std::error::Error>> {
     let content = remove_comments(content);
     let directives = parse_directives(&content);
 
@@ -108,7 +151,7 @@ fn parse_simfile(content: &str, strip_tags: bool) -> Result<Simfile, Box<dyn std
 
     let bpms = parse_bpms(&content);
 
-    let charts = parse_charts(&content);
+    let charts = parse_charts(&content)?;
 
     Ok(Simfile {
         metadata,
@@ -227,7 +270,7 @@ fn parse_bpms(content: &str) -> String {
     }
 }
 
-fn parse_charts(content: &str) -> Vec<Chart> {
+fn parse_charts(content: &str) -> Result<Vec<Chart>, Box<dyn std::error::Error>> {
     let mut charts = Vec::new();
     let mut idx = 0;
 
@@ -262,7 +305,7 @@ fn parse_charts(content: &str) -> Vec<Chart> {
             idx += 6;
         }
     }
-    charts
+    Ok(charts)
 }
 
 fn normalize_line_endings(s: &str) -> String {
@@ -385,4 +428,359 @@ fn remove_control_characters(s: &str) -> String {
     s.chars()
         .filter(|&c| !c.is_control() || c == '\n')
         .collect()
+}
+
+fn split_measures(note_data: &str) -> Vec<&str> {
+    note_data.split(',').collect()
+}
+
+fn process_line(line: &str, counts: &mut NoteCounts, holding: &mut usize) {
+    let mut note_count = 0;
+
+    for c in line.chars() {
+        match c {
+            '1' => {
+                counts.notes += 1;
+                note_count += 1;
+            }
+            '2' => {
+                counts.notes += 1;
+                counts.holds += 1;
+                *holding += 1;
+                note_count += 1;
+            }
+            '3' => {
+                // Hold end
+                if *holding > 0 {
+                    *holding -= 1;
+                }
+            }
+            '4' => {
+                counts.notes += 1;
+                counts.rolls += 1;
+                *holding += 1;
+                note_count += 1;
+            }
+            'M' => {
+                counts.mines += 1;
+            }
+            _ => {}
+        }
+    }
+
+    // Count jumps and hands
+    if note_count >= 2 {
+        counts.jumps += 1;
+    }
+    if note_count + *holding >= 3 {
+        counts.hands += 1;
+    }
+}
+
+fn process_measure(
+    measure: &str,
+    counts: &mut NoteCounts,
+    holding: &mut usize,
+    measure_densities: &mut Vec<usize>,
+) {
+    let mut measure_density = 0;
+    for line in measure.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut has_note = false;
+        for c in line.chars() {
+            if c == '1' || c == '2' || c == '4' {
+                has_note = true;
+                break;
+            }
+        }
+        if has_note {
+            measure_density += 1;
+        }
+        process_line(line, counts, holding);
+    }
+    measure_densities.push(measure_density);
+}
+
+fn categorize_measure_density(measure_density: usize) -> RunDensity {
+    if measure_density >= 32 {
+        RunDensity::Run32
+    } else if measure_density >= 24 {
+        RunDensity::Run24
+    } else if measure_density >= 20 {
+        RunDensity::Run20
+    } else if measure_density >= 16 {
+        RunDensity::Run16
+    } else {
+        RunDensity::Break
+    }
+}
+
+fn generate_breakdown(measure_densities: &[usize]) -> String {
+    let mut breakdown = String::new();
+
+    // Find the index of the first non-break measure
+    let first_non_break = measure_densities
+        .iter()
+        .position(|&density| categorize_measure_density(density) != RunDensity::Break);
+
+    // Find the index of the last non-break measure
+    let last_non_break = measure_densities
+        .iter()
+        .rposition(|&density| categorize_measure_density(density) != RunDensity::Break);
+
+    if let (Some(start_idx), Some(end_idx)) = (first_non_break, last_non_break) {
+        let mut previous_density = RunDensity::Break;
+        let mut run_length = 0;
+
+        for &density in &measure_densities[start_idx..=end_idx] {
+            let current_density = categorize_measure_density(density);
+            if current_density == previous_density {
+                run_length += 1;
+            } else {
+                if run_length > 0 {
+                    breakdown.push_str(&format_run(previous_density, run_length));
+                }
+                run_length = 1;
+                previous_density = current_density;
+            }
+        }
+
+        // Append the last run
+        if run_length > 0 {
+            breakdown.push_str(&format_run(previous_density, run_length));
+        }
+    }
+
+    breakdown.trim().to_string()
+}
+
+fn format_run(density: RunDensity, length: usize) -> String {
+    match density {
+        RunDensity::Run32 => format!("={}= ", length),
+        RunDensity::Run24 => format!("\\{}\\ ", length),
+        RunDensity::Run20 => format!("~{}~ ", length),
+        RunDensity::Run16 => format!("{} ", length),
+        RunDensity::Break => {
+            if length > 1 {
+                format!("({}) ", length)
+            } else {
+                String::new()
+            }
+        }
+    }
+}
+
+fn parse_token(token: &str) -> Option<BreakdownToken> {
+    if token.starts_with('(') && token.ends_with(')') {
+        // It's a break
+        token[1..token.len() - 1].parse::<usize>().ok().map(|length| BreakdownToken {
+            length,
+            is_run: false,
+            density: None,
+            original: token.to_string(),
+            run_symbol: String::new(),
+        })
+    } else {
+        // It's a run
+        let (density, length_str, run_symbol) = if let Some(number_str) = token.strip_prefix('=').and_then(|s| s.strip_suffix('=')) {
+            (RunDensity::Run32, number_str, "=".to_string())
+        } else if let Some(number_str) = token.strip_prefix('\\').and_then(|s| s.strip_suffix('\\')) {
+            (RunDensity::Run24, number_str, "\\".to_string())
+        } else if let Some(number_str) = token.strip_prefix('~').and_then(|s| s.strip_suffix('~')) {
+            (RunDensity::Run20, number_str, "~".to_string())
+        } else {
+            (RunDensity::Run16, token, "".to_string())
+        };
+
+        length_str.parse::<usize>().ok().map(|length| BreakdownToken {
+            length,
+            is_run: true,
+            density: Some(density),
+            original: token.to_string(),
+            run_symbol,
+        })
+    }
+}
+
+fn generate_simplified(detailed_breakdown: &str, partially: bool) -> String {
+    let tokens: Vec<&str> = detailed_breakdown.split_whitespace().collect();
+
+    // Parse tokens into BreakdownTokens
+    let parsed_tokens: Vec<BreakdownToken> = tokens.iter()
+        .filter_map(|&token| parse_token(token))
+        .collect();
+
+    let mut simplified_tokens = Vec::new();
+    let mut current_group_length = 0;
+    let mut current_group_runs = 0;
+    let mut current_group_includes_breaks = false;
+    let mut current_density = None;
+    let mut current_density_symbol = None::<String>;
+
+    let mut previous_token_was_run = false;
+    let mut i = 0;
+
+    while i < parsed_tokens.len() {
+        let token = &parsed_tokens[i];
+
+        if token.is_run {
+            if previous_token_was_run {
+                // Implied break of length 1 between consecutive runs
+                let implied_break_length = 1;
+                if (partially && implied_break_length <= 1) || (!partially && implied_break_length <= 4) {
+                    // Include implied break in current group
+                    current_group_length += implied_break_length;
+                    current_group_includes_breaks = true;
+                } else {
+                    // Break is too long; output current group
+                    if current_group_length > 0 {
+                        // Output the group
+                        let run_symbol = current_density_symbol.as_deref().unwrap_or("");
+                        let formatted_run = if current_group_runs > 1 || current_group_includes_breaks {
+                            format!("{}{}{}*", run_symbol, current_group_length, run_symbol)
+                        } else {
+                            format!("{}{}{}", run_symbol, current_group_length, run_symbol)
+                        };
+                        simplified_tokens.push(formatted_run);
+                    }
+                    // Append appropriate break symbol
+                    simplified_tokens.push("-".to_string());
+                    // Reset current group
+                    current_group_length = 0;
+                    current_group_runs = 0;
+                    current_group_includes_breaks = false;
+                    current_density = None;
+                    current_density_symbol = None;
+                }
+            }
+
+            // If the current group is empty, start a new group
+            if current_group_runs == 0 {
+                current_density = token.density.clone();
+                current_density_symbol = Some(token.run_symbol.clone());
+            }
+
+            // Check if the run density matches the current group
+            if token.density == current_density {
+                // Add to current group
+                current_group_length += token.length;
+                current_group_runs += 1;
+            } else {
+                // Different density, but we've already handled implied breaks, so start a new group
+                if current_group_length > 0 {
+                    // Output the group
+                    let run_symbol = current_density_symbol.as_deref().unwrap_or("");
+                    let formatted_run = if current_group_runs > 1 || current_group_includes_breaks {
+                        format!("{}{}{}*", run_symbol, current_group_length, run_symbol)
+                    } else {
+                        format!("{}{}{}", run_symbol, current_group_length, run_symbol)
+                    };
+                    simplified_tokens.push(formatted_run);
+                }
+                // Start a new group with this run
+                current_group_length = token.length;
+                current_group_runs = 1;
+                current_group_includes_breaks = false;
+                current_density = token.density.clone();
+                current_density_symbol = Some(token.run_symbol.clone());
+            }
+            previous_token_was_run = true;
+        } else {
+            // It's a break
+            let break_length = token.length;
+            let include_break_in_group = if partially {
+                break_length <= 1
+            } else {
+                break_length <= 4
+            };
+
+            if include_break_in_group {
+                // Include break in current group
+                current_group_length += break_length;
+                current_group_includes_breaks = true;
+            } else {
+                // Break is too long, output current group
+                if current_group_length > 0 {
+                    let run_symbol = current_density_symbol.as_deref().unwrap_or("");
+                    let formatted_run = if current_group_runs > 1 || current_group_includes_breaks {
+                        format!("{}{}{}*", run_symbol, current_group_length, run_symbol)
+                    } else {
+                        format!("{}{}{}", run_symbol, current_group_length, run_symbol)
+                    };
+                    simplified_tokens.push(formatted_run);
+                }
+                // Append appropriate break symbol
+                let break_symbol = if break_length > 32 {
+                    "|".to_string()
+                } else if break_length > 4 {
+                    "/".to_string()
+                } else {
+                    "-".to_string()
+                };
+                simplified_tokens.push(break_symbol);
+                // Reset current group
+                current_group_length = 0;
+                current_group_runs = 0;
+                current_group_includes_breaks = false;
+                current_density = None;
+                current_density_symbol = None;
+            }
+            previous_token_was_run = false;
+        }
+
+        i += 1;
+    }
+
+    // Output any remaining group
+    if current_group_length > 0 {
+        let run_symbol = current_density_symbol.as_deref().unwrap_or("");
+        let formatted_run = if current_group_runs > 1 || current_group_includes_breaks {
+            format!("{}{}{}*", run_symbol, current_group_length, run_symbol)
+        } else {
+            format!("{}{}{}", run_symbol, current_group_length, run_symbol)
+        };
+        simplified_tokens.push(formatted_run);
+    }
+
+    simplified_tokens.join(" ")
+}
+
+fn process_chart(
+    notes: &str,
+) -> (
+    NoteCounts,
+    String,
+    String,
+    String,
+) {
+    let measures = split_measures(notes);
+
+    let mut counts = NoteCounts {
+        notes: 0,
+        mines: 0,
+        holds: 0,
+        rolls: 0,
+        jumps: 0,
+        hands: 0,
+    };
+    let mut holding = 0;
+    let mut measure_densities = Vec::new();
+
+    for measure in &measures {
+        process_measure(measure, &mut counts, &mut holding, &mut measure_densities);
+    }
+
+    let detailed_breakdown = generate_breakdown(&measure_densities);
+    let partially_simplified = generate_simplified(&detailed_breakdown, true);
+    let simplified = generate_simplified(&detailed_breakdown, false);
+
+    (
+        counts,
+        detailed_breakdown,
+        partially_simplified,
+        simplified,
+    )
 }
