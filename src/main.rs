@@ -52,7 +52,6 @@ struct BreakdownToken {
     length: usize,
     is_run: bool,
     density: Option<RunDensity>,
-    original: String,
     run_symbol: String,
 }
 
@@ -580,7 +579,6 @@ fn parse_token(token: &str) -> Option<BreakdownToken> {
             length,
             is_run: false,
             density: None,
-            original: token.to_string(),
             run_symbol: String::new(),
         })
     } else {
@@ -599,153 +597,120 @@ fn parse_token(token: &str) -> Option<BreakdownToken> {
             length,
             is_run: true,
             density: Some(density),
-            original: token.to_string(),
             run_symbol,
         })
     }
 }
 
 fn generate_simplified(detailed_breakdown: &str, partially: bool) -> String {
+    let acceptable_break_length = if partially { 1 } else { 4 };
+
     let tokens: Vec<&str> = detailed_breakdown.split_whitespace().collect();
 
     // Parse tokens into BreakdownTokens
-    let parsed_tokens: Vec<BreakdownToken> = tokens.iter()
+    let parsed_tokens: Vec<BreakdownToken> = tokens
+        .iter()
         .filter_map(|&token| parse_token(token))
         .collect();
 
     let mut simplified_tokens = Vec::new();
-    let mut current_group_length = 0;
-    let mut current_group_runs = 0;
-    let mut current_group_includes_breaks = false;
-    let mut current_density = None;
-    let mut current_density_symbol = None::<String>;
 
-    let mut previous_token_was_run = false;
     let mut i = 0;
-
     while i < parsed_tokens.len() {
         let token = &parsed_tokens[i];
 
         if token.is_run {
-            if previous_token_was_run {
-                // Implied break of length 1 between consecutive runs
-                let implied_break_length = 1;
-                if (partially && implied_break_length <= 1) || (!partially && implied_break_length <= 4) {
-                    // Include implied break in current group
-                    current_group_length += implied_break_length;
-                    current_group_includes_breaks = true;
-                } else {
-                    // Break is too long; output current group
-                    if current_group_length > 0 {
-                        // Output the group
-                        let run_symbol = current_density_symbol.as_deref().unwrap_or("");
-                        let formatted_run = if current_group_runs > 1 || current_group_includes_breaks {
-                            format!("{}{}{}*", run_symbol, current_group_length, run_symbol)
-                        } else {
-                            format!("{}{}{}", run_symbol, current_group_length, run_symbol)
-                        };
-                        simplified_tokens.push(formatted_run);
-                    }
-                    // Append appropriate break symbol
-                    simplified_tokens.push("-".to_string());
-                    // Reset current group
-                    current_group_length = 0;
-                    current_group_runs = 0;
-                    current_group_includes_breaks = false;
-                    current_density = None;
-                    current_density_symbol = None;
-                }
-            }
+            let mut current_density = token.density.clone();
+            let mut current_density_symbol = token.run_symbol.clone();
+            let mut current_group_length = token.length;
+            let mut current_group_runs = 1;
+            let mut current_group_includes_breaks = false;
 
-            // If the current group is empty, start a new group
-            if current_group_runs == 0 {
-                current_density = token.density.clone();
-                current_density_symbol = Some(token.run_symbol.clone());
-            }
+            let mut j = i + 1;
 
-            // Check if the run density matches the current group
-            if token.density == current_density {
-                // Add to current group
-                current_group_length += token.length;
-                current_group_runs += 1;
-            } else {
-                // Different density, but we've already handled implied breaks, so start a new group
-                if current_group_length > 0 {
-                    // Output the group
-                    let run_symbol = current_density_symbol.as_deref().unwrap_or("");
-                    let formatted_run = if current_group_runs > 1 || current_group_includes_breaks {
-                        format!("{}{}{}*", run_symbol, current_group_length, run_symbol)
+            while j < parsed_tokens.len() {
+                let next_token = &parsed_tokens[j];
+
+                if !next_token.is_run {
+                    // Next token is an explicit break
+                    let break_length = next_token.length;
+                    if break_length <= acceptable_break_length {
+                        current_group_length += break_length;
+                        current_group_includes_breaks = true;
+                        j += 1;
                     } else {
-                        format!("{}{}{}", run_symbol, current_group_length, run_symbol)
-                    };
-                    simplified_tokens.push(formatted_run);
+                        break;
+                    }
+                } else if next_token.density == current_density {
+                    // Next token is a run of the same density
+
+                    // Check if there was an explicit break between runs
+                    if parsed_tokens[j - 1].is_run {
+                        // Previous token was a run, so implied break
+                        let implied_break_length = 1;
+                        if implied_break_length <= acceptable_break_length {
+                            current_group_length += implied_break_length;
+                            if implied_break_length > 0 {
+                                current_group_includes_breaks = true;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    // Add next run's length
+                    current_group_length += next_token.length;
+                    current_group_runs += 1;
+                    j += 1;
+                } else {
+                    // Different density, cannot combine
+                    break;
                 }
-                // Start a new group with this run
-                current_group_length = token.length;
-                current_group_runs = 1;
-                current_group_includes_breaks = false;
-                current_density = token.density.clone();
-                current_density_symbol = Some(token.run_symbol.clone());
             }
-            previous_token_was_run = true;
+
+            // Output the group
+            let run_symbol = current_density_symbol.as_str();
+            let formatted_run = if current_group_runs > 1 || current_group_includes_breaks {
+                format!("{}{}{}*", run_symbol, current_group_length, run_symbol)
+            } else {
+                format!("{}{}{}", run_symbol, current_group_length, run_symbol)
+            };
+            simplified_tokens.push(formatted_run);
+
+            i = j;
         } else {
             // It's a break
             let break_length = token.length;
-            let include_break_in_group = if partially {
-                break_length <= 1
+            let break_symbol = if break_length > 32 {
+                "|".to_string()
+            } else if break_length > 4 {
+                "/".to_string()
             } else {
-                break_length <= 4
+                "-".to_string()
             };
-
-            if include_break_in_group {
-                // Include break in current group
-                current_group_length += break_length;
-                current_group_includes_breaks = true;
-            } else {
-                // Break is too long, output current group
-                if current_group_length > 0 {
-                    let run_symbol = current_density_symbol.as_deref().unwrap_or("");
-                    let formatted_run = if current_group_runs > 1 || current_group_includes_breaks {
-                        format!("{}{}{}*", run_symbol, current_group_length, run_symbol)
-                    } else {
-                        format!("{}{}{}", run_symbol, current_group_length, run_symbol)
-                    };
-                    simplified_tokens.push(formatted_run);
-                }
-                // Append appropriate break symbol
-                let break_symbol = if break_length > 32 {
-                    "|".to_string()
-                } else if break_length > 4 {
-                    "/".to_string()
-                } else {
-                    "-".to_string()
-                };
-                simplified_tokens.push(break_symbol);
-                // Reset current group
-                current_group_length = 0;
-                current_group_runs = 0;
-                current_group_includes_breaks = false;
-                current_density = None;
-                current_density_symbol = None;
-            }
-            previous_token_was_run = false;
+            simplified_tokens.push(break_symbol);
+            i += 1;
         }
-
-        i += 1;
-    }
-
-    // Output any remaining group
-    if current_group_length > 0 {
-        let run_symbol = current_density_symbol.as_deref().unwrap_or("");
-        let formatted_run = if current_group_runs > 1 || current_group_includes_breaks {
-            format!("{}{}{}*", run_symbol, current_group_length, run_symbol)
-        } else {
-            format!("{}{}{}", run_symbol, current_group_length, run_symbol)
-        };
-        simplified_tokens.push(formatted_run);
     }
 
     simplified_tokens.join(" ")
+}
+
+fn calculate_implied_break_length(tokens: &[BreakdownToken], current_index: usize) -> usize {
+    // Calculate the implied break length between tokens[current_index - 1] and tokens[current_index]
+    let mut implied_break_length = 0;
+    for idx in (current_index - 1)..current_index {
+        if idx + 1 < tokens.len() {
+            let between_token = &tokens[idx + 1];
+            if !between_token.is_run {
+                // Explicit break already handled
+                break;
+            } else {
+                // Implied break of length 1
+                implied_break_length += 1;
+            }
+        }
+    }
+    implied_break_length
 }
 
 fn process_chart(
