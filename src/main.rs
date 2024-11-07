@@ -620,8 +620,8 @@ fn generate_simplified(detailed_breakdown: &str, partially: bool) -> String {
         let token = &parsed_tokens[i];
 
         if token.is_run {
-            let mut current_density = token.density.clone();
-            let mut current_density_symbol = token.run_symbol.clone();
+            let current_density = token.density.clone();
+            let current_density_symbol = token.run_symbol.clone();
             let mut current_group_length = token.length;
             let mut current_group_runs = 1;
             let mut current_group_includes_breaks = false;
@@ -693,24 +693,6 @@ fn generate_simplified(detailed_breakdown: &str, partially: bool) -> String {
     }
 
     simplified_tokens.join(" ")
-}
-
-fn calculate_implied_break_length(tokens: &[BreakdownToken], current_index: usize) -> usize {
-    // Calculate the implied break length between tokens[current_index - 1] and tokens[current_index]
-    let mut implied_break_length = 0;
-    for idx in (current_index - 1)..current_index {
-        if idx + 1 < tokens.len() {
-            let between_token = &tokens[idx + 1];
-            if !between_token.is_run {
-                // Explicit break already handled
-                break;
-            } else {
-                // Implied break of length 1
-                implied_break_length += 1;
-            }
-        }
-    }
-    implied_break_length
 }
 
 fn process_chart(
