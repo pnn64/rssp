@@ -38,6 +38,7 @@ struct Chart {
     note_data: String,
 }
 
+#[derive(Default)]
 struct NoteCounts {
     notes: usize,
     mines: usize,
@@ -75,10 +76,10 @@ fn process_file(filename: &str, strip_tags: bool) {
             Ok(simfile) => {
                 for chart in simfile.charts {
                     let notes = clean_note_data(&chart.note_data);
-                    let data_to_hash = [notes.as_str(), &simfile.bpms].concat();
+                    let data_to_hash = format!("{}{}", notes, simfile.bpms);
 
                     let hash_result = Sha1::digest(data_to_hash.as_bytes());
-                    let hash_hex = hex::encode(hash_result)[..16].to_string();
+                    let hash_hex = hex::encode(&hash_result)[..16].to_string();
 
                     // Process the chart to get counts and breakdowns
                     let (counts, detailed_breakdown, partially_simplified, simplified) =
@@ -160,57 +161,31 @@ fn parse_simfile(
 }
 
 fn remove_comments(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if c == '/' {
-            if let Some('/') = chars.peek() {
-                chars.next(); // Consume second '/'
-                // Skip until newline or end of input
-                while let Some(c) = chars.next() {
-                    if c == '\n' {
-                        result.push(c);
-                        break;
-                    }
-                }
+    s.lines()
+        .map(|line| {
+            if let Some(idx) = line.find("//") {
+                &line[..idx]
             } else {
-                result.push(c);
+                line
             }
-        } else {
-            result.push(c);
-        }
-    }
-
-    result
+        })
+        .collect::<Vec<&str>>()
+        .join("\n")
 }
 
-fn parse_directives(content: &str) -> Vec<String> {
+fn parse_directives(content: &str) -> Vec<&str> {
     content
         .split(';')
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| {
-            let mut directive = s.to_string();
-            if !directive.ends_with(';') {
-                directive.push(';');
-            }
-            directive
-        })
         .collect()
 }
 
-fn starts_with_case_insensitive(s: &str, prefix: &str) -> bool {
-    s.chars()
-        .zip(prefix.chars())
-        .all(|(sc, pc)| sc.eq_ignore_ascii_case(&pc))
-}
-
-fn parse_metadata(directives: &[String]) -> HashMap<String, String> {
+fn parse_metadata(directives: &[&str]) -> HashMap<String, String> {
     let mut metadata = HashMap::new();
-    for directive in directives {
+    for &directive in directives {
         for &key in METADATA_KEYS {
-            if starts_with_case_insensitive(directive, key) {
+            if directive.to_ascii_uppercase().starts_with(key) {
                 if let Some(value) = parse_value(directive, key) {
                     metadata.insert(key[1..].to_lowercase(), value);
                 }
@@ -232,34 +207,6 @@ fn parse_value(directive: &str, key: &str) -> Option<String> {
     }
 }
 
-fn extract_value(content: &str, key: &str) -> Option<String> {
-    let mut idx = 0;
-
-    while let Some(pos) = find_case_insensitive(&content[idx..], key) {
-        idx += pos;
-        let next_char_idx = idx + key.len();
-        if content[next_char_idx..].trim_start().starts_with(':') {
-            let rest = &content[next_char_idx..];
-            let rest = rest.trim_start();
-            if rest.starts_with(':') {
-                let rest = &rest[1..];
-                if let Some(end_idx) = rest.find(';') {
-                    let value = &rest[..end_idx];
-                    return Some(value.trim().to_string());
-                }
-            }
-        }
-        idx += key.len();
-    }
-    None
-}
-
-fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
-    haystack
-        .to_lowercase()
-        .find(&needle.to_lowercase())
-}
-
 fn parse_bpms(content: &str) -> String {
     if let Some(value) = extract_value(content, "#BPMS") {
         let bpm_data = value.replace(['\n', '\r'], "");
@@ -269,11 +216,26 @@ fn parse_bpms(content: &str) -> String {
     }
 }
 
+fn extract_value(content: &str, key: &str) -> Option<String> {
+    let key_upper = key.to_ascii_uppercase();
+    content
+        .split(';')
+        .find_map(|directive| {
+            let directive = directive.trim();
+            if directive.to_ascii_uppercase().starts_with(&key_upper) {
+                parse_value(directive, key)
+            } else {
+                None
+            }
+        })
+}
+
 fn parse_charts(content: &str) -> Result<Vec<Chart>, Box<dyn std::error::Error>> {
     let mut charts = Vec::new();
     let mut idx = 0;
+    let content_lower = content.to_ascii_lowercase();
 
-    while let Some(pos) = find_case_insensitive(&content[idx..], "#NOTES") {
+    while let Some(pos) = content_lower[idx..].find("#notes") {
         idx += pos;
         let rest = &content[idx + 6..]; // skip past "#NOTES"
         let rest = rest.trim_start();
@@ -376,20 +338,14 @@ fn minimize_chart(chart_string: &str) -> String {
 fn minimize_measure(measure: &[String]) -> Vec<String> {
     let mut measure = measure.to_vec();
 
-    loop {
-        if measure.len() % 2 != 0 {
-            break;
-        }
-        if measure
+    while measure.len() % 2 == 0
+        && measure
             .iter()
             .skip(1)
             .step_by(2)
             .all(|line| line.chars().all(|c| c == '0'))
-        {
-            measure = measure.iter().step_by(2).cloned().collect();
-        } else {
-            break;
-        }
+    {
+        measure = measure.iter().step_by(2).cloned().collect();
     }
 
     measure
@@ -403,14 +359,12 @@ fn normalize_float_digits(param: &str) -> String {
             if beat_bpm.is_empty() {
                 None
             } else {
-                let parts: Vec<&str> = beat_bpm.splitn(2, '=').collect();
-                if parts.len() == 2 {
-                    let beat = normalize_decimal(parts[0]);
-                    let bpm = normalize_decimal(parts[1]);
-                    Some(format!("{}={}", beat, bpm))
-                } else {
-                    None
-                }
+                let mut parts = beat_bpm.splitn(2, '=');
+                let beat = parts.next()?.trim();
+                let bpm = parts.next()?.trim();
+                let beat = normalize_decimal(beat);
+                let bpm = normalize_decimal(bpm);
+                Some(format!("{}={}", beat, bpm))
             }
         })
         .collect::<Vec<_>>()
@@ -418,19 +372,13 @@ fn normalize_float_digits(param: &str) -> String {
 }
 
 fn normalize_decimal(decimal: &str) -> String {
-    remove_control_characters(decimal)
+    decimal
         .parse::<f64>()
         .map_or_else(|_| "0.000".to_string(), |f| format!("{:.3}", f))
 }
 
-fn remove_control_characters(s: &str) -> String {
-    s.chars()
-        .filter(|&c| !c.is_control() || c == '\n')
-        .collect()
-}
-
-fn split_measures(note_data: &str) -> Vec<&str> {
-    note_data.split(',').collect()
+fn split_measures(note_data: &str) -> impl Iterator<Item = &str> {
+    note_data.split(',')
 }
 
 fn process_line(line: &str, counts: &mut NoteCounts, holding: &mut usize) {
@@ -449,7 +397,6 @@ fn process_line(line: &str, counts: &mut NoteCounts, holding: &mut usize) {
                 note_count += 1;
             }
             '3' => {
-                // Hold end
                 if *holding > 0 {
                     *holding -= 1;
                 }
@@ -467,7 +414,6 @@ fn process_line(line: &str, counts: &mut NoteCounts, holding: &mut usize) {
         }
     }
 
-    // Count jumps and hands
     if note_count >= 2 {
         counts.jumps += 1;
     }
@@ -476,56 +422,42 @@ fn process_line(line: &str, counts: &mut NoteCounts, holding: &mut usize) {
     }
 }
 
-fn process_measure(
-    measure: &str,
-    counts: &mut NoteCounts,
-    holding: &mut usize,
-    measure_densities: &mut Vec<usize>,
-) {
+fn process_measure(measure: &str, holding: &mut usize) -> (NoteCounts, usize) {
+    let mut counts = NoteCounts::default();
     let mut measure_density = 0;
+
     for line in measure.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let mut has_note = false;
-        for c in line.chars() {
-            if c == '1' || c == '2' || c == '4' {
-                has_note = true;
-                break;
-            }
-        }
+        let has_note = line.chars().any(|c| matches!(c, '1' | '2' | '4'));
         if has_note {
             measure_density += 1;
         }
-        process_line(line, counts, holding);
+        process_line(line, &mut counts, holding);
     }
-    measure_densities.push(measure_density);
+
+    (counts, measure_density)
 }
 
 fn categorize_measure_density(measure_density: usize) -> RunDensity {
-    if measure_density >= 32 {
-        RunDensity::Run32
-    } else if measure_density >= 24 {
-        RunDensity::Run24
-    } else if measure_density >= 20 {
-        RunDensity::Run20
-    } else if measure_density >= 16 {
-        RunDensity::Run16
-    } else {
-        RunDensity::Break
+    match measure_density {
+        d if d >= 32 => RunDensity::Run32,
+        d if d >= 24 => RunDensity::Run24,
+        d if d >= 20 => RunDensity::Run20,
+        d if d >= 16 => RunDensity::Run16,
+        _ => RunDensity::Break,
     }
 }
 
 fn generate_breakdown(measure_densities: &[usize]) -> String {
     let mut breakdown = String::new();
 
-    // Find the index of the first non-break measure
     let first_non_break = measure_densities
         .iter()
         .position(|&density| categorize_measure_density(density) != RunDensity::Break);
 
-    // Find the index of the last non-break measure
     let last_non_break = measure_densities
         .iter()
         .rposition(|&density| categorize_measure_density(density) != RunDensity::Break);
@@ -547,7 +479,6 @@ fn generate_breakdown(measure_densities: &[usize]) -> String {
             }
         }
 
-        // Append the last run
         if run_length > 0 {
             breakdown.push_str(&format_run(previous_density, run_length));
         }
@@ -574,18 +505,25 @@ fn format_run(density: RunDensity, length: usize) -> String {
 
 fn parse_token(token: &str) -> Option<BreakdownToken> {
     if token.starts_with('(') && token.ends_with(')') {
-        // It's a break
-        token[1..token.len() - 1].parse::<usize>().ok().map(|length| BreakdownToken {
-            length,
-            is_run: false,
-            density: None,
-            run_symbol: String::new(),
-        })
+        token[1..token.len() - 1]
+            .parse::<usize>()
+            .ok()
+            .map(|length| BreakdownToken {
+                length,
+                is_run: false,
+                density: None,
+                run_symbol: String::new(),
+            })
     } else {
-        // It's a run
-        let (density, length_str, run_symbol) = if let Some(number_str) = token.strip_prefix('=').and_then(|s| s.strip_suffix('=')) {
+        let (density, length_str, run_symbol) = if let Some(number_str) = token
+            .strip_prefix('=')
+            .and_then(|s| s.strip_suffix('='))
+        {
             (RunDensity::Run32, number_str, "=".to_string())
-        } else if let Some(number_str) = token.strip_prefix('\\').and_then(|s| s.strip_suffix('\\')) {
+        } else if let Some(number_str) = token
+            .strip_prefix('\\')
+            .and_then(|s| s.strip_suffix('\\'))
+        {
             (RunDensity::Run24, number_str, "\\".to_string())
         } else if let Some(number_str) = token.strip_prefix('~').and_then(|s| s.strip_suffix('~')) {
             (RunDensity::Run20, number_str, "~".to_string())
@@ -605,17 +543,13 @@ fn parse_token(token: &str) -> Option<BreakdownToken> {
 fn generate_simplified(detailed_breakdown: &str, partially: bool) -> String {
     let acceptable_break_length = if partially { 1 } else { 4 };
 
-    let tokens: Vec<&str> = detailed_breakdown.split_whitespace().collect();
-
-    // Parse tokens into BreakdownTokens
-    let parsed_tokens: Vec<BreakdownToken> = tokens
-        .iter()
-        .filter_map(|&token| parse_token(token))
-        .collect();
+    let tokens = detailed_breakdown.split_whitespace();
 
     let mut simplified_tokens = Vec::new();
 
     let mut i = 0;
+    let parsed_tokens: Vec<BreakdownToken> = tokens.filter_map(parse_token).collect();
+
     while i < parsed_tokens.len() {
         let token = &parsed_tokens[i];
 
@@ -632,7 +566,6 @@ fn generate_simplified(detailed_breakdown: &str, partially: bool) -> String {
                 let next_token = &parsed_tokens[j];
 
                 if !next_token.is_run {
-                    // Next token is an explicit break
                     let break_length = next_token.length;
                     if break_length <= acceptable_break_length {
                         current_group_length += break_length;
@@ -642,32 +575,23 @@ fn generate_simplified(detailed_breakdown: &str, partially: bool) -> String {
                         break;
                     }
                 } else if next_token.density == current_density {
-                    // Next token is a run of the same density
-
-                    // Check if there was an explicit break between runs
                     if parsed_tokens[j - 1].is_run {
-                        // Previous token was a run, so implied break
                         let implied_break_length = 1;
                         if implied_break_length <= acceptable_break_length {
                             current_group_length += implied_break_length;
-                            if implied_break_length > 0 {
-                                current_group_includes_breaks = true;
-                            }
+                            current_group_includes_breaks = true;
                         } else {
                             break;
                         }
                     }
-                    // Add next run's length
                     current_group_length += next_token.length;
                     current_group_runs += 1;
                     j += 1;
                 } else {
-                    // Different density, cannot combine
                     break;
                 }
             }
 
-            // Output the group
             let run_symbol = current_density_symbol.as_str();
             let formatted_run = if current_group_runs > 1 || current_group_includes_breaks {
                 format!("{}{}{}*", run_symbol, current_group_length, run_symbol)
@@ -678,7 +602,6 @@ fn generate_simplified(detailed_breakdown: &str, partially: bool) -> String {
 
             i = j;
         } else {
-            // It's a break
             let break_length = token.length;
             let break_symbol = if break_length > 32 {
                 "|".to_string()
@@ -697,27 +620,23 @@ fn generate_simplified(detailed_breakdown: &str, partially: bool) -> String {
 
 fn process_chart(
     notes: &str,
-) -> (
-    NoteCounts,
-    String,
-    String,
-    String,
-) {
+) -> (NoteCounts, String, String, String) {
     let measures = split_measures(notes);
 
-    let mut counts = NoteCounts {
-        notes: 0,
-        mines: 0,
-        holds: 0,
-        rolls: 0,
-        jumps: 0,
-        hands: 0,
-    };
-    let mut holding = 0;
+    let mut total_counts = NoteCounts::default();
     let mut measure_densities = Vec::new();
+    let mut holding = 0;
 
-    for measure in &measures {
-        process_measure(measure, &mut counts, &mut holding, &mut measure_densities);
+    for measure in measures {
+        let (counts, measure_density) = process_measure(measure, &mut holding);
+        total_counts.notes += counts.notes;
+        total_counts.mines += counts.mines;
+        total_counts.holds += counts.holds;
+        total_counts.rolls += counts.rolls;
+        total_counts.jumps += counts.jumps;
+        total_counts.hands += counts.hands;
+
+        measure_densities.push(measure_density);
     }
 
     let detailed_breakdown = generate_breakdown(&measure_densities);
@@ -725,7 +644,7 @@ fn process_chart(
     let simplified = generate_simplified(&detailed_breakdown, false);
 
     (
-        counts,
+        total_counts,
         detailed_breakdown,
         partially_simplified,
         simplified,
