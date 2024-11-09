@@ -317,7 +317,7 @@ fn clean_note_data(note_data: &str) -> String {
 }
 
 fn minimize_chart(chart_string: &str) -> String {
-    let mut final_chart_data = Vec::new();
+    let mut final_chart_data = Vec::with_capacity(chart_string.len());
     let mut cur_measure = Vec::new();
 
     for line in chart_string.lines().map(str::trim).filter(|line| !line.is_empty()) {
