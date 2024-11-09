@@ -48,6 +48,15 @@ struct NoteCounts {
     hands: usize,
 }
 
+#[derive(Default)]
+struct StreamCounts {
+    total_breaks: usize,
+    run16_streams: usize,
+    run20_streams: usize,
+    run24_streams: usize,
+    run32_streams: usize,
+}
+
 #[derive(Debug, Clone)]
 struct BreakdownToken {
     length: usize,
@@ -82,7 +91,7 @@ fn process_file(filename: &str, strip_tags: bool) {
                     let hash_hex = hex::encode(&hash_result)[..16].to_string();
 
                     // Process the chart to get counts and breakdowns
-                    let (counts, detailed_breakdown, partially_simplified, simplified) =
+                    let (counts, detailed_breakdown, partially_simplified, simplified, stream_counts) =
                         process_chart(&notes);
 
                     let chart_info = json!({
@@ -106,9 +115,14 @@ fn process_file(filename: &str, strip_tags: bool) {
                         "detailed_breakdown": detailed_breakdown,
                         "partially_simplified_breakdown": partially_simplified,
                         "simplified_breakdown": simplified,
+                        "total_breaks": stream_counts.total_breaks,
+                        "16th_streams": stream_counts.run16_streams,
+                        "20th_streams": stream_counts.run20_streams,
+                        "24th_streams": stream_counts.run24_streams,
+                        "32nd_streams": stream_counts.run32_streams,
                     });
 
-                    println!("\nChart Info:");
+                    println!("Chart Info:");
                     match serde_json::to_string_pretty(&chart_info) {
                         Ok(json_str) => println!("{}", json_str),
                         Err(e) => eprintln!("Error marshaling JSON: {}", e),
@@ -125,7 +139,7 @@ fn process_file(filename: &str, strip_tags: bool) {
 fn get_simfile_content(filename: &str) -> Option<String> {
     let path = Path::new(filename);
     let ext = path.extension()?.to_str()?.to_lowercase();
-    if ext != "sm" && ext != "ssc" {
+    if ext != "sm" {
         return None;
     }
     fs::read_to_string(filename)
@@ -620,9 +634,32 @@ fn generate_simplified(detailed_breakdown: &str, partially: bool) -> String {
     simplified_tokens.join(" ")
 }
 
+fn generate_breakdown_counts(measure_densities: &[usize], stream_counts: &mut StreamCounts) {
+    // Identify the range to consider (excluding initial and trailing breaks)
+    let first_non_break = measure_densities
+        .iter()
+        .position(|&density| categorize_measure_density(density) != RunDensity::Break);
+
+    let last_non_break = measure_densities
+        .iter()
+        .rposition(|&density| categorize_measure_density(density) != RunDensity::Break);
+
+    if let (Some(start_idx), Some(end_idx)) = (first_non_break, last_non_break) {
+        for &density in &measure_densities[start_idx..=end_idx] {
+            match categorize_measure_density(density) {
+                RunDensity::Run32 => stream_counts.run32_streams += 1,
+                RunDensity::Run24 => stream_counts.run24_streams += 1,
+                RunDensity::Run20 => stream_counts.run20_streams += 1,
+                RunDensity::Run16 => stream_counts.run16_streams += 1,
+                RunDensity::Break => stream_counts.total_breaks += 1,
+            }
+        }
+    }
+}
+
 fn process_chart(
     notes: &str,
-) -> (NoteCounts, String, String, String) {
+) -> (NoteCounts, String, String, String, StreamCounts) {
     let measures = split_measures(notes);
 
     let mut total_counts = NoteCounts::default();
@@ -641,6 +678,9 @@ fn process_chart(
         measure_densities.push(measure_density);
     }
 
+    let mut stream_counts = StreamCounts::default();
+    generate_breakdown_counts(&measure_densities, &mut stream_counts);
+
     let detailed_breakdown = generate_breakdown(&measure_densities);
     let partially_simplified = generate_simplified(&detailed_breakdown, true);
     let simplified = generate_simplified(&detailed_breakdown, false);
@@ -650,5 +690,6 @@ fn process_chart(
         detailed_breakdown,
         partially_simplified,
         simplified,
+        stream_counts,
     )
 }
