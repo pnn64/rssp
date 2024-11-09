@@ -161,16 +161,16 @@ fn parse_simfile(
 }
 
 fn remove_comments(s: &str) -> String {
-    s.lines()
-        .map(|line| {
-            if let Some(idx) = line.find("//") {
-                &line[..idx]
-            } else {
-                line
-            }
-        })
-        .collect::<Vec<&str>>()
-        .join("\n")
+    let mut result = String::with_capacity(s.len());
+    for line in s.lines() {
+        if let Some(idx) = line.find("//") {
+            result.push_str(&line[..idx]);
+        } else {
+            result.push_str(line);
+        }
+        result.push('\n');
+    }
+    result
 }
 
 fn parse_directives(content: &str) -> Vec<&str> {
@@ -185,7 +185,9 @@ fn parse_metadata(directives: &[&str]) -> HashMap<String, String> {
     let mut metadata = HashMap::new();
     for &directive in directives {
         for &key in METADATA_KEYS {
-            if directive.to_ascii_uppercase().starts_with(key) {
+            if directive.len() >= key.len()
+                && directive[..key.len()].eq_ignore_ascii_case(key)
+            {
                 if let Some(value) = parse_value(directive, key) {
                     metadata.insert(key[1..].to_lowercase(), value);
                 }
@@ -258,7 +260,7 @@ fn parse_charts(content: &str) -> Result<Vec<Chart>, Box<dyn std::error::Error>>
                         note_data: parts[5].to_string(),
                     });
                 }
-                idx += 6 + rest[..end_idx + 1].len();
+                idx += 6 + end_idx + 1;
             } else {
                 break; // No matching ';'
             }
