@@ -86,8 +86,6 @@ fn process_file(filename: &str, strip_tags: bool) {
                 for chart in simfile.charts {
                     let notes = clean_note_data(&chart.note_data);
                     let data_to_hash = format!("{}{}", notes.trim_end(), simfile.bpms);
-                    
-                    //println!("Data to hash:\n{}", data_to_hash);
 
                     let hash_result = Sha1::digest(data_to_hash.as_bytes());
                     let hash_hex = hex::encode(&hash_result)[..16].to_string();
@@ -153,7 +151,6 @@ fn parse_simfile(
     content: &str,
     strip_tags: bool,
 ) -> Result<Simfile, Box<dyn std::error::Error>> {
-    let content = remove_comments(content);
     let directives = parse_directives(&content);
 
     let mut metadata = parse_metadata(&directives);
@@ -174,19 +171,6 @@ fn parse_simfile(
         charts,
         bpms,
     })
-}
-
-fn remove_comments(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    for line in s.lines() {
-        if let Some(idx) = line.find("//") {
-            result.push_str(&line[..idx]);
-        } else {
-            result.push_str(line);
-        }
-        result.push('\n');
-    }
-    result
 }
 
 fn parse_directives(content: &str) -> Vec<&str> {
@@ -333,48 +317,50 @@ fn clean_note_data(note_data: &str) -> String {
 }
 
 fn minimize_chart(chart_string: &str) -> String {
-    let mut final_chart_data = String::with_capacity(chart_string.len());
-    let mut cur_measure_lines = Vec::new();
+    let mut final_chart_data = String::new();
+    let mut measures = chart_string.split(',').peekable();
 
-    for line in chart_string.lines().map(str::trim).filter(|line| !line.is_empty()) {
-        if line == "," {
-            minimize_and_append_measure(&mut final_chart_data, &cur_measure_lines);
-            final_chart_data.push_str(",\n");
-            cur_measure_lines.clear();
-        } else {
-            cur_measure_lines.push(line);
+    while let Some(measure) = measures.next() {
+        let mut lines = measure
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with("//"));
+
+        // Check if there are any lines to process
+        if lines.clone().next().is_some() {
+            minimize_and_append_measure_iter(&mut final_chart_data, &mut lines);
+            if measures.peek().is_some() {
+                final_chart_data.push_str(",\n");
+            }
         }
-    }
-
-    if !cur_measure_lines.is_empty() {
-        minimize_and_append_measure(&mut final_chart_data, &cur_measure_lines);
     }
 
     final_chart_data
 }
 
-fn minimize_and_append_measure(final_chart_data: &mut String, measure: &[&str]) {
-    let minimized_lines = {
-        let mut step = 1;
-        let mut len = measure.len();
+fn minimize_and_append_measure_iter<'a, I>(final_chart_data: &mut String, measure_lines: &mut I)
+where
+    I: Iterator<Item = &'a str> + Clone,
+{
+    let mut step = 1;
+    let mut len = measure_lines.clone().count();
 
-        while len % 2 == 0 && is_every_second_line_empty(measure, step) {
-            step *= 2;
-            len /= 2;
-        }
+    while len % 2 == 0 && is_every_nth_line_empty(measure_lines.clone(), step) {
+        step *= 2;
+        len /= 2;
+    }
 
-        measure.iter().step_by(step)
-    };
-
-    for &line in minimized_lines {
+    for line in measure_lines.clone().step_by(step) {
         final_chart_data.push_str(line);
         final_chart_data.push('\n');
     }
 }
 
-fn is_every_second_line_empty(measure: &[&str], step: usize) -> bool {
-    measure
-        .iter()
+fn is_every_nth_line_empty<'a, I>(lines: I, step: usize) -> bool
+where
+    I: Iterator<Item = &'a str>,
+{
+    lines
         .skip(step)
         .step_by(2 * step)
         .all(|line| line.chars().all(|c| c == '0'))
