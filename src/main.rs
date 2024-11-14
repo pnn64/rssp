@@ -198,10 +198,10 @@ fn parse_directives(content: &str) -> Vec<&str> {
 fn parse_metadata(directives: &[&str]) -> HashMap<String, String> {
     let mut metadata = HashMap::new();
     for &directive in directives {
+        let directive_upper = directive.to_ascii_uppercase();
         for &key in METADATA_KEYS {
-            if directive.len() >= key.len()
-                && directive[..key.len()].eq_ignore_ascii_case(key)
-            {
+            let key_upper = key.to_ascii_uppercase();
+            if directive_upper.starts_with(&key_upper) {
                 if let Some(value) = parse_value(directive, key) {
                     metadata.insert(key[1..].to_lowercase(), value);
                 }
