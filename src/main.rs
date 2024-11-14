@@ -85,7 +85,9 @@ fn process_file(filename: &str, strip_tags: bool) {
             Ok(simfile) => {
                 for chart in simfile.charts {
                     let notes = clean_note_data(&chart.note_data);
-                    let data_to_hash = format!("{}{}", notes, simfile.bpms);
+                    let data_to_hash = format!("{}{}", notes.trim_end(), simfile.bpms);
+                    
+                    //println!("Data to hash:\n{}", data_to_hash);
 
                     let hash_result = Sha1::digest(data_to_hash.as_bytes());
                     let hash_hex = hex::encode(&hash_result)[..16].to_string();
@@ -331,40 +333,51 @@ fn clean_note_data(note_data: &str) -> String {
 }
 
 fn minimize_chart(chart_string: &str) -> String {
-    let mut final_chart_data = Vec::with_capacity(chart_string.len());
-    let mut cur_measure = Vec::new();
+    let mut final_chart_data = String::with_capacity(chart_string.len());
+    let mut cur_measure_lines = Vec::new();
 
     for line in chart_string.lines().map(str::trim).filter(|line| !line.is_empty()) {
         if line == "," {
-            final_chart_data.extend(minimize_measure(&cur_measure));
-            final_chart_data.push(",".to_string());
-            cur_measure.clear();
+            minimize_and_append_measure(&mut final_chart_data, &cur_measure_lines);
+            final_chart_data.push_str(",\n");
+            cur_measure_lines.clear();
         } else {
-            cur_measure.push(line.to_string());
+            cur_measure_lines.push(line);
         }
     }
 
-    if !cur_measure.is_empty() {
-        final_chart_data.extend(minimize_measure(&cur_measure));
+    if !cur_measure_lines.is_empty() {
+        minimize_and_append_measure(&mut final_chart_data, &cur_measure_lines);
     }
 
-    final_chart_data.join("\n")
+    final_chart_data
 }
 
-fn minimize_measure(measure: &[String]) -> Vec<String> {
-    let mut measure = measure.to_vec();
+fn minimize_and_append_measure(final_chart_data: &mut String, measure: &[&str]) {
+    let minimized_lines = {
+        let mut step = 1;
+        let mut len = measure.len();
 
-    while measure.len() % 2 == 0
-        && measure
-            .iter()
-            .skip(1)
-            .step_by(2)
-            .all(|line| line.chars().all(|c| c == '0'))
-    {
-        measure = measure.iter().step_by(2).cloned().collect();
+        while len % 2 == 0 && is_every_second_line_empty(measure, step) {
+            step *= 2;
+            len /= 2;
+        }
+
+        measure.iter().step_by(step)
+    };
+
+    for &line in minimized_lines {
+        final_chart_data.push_str(line);
+        final_chart_data.push('\n');
     }
+}
 
+fn is_every_second_line_empty(measure: &[&str], step: usize) -> bool {
     measure
+        .iter()
+        .skip(step)
+        .step_by(2 * step)
+        .all(|line| line.chars().all(|c| c == '0'))
 }
 
 fn normalize_float_digits(param: &str) -> String {
