@@ -86,6 +86,8 @@ fn process_file(filename: &str, strip_tags: bool) {
                 for chart in simfile.charts {
                     let notes = clean_note_data(&chart.note_data);
                     let data_to_hash = format!("{}{}", notes.trim_end(), simfile.bpms);
+                    
+                    //println!("Data to hash:\n{}", data_to_hash);
 
                     let hash_result = Sha1::digest(data_to_hash.as_bytes());
                     let hash_hex = hex::encode(&hash_result)[..16].to_string();
@@ -138,12 +140,12 @@ fn process_file(filename: &str, strip_tags: bool) {
 
 fn get_simfile_content(filename: &str) -> Option<String> {
     let path = Path::new(filename);
-    let ext = path.extension()?.to_str()?.to_lowercase();
-    if ext != "sm" {
+    let ext = path.extension()?.to_str()?;
+    if !ext.eq_ignore_ascii_case("sm") {
         return None;
     }
     fs::read_to_string(filename)
-        .map(|content| content.trim_start_matches('\u{FEFF}').to_string())
+        .map(|content| content.trim_start_matches('\u{FEFF}').to_owned())
         .ok()
 }
 
@@ -151,7 +153,7 @@ fn parse_simfile(
     content: &str,
     strip_tags: bool,
 ) -> Result<Simfile, Box<dyn std::error::Error>> {
-    let directives = parse_directives(&content);
+    let directives = parse_directives(content);
 
     let mut metadata = parse_metadata(&directives);
 
@@ -162,9 +164,9 @@ fn parse_simfile(
         }
     }
 
-    let bpms = parse_bpms(&content);
+    let bpms = parse_bpms(content);
 
-    let charts = parse_charts(&content)?;
+    let charts = parse_charts(content)?;
 
     Ok(Simfile {
         metadata,
@@ -184,10 +186,10 @@ fn parse_directives(content: &str) -> Vec<&str> {
 fn parse_metadata(directives: &[&str]) -> HashMap<String, String> {
     let mut metadata = HashMap::new();
     for &directive in directives {
-        let directive_upper = directive.to_ascii_uppercase();
         for &key in METADATA_KEYS {
-            let key_upper = key.to_ascii_uppercase();
-            if directive_upper.starts_with(&key_upper) {
+            if directive.len() >= key.len()
+                && directive.as_bytes()[..key.len()].eq_ignore_ascii_case(key.as_bytes())
+            {
                 if let Some(value) = parse_value(directive, key) {
                     metadata.insert(key[1..].to_lowercase(), value);
                 }
@@ -199,7 +201,7 @@ fn parse_metadata(directives: &[&str]) -> HashMap<String, String> {
 }
 
 fn parse_value(directive: &str, key: &str) -> Option<String> {
-    let rest = &directive[key.len()..].trim_start();
+    let rest = directive[key.len()..].trim_start();
     if rest.starts_with(':') {
         let rest = &rest[1..];
         let value = rest.trim_end_matches(';').trim();
@@ -219,12 +221,13 @@ fn parse_bpms(content: &str) -> String {
 }
 
 fn extract_value(content: &str, key: &str) -> Option<String> {
-    let key_upper = key.to_ascii_uppercase();
     content
         .split(';')
         .find_map(|directive| {
             let directive = directive.trim();
-            if directive.to_ascii_uppercase().starts_with(&key_upper) {
+            if directive.len() >= key.len()
+                && directive.as_bytes()[..key.len()].eq_ignore_ascii_case(key.as_bytes())
+            {
                 parse_value(directive, key)
             } else {
                 None
@@ -235,9 +238,8 @@ fn extract_value(content: &str, key: &str) -> Option<String> {
 fn parse_charts(content: &str) -> Result<Vec<Chart>, Box<dyn std::error::Error>> {
     let mut charts = Vec::new();
     let mut idx = 0;
-    let content_lower = content.to_ascii_lowercase();
 
-    while let Some(pos) = content_lower[idx..].find("#notes") {
+    while let Some(pos) = find_case_insensitive(&content[idx..], "#NOTES") {
         idx += pos;
         let rest = &content[idx + 6..]; // skip past "#NOTES"
         let rest = rest.trim_start();
@@ -269,6 +271,18 @@ fn parse_charts(content: &str) -> Result<Vec<Chart>, Box<dyn std::error::Error>>
         }
     }
     Ok(charts)
+}
+
+fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    haystack
+        .char_indices()
+        .find(|&(i, _)| {
+            haystack[i..]
+                .chars()
+                .zip(needle.chars())
+                .all(|(h, n)| h.eq_ignore_ascii_case(&n))
+        })
+        .map(|(i, _)| i)
 }
 
 fn normalize_line_endings(s: &str) -> String {
@@ -338,6 +352,7 @@ fn minimize_chart(chart_string: &str) -> String {
     final_chart_data
 }
 
+#[inline(always)]
 fn minimize_and_append_measure_iter<'a, I>(final_chart_data: &mut String, measure_lines: &mut I)
 where
     I: Iterator<Item = &'a str> + Clone,
@@ -356,6 +371,7 @@ where
     }
 }
 
+#[inline(always)]
 fn is_every_nth_line_empty<'a, I>(lines: I, step: usize) -> bool
 where
     I: Iterator<Item = &'a str>,
@@ -634,7 +650,6 @@ fn generate_simplified(detailed_breakdown: &str, partially: bool) -> String {
 }
 
 fn generate_breakdown_counts(measure_densities: &[usize], stream_counts: &mut StreamCounts) {
-    // Identify the range to consider (excluding initial and trailing breaks)
     let first_non_break = measure_densities
         .iter()
         .position(|&density| categorize_measure_density(density) != RunDensity::Break);
