@@ -40,7 +40,8 @@ struct Chart {
 
 #[derive(Default)]
 struct NoteCounts {
-    notes: usize,
+    arrows: usize, // Total number of arrows (individual notes)
+    steps: usize,  // Total number of steps (counts jumps/hands as one step)
     mines: usize,
     holds: usize,
     rolls: usize,
@@ -86,15 +87,18 @@ fn process_file(filename: &str, strip_tags: bool) {
                 for chart in simfile.charts {
                     let notes = clean_note_data(&chart.note_data);
                     let data_to_hash = format!("{}{}", notes.trim_end(), simfile.bpms);
-                    
-                    //println!("Data to hash:\n{}", data_to_hash);
 
                     let hash_result = Sha1::digest(data_to_hash.as_bytes());
                     let hash_hex = hex::encode(&hash_result)[..16].to_string();
 
                     // Process the chart to get counts and breakdowns
-                    let (counts, detailed_breakdown, partially_simplified, simplified, stream_counts) =
-                        process_chart(&notes);
+                    let (
+                        counts,
+                        detailed_breakdown,
+                        partially_simplified,
+                        simplified,
+                        stream_counts,
+                    ) = process_chart(&notes);
 
                     let chart_info = json!({
                         "title": simfile.metadata.get("title").map(|s| s.as_str()).unwrap_or_default(),
@@ -108,7 +112,8 @@ fn process_file(filename: &str, strip_tags: bool) {
                         "diff": chart.difficulty,
                         "diff_number": chart.difficulty_num.to_string(),
                         "hash": hash_hex,
-                        "notes": counts.notes,
+                        "arrows": counts.arrows,
+                        "steps": counts.steps,
                         "mines": counts.mines,
                         "holds": counts.holds,
                         "rolls": counts.rolls,
@@ -412,30 +417,23 @@ fn split_measures(note_data: &str) -> impl Iterator<Item = &str> {
     note_data.split(',')
 }
 
-fn process_line(line: &str, counts: &mut NoteCounts, holding: &mut usize) {
+fn process_line(line: &str, counts: &mut NoteCounts) {
     let mut note_count = 0;
 
     for c in line.chars() {
         match c {
             '1' => {
-                counts.notes += 1;
+                counts.arrows += 1;
                 note_count += 1;
             }
             '2' => {
-                counts.notes += 1;
+                counts.arrows += 1;
                 counts.holds += 1;
-                *holding += 1;
                 note_count += 1;
             }
-            '3' => {
-                if *holding > 0 {
-                    *holding -= 1;
-                }
-            }
             '4' => {
-                counts.notes += 1;
+                counts.arrows += 1;
                 counts.rolls += 1;
-                *holding += 1;
                 note_count += 1;
             }
             'M' => {
@@ -445,15 +443,18 @@ fn process_line(line: &str, counts: &mut NoteCounts, holding: &mut usize) {
         }
     }
 
-    if note_count >= 2 {
-        counts.jumps += 1;
+    if note_count > 0 {
+        counts.steps += 1;
     }
-    if note_count + *holding >= 3 {
+
+    if note_count == 2 {
+        counts.jumps += 1;
+    } else if note_count >= 3 {
         counts.hands += 1;
     }
 }
 
-fn process_measure(measure: &str, holding: &mut usize) -> (NoteCounts, usize) {
+fn process_measure(measure: &str) -> (NoteCounts, usize) {
     let mut counts = NoteCounts::default();
     let mut measure_density = 0;
 
@@ -462,11 +463,18 @@ fn process_measure(measure: &str, holding: &mut usize) -> (NoteCounts, usize) {
         if line.is_empty() {
             continue;
         }
-        let has_note = line.chars().any(|c| matches!(c, '1' | '2' | '4'));
-        if has_note {
+        let mut line_counts = NoteCounts::default();
+        process_line(line, &mut line_counts);
+        if line_counts.arrows > 0 {
             measure_density += 1;
         }
-        process_line(line, &mut counts, holding);
+        counts.arrows += line_counts.arrows;
+        counts.steps += line_counts.steps;
+        counts.mines += line_counts.mines;
+        counts.holds += line_counts.holds;
+        counts.rolls += line_counts.rolls;
+        counts.jumps += line_counts.jumps;
+        counts.hands += line_counts.hands;
     }
 
     (counts, measure_density)
@@ -678,11 +686,11 @@ fn process_chart(
 
     let mut total_counts = NoteCounts::default();
     let mut measure_densities = Vec::new();
-    let mut holding = 0;
 
     for measure in measures {
-        let (counts, measure_density) = process_measure(measure, &mut holding);
-        total_counts.notes += counts.notes;
+        let (counts, measure_density) = process_measure(measure);
+        total_counts.arrows += counts.arrows;
+        total_counts.steps += counts.steps;
         total_counts.mines += counts.mines;
         total_counts.holds += counts.holds;
         total_counts.rolls += counts.rolls;
