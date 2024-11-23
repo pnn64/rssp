@@ -53,7 +53,7 @@ struct NoteCounts {
     down: usize,
     up: usize,
     right: usize,
-    total_measures: usize, // Added total_measures field here
+    total_measures: usize,
 }
 
 #[derive(Default)]
@@ -91,10 +91,8 @@ fn process_file(filename: &str, strip_tags: bool) {
     if let Some(content) = get_simfile_content(filename) {
         match parse_simfile(&content, strip_tags) {
             Ok(simfile) => {
-                // Extract BPM values
                 let bpm_values: Vec<f64> = simfile.bpms_map.iter().map(|&(_, bpm)| bpm).collect();
 
-                // Compute max and min BPM
                 let max_bpm = bpm_values
                     .iter()
                     .cloned()
@@ -113,7 +111,6 @@ fn process_file(filename: &str, strip_tags: bool) {
                     let hash_result = Sha1::digest(data_to_hash.as_bytes());
                     let hash_hex = hex::encode(&hash_result)[..16].to_string();
 
-                    // Process the chart to get counts and breakdowns
                     let (
                         counts,
                         detailed_breakdown,
@@ -127,13 +124,11 @@ fn process_file(filename: &str, strip_tags: bool) {
                         &simfile.bpms_map,
                     );
 
-                    // Compute the length
                     let total_measures = counts.total_measures;
                     let length_in_seconds =
                         compute_length(total_measures, &simfile.bpms_map, &simfile.stops_map);
                     let length_in_seconds_int = length_in_seconds.trunc() as usize;
 
-                    // Compute max and median NPS from measure_nps
                     let max_nps = measure_nps.iter().cloned().fold(f64::NAN, f64::max);
 
                     let mut sorted_nps = measure_nps.clone();
@@ -148,6 +143,11 @@ fn process_file(filename: &str, strip_tags: bool) {
                         } else {
                             0.0
                         };
+
+                    let total_streams = stream_counts.run16_streams
+                        + stream_counts.run20_streams
+                        + stream_counts.run24_streams
+                        + stream_counts.run32_streams;
 
                     let chart_info = json!({
                         "title": simfile.metadata.get("title").map(|s| s.as_str()).unwrap_or_default(),
@@ -182,11 +182,14 @@ fn process_file(filename: &str, strip_tags: bool) {
                         "detailed_breakdown": detailed_breakdown,
                         "partially_simplified_breakdown": partially_simplified,
                         "simplified_breakdown": simplified,
+                        "streams": {
+                            "total": total_streams,
+                            "16th": stream_counts.run16_streams,
+                            "20th": stream_counts.run20_streams,
+                            "24th": stream_counts.run24_streams,
+                            "32nd": stream_counts.run32_streams,
+                        },
                         "total_breaks": stream_counts.total_breaks,
-                        "16th_streams": stream_counts.run16_streams,
-                        "20th_streams": stream_counts.run20_streams,
-                        "24th_streams": stream_counts.run24_streams,
-                        "32nd_streams": stream_counts.run32_streams,
                     });
 
                     println!("Chart Info:");
@@ -891,7 +894,6 @@ fn process_chart(
 
         measure_densities.push(measure_density);
 
-        // Calculate NPS per measure
         let nps = (bpm / 4.0) * (measure_density as f64) / 60.0;
         measure_nps.push(nps);
 
