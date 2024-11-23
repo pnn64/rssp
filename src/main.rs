@@ -40,13 +40,17 @@ struct Chart {
 
 #[derive(Default)]
 struct NoteCounts {
-    arrows: usize, // Total number of arrows (individual notes)
-    steps: usize,  // Total number of steps (counts jumps/hands as one step)
+    arrows: usize,
+    steps: usize,
     mines: usize,
     holds: usize,
     rolls: usize,
     jumps: usize,
     hands: usize,
+    left: usize,
+    down: usize,
+    up: usize,
+    right: usize,
 }
 
 #[derive(Default)]
@@ -98,7 +102,7 @@ fn process_file(filename: &str, strip_tags: bool) {
                         partially_simplified,
                         simplified,
                         stream_counts,
-                    ) = process_chart(&notes);
+                    ) = process_chart(&notes, &chart.steps_type);
 
                     let chart_info = json!({
                         "title": simfile.metadata.get("title").map(|s| s.as_str()).unwrap_or_default(),
@@ -112,7 +116,13 @@ fn process_file(filename: &str, strip_tags: bool) {
                         "diff": chart.difficulty,
                         "diff_number": chart.difficulty_num.to_string(),
                         "hash": hash_hex,
-                        "arrows": counts.arrows,
+                        "arrows": {
+                            "total": counts.arrows,
+                            "left": counts.left,
+                            "down": counts.down,
+                            "up": counts.up,
+                            "right": counts.right,
+                        },
                         "steps": counts.steps,
                         "mines": counts.mines,
                         "holds": counts.holds,
@@ -417,24 +427,36 @@ fn split_measures(note_data: &str) -> impl Iterator<Item = &str> {
     note_data.split(',')
 }
 
-fn process_line(line: &str, counts: &mut NoteCounts) {
+fn process_line(line: &str, steps_type: &str, counts: &mut NoteCounts) {
     let mut note_count = 0;
 
-    for c in line.chars() {
+    // Get the arrow mapping based on steps_type and line length
+    let arrow_mapping = get_arrow_mapping(steps_type, line.len());
+
+    for (i, c) in line.chars().enumerate() {
         match c {
             '1' => {
                 counts.arrows += 1;
                 note_count += 1;
+                if let Some(direction) = arrow_mapping.get(i).and_then(|d| *d) {
+                    increment_direction_count(direction, counts);
+                }
             }
             '2' => {
                 counts.arrows += 1;
                 counts.holds += 1;
                 note_count += 1;
+                if let Some(direction) = arrow_mapping.get(i).and_then(|d| *d) {
+                    increment_direction_count(direction, counts);
+                }
             }
             '4' => {
                 counts.arrows += 1;
                 counts.rolls += 1;
                 note_count += 1;
+                if let Some(direction) = arrow_mapping.get(i).and_then(|d| *d) {
+                    increment_direction_count(direction, counts);
+                }
             }
             'M' => {
                 counts.mines += 1;
@@ -454,7 +476,32 @@ fn process_line(line: &str, counts: &mut NoteCounts) {
     }
 }
 
-fn process_measure(measure: &str) -> (NoteCounts, usize) {
+fn increment_direction_count(direction: &str, counts: &mut NoteCounts) {
+    match direction {
+        "left" => counts.left += 1,
+        "down" => counts.down += 1,
+        "up" => counts.up += 1,
+        "right" => counts.right += 1,
+        _ => {},
+    }
+}
+
+fn get_arrow_mapping(steps_type: &str, line_length: usize) -> Vec<Option<&'static str>> {
+    match steps_type {
+        "dance-single" => {
+            vec![
+                Some("left"),
+                Some("down"),
+                Some("up"),
+                Some("right"),
+            ]
+        }
+        // Add mappings for other steps_types if needed
+        _ => vec![None; line_length],
+    }
+}
+
+fn process_measure(measure: &str, steps_type: &str) -> (NoteCounts, usize) {
     let mut counts = NoteCounts::default();
     let mut measure_density = 0;
 
@@ -464,7 +511,7 @@ fn process_measure(measure: &str) -> (NoteCounts, usize) {
             continue;
         }
         let mut line_counts = NoteCounts::default();
-        process_line(line, &mut line_counts);
+        process_line(line, steps_type, &mut line_counts);
         if line_counts.arrows > 0 {
             measure_density += 1;
         }
@@ -475,6 +522,10 @@ fn process_measure(measure: &str) -> (NoteCounts, usize) {
         counts.rolls += line_counts.rolls;
         counts.jumps += line_counts.jumps;
         counts.hands += line_counts.hands;
+        counts.left += line_counts.left;
+        counts.down += line_counts.down;
+        counts.up += line_counts.up;
+        counts.right += line_counts.right;
     }
 
     (counts, measure_density)
@@ -681,6 +732,7 @@ fn generate_breakdown_counts(measure_densities: &[usize], stream_counts: &mut St
 
 fn process_chart(
     notes: &str,
+    steps_type: &str,
 ) -> (NoteCounts, String, String, String, StreamCounts) {
     let measures = split_measures(notes);
 
@@ -688,7 +740,7 @@ fn process_chart(
     let mut measure_densities = Vec::new();
 
     for measure in measures {
-        let (counts, measure_density) = process_measure(measure);
+        let (counts, measure_density) = process_measure(measure, steps_type);
         total_counts.arrows += counts.arrows;
         total_counts.steps += counts.steps;
         total_counts.mines += counts.mines;
@@ -696,6 +748,10 @@ fn process_chart(
         total_counts.rolls += counts.rolls;
         total_counts.jumps += counts.jumps;
         total_counts.hands += counts.hands;
+        total_counts.left += counts.left;
+        total_counts.down += counts.down;
+        total_counts.up += counts.up;
+        total_counts.right += counts.right;
 
         measure_densities.push(measure_density);
     }
