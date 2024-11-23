@@ -53,6 +53,7 @@ struct NoteCounts {
     down: usize,
     up: usize,
     right: usize,
+    total_measures: usize, // Added total_measures field here
 }
 
 #[derive(Default)]
@@ -90,6 +91,21 @@ fn process_file(filename: &str, strip_tags: bool) {
     if let Some(content) = get_simfile_content(filename) {
         match parse_simfile(&content, strip_tags) {
             Ok(simfile) => {
+                // Extract BPM values
+                let bpm_values: Vec<f64> = simfile.bpms_map.iter().map(|&(_, bpm)| bpm).collect();
+
+                // Compute max and min BPM
+                let max_bpm = bpm_values
+                    .iter()
+                    .cloned()
+                    .fold(f64::NAN, f64::max)
+                    .round() as i32;
+                let min_bpm = bpm_values
+                    .iter()
+                    .cloned()
+                    .fold(f64::NAN, f64::min)
+                    .round() as i32;
+
                 for chart in simfile.charts {
                     let notes = clean_note_data(&chart.note_data);
                     let data_to_hash = format!("{}{}", notes.trim_end(), simfile.bpms);
@@ -104,16 +120,34 @@ fn process_file(filename: &str, strip_tags: bool) {
                         partially_simplified,
                         simplified,
                         stream_counts,
-                    ) = process_chart(&notes, &chart.steps_type);
-
-                    // Split measures to get the total number of measures
-                    let measures: Vec<&str> = split_measures(&notes).collect();
-                    let total_measures = measures.len();
+                        measure_nps,
+                    ) = process_chart(
+                        &notes,
+                        &chart.steps_type,
+                        &simfile.bpms_map,
+                    );
 
                     // Compute the length
+                    let total_measures = counts.total_measures;
                     let length_in_seconds =
                         compute_length(total_measures, &simfile.bpms_map, &simfile.stops_map);
                     let length_in_seconds_int = length_in_seconds.trunc() as usize;
+
+                    // Compute max and median NPS from measure_nps
+                    let max_nps = measure_nps.iter().cloned().fold(f64::NAN, f64::max);
+
+                    let mut sorted_nps = measure_nps.clone();
+                    sorted_nps.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+                    let median_nps =
+                        if sorted_nps.len() % 2 == 0 && sorted_nps.len() > 0 {
+                            let mid = sorted_nps.len() / 2;
+                            (sorted_nps[mid - 1] + sorted_nps[mid]) / 2.0
+                        } else if sorted_nps.len() > 0 {
+                            sorted_nps[sorted_nps.len() / 2]
+                        } else {
+                            0.0
+                        };
 
                     let chart_info = json!({
                         "title": simfile.metadata.get("title").map(|s| s.as_str()).unwrap_or_default(),
@@ -128,6 +162,10 @@ fn process_file(filename: &str, strip_tags: bool) {
                         "diff_number": chart.difficulty_num.to_string(),
                         "hash": hash_hex,
                         "length": length_in_seconds_int,
+                        "max_bpm": max_bpm,
+                        "min_bpm": min_bpm,
+                        "max_nps": format!("{:.2}", max_nps),
+                        "median_nps": format!("{:.2}", median_nps),
                         "arrows": {
                             "total": counts.arrows,
                             "left": counts.left,
@@ -194,8 +232,7 @@ fn parse_simfile(
     let bpms = parse_bpms(content);
     let bpms_map = parse_bpms_map(&bpms);
 
-    let stops = parse_stops(content);
-    let stops_map = parse_stops_map(&stops);
+    let stops_map = parse_stops_map(&parse_stops(content));
 
     let charts = parse_charts(content)?;
 
@@ -277,7 +314,8 @@ fn parse_stops(content: &str) -> String {
 }
 
 fn parse_bpms_map(bpms: &str) -> Vec<(f64, f64)> {
-    bpms.split(',')
+    let mut bpm_entries: Vec<(f64, f64)> = bpms
+        .split(',')
         .filter_map(|entry| {
             let parts: Vec<&str> = entry.split('=').collect();
             if parts.len() == 2 {
@@ -288,11 +326,15 @@ fn parse_bpms_map(bpms: &str) -> Vec<(f64, f64)> {
                 None
             }
         })
-        .collect()
+        .collect();
+
+    bpm_entries.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    bpm_entries
 }
 
 fn parse_stops_map(stops: &str) -> Vec<(f64, f64)> {
-    stops.split(',')
+    let mut stop_entries: Vec<(f64, f64)> = stops
+        .split(',')
         .filter_map(|entry| {
             let parts: Vec<&str> = entry.split('=').collect();
             if parts.len() == 2 {
@@ -303,7 +345,10 @@ fn parse_stops_map(stops: &str) -> Vec<(f64, f64)> {
                 None
             }
         })
-        .collect()
+        .collect();
+
+    stop_entries.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    stop_entries
 }
 
 fn parse_charts(content: &str) -> Result<Vec<Chart>, Box<dyn std::error::Error>> {
@@ -536,7 +581,7 @@ fn increment_direction_count(direction: &str, counts: &mut NoteCounts) {
         "down" => counts.down += 1,
         "up" => counts.up += 1,
         "right" => counts.right += 1,
-        _ => {},
+        _ => {}
     }
 }
 
@@ -554,11 +599,19 @@ fn get_arrow_mapping(steps_type: &str, line_length: usize) -> Vec<Option<&'stati
     }
 }
 
-fn process_measure(measure: &str, steps_type: &str) -> (NoteCounts, usize) {
+fn process_measure(
+    measure: &str,
+    steps_type: &str,
+    measure_start_beat: f64,
+) -> (NoteCounts, usize, Vec<f64>) {
     let mut counts = NoteCounts::default();
     let mut measure_density = 0;
+    let mut note_beats = Vec::new();
 
-    for line in measure.lines() {
+    let lines: Vec<&str> = measure.lines().collect();
+    let num_lines = lines.len();
+
+    for (i, line) in lines.iter().enumerate() {
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -567,6 +620,10 @@ fn process_measure(measure: &str, steps_type: &str) -> (NoteCounts, usize) {
         process_line(line, steps_type, &mut line_counts);
         if line_counts.arrows > 0 {
             measure_density += 1;
+
+            // Calculate beat position of the line
+            let line_beat = measure_start_beat + (i as f64 * 4.0 / num_lines as f64);
+            note_beats.push(line_beat);
         }
         counts.arrows += line_counts.arrows;
         counts.steps += line_counts.steps;
@@ -581,7 +638,19 @@ fn process_measure(measure: &str, steps_type: &str) -> (NoteCounts, usize) {
         counts.right += line_counts.right;
     }
 
-    (counts, measure_density)
+    (counts, measure_density, note_beats)
+}
+
+fn find_current_bpm(beat: f64, bpms: &[(f64, f64)]) -> f64 {
+    let mut current_bpm = bpms[0].1;
+    for &(bpm_beat, bpm_value) in bpms {
+        if bpm_beat <= beat {
+            current_bpm = bpm_value;
+        } else {
+            break;
+        }
+    }
+    current_bpm
 }
 
 fn categorize_measure_density(measure_density: usize) -> RunDensity {
@@ -786,14 +855,28 @@ fn generate_breakdown_counts(measure_densities: &[usize], stream_counts: &mut St
 fn process_chart(
     notes: &str,
     steps_type: &str,
-) -> (NoteCounts, String, String, String, StreamCounts) {
-    let measures = split_measures(notes);
+    bpms: &[(f64, f64)],
+) -> (
+    NoteCounts,
+    String,
+    String,
+    String,
+    StreamCounts,
+    Vec<f64>,
+) {
+    let measures: Vec<&str> = split_measures(notes).collect();
 
     let mut total_counts = NoteCounts::default();
     let mut measure_densities = Vec::new();
+    let mut measure_nps = Vec::new();
 
-    for measure in measures {
-        let (counts, measure_density) = process_measure(measure, steps_type);
+    let mut measure_index = 0;
+
+    for measure in &measures {
+        let measure_start_beat = measure_index as f64 * 4.0;
+        let bpm = find_current_bpm(measure_start_beat, bpms);
+
+        let (counts, measure_density, _) = process_measure(measure, steps_type, measure_start_beat);
         total_counts.arrows += counts.arrows;
         total_counts.steps += counts.steps;
         total_counts.mines += counts.mines;
@@ -807,7 +890,15 @@ fn process_chart(
         total_counts.right += counts.right;
 
         measure_densities.push(measure_density);
+
+        // Calculate NPS per measure
+        let nps = (bpm / 4.0) * (measure_density as f64) / 60.0;
+        measure_nps.push(nps);
+
+        measure_index += 1;
     }
+
+    total_counts.total_measures = measure_index;
 
     let mut stream_counts = StreamCounts::default();
     generate_breakdown_counts(&measure_densities, &mut stream_counts);
@@ -822,37 +913,55 @@ fn process_chart(
         partially_simplified,
         simplified,
         stream_counts,
+        measure_nps,
     )
 }
 
-fn find_current_bpm(beat: f64, bpms: &[(f64, f64)]) -> f64 {
-    let mut current_bpm = bpms[0].1;
-    for &(bpm_beat, bpm_value) in bpms {
-        if bpm_beat <= beat {
-            current_bpm = bpm_value;
-        } else {
-            break;
-        }
-    }
-    current_bpm
+fn compute_length(total_measures: usize, bpms: &[(f64, f64)], stops: &[(f64, f64)]) -> f64 {
+    let total_beats = total_measures as f64 * 4.0;
+    beat_to_seconds(total_beats, bpms, stops)
 }
 
-fn compute_length(total_measures: usize, bpms: &[(f64, f64)], stops: &[(f64, f64)]) -> f64 {
-    let mut total_length = 0.0;
+fn beat_to_seconds(beat: f64, bpms: &[(f64, f64)], stops: &[(f64, f64)]) -> f64 {
+    let mut total_time = 0.0;
+    let mut last_beat = 0.0;
+    let mut current_bpm = bpms[0].1;
 
-    for measure_index in 0..total_measures {
-        let measure_start_beat = measure_index as f64 * 4.0;
-        let bpm = find_current_bpm(measure_start_beat, bpms);
-        let measure_duration = (4.0 / bpm) * 60.0;
-        total_length += measure_duration;
-    }
+    let mut bpm_iter = bpms.iter().peekable();
+    let mut stop_iter = stops.iter().peekable();
 
-    let total_beats = total_measures as f64 * 4.0;
-    for &(stop_beat, stop_duration) in stops {
-        if stop_beat >= 0.0 && stop_beat < total_beats {
-            total_length += stop_duration;
+    while last_beat < beat {
+        let next_bpm_change = bpm_iter.peek().map(|&&(b, _)| b);
+        let next_stop = stop_iter.peek().map(|&&(b, _)| b);
+
+        let next_event_beat = match (next_bpm_change, next_stop) {
+            (Some(bpm_beat), Some(stop_beat)) => bpm_beat.min(stop_beat),
+            (Some(bpm_beat), None) => bpm_beat,
+            (None, Some(stop_beat)) => stop_beat,
+            (None, None) => beat,
+        };
+
+        let segment_end_beat = next_event_beat.min(beat);
+        let delta_beats = segment_end_beat - last_beat;
+        let delta_time = delta_beats / current_bpm * 60.0;
+
+        total_time += delta_time;
+        last_beat = segment_end_beat;
+
+        if let Some(&(bpm_beat, new_bpm)) = bpm_iter.peek() {
+            if *bpm_beat == last_beat {
+                current_bpm = *new_bpm;
+                bpm_iter.next();
+            }
+        }
+
+        if let Some(&(stop_beat, stop_duration)) = stop_iter.peek() {
+            if *stop_beat == last_beat {
+                total_time += *stop_duration;
+                stop_iter.next();
+            }
         }
     }
 
-    total_length
+    total_time
 }
