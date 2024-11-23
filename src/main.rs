@@ -29,6 +29,8 @@ struct Simfile {
     metadata: HashMap<String, String>,
     charts: Vec<Chart>,
     bpms: String,
+    bpms_map: Vec<(f64, f64)>,
+    stops_map: Vec<(f64, f64)>,
 }
 
 struct Chart {
@@ -104,6 +106,15 @@ fn process_file(filename: &str, strip_tags: bool) {
                         stream_counts,
                     ) = process_chart(&notes, &chart.steps_type);
 
+                    // Split measures to get the total number of measures
+                    let measures: Vec<&str> = split_measures(&notes).collect();
+                    let total_measures = measures.len();
+
+                    // Compute the length
+                    let length_in_seconds =
+                        compute_length(total_measures, &simfile.bpms_map, &simfile.stops_map);
+                    let length_in_seconds_int = length_in_seconds.trunc() as usize;
+
                     let chart_info = json!({
                         "title": simfile.metadata.get("title").map(|s| s.as_str()).unwrap_or_default(),
                         "titletranslit": simfile.metadata.get("titletranslit").map(|s| s.as_str()).unwrap_or_default(),
@@ -116,6 +127,7 @@ fn process_file(filename: &str, strip_tags: bool) {
                         "diff": chart.difficulty,
                         "diff_number": chart.difficulty_num.to_string(),
                         "hash": hash_hex,
+                        "length": length_in_seconds_int,
                         "arrows": {
                             "total": counts.arrows,
                             "left": counts.left,
@@ -180,6 +192,10 @@ fn parse_simfile(
     }
 
     let bpms = parse_bpms(content);
+    let bpms_map = parse_bpms_map(&bpms);
+
+    let stops = parse_stops(content);
+    let stops_map = parse_stops_map(&stops);
 
     let charts = parse_charts(content)?;
 
@@ -187,6 +203,8 @@ fn parse_simfile(
         metadata,
         charts,
         bpms,
+        bpms_map,
+        stops_map,
     })
 }
 
@@ -248,6 +266,44 @@ fn extract_value(content: &str, key: &str) -> Option<String> {
                 None
             }
         })
+}
+
+fn parse_stops(content: &str) -> String {
+    if let Some(value) = extract_value(content, "#STOPS") {
+        value.replace(['\n', '\r'], "")
+    } else {
+        "".to_string()
+    }
+}
+
+fn parse_bpms_map(bpms: &str) -> Vec<(f64, f64)> {
+    bpms.split(',')
+        .filter_map(|entry| {
+            let parts: Vec<&str> = entry.split('=').collect();
+            if parts.len() == 2 {
+                let beat = parts[0].parse::<f64>().ok()?;
+                let bpm = parts[1].parse::<f64>().ok()?;
+                Some((beat, bpm))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn parse_stops_map(stops: &str) -> Vec<(f64, f64)> {
+    stops.split(',')
+        .filter_map(|entry| {
+            let parts: Vec<&str> = entry.split('=').collect();
+            if parts.len() == 2 {
+                let beat = parts[0].parse::<f64>().ok()?;
+                let stop = parts[1].parse::<f64>().ok()?;
+                Some((beat, stop))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn parse_charts(content: &str) -> Result<Vec<Chart>, Box<dyn std::error::Error>> {
@@ -355,7 +411,6 @@ fn minimize_chart(chart_string: &str) -> String {
             .map(str::trim)
             .filter(|line| !line.is_empty() && !line.starts_with("//"));
 
-        // Check if there are any lines to process
         if lines.clone().next().is_some() {
             minimize_and_append_measure_iter(&mut final_chart_data, &mut lines);
             if measures.peek().is_some() {
@@ -430,7 +485,6 @@ fn split_measures(note_data: &str) -> impl Iterator<Item = &str> {
 fn process_line(line: &str, steps_type: &str, counts: &mut NoteCounts) {
     let mut note_count = 0;
 
-    // Get the arrow mapping based on steps_type and line length
     let arrow_mapping = get_arrow_mapping(steps_type, line.len());
 
     for (i, c) in line.chars().enumerate() {
@@ -496,7 +550,6 @@ fn get_arrow_mapping(steps_type: &str, line_length: usize) -> Vec<Option<&'stati
                 Some("right"),
             ]
         }
-        // Add mappings for other steps_types if needed
         _ => vec![None; line_length],
     }
 }
@@ -770,4 +823,36 @@ fn process_chart(
         simplified,
         stream_counts,
     )
+}
+
+fn find_current_bpm(beat: f64, bpms: &[(f64, f64)]) -> f64 {
+    let mut current_bpm = bpms[0].1;
+    for &(bpm_beat, bpm_value) in bpms {
+        if bpm_beat <= beat {
+            current_bpm = bpm_value;
+        } else {
+            break;
+        }
+    }
+    current_bpm
+}
+
+fn compute_length(total_measures: usize, bpms: &[(f64, f64)], stops: &[(f64, f64)]) -> f64 {
+    let mut total_length = 0.0;
+
+    for measure_index in 0..total_measures {
+        let measure_start_beat = measure_index as f64 * 4.0;
+        let bpm = find_current_bpm(measure_start_beat, bpms);
+        let measure_duration = (4.0 / bpm) * 60.0;
+        total_length += measure_duration;
+    }
+
+    let total_beats = total_measures as f64 * 4.0;
+    for &(stop_beat, stop_duration) in stops {
+        if stop_beat >= 0.0 && stop_beat < total_beats {
+            total_length += stop_duration;
+        }
+    }
+
+    total_length
 }
