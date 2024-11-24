@@ -64,6 +64,21 @@ struct StreamCounts {
     run32_streams: usize,
 }
 
+#[derive(Default)]
+struct PatternInfo {
+    left_foot_candles: usize,
+    right_foot_candles: usize,
+    total_candles: usize,
+    candles_percent: f64,
+    ld_ru_mono: usize,
+    lu_rd_mono: usize,
+    mono_percent: f64,
+    anchor_left: usize,
+    anchor_down: usize,
+    anchor_up: usize,
+    anchor_right: usize,
+}
+
 #[derive(Debug, Clone)]
 struct BreakdownToken {
     length: usize,
@@ -118,6 +133,7 @@ fn process_file(filename: &str, strip_tags: bool) {
                         stream_counts,
                         measure_nps,
                         length_in_seconds,
+                        pattern_info,
                     ) = process_chart(
                         &notes,
                         &chart.steps_type,
@@ -190,6 +206,17 @@ fn process_file(filename: &str, strip_tags: bool) {
                             "32nd": stream_counts.run32_streams,
                         },
                         "total_breaks": stream_counts.total_breaks,
+                        "left_foot_candles": pattern_info.left_foot_candles,
+                        "right_foot_candles": pattern_info.right_foot_candles,
+                        "total_candles": pattern_info.total_candles,
+                        "candles_percent": format!("{:.2}", pattern_info.candles_percent),
+                        "ld_ru_mono": pattern_info.ld_ru_mono,
+                        "lu_rd_mono": pattern_info.lu_rd_mono,
+                        "mono_percent": format!("{:.2}", pattern_info.mono_percent),
+                        "anchor_left": pattern_info.anchor_left,
+                        "anchor_down": pattern_info.anchor_down,
+                        "anchor_up": pattern_info.anchor_up,
+                        "anchor_right": pattern_info.anchor_right,
                     });
 
                     println!("Chart Info:");
@@ -574,10 +601,11 @@ fn process_measure(
     measure: &str,
     steps_type: &str,
     measure_start_beat: f64,
-) -> (NoteCounts, usize, Vec<f64>) {
+) -> (NoteCounts, usize, Vec<f64>, Vec<String>) {
     let mut counts = NoteCounts::default();
     let mut measure_density = 0;
     let mut note_beats = Vec::new();
+    let mut measure_lines = Vec::new();
 
     let lines: Vec<&str> = measure.lines().collect();
     let num_lines = lines.len();
@@ -607,9 +635,11 @@ fn process_measure(
         counts.down += line_counts.down;
         counts.up += line_counts.up;
         counts.right += line_counts.right;
+
+        measure_lines.push(line.to_string());
     }
 
-    (counts, measure_density, note_beats)
+    (counts, measure_density, note_beats, measure_lines)
 }
 
 fn find_current_bpm(beat: f64, bpms: &[(f64, f64)]) -> f64 {
@@ -841,14 +871,16 @@ fn process_chart(
     String,
     StreamCounts,
     Vec<f64>,
-    f64, // Add length_in_seconds to return value
+    f64,
+    PatternInfo,
 ) {
     let measures: Vec<&str> = split_measures(notes).collect();
 
     let mut total_counts = NoteCounts::default();
     let mut measure_densities = Vec::new();
     let mut measure_nps = Vec::new();
-    let mut length_in_seconds = 0.0; // Initialize length_in_seconds
+    let mut length_in_seconds = 0.0;
+    let mut all_measures_lines: Vec<String> = Vec::new();
 
     let mut measure_index = 0;
 
@@ -856,7 +888,7 @@ fn process_chart(
         let measure_start_beat = measure_index as f64 * 4.0;
         let bpm = find_current_bpm(measure_start_beat, bpms);
 
-        let (counts, measure_density, _) = process_measure(measure, steps_type, measure_start_beat);
+        let (counts, measure_density, _, measure_lines) = process_measure(measure, steps_type, measure_start_beat);
         total_counts.arrows += counts.arrows;
         total_counts.steps += counts.steps;
         total_counts.mines += counts.mines;
@@ -877,6 +909,9 @@ fn process_chart(
         // Accumulate length for each measure
         length_in_seconds += (4.0 / bpm) * 60.0;
 
+        // Collect all measure lines
+        all_measures_lines.extend(measure_lines);
+
         measure_index += 1;
     }
 
@@ -889,6 +924,12 @@ fn process_chart(
     let partially_simplified = generate_simplified(&detailed_breakdown, true);
     let simplified = generate_simplified(&detailed_breakdown, false);
 
+    // Build arrows_per_line for pattern analysis
+    let arrows_per_line = build_arrows_per_line(&all_measures_lines);
+
+    // Perform pattern analysis
+    let pattern_info = perform_pattern_analysis(&arrows_per_line, total_counts.arrows);
+
     (
         total_counts,
         detailed_breakdown,
@@ -896,6 +937,257 @@ fn process_chart(
         simplified,
         stream_counts,
         measure_nps,
-        length_in_seconds, // Return length_in_seconds
+        length_in_seconds,
+        pattern_info,
     )
+}
+
+fn parse_line_to_arrows(line: &str) -> Vec<usize> {
+    let mut arrows = Vec::new();
+    for (i, c) in line.chars().enumerate() {
+        match c {
+            '1' | '2' | '4' => arrows.push(i),
+            _ => {},
+        }
+    }
+    arrows
+}
+
+fn build_arrows_per_line(chart_lines: &[String]) -> Vec<Vec<usize>> {
+    let mut arrows_per_line = Vec::new();
+    for line in chart_lines {
+        let arrows = parse_line_to_arrows(line);
+        arrows_per_line.push(arrows);
+    }
+    arrows_per_line
+}
+
+fn count_left_foot_candles(arrows_per_line: &[Vec<usize>]) -> usize {
+    let mut count = 0;
+    for i in 0..(arrows_per_line.len() - 2) {
+        let line1 = &arrows_per_line[i];
+        let line2 = &arrows_per_line[i + 1];
+        let line3 = &arrows_per_line[i + 2];
+
+        // Pattern 1: Down, Right, Up
+        if line1.contains(&1) && line2.contains(&3) && line3.contains(&2) {
+            count += 1;
+        }
+        // Pattern 2: Up, Right, Down
+        else if line1.contains(&2) && line2.contains(&3) && line3.contains(&1) {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn count_right_foot_candles(arrows_per_line: &[Vec<usize>]) -> usize {
+    let mut count = 0;
+    for i in 0..(arrows_per_line.len() - 2) {
+        let line1 = &arrows_per_line[i];
+        let line2 = &arrows_per_line[i + 1];
+        let line3 = &arrows_per_line[i + 2];
+
+        // Pattern 1: Down, Left, Up
+        if line1.contains(&1) && line2.contains(&0) && line3.contains(&2) {
+            count += 1;
+        }
+        // Pattern 2: Up, Left, Down
+        else if line1.contains(&2) && line2.contains(&0) && line3.contains(&1) {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn count_ld_ru_mono(arrows_per_line: &[Vec<usize>]) -> usize {
+    let patterns = vec![
+        vec![0, 2, 1, 3],
+        vec![0, 3, 1, 2],
+        vec![1, 2, 0, 3],
+        vec![1, 3, 0, 2],
+        vec![2, 0, 3, 1],
+        vec![2, 1, 3, 0],
+        vec![3, 0, 2, 1],
+        vec![3, 1, 2, 0],
+    ];
+
+    let mut count = 0;
+    let mut i = 0;
+    while i <= arrows_per_line.len().saturating_sub(4) {
+        let line1 = &arrows_per_line[i];
+        let line2 = &arrows_per_line[i + 1];
+        let line3 = &arrows_per_line[i + 2];
+        let line4 = &arrows_per_line[i + 3];
+
+        // Ensure each line contains exactly one arrow
+        if line1.len() == 1 && line2.len() == 1 && line3.len() == 1 && line4.len() == 1 {
+            let sequence = vec![line1[0], line2[0], line3[0], line4[0]];
+
+            if patterns.contains(&sequence) {
+                count += 1;
+                i += 4; // Skip ahead by the pattern length to avoid overlap
+                continue;
+            }
+        }
+        i += 1; // Move to the next step
+    }
+    count
+}
+
+fn count_lu_rd_mono(arrows_per_line: &[Vec<usize>]) -> usize {
+    let patterns = vec![
+        vec![0, 1, 2, 3],
+        vec![0, 3, 2, 1],
+        vec![2, 1, 0, 3],
+        vec![2, 3, 0, 1],
+        vec![1, 0, 3, 2],
+        vec![1, 2, 3, 0],
+        vec![3, 0, 1, 2],
+        vec![3, 2, 1, 0],
+    ];
+
+    let mut count = 0;
+    let mut i = 0;
+    while i <= arrows_per_line.len().saturating_sub(4) {
+        let line1 = &arrows_per_line[i];
+        let line2 = &arrows_per_line[i + 1];
+        let line3 = &arrows_per_line[i + 2];
+        let line4 = &arrows_per_line[i + 3];
+
+        // Ensure each line contains exactly one arrow
+        if line1.len() == 1 && line2.len() == 1 && line3.len() == 1 && line4.len() == 1 {
+            let sequence = vec![line1[0], line2[0], line3[0], line4[0]];
+
+            if patterns.contains(&sequence) {
+                count += 1;
+                i += 4; // Skip ahead by the pattern length to avoid overlap
+                continue;
+            }
+        }
+        i += 1; // Move to the next step
+    }
+    count
+}
+
+fn count_left_anchors(arrows_per_line: &[Vec<usize>]) -> usize {
+    let anchor_arrow = 0; // Left arrow index
+    let mut count = 0;
+    let mut i = 0;
+
+    while i <= arrows_per_line.len().saturating_sub(5) {
+        if arrows_per_line[i].contains(&anchor_arrow) &&
+           arrows_per_line[i + 2].contains(&anchor_arrow) &&
+           arrows_per_line[i + 4].contains(&anchor_arrow)
+        {
+            count += 1;
+            i += 5; // Skip steps to prevent overlapping
+        } else {
+            i += 1;
+        }
+    }
+    count
+}
+
+fn count_down_anchors(arrows_per_line: &[Vec<usize>]) -> usize {
+    let anchor_arrow = 1; // Down arrow index
+    let mut count = 0;
+    let mut i = 0;
+
+    while i <= arrows_per_line.len().saturating_sub(5) {
+        if arrows_per_line[i].contains(&anchor_arrow) &&
+           arrows_per_line[i + 2].contains(&anchor_arrow) &&
+           arrows_per_line[i + 4].contains(&anchor_arrow)
+        {
+            count += 1;
+            i += 5; // Skip steps to prevent overlapping
+        } else {
+            i += 1;
+        }
+    }
+    count
+}
+
+fn count_up_anchors(arrows_per_line: &[Vec<usize>]) -> usize {
+    let anchor_arrow = 2; // Up arrow index
+    let mut count = 0;
+    let mut i = 0;
+
+    while i <= arrows_per_line.len().saturating_sub(5) {
+        if arrows_per_line[i].contains(&anchor_arrow) &&
+           arrows_per_line[i + 2].contains(&anchor_arrow) &&
+           arrows_per_line[i + 4].contains(&anchor_arrow)
+        {
+            count += 1;
+            i += 5; // Skip steps to prevent overlapping
+        } else {
+            i += 1;
+        }
+    }
+    count
+}
+
+fn count_right_anchors(arrows_per_line: &[Vec<usize>]) -> usize {
+    let anchor_arrow = 3; // Right arrow index
+    let mut count = 0;
+    let mut i = 0;
+
+    while i <= arrows_per_line.len().saturating_sub(5) {
+        if arrows_per_line[i].contains(&anchor_arrow) &&
+           arrows_per_line[i + 2].contains(&anchor_arrow) &&
+           arrows_per_line[i + 4].contains(&anchor_arrow)
+        {
+            count += 1;
+            i += 5; // Skip steps to prevent overlapping
+        } else {
+            i += 1;
+        }
+    }
+    count
+}
+
+fn perform_pattern_analysis(arrows_per_line: &[Vec<usize>], num_arrows: usize) -> PatternInfo {
+    let left_foot_candles = count_left_foot_candles(arrows_per_line);
+    let right_foot_candles = count_right_foot_candles(arrows_per_line);
+    let total_candles = left_foot_candles + right_foot_candles;
+
+    let candles_percent = if num_arrows > 1 {
+        (total_candles as f64 / ((num_arrows - 1) as f64 / 2.0).floor()) * 100.0
+    } else {
+        0.0
+    };
+
+    // Mono pattern counts
+    let ld_ru_mono = count_ld_ru_mono(arrows_per_line);
+    let lu_rd_mono = count_lu_rd_mono(arrows_per_line);
+
+    // Each mono pattern consists of 4 arrows
+    let total_mono_arrows = (ld_ru_mono + lu_rd_mono) * 4;
+
+    // Calculate mono_percent based on arrows
+    let mono_percent = if num_arrows > 0 {
+        (total_mono_arrows as f64 / num_arrows as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    // Anchor pattern counts
+    let anchor_left = count_left_anchors(arrows_per_line);
+    let anchor_down = count_down_anchors(arrows_per_line);
+    let anchor_up = count_up_anchors(arrows_per_line);
+    let anchor_right = count_right_anchors(arrows_per_line);
+
+    PatternInfo {
+        left_foot_candles,
+        right_foot_candles,
+        total_candles,
+        candles_percent,
+        ld_ru_mono,
+        lu_rd_mono,
+        mono_percent,
+        anchor_left,
+        anchor_down,
+        anchor_up,
+        anchor_right,
+    }
 }
