@@ -1070,65 +1070,7 @@ fn count_lu_rd_mono(arrows_per_line: &[Vec<usize>]) -> usize {
     count
 }
 
-fn count_left_anchors(arrows_per_line: &[Vec<usize>]) -> usize {
-    let anchor_arrow = 0; // Left arrow index
-    let mut count = 0;
-    let mut i = 0;
-
-    while i <= arrows_per_line.len().saturating_sub(5) {
-        if arrows_per_line[i].contains(&anchor_arrow) &&
-           arrows_per_line[i + 2].contains(&anchor_arrow) &&
-           arrows_per_line[i + 4].contains(&anchor_arrow)
-        {
-            count += 1;
-            i += 5; // Skip steps to prevent overlapping
-        } else {
-            i += 1;
-        }
-    }
-    count
-}
-
-fn count_down_anchors(arrows_per_line: &[Vec<usize>]) -> usize {
-    let anchor_arrow = 1; // Down arrow index
-    let mut count = 0;
-    let mut i = 0;
-
-    while i <= arrows_per_line.len().saturating_sub(5) {
-        if arrows_per_line[i].contains(&anchor_arrow) &&
-           arrows_per_line[i + 2].contains(&anchor_arrow) &&
-           arrows_per_line[i + 4].contains(&anchor_arrow)
-        {
-            count += 1;
-            i += 5; // Skip steps to prevent overlapping
-        } else {
-            i += 1;
-        }
-    }
-    count
-}
-
-fn count_up_anchors(arrows_per_line: &[Vec<usize>]) -> usize {
-    let anchor_arrow = 2; // Up arrow index
-    let mut count = 0;
-    let mut i = 0;
-
-    while i <= arrows_per_line.len().saturating_sub(5) {
-        if arrows_per_line[i].contains(&anchor_arrow) &&
-           arrows_per_line[i + 2].contains(&anchor_arrow) &&
-           arrows_per_line[i + 4].contains(&anchor_arrow)
-        {
-            count += 1;
-            i += 5; // Skip steps to prevent overlapping
-        } else {
-            i += 1;
-        }
-    }
-    count
-}
-
-fn count_right_anchors(arrows_per_line: &[Vec<usize>]) -> usize {
-    let anchor_arrow = 3; // Right arrow index
+fn count_anchors(arrows_per_line: &[Vec<usize>], anchor_arrow: usize) -> usize {
     let mut count = 0;
     let mut i = 0;
 
@@ -1157,25 +1099,21 @@ fn perform_pattern_analysis(arrows_per_line: &[Vec<usize>], num_arrows: usize) -
         0.0
     };
 
-    // Mono pattern counts
     let ld_ru_mono = count_ld_ru_mono(arrows_per_line);
     let lu_rd_mono = count_lu_rd_mono(arrows_per_line);
 
-    // Each mono pattern consists of 4 arrows
     let total_mono_arrows = (ld_ru_mono + lu_rd_mono) * 4;
 
-    // Calculate mono_percent based on arrows
     let mono_percent = if num_arrows > 0 {
         (total_mono_arrows as f64 / num_arrows as f64) * 100.0
     } else {
         0.0
     };
 
-    // Anchor pattern counts
-    let anchor_left = count_left_anchors(arrows_per_line);
-    let anchor_down = count_down_anchors(arrows_per_line);
-    let anchor_up = count_up_anchors(arrows_per_line);
-    let anchor_right = count_right_anchors(arrows_per_line);
+    let anchor_left = count_anchors(arrows_per_line, 0);
+    let anchor_down = count_anchors(arrows_per_line, 1);
+    let anchor_up = count_anchors(arrows_per_line, 2);
+    let anchor_right = count_anchors(arrows_per_line, 3);
 
     PatternInfo {
         left_foot_candles,
