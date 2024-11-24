@@ -149,6 +149,10 @@ fn process_file(filename: &str, strip_tags: bool) {
                         + stream_counts.run24_streams
                         + stream_counts.run32_streams;
 
+                    // Apply custom rounding to max_nps and median_nps
+                    let rounded_max_nps = round_half_up(max_nps, 2);
+                    let rounded_median_nps = round_half_up(median_nps, 2);
+
                     let chart_info = json!({
                         "title": simfile.metadata.get("title").map(|s| s.as_str()).unwrap_or_default(),
                         "titletranslit": simfile.metadata.get("titletranslit").map(|s| s.as_str()).unwrap_or_default(),
@@ -164,8 +168,8 @@ fn process_file(filename: &str, strip_tags: bool) {
                         "length": length_in_seconds_int,
                         "max_bpm": max_bpm,
                         "min_bpm": min_bpm,
-                        "max_nps": format!("{:.2}", max_nps),
-                        "median_nps": format!("{:.2}", median_nps),
+                        "max_nps": format!("{:.2}", rounded_max_nps),
+                        "median_nps": format!("{:.2}", rounded_median_nps),
                         "arrows": {
                             "total": counts.arrows,
                             "left": counts.left,
@@ -201,8 +205,6 @@ fn process_file(filename: &str, strip_tags: bool) {
             }
             Err(e) => eprintln!("Error parsing simfile: {}", e),
         }
-    } else {
-        eprintln!("Invalid simfile: {}", filename);
     }
 }
 
@@ -853,6 +855,13 @@ fn generate_breakdown_counts(measure_densities: &[usize], stream_counts: &mut St
             }
         }
     }
+}
+
+/// Rounds a floating-point number to the specified number of decimal places.
+/// Uses the "round half up" strategy.
+fn round_half_up(value: f64, decimals: u32) -> f64 {
+    let multiplier = 10_f64.powi(decimals as i32);
+    (value * multiplier).round() / multiplier
 }
 
 fn process_chart(
