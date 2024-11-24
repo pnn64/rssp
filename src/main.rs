@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use clap::Parser;
 use serde_json::json;
 use sha1::{Digest, Sha1};
@@ -73,6 +75,12 @@ struct PatternInfo {
     ld_ru_mono: usize,
     lu_rd_mono: usize,
     mono_percent: f64,
+    lr_boxes: usize,
+    ud_boxes: usize,
+    corner_ld_boxes: usize,
+    corner_lu_boxes: usize,
+    corner_rd_boxes: usize,
+    corner_ru_boxes: usize,
     anchor_left: usize,
     anchor_down: usize,
     anchor_up: usize,
@@ -213,6 +221,12 @@ fn process_file(filename: &str, strip_tags: bool) {
                         "ld_ru_mono": pattern_info.ld_ru_mono,
                         "lu_rd_mono": pattern_info.lu_rd_mono,
                         "mono_percent": format!("{:.2}", pattern_info.mono_percent),
+                        "lr_boxes": pattern_info.lr_boxes,
+                        "ud_boxes": pattern_info.ud_boxes,
+                        "corner_ld_boxes": pattern_info.corner_ld_boxes,
+                        "corner_lu_boxes": pattern_info.corner_lu_boxes,
+                        "corner_rd_boxes": pattern_info.corner_rd_boxes,
+                        "corner_ru_boxes": pattern_info.corner_ru_boxes,
                         "anchor_left": pattern_info.anchor_left,
                         "anchor_down": pattern_info.anchor_down,
                         "anchor_up": pattern_info.anchor_up,
@@ -1088,6 +1102,138 @@ fn count_anchors(arrows_per_line: &[Vec<usize>], anchor_arrow: usize) -> usize {
     count
 }
 
+fn count_lr_boxes(arrows_per_line: &[Vec<usize>]) -> usize {
+    let mut count = 0;
+    let pattern_length = 4;
+    for i in 0..arrows_per_line.len().saturating_sub(pattern_length - 1) {
+        // Pattern 1: Left, Right, Left, Right
+        if arrows_per_line[i].contains(&0) &&
+           arrows_per_line[i + 1].contains(&3) &&
+           arrows_per_line[i + 2].contains(&0) &&
+           arrows_per_line[i + 3].contains(&3) {
+            count += 1;
+        }
+        // Pattern 2: Right, Left, Right, Left
+        else if arrows_per_line[i].contains(&3) &&
+                arrows_per_line[i + 1].contains(&0) &&
+                arrows_per_line[i + 2].contains(&3) &&
+                arrows_per_line[i + 3].contains(&0) {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn count_ud_boxes(arrows_per_line: &[Vec<usize>]) -> usize {
+    let mut count = 0;
+    let pattern_length = 4;
+    for i in 0..arrows_per_line.len().saturating_sub(pattern_length - 1) {
+        // Pattern 1: Up, Down, Up, Down
+        if arrows_per_line[i].contains(&2) &&
+           arrows_per_line[i + 1].contains(&1) &&
+           arrows_per_line[i + 2].contains(&2) &&
+           arrows_per_line[i + 3].contains(&1) {
+            count += 1;
+        }
+        // Pattern 2: Down, Up, Down, Up
+        else if arrows_per_line[i].contains(&1) &&
+                arrows_per_line[i + 1].contains(&2) &&
+                arrows_per_line[i + 2].contains(&1) &&
+                arrows_per_line[i + 3].contains(&2) {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn count_corner_ld_boxes(arrows_per_line: &[Vec<usize>]) -> usize {
+    let mut count = 0;
+    let pattern_length = 4;
+    for i in 0..arrows_per_line.len().saturating_sub(pattern_length - 1) {
+        // Pattern 1: Left, Down, Left, Down
+        if arrows_per_line[i].contains(&0) &&
+           arrows_per_line[i + 1].contains(&1) &&
+           arrows_per_line[i + 2].contains(&0) &&
+           arrows_per_line[i + 3].contains(&1) {
+            count += 1;
+        }
+        // Pattern 2: Down, Left, Down, Left
+        else if arrows_per_line[i].contains(&1) &&
+                arrows_per_line[i + 1].contains(&0) &&
+                arrows_per_line[i + 2].contains(&1) &&
+                arrows_per_line[i + 3].contains(&0) {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn count_corner_lu_boxes(arrows_per_line: &[Vec<usize>]) -> usize {
+    let mut count = 0;
+    let pattern_length = 4;
+    for i in 0..arrows_per_line.len().saturating_sub(pattern_length - 1) {
+        // Pattern 1: Left, Up, Left, Up
+        if arrows_per_line[i].contains(&0) &&
+           arrows_per_line[i + 1].contains(&2) &&
+           arrows_per_line[i + 2].contains(&0) &&
+           arrows_per_line[i + 3].contains(&2) {
+            count += 1;
+        }
+        // Pattern 2: Up, Left, Up, Left
+        else if arrows_per_line[i].contains(&2) &&
+                arrows_per_line[i + 1].contains(&0) &&
+                arrows_per_line[i + 2].contains(&2) &&
+                arrows_per_line[i + 3].contains(&0) {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn count_corner_rd_boxes(arrows_per_line: &[Vec<usize>]) -> usize {
+    let mut count = 0;
+    let pattern_length = 4;
+    for i in 0..arrows_per_line.len().saturating_sub(pattern_length - 1) {
+        // Pattern 1: Right, Down, Right, Down
+        if arrows_per_line[i].contains(&3) &&
+           arrows_per_line[i + 1].contains(&1) &&
+           arrows_per_line[i + 2].contains(&3) &&
+           arrows_per_line[i + 3].contains(&1) {
+            count += 1;
+        }
+        // Pattern 2: Down, Right, Down, Right
+        else if arrows_per_line[i].contains(&1) &&
+                arrows_per_line[i + 1].contains(&3) &&
+                arrows_per_line[i + 2].contains(&1) &&
+                arrows_per_line[i + 3].contains(&3) {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn count_corner_ru_boxes(arrows_per_line: &[Vec<usize>]) -> usize {
+    let mut count = 0;
+    let pattern_length = 4;
+    for i in 0..arrows_per_line.len().saturating_sub(pattern_length - 1) {
+        // Pattern 1: Right, Up, Right, Up
+        if arrows_per_line[i].contains(&3) &&
+           arrows_per_line[i + 1].contains(&2) &&
+           arrows_per_line[i + 2].contains(&3) &&
+           arrows_per_line[i + 3].contains(&2) {
+            count += 1;
+        }
+        // Pattern 2: Up, Right, Up, Right
+        else if arrows_per_line[i].contains(&2) &&
+                arrows_per_line[i + 1].contains(&3) &&
+                arrows_per_line[i + 2].contains(&2) &&
+                arrows_per_line[i + 3].contains(&3) {
+            count += 1;
+        }
+    }
+    count
+}
+
 fn perform_pattern_analysis(arrows_per_line: &[Vec<usize>], num_arrows: usize) -> PatternInfo {
     let left_foot_candles = count_left_foot_candles(arrows_per_line);
     let right_foot_candles = count_right_foot_candles(arrows_per_line);
@@ -1110,6 +1256,13 @@ fn perform_pattern_analysis(arrows_per_line: &[Vec<usize>], num_arrows: usize) -
         0.0
     };
 
+    let lr_boxes = count_lr_boxes(arrows_per_line);
+    let ud_boxes = count_ud_boxes(arrows_per_line);
+    let corner_ld_boxes = count_corner_ld_boxes(arrows_per_line);
+    let corner_lu_boxes = count_corner_lu_boxes(arrows_per_line);
+    let corner_rd_boxes = count_corner_rd_boxes(arrows_per_line);
+    let corner_ru_boxes = count_corner_ru_boxes(arrows_per_line);
+
     let anchor_left = count_anchors(arrows_per_line, 0);
     let anchor_down = count_anchors(arrows_per_line, 1);
     let anchor_up = count_anchors(arrows_per_line, 2);
@@ -1123,6 +1276,12 @@ fn perform_pattern_analysis(arrows_per_line: &[Vec<usize>], num_arrows: usize) -
         ld_ru_mono,
         lu_rd_mono,
         mono_percent,
+        lr_boxes,
+        ud_boxes,
+        corner_ld_boxes,
+        corner_lu_boxes,
+        corner_rd_boxes,
+        corner_ru_boxes,
         anchor_left,
         anchor_down,
         anchor_up,
