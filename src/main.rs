@@ -367,7 +367,9 @@ fn generate_breakdown(measure_densities: &[usize], mode: BreakdownMode) -> Strin
                         }
                     }
                     BreakdownMode::Partial => {
-                        if bk_len <= 4 {
+                        if bk_len == 1 {
+                            // skip
+                        } else if bk_len <= 4 {
                             output.push("-".to_string());
                         } else if bk_len <= 32 {
                             output.push("/".to_string());
