@@ -5,7 +5,7 @@ use std::time::Instant;
 use std::fmt::Write; // for normalize_float_digits
 use sha1::{Digest, Sha1};
 
-/// Holds arrow/step statistics.
+/// All arrow/step-related counts.
 #[derive(Default)]
 struct ArrowStats {
     total_arrows: u32,
@@ -13,24 +13,54 @@ struct ArrowStats {
     down: u32,
     up: u32,
     right: u32,
-
-    total_steps: u32, // any line with >=1 arrow is counted as 1 step
-    jumps: u32,       // lines with exactly 2 arrows
-    hands: u32,       // lines with >= 3 arrows
+    total_steps: u32,
+    jumps: u32,
+    hands: u32,
+    mines: u32,
+    holds: u32,
+    rolls: u32,
 }
 
-/// Checks if a 4-byte line is all zero.
+/// Tracks how many dense measures appear at each run level.
+#[derive(Default)]
+struct StreamCounts {
+    run16_streams: u32,
+    run20_streams: u32,
+    run24_streams: u32,
+    run32_streams: u32,
+    total_breaks: u32,
+}
+
+/// A measure’s “density” category.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum RunDensity {
+    Run32,
+    Run24,
+    Run20,
+    Run16,
+    Break,
+}
+
+/// Which kind of breakdown are we generating?
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum BreakdownMode {
+    Detailed,
+    Partial,
+    Simplified,
+}
+
+// --------------------------------------------------------------------
+// Minimization & Counting
+// --------------------------------------------------------------------
+
 #[inline(always)]
 fn is_all_zero(line: &[u8; 4]) -> bool {
     line.iter().all(|&b| b == b'0')
 }
 
-/// Minimizes the lines in the measure by halving zero lines
-/// repeatedly (StepMania measure halving technique).
 #[inline(always)]
 fn minimize_measure(measure: &mut Vec<[u8; 4]>) {
     while measure.len() >= 2 && measure.len() % 2 == 0 {
-        // If any "odd" line isn't all zero, stop.
         if (1..measure.len()).step_by(2).any(|i| !is_all_zero(&measure[i])) {
             break;
         }
@@ -41,36 +71,47 @@ fn minimize_measure(measure: &mut Vec<[u8; 4]>) {
         measure.truncate(half_len);
     }
 
-    // If all lines are zero, keep only 1 line.
+    // If everything is zero, keep only 1 line
     if !measure.is_empty() && measure.iter().all(is_all_zero) {
         measure.truncate(1);
     }
 }
 
-/// Counts the arrows in a single 4-byte line, updating `stats`.
 #[inline(always)]
-fn count_arrows_in_line(line: &[u8; 4], stats: &mut ArrowStats) {
+fn count_line(line: &[u8; 4], stats: &mut ArrowStats) -> bool {
     let mut pressed = 0u32;
+    for &ch in line {
+        match ch {
+            b'1' => pressed += 1,
+            b'2' => {
+                stats.holds += 1;
+                pressed += 1;
+            }
+            b'4' => {
+                stats.rolls += 1;
+                pressed += 1;
+            }
+            b'M' | b'm' => {
+                stats.mines += 1;
+            }
+            _ => {}
+        }
+    }
 
-    // Index 0 -> left, index 1 -> down, index 2 -> up, index 3 -> right
-    if line[0] == b'1' {
+    // Column-based counting
+    if line[0] == b'1' || line[0] == b'2' || line[0] == b'4' {
         stats.left += 1;
-        pressed += 1;
     }
-    if line[1] == b'1' {
+    if line[1] == b'1' || line[1] == b'2' || line[1] == b'4' {
         stats.down += 1;
-        pressed += 1;
     }
-    if line[2] == b'1' {
+    if line[2] == b'1' || line[2] == b'2' || line[2] == b'4' {
         stats.up += 1;
-        pressed += 1;
     }
-    if line[3] == b'1' {
+    if line[3] == b'1' || line[3] == b'2' || line[3] == b'4' {
         stats.right += 1;
-        pressed += 1;
     }
 
-    // If at least 1 arrow was pressed, that's a step
     if pressed > 0 {
         stats.total_steps += 1;
     }
@@ -79,61 +120,66 @@ fn count_arrows_in_line(line: &[u8; 4], stats: &mut ArrowStats) {
     } else if pressed >= 3 {
         stats.hands += 1;
     }
-
     stats.total_arrows += pressed;
+
+    pressed > 0
 }
 
-/// Minimizes a chart in one pass **and** counts arrows in the kept lines.
-/// Returns the minimized chart and the `ArrowStats`.
-#[inline]
-fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats) {
+/// Minimizes chart + counts arrows, returning (final chart bytes, arrow stats, measure densities).
+fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<usize>) {
     let mut output = Vec::with_capacity(notes_data.len());
     let mut measure = Vec::with_capacity(64);
 
-    let mut saw_semicolon = false;
     let mut stats = ArrowStats::default();
+    let mut measure_densities = Vec::new();
+    let mut saw_semicolon = false;
 
-    // Called when we hit a comma or semicolon or end of data
     #[inline(always)]
-    fn finalize_measure(measure: &mut Vec<[u8; 4]>, output: &mut Vec<u8>, stats: &mut ArrowStats) {
+    fn finalize_measure(
+        measure: &mut Vec<[u8; 4]>,
+        output: &mut Vec<u8>,
+        stats: &mut ArrowStats,
+        measure_densities: &mut Vec<usize>,
+    ) {
         if measure.is_empty() {
+            measure_densities.push(0);
             return;
         }
         minimize_measure(measure);
         output.reserve(measure.len() * 5);
 
-        // Now count arrows & write lines
+        let mut density = 0usize;
         for mline in measure.iter() {
-            count_arrows_in_line(mline, stats);
+            if count_line(mline, stats) {
+                density += 1;
+            }
             output.extend_from_slice(mline);
             output.push(b'\n');
         }
         measure.clear();
+        measure_densities.push(density);
     }
 
-    // Split lines by newline. We'll parse each line that is 4 bytes
-    // or see if it's a comma line or semicolon.
     for line in notes_data.split(|&b| b == b'\n') {
         if line.is_empty() {
             continue;
         }
         match line[0] {
             b',' => {
-                finalize_measure(&mut measure, &mut output, &mut stats);
-                // Write out the measure separator
+                finalize_measure(&mut measure, &mut output, &mut stats, &mut measure_densities);
                 output.extend_from_slice(b",\n");
             }
             b';' => {
-                finalize_measure(&mut measure, &mut output, &mut stats);
+                finalize_measure(&mut measure, &mut output, &mut stats, &mut measure_densities);
                 saw_semicolon = true;
                 break;
             }
             b' ' => {
-                // skip lines that are only spaces
+                // skip lines of only spaces
             }
             _ => {
-                // If line is too short, skip as malformed
                 if line.len() < 4 {
+                    // skip malformed lines
                     continue;
                 }
                 let mut arr = [0u8; 4];
@@ -143,25 +189,217 @@ fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats) {
         }
     }
 
-    // If we never saw a semicolon, but have leftover measure lines, finalize them
     if !saw_semicolon && !measure.is_empty() {
-        finalize_measure(&mut measure, &mut output, &mut stats);
+        finalize_measure(&mut measure, &mut output, &mut stats, &mut measure_densities);
     }
 
-    // If the chart ends with ",\n", remove it
+    // remove trailing ",\n"
     if output.ends_with(&[b',', b'\n']) {
         output.truncate(output.len() - 2);
     }
 
-    (output, stats)
+    (output, stats, measure_densities)
 }
 
-/// Normalizes floats in the #BPMS string (like "0.000=149.000").
+#[inline]
+fn categorize_measure_density(d: usize) -> RunDensity {
+    match d {
+        d if d >= 32 => RunDensity::Run32,
+        d if d >= 24 => RunDensity::Run24,
+        d if d >= 20 => RunDensity::Run20,
+        d if d >= 16 => RunDensity::Run16,
+        _ => RunDensity::Break,
+    }
+}
+
+#[inline]
+fn compute_stream_counts(measure_densities: &[usize]) -> StreamCounts {
+    let mut sc = StreamCounts::default();
+    for &d in measure_densities {
+        match categorize_measure_density(d) {
+            RunDensity::Run32 => sc.run32_streams += 1,
+            RunDensity::Run24 => sc.run24_streams += 1,
+            RunDensity::Run20 => sc.run20_streams += 1,
+            RunDensity::Run16 => sc.run16_streams += 1,
+            RunDensity::Break => sc.total_breaks += 1,
+        }
+    }
+    sc
+}
+
+// --------------------------------------------------------------------
+// Single function for all 3 breakdowns
+// --------------------------------------------------------------------
+
+/// A token for run or break.
+#[derive(Debug)]
+enum Token {
+    Run(RunDensity, usize), // e.g. (Run16, length=3)
+    Break(usize),           // e.g. (5)
+}
+
+#[inline]
+fn format_run_symbol(cat: RunDensity, length: usize, star: bool) -> String {
+    let base = match cat {
+        RunDensity::Run16 => format!("{}", length),
+        RunDensity::Run20 => format!("~{}~", length),
+        RunDensity::Run24 => format!(r"\{}\", length),
+        RunDensity::Run32 => format!("={}=", length),
+        RunDensity::Break => unreachable!(),
+    };
+    if star {
+        format!("{}*", base)
+    } else {
+        base
+    }
+}
+
+/// The single function that builds tokens, merges them based on `BreakdownMode`,
+/// and outputs the final string.
+fn generate_breakdown(measure_densities: &[usize], mode: BreakdownMode) -> String {
+    // 1) Convert measure densities -> category
+    let cats: Vec<RunDensity> = measure_densities
+        .iter()
+        .map(|&d| categorize_measure_density(d))
+        .collect();
+
+    // 2) skip leading/trailing breaks
+    let first_run = cats.iter().position(|&c| c != RunDensity::Break);
+    let last_run  = cats.iter().rposition(|&c| c != RunDensity::Break);
+    if first_run.is_none() || last_run.is_none() {
+        return String::new();
+    }
+
+    // 3) Build run-length tokens
+    let mut tokens = Vec::new();
+    {
+        let mut i = first_run.unwrap();
+        let end = last_run.unwrap();
+        while i <= end {
+            let c = cats[i];
+            let mut length = 1;
+            let mut j = i + 1;
+            while j <= end && cats[j] == c {
+                length += 1;
+                j += 1;
+            }
+            if c == RunDensity::Break {
+                tokens.push(Token::Break(length));
+            } else {
+                tokens.push(Token::Run(c, length));
+            }
+            i = j;
+        }
+    }
+
+    // 4) We'll produce the final tokens by merging if needed
+    let mut output = Vec::new();
+    let mut idx = 0;
+
+    while idx < tokens.len() {
+        match tokens[idx] {
+            Token::Run(cat, mut run_len) => {
+                let mut star = false;
+
+                // Decide how to merge based on mode
+                // Detailed => no merges
+                // Partial => merges break==1, same cat
+                // Simplified => merges break<=4, same cat
+                if mode != BreakdownMode::Detailed {
+                    // Repeatedly try merges:
+                    while idx + 2 < tokens.len() {
+                        let can_merge = match (&tokens[idx + 1], &tokens[idx + 2]) {
+                            (Token::Break(bk_len), Token::Run(next_cat, next_len)) => {
+                                if cat == *next_cat {
+                                    match mode {
+                                        BreakdownMode::Partial => {
+                                            // break==1 => Some(1)
+                                            if *bk_len == 1 {
+                                                // merge run_len += bk_len + next_len
+                                                run_len += bk_len + *next_len;
+                                                true
+                                            } else {
+                                                false
+                                            }
+                                        }
+                                        BreakdownMode::Simplified => {
+                                            // break<=4 => Some(bk_len)
+                                            if *bk_len <= 4 {
+                                                run_len += bk_len + *next_len;
+                                                true
+                                            } else {
+                                                false
+                                            }
+                                        }
+                                        BreakdownMode::Detailed => false,
+                                    }
+                                } else {
+                                    false
+                                }
+                            }
+                            _ => false,
+                        };
+                        if can_merge {
+                            star = true;
+                            idx += 2; // skip those tokens
+                        } else {
+                            break;
+                        }
+                    }
+                }
+
+                // Now push the run token
+                let s = format_run_symbol(cat, run_len, star);
+                output.push(s);
+
+                idx += 1; // consumed
+            }
+            Token::Break(bk_len) => {
+                // Format leftover breaks. 
+                // Detailed => skip single break, if bk_len>1 => (bk_len)
+                // Partial => bk_len<=4 => "-", <=32=>"/", else "|"
+                // Simplified => bk_len<=4 => skip, <=32=>"/", else "|"
+
+                match mode {
+                    BreakdownMode::Detailed => {
+                        if bk_len > 1 {
+                            output.push(format!("({})", bk_len));
+                        }
+                    }
+                    BreakdownMode::Partial => {
+                        if bk_len <= 4 {
+                            output.push("-".to_string());
+                        } else if bk_len <= 32 {
+                            output.push("/".to_string());
+                        } else {
+                            output.push("|".to_string());
+                        }
+                    }
+                    BreakdownMode::Simplified => {
+                        if bk_len <= 4 {
+                            // skip
+                        } else if bk_len <= 32 {
+                            output.push("/".to_string());
+                        } else {
+                            output.push("|".to_string());
+                        }
+                    }
+                }
+
+                idx += 1;
+            }
+        }
+    }
+    output.join(" ")
+}
+
+// --------------------------------------------------------------------
+// Normalizes BPM floats
+// --------------------------------------------------------------------
 #[inline]
 fn normalize_float_digits(param: &str) -> String {
     let mut output = String::with_capacity(param.len());
     let mut first = true;
-
     for beat_bpm in param.split(',').map(str::trim).filter(|s| !s.is_empty()) {
         if !first {
             output.push(',');
@@ -184,17 +422,14 @@ fn normalize_float_digits(param: &str) -> String {
     output
 }
 
-/// Extracts #TITLE, #SUBTITLE, #ARTIST, #BPMS, and #NOTES with a single pass.
+// --------------------------------------------------------------------
+// Extract sections
+// --------------------------------------------------------------------
 #[inline(always)]
 fn extract_sections(
     data: &[u8],
-) -> io::Result<(
-    Option<&[u8]>, 
-    Option<&[u8]>, 
-    Option<&[u8]>, 
-    Option<&[u8]>, 
-    Option<&[u8]>
-)> {
+) -> io::Result<(Option<&[u8]>, Option<&[u8]>, Option<&[u8]>, Option<&[u8]>, Option<&[u8]>)>
+{
     let mut title    = None;
     let mut subtitle = None;
     let mut artist   = None;
@@ -203,28 +438,23 @@ fn extract_sections(
 
     let mut i = 0;
     while i < data.len() {
-        if title.is_some() 
-            && subtitle.is_some() 
-            && artist.is_some() 
-            && bpms.is_some() 
-            && notes.is_some() 
-        {
+        if title.is_some() && subtitle.is_some() && artist.is_some() && bpms.is_some() && notes.is_some() {
             break;
         }
 
         #[inline(always)]
         fn parse_tag<'a>(
             data: &'a [u8], 
-            index: &mut usize, 
+            idx: &mut usize, 
             tag_len: usize
         ) -> Option<&'a [u8]> {
-            let start_idx = *index + tag_len; 
+            let start_idx = *idx + tag_len;
             if start_idx > data.len() {
                 return None;
             }
             if let Some(end_off) = data[start_idx..].iter().position(|&b| b == b';') {
                 let result = &data[start_idx..start_idx + end_off];
-                *index = start_idx + end_off + 1; // Move past the semicolon
+                *idx = start_idx + end_off + 1;
                 Some(result)
             } else {
                 None
@@ -235,35 +465,28 @@ fn extract_sections(
         if slice.starts_with(b"#TITLE:") && title.is_none() {
             title = parse_tag(data, &mut i, b"#TITLE:".len());
             continue;
-        }
-        else if slice.starts_with(b"#SUBTITLE:") && subtitle.is_none() {
+        } else if slice.starts_with(b"#SUBTITLE:") && subtitle.is_none() {
             subtitle = parse_tag(data, &mut i, b"#SUBTITLE:".len());
             continue;
-        }
-        else if slice.starts_with(b"#ARTIST:") && artist.is_none() {
+        } else if slice.starts_with(b"#ARTIST:") && artist.is_none() {
             artist = parse_tag(data, &mut i, b"#ARTIST:".len());
             continue;
-        }
-        else if slice.starts_with(b"#BPMS:") && bpms.is_none() {
+        } else if slice.starts_with(b"#BPMS:") && bpms.is_none() {
             bpms = parse_tag(data, &mut i, b"#BPMS:".len());
             continue;
-        }
-        else if slice.starts_with(b"#NOTES:") && notes.is_none() {
+        } else if slice.starts_with(b"#NOTES:") && notes.is_none() {
             let start_idx = i + b"#NOTES:".len();
             if start_idx < data.len() {
                 notes = Some(&data[start_idx..]);
             }
             break;
         }
-
         i += 1;
     }
 
     Ok((title, subtitle, artist, bpms, notes))
 }
 
-/// Splits out the first 5 colon-delimited fields from the #NOTES section.
-/// Returns (fields, remainder).
 #[inline]
 fn split_notes_fields<'a>(notes_block: &'a [u8]) -> (Vec<&'a [u8]>, &'a [u8]) {
     let mut fields = Vec::with_capacity(5);
@@ -283,6 +506,10 @@ fn split_notes_fields<'a>(notes_block: &'a [u8]) -> (Vec<&'a [u8]>, &'a [u8]) {
     (fields, &notes_block[notes_block.len()..])
 }
 
+// --------------------------------------------------------------------
+// Main
+// --------------------------------------------------------------------
+
 fn main() -> io::Result<()> {
     let before = Instant::now();
     let args: Vec<String> = args().collect();
@@ -299,7 +526,6 @@ fn main() -> io::Result<()> {
     let (title_opt, subtitle_opt, artist_opt, bpms_opt, notes_opt) =
         extract_sections(&simfile_data)?;
 
-    // Convert each section to UTF-8 or fallback placeholder
     let title_str = std::str::from_utf8(title_opt.unwrap_or(b"<invalid-title>"))
         .unwrap_or("<invalid-title>");
     let subtitle_str = std::str::from_utf8(subtitle_opt.unwrap_or(b"<invalid-subtitle>"))
@@ -308,7 +534,6 @@ fn main() -> io::Result<()> {
         .unwrap_or("<invalid-artist>");
     let bpms_raw = std::str::from_utf8(bpms_opt.unwrap_or(b"<invalid-bpms>"))
         .unwrap_or("<invalid-bpms>");
-
     let normalized_bpms = normalize_float_digits(bpms_raw);
 
     let notes_bytes = notes_opt.unwrap_or(b"<invalid-notes>");
@@ -318,20 +543,27 @@ fn main() -> io::Result<()> {
         std::process::exit(1);
     }
 
-    // Trim fields as needed
     let step_type_str  = std::str::from_utf8(fields[0]).unwrap_or("").trim();
     let difficulty_str = std::str::from_utf8(fields[2]).unwrap_or("").trim();
     let rating_str     = std::str::from_utf8(fields[3]).unwrap_or("").trim();
 
-    // Build the minimized chart & count arrows in 1 pass
-    let (mut minimized_chart, stats) = minimize_chart_and_count(chart_data);
+    // Minimize + count arrows
+    let (mut minimized_chart, stats, measure_densities) = minimize_chart_and_count(chart_data);
 
-    // Remove trailing newlines
-    if let Some(pos) = minimized_chart.iter().rposition(|&x| x != b'\n') {
+    // remove trailing newlines
+    if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
         minimized_chart.truncate(pos + 1);
     }
 
-    // Hash minimized chart + normalized BPMs
+    // Compute stream counts
+    let stream_counts = compute_stream_counts(&measure_densities);
+
+    // Generate breakdowns
+    let detailed = generate_breakdown(&measure_densities, BreakdownMode::Detailed);
+    let partial  = generate_breakdown(&measure_densities, BreakdownMode::Partial);
+    let simple   = generate_breakdown(&measure_densities, BreakdownMode::Simplified);
+
+    // Build hash
     let mut hasher = Sha1::new();
     hasher.update(&minimized_chart);
     hasher.update(normalized_bpms.as_bytes());
@@ -339,6 +571,7 @@ fn main() -> io::Result<()> {
     let hash_hex = hex::encode(hash_result);
     let short_hash = &hash_hex[..16];
 
+    // Print
     println!("Elapsed time: {:.2?}", before.elapsed());
     println!("Title: {}", title_str);
     println!("Subtitle: {}", subtitle_str);
@@ -349,16 +582,29 @@ fn main() -> io::Result<()> {
     println!("Rating: {}", rating_str);
     println!("Hash (first 16 hex chars): {}", short_hash);
 
-    // Print arrow stats
     println!("--- Arrow Stats ---");
-    println!("Left: {}", stats.left);
-    println!("Down: {}", stats.down);
-    println!("Up: {}", stats.up);
-    println!("Right: {}", stats.right);
+    println!("Left: {}",   stats.left);
+    println!("Down: {}",   stats.down);
+    println!("Up: {}",     stats.up);
+    println!("Right: {}",  stats.right);
     println!("Total arrows: {}", stats.total_arrows);
-    println!("Total steps: {}", stats.total_steps);
+    println!("Total steps: {}",  stats.total_steps);
     println!("Jumps (2-arrow steps): {}", stats.jumps);
     println!("Hands (3+ arrow steps): {}", stats.hands);
+    println!("Holds: {}", stats.holds);
+    println!("Rolls: {}", stats.rolls);
+    println!("Mines: {}", stats.mines);
+
+    println!("--- Stream Counts ---");
+    println!("16th streams: {}",  stream_counts.run16_streams);
+    println!("20th streams: {}",  stream_counts.run20_streams);
+    println!("24th streams: {}",  stream_counts.run24_streams);
+    println!("32nd streams: {}",  stream_counts.run32_streams);
+    println!("Total breaks: {}",  stream_counts.total_breaks);
+
+    println!("Detailed breakdown:      {}", detailed);
+    println!("Partially simplified:    {}", partial);
+    println!("Simplified breakdown:    {}", simple);
 
     Ok(())
 }
