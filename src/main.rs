@@ -428,13 +428,24 @@ fn normalize_float_digits(param: &str) -> String {
 #[inline(always)]
 fn extract_sections(
     data: &[u8],
-) -> io::Result<(Option<&[u8]>, Option<&[u8]>, Option<&[u8]>, Option<&[u8]>, Option<&[u8]>)>
-{
-    let mut title    = None;
+) -> io::Result<(
+    Option<&[u8]>, // title
+    Option<&[u8]>, // subtitle
+    Option<&[u8]>, // artist
+    Option<&[u8]>, // titletranslit
+    Option<&[u8]>, // subtitletranslit
+    Option<&[u8]>, // artisttranslit
+    Option<&[u8]>, // bpms
+    Option<&[u8]>, // notes
+)> {
+    let mut title = None;
     let mut subtitle = None;
-    let mut artist   = None;
-    let mut bpms     = None;
-    let mut notes    = None;
+    let mut artist = None;
+    let mut titletranslit = None;
+    let mut subtitletranslit = None;
+    let mut artisttranslit = None;
+    let mut bpms = None;
+    let mut notes = None;
 
     let mut i = 0;
     while i < data.len() {
@@ -471,6 +482,15 @@ fn extract_sections(
         } else if slice.starts_with(b"#ARTIST:") && artist.is_none() {
             artist = parse_tag(data, &mut i, b"#ARTIST:".len());
             continue;
+        } else if slice.starts_with(b"#TITLETRANSLIT:") && titletranslit.is_none() {
+            titletranslit = parse_tag(data, &mut i, b"#TITLETRANSLIT:".len());
+            continue;
+        } else if slice.starts_with(b"#SUBTITLETRANSLIT:") && subtitletranslit.is_none() {
+            subtitletranslit = parse_tag(data, &mut i, b"#SUBTITLETRANSLIT:".len());
+            continue;
+        } else if slice.starts_with(b"#ARTISTTRANSLIT:") && artisttranslit.is_none() {
+            artisttranslit = parse_tag(data, &mut i, b"#ARTISTTRANSLIT:".len());
+            continue;
         } else if slice.starts_with(b"#BPMS:") && bpms.is_none() {
             bpms = parse_tag(data, &mut i, b"#BPMS:".len());
             continue;
@@ -484,7 +504,16 @@ fn extract_sections(
         i += 1;
     }
 
-    Ok((title, subtitle, artist, bpms, notes))
+    Ok((
+        title,
+        subtitle,
+        artist,
+        titletranslit,
+        subtitletranslit,
+        artisttranslit,
+        bpms,
+        notes,
+    ))
 }
 
 #[inline]
@@ -523,8 +552,16 @@ fn main() -> io::Result<()> {
     let mut simfile_data = Vec::new();
     file.read_to_end(&mut simfile_data)?;
 
-    let (title_opt, subtitle_opt, artist_opt, bpms_opt, notes_opt) =
-        extract_sections(&simfile_data)?;
+    let (
+        title_opt,
+        subtitle_opt,
+        artist_opt,
+        titletranslit_opt,
+        subtitletranslit_opt,
+        artisttranslit_opt,
+        bpms_opt,
+        notes_opt,
+    ) = extract_sections(&simfile_data)?;
 
     let title_str = std::str::from_utf8(title_opt.unwrap_or(b"<invalid-title>"))
         .unwrap_or("<invalid-title>");
@@ -535,6 +572,14 @@ fn main() -> io::Result<()> {
     let bpms_raw = std::str::from_utf8(bpms_opt.unwrap_or(b"<invalid-bpms>"))
         .unwrap_or("<invalid-bpms>");
     let normalized_bpms = normalize_float_digits(bpms_raw);
+
+    // Handle transliterated fields
+    let titletranslit_str = std::str::from_utf8(titletranslit_opt.unwrap_or(b""))
+        .unwrap_or("");
+    let subtitletranslit_str = std::str::from_utf8(subtitletranslit_opt.unwrap_or(b""))
+        .unwrap_or("");
+    let artisttranslit_str = std::str::from_utf8(artisttranslit_opt.unwrap_or(b""))
+        .unwrap_or("");
 
     let notes_bytes = notes_opt.unwrap_or(b"<invalid-notes>");
     let (fields, chart_data) = split_notes_fields(notes_bytes);
@@ -574,8 +619,11 @@ fn main() -> io::Result<()> {
     // Print
     println!("Elapsed time: {:.2?}", before.elapsed());
     println!("Title: {}", title_str);
+    println!("Title translate: {}", titletranslit_str);
     println!("Subtitle: {}", subtitle_str);
+    println!("Subtitle translate: {}", subtitletranslit_str);
     println!("Artist: {}", artist_str);
+    println!("Artist translate: {}", artisttranslit_str);
     println!("Normalized BPMs: {}", normalized_bpms);
     println!("Steptype: {}", step_type_str);
     println!("Difficulty: {}", difficulty_str);
