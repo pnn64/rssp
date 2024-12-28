@@ -635,46 +635,48 @@ fn parse_bitmask_chart(chart_data: &[u8]) -> Vec<u8> {
 }
 
 /// Count left-foot candles and right-foot candles by scanning bitmask lines.
+/// We'll define pattern arrays for both left and right candles, then loop
+/// over bitmasks in steps of 1 (no skip on match).
 fn count_candles(bitmasks: &[u8]) -> (u32, u32) {
-    // For convenience:
-    // left = 0b0001, down = 0b0010, up = 0b0100, right = 0b1000
-    let mut left_foot = 0;
-    let mut right_foot = 0;
+    // Each candle is 3 lines. We store them as arrays of `[u8; 3]`.
+    // L-foot: (Down -> Right -> Up) or (Up -> Right -> Down)
+    const LEFT_FOOT_PATTERNS: &[[u8; 3]] = &[
+        [0b0010, 0b1000, 0b0100],
+        [0b0100, 0b1000, 0b0010],
+    ];
+    // R-foot: (Down -> Left -> Up) or (Up -> Left -> Down)
+    const RIGHT_FOOT_PATTERNS: &[[u8; 3]] = &[
+        [0b0010, 0b0001, 0b0100],
+        [0b0100, 0b0001, 0b0010],
+    ];
+
+    let mut left_foot = 0u32;
+    let mut right_foot = 0u32;
 
     if bitmasks.len() < 3 {
         return (0, 0);
     }
 
+    // Overlapping scan
     for i in 0..(bitmasks.len() - 2) {
-        let (a, b, c) = (bitmasks[i], bitmasks[i + 1], bitmasks[i + 2]);
-        // L-foot candle: (down->right->up) or (up->right->down).
-        if (a == 0b0010 && b == 0b1000 && c == 0b0100) 
-            || (a == 0b0100 && b == 0b1000 && c == 0b0010)
-        {
+        let block = [bitmasks[i], bitmasks[i + 1], bitmasks[i + 2]];
+
+        // If this 3-line block matches any L-foot pattern, increment left_foot
+        if LEFT_FOOT_PATTERNS.iter().any(|pat| *pat == block) {
             left_foot += 1;
         }
-
-        // R-foot candle: (down->left->up) or (up->left->down).
-        if (a == 0b0010 && b == 0b0001 && c == 0b0100)
-            || (a == 0b0100 && b == 0b0001 && c == 0b0010)
-        {
+        // If it matches any R-foot pattern, increment right_foot
+        if RIGHT_FOOT_PATTERNS.iter().any(|pat| *pat == block) {
             right_foot += 1;
         }
     }
     (left_foot, right_foot)
 }
 
-/// Count monos (LD_RU or LU_RD) by scanning 4 consecutive lines.
+/// Count monos (LD_RU or LU_RD) by scanning 4 consecutive lines with "skip on match".
+/// We'll define 2 pattern arrays, one for LD_RU, one for LU_RD.
 fn count_monos(bitmasks: &[u8]) -> (u32, u32) {
-    let mut ld_ru = 0;
-    let mut lu_rd = 0;
-
-    if bitmasks.len() < 4 {
-        return (0, 0);
-    }
-
-    // The old code had multiple permutations for LD_RU and LU_RD.
-    let valid_ld_ru = [
+    const VALID_LD_RU: &[[u8; 4]] = &[
         [0b0001, 0b0100, 0b0010, 0b1000],
         [0b0001, 0b1000, 0b0010, 0b0100],
         [0b0010, 0b0100, 0b0001, 0b1000],
@@ -684,8 +686,7 @@ fn count_monos(bitmasks: &[u8]) -> (u32, u32) {
         [0b1000, 0b0001, 0b0100, 0b0010],
         [0b1000, 0b0010, 0b0100, 0b0001],
     ];
-
-    let valid_lu_rd = [
+    const VALID_LU_RD: &[[u8; 4]] = &[
         [0b0001, 0b0010, 0b0100, 0b1000],
         [0b0001, 0b1000, 0b0100, 0b0010],
         [0b0100, 0b0010, 0b0001, 0b1000],
@@ -696,18 +697,27 @@ fn count_monos(bitmasks: &[u8]) -> (u32, u32) {
         [0b1000, 0b0100, 0b0010, 0b0001],
     ];
 
+    let mut ld_ru = 0u32;
+    let mut lu_rd = 0u32;
+
+    if bitmasks.len() < 4 {
+        return (0, 0);
+    }
+
+    // We do a while loop so we can skip on match.
     let mut i = 0;
     while i + 3 < bitmasks.len() {
         let block = &bitmasks[i..i + 4];
+
         // skip blocks where any line has 0 or >1 arrows pressed
-        if block.iter().all(|b| b.count_ones() == 1) {
-            if valid_ld_ru.iter().any(|p| p == block) {
+        if block.iter().all(|&b| b.count_ones() == 1) {
+            if VALID_LD_RU.iter().any(|pat| pat == block) {
                 ld_ru += 1;
-                i += 4;
+                i += 4; // skip on match
                 continue;
-            } else if valid_lu_rd.iter().any(|p| p == block) {
+            } else if VALID_LU_RD.iter().any(|pat| pat == block) {
                 lu_rd += 1;
-                i += 4;
+                i += 4; // skip on match
                 continue;
             }
         }
@@ -716,8 +726,34 @@ fn count_monos(bitmasks: &[u8]) -> (u32, u32) {
     (ld_ru, lu_rd)
 }
 
-/// Count boxes: LR, UD, corner boxes, etc.
+/// Count boxes by scanning 4 consecutive lines (overlapping).
+/// We'll define multiple box types in arrays, then check each 4-line block.
 fn count_boxes(bitmasks: &[u8]) -> (u32, u32, u32, u32, u32, u32) {
+    const LR_BOXES: &[[u8; 4]] = &[
+        [0b0001, 0b1000, 0b0001, 0b1000],
+        [0b1000, 0b0001, 0b1000, 0b0001],
+    ];
+    const UD_BOXES: &[[u8; 4]] = &[
+        [0b0100, 0b0010, 0b0100, 0b0010],
+        [0b0010, 0b0100, 0b0010, 0b0100],
+    ];
+    const CORNER_LD_BOXES: &[[u8; 4]] = &[
+        [0b0001, 0b0010, 0b0001, 0b0010],
+        [0b0010, 0b0001, 0b0010, 0b0001],
+    ];
+    const CORNER_LU_BOXES: &[[u8; 4]] = &[
+        [0b0001, 0b0100, 0b0001, 0b0100],
+        [0b0100, 0b0001, 0b0100, 0b0001],
+    ];
+    const CORNER_RD_BOXES: &[[u8; 4]] = &[
+        [0b1000, 0b0010, 0b1000, 0b0010],
+        [0b0010, 0b1000, 0b0010, 0b1000],
+    ];
+    const CORNER_RU_BOXES: &[[u8; 4]] = &[
+        [0b1000, 0b0100, 0b1000, 0b0100],
+        [0b0100, 0b1000, 0b0100, 0b1000],
+    ];
+
     let mut lr = 0;
     let mut ud = 0;
     let mut corner_ld = 0;
@@ -729,52 +765,86 @@ fn count_boxes(bitmasks: &[u8]) -> (u32, u32, u32, u32, u32, u32) {
         return (0, 0, 0, 0, 0, 0);
     }
 
+    // Overlapping scan
     for i in 0..(bitmasks.len() - 3) {
-        let (a, b, c, d) = (bitmasks[i], bitmasks[i + 1], bitmasks[i + 2], bitmasks[i + 3]);
+        let block = [bitmasks[i], bitmasks[i + 1], bitmasks[i + 2], bitmasks[i + 3]];
 
-        // LR boxes
-        if (a == 0b0001 && b == 0b1000 && c == 0b0001 && d == 0b1000)
-            || (a == 0b1000 && b == 0b0001 && c == 0b1000 && d == 0b0001)
-        {
+        if LR_BOXES.iter().any(|pat| *pat == block) {
             lr += 1;
         }
-
-        // UD boxes
-        if (a == 0b0100 && b == 0b0010 && c == 0b0100 && d == 0b0010)
-            || (a == 0b0010 && b == 0b0100 && c == 0b0010 && d == 0b0100)
-        {
+        if UD_BOXES.iter().any(|pat| *pat == block) {
             ud += 1;
         }
-
-        // corner LD boxes
-        if (a == 0b0001 && b == 0b0010 && c == 0b0001 && d == 0b0010)
-            || (a == 0b0010 && b == 0b0001 && c == 0b0010 && d == 0b0001)
-        {
+        if CORNER_LD_BOXES.iter().any(|pat| *pat == block) {
             corner_ld += 1;
         }
-
-        // corner LU boxes
-        if (a == 0b0001 && b == 0b0100 && c == 0b0001 && d == 0b0100)
-            || (a == 0b0100 && b == 0b0001 && c == 0b0100 && d == 0b0001)
-        {
+        if CORNER_LU_BOXES.iter().any(|pat| *pat == block) {
             corner_lu += 1;
         }
-
-        // corner RD boxes
-        if (a == 0b1000 && b == 0b0010 && c == 0b1000 && d == 0b0010)
-            || (a == 0b0010 && b == 0b1000 && c == 0b0010 && d == 0b1000)
-        {
+        if CORNER_RD_BOXES.iter().any(|pat| *pat == block) {
             corner_rd += 1;
         }
-
-        // corner RU boxes
-        if (a == 0b1000 && b == 0b0100 && c == 0b1000 && d == 0b0100)
-            || (a == 0b0100 && b == 0b1000 && c == 0b0100 && d == 0b1000)
-        {
+        if CORNER_RU_BOXES.iter().any(|pat| *pat == block) {
             corner_ru += 1;
         }
     }
     (lr, ud, corner_ld, corner_lu, corner_rd, corner_ru)
+}
+
+/// Same as your original dorito logic, but with const arrays:
+#[inline]
+fn count_doritos(bitmasks: &[u8]) -> (u32, u32, u32, u32) {
+    // define patterns as arrays of 5 bitmasks:
+    const RIGHT_DORITO: [u8; 5] = [
+        0b1000, 0b0100, 0b0010, 0b0100, 0b1000
+    ];
+    const LEFT_DORITO: [u8; 5] = [
+        0b0001, 0b0010, 0b0100, 0b0010, 0b0001
+    ];
+    const INV_RIGHT_DORITO: [u8; 5] = [
+        0b1000, 0b0010, 0b0100, 0b0010, 0b1000
+    ];
+    const INV_LEFT_DORITO: [u8; 5] = [
+        0b0001, 0b0100, 0b0010, 0b0100, 0b0001
+    ];
+
+    let mut rd_count = 0;
+    let mut ld_count = 0;
+    let mut ird_count = 0;
+    let mut ild_count = 0;
+
+    if bitmasks.len() < 5 {
+        return (0, 0, 0, 0);
+    }
+
+    let mut i = 0;
+    // skip-on-match approach
+    while i + 4 < bitmasks.len() {
+        // each line must have exactly 1 arrow
+        if bitmasks[i..i+5].iter().all(|&b| b.count_ones() == 1) {
+            let block = &bitmasks[i..i+5];
+            if block == &RIGHT_DORITO {
+                rd_count += 1;
+                i += 5;
+                continue;
+            } else if block == &LEFT_DORITO {
+                ld_count += 1;
+                i += 5;
+                continue;
+            } else if block == &INV_RIGHT_DORITO {
+                ird_count += 1;
+                i += 5;
+                continue;
+            } else if block == &INV_LEFT_DORITO {
+                ild_count += 1;
+                i += 5;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    (rd_count, ld_count, ird_count, ild_count)
 }
 
 /// Count anchors (same arrow repeated among lines spaced out).
@@ -796,88 +866,6 @@ fn count_anchors(bitmasks: &[u8], arrow_bit: u8) -> u32 {
         }
     }
     count
-}
-
-// --------------------------------------------------------------------
-// *** NEW *** Dorito Analysis
-// --------------------------------------------------------------------
-
-/// We define 5-line patterns for Doritos and Inverse Doritos:
-///  R=0b1000, U=0b0100, D=0b0010, L=0b0001
-///
-/// 1) right_dorito:  R U D U R
-/// 2) left_dorito:   L D U D L
-/// 3) inv_right_dorito: R D U D R
-/// 4) inv_left_dorito:  L U D U L
-#[inline]
-fn count_doritos(bitmasks: &[u8]) -> (u32, u32, u32, u32) {
-    // define patterns as arrays of 5 bitmasks:
-    // R=1000, U=0100, D=0010, L=0001
-    const RIGHT_DORITO: [u8; 5] = [
-        0b1000, // R
-        0b0100, // U
-        0b0010, // D
-        0b0100, // U
-        0b1000, // R
-    ];
-    const LEFT_DORITO: [u8; 5] = [
-        0b0001, // L
-        0b0010, // D
-        0b0100, // U
-        0b0010, // D
-        0b0001, // L
-    ];
-    const INV_RIGHT_DORITO: [u8; 5] = [
-        0b1000, // R
-        0b0010, // D
-        0b0100, // U
-        0b0010, // D
-        0b1000, // R
-    ];
-    const INV_LEFT_DORITO: [u8; 5] = [
-        0b0001, // L
-        0b0100, // U
-        0b0010, // D
-        0b0100, // U
-        0b0001, // L
-    ];
-
-    let mut rd_count = 0;
-    let mut ld_count = 0;
-    let mut ird_count = 0;
-    let mut ild_count = 0;
-
-    if bitmasks.len() < 5 {
-        return (0, 0, 0, 0);
-    }
-
-    let mut i = 0;
-    while i + 4 < bitmasks.len() {
-        // each line must have exactly 1 arrow
-        if bitmasks[i..i+5].iter().all(|b| b.count_ones() == 1) {
-            let block = &bitmasks[i..i+5];
-            if block == RIGHT_DORITO {
-                rd_count += 1;
-                i += 5;
-                continue;
-            } else if block == LEFT_DORITO {
-                ld_count += 1;
-                i += 5;
-                continue;
-            } else if block == INV_RIGHT_DORITO {
-                ird_count += 1;
-                i += 5;
-                continue;
-            } else if block == INV_LEFT_DORITO {
-                ild_count += 1;
-                i += 5;
-                continue;
-            }
-        }
-        i += 1;
-    }
-
-    (rd_count, ld_count, ird_count, ild_count)
 }
 
 /// Full pattern analysis on the minimized chart lines.
