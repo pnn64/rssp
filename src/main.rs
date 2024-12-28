@@ -1174,12 +1174,12 @@ fn main() -> io::Result<()> {
         println!("Hash (first 16 hex chars): {}", short_hash);
 
         println!("--- Arrow Stats ---");
-        println!("Left: {}",   stats.left);
-        println!("Down: {}",   stats.down);
-        println!("Up: {}",     stats.up);
-        println!("Right: {}",  stats.right);
+        println!("Left: {}", stats.left);
+        println!("Down: {}", stats.down);
+        println!("Up: {}", stats.up);
+        println!("Right: {}", stats.right);
         println!("Total arrows: {}", stats.total_arrows);
-        println!("Total steps: {}",  stats.total_steps);
+        println!("Total steps: {}", stats.total_steps);
         println!("Jumps (2-arrow steps): {}", stats.jumps);
         println!("Hands (3+ arrow steps): {}", stats.hands);
         println!("Holds: {}", stats.holds);
@@ -1187,15 +1187,15 @@ fn main() -> io::Result<()> {
         println!("Mines: {}", stats.mines);
 
         println!("--- Stream Counts ---");
-        println!("16th streams: {}",  stream_counts.run16_streams);
-        println!("20th streams: {}",  stream_counts.run20_streams);
-        println!("24th streams: {}",  stream_counts.run24_streams);
-        println!("32nd streams: {}",  stream_counts.run32_streams);
-        println!("Total breaks: {}",  stream_counts.total_breaks);
+        println!("16th streams: {}", stream_counts.run16_streams);
+        println!("20th streams: {}", stream_counts.run20_streams);
+        println!("24th streams: {}", stream_counts.run24_streams);
+        println!("32nd streams: {}", stream_counts.run32_streams);
+        println!("Total breaks: {}", stream_counts.total_breaks);
 
-        println!("Detailed breakdown:      {}", detailed);
-        println!("Partially simplified:    {}", partial);
-        println!("Simplified breakdown:    {}", simple);
+        println!("Detailed breakdown: {}", detailed);
+        println!("Partially simplified: {}", partial);
+        println!("Simplified breakdown: {}", simple);
 
         println!("--- Additional Chart Info ---");
         println!("Min BPM: {:.2}", min_bpm);
