@@ -1,9 +1,11 @@
 use std::env::args;
 use std::fs::File;
-use std::io::{self, Read};
+use std::io;
+use std::io::Read;
 use std::time::Instant;
 use std::fmt::Write; // for normalize_float_digits
 use sha1::{Digest, Sha1};
+use image::{ImageBuffer, Rgb, RgbImage, ImageError};
 
 /// All arrow/step-related counts.
 #[derive(Default)]
@@ -595,7 +597,7 @@ fn median(arr: &[f64]) -> f64 {
 }
 
 // --------------------------------------------------------------------
-// *** NEW *** Pattern Analysis
+// Pattern Analysis
 // --------------------------------------------------------------------
 
 /// Convert a single line of up to 4 bytes (e.g. "1000") into a bitmask.
@@ -928,6 +930,100 @@ fn do_pattern_analysis(bitmasks: &[u8], total_arrows: u32) -> PatternStats {
 }
 
 // --------------------------------------------------------------------
+// Density Graph PNG
+// --------------------------------------------------------------------
+
+fn generate_density_graph_png(
+    measure_nps_vec: &[f64],
+    max_nps: f64,
+    short_hash: &str,
+) -> Result<(), ImageError> {
+    const IMAGE_WIDTH: u32 = 1000;
+    const GRAPH_HEIGHT: u32 = 400;
+
+    // Create a new RGB image buffer.
+    let mut imgbuf: RgbImage = ImageBuffer::new(IMAGE_WIDTH, GRAPH_HEIGHT);
+
+    // Background color = #03112c
+    let bg_color = Rgb([0x03, 0x11, 0x2c]);
+
+    // Bottom color of gradient = #00b8cc
+    let bottom_color = (0x00, 0xb8, 0xcc);
+    // Top color of gradient = #8200a1
+    let top_color = (0x82, 0x00, 0xa1);
+
+    // Fill the entire image with the background first.
+    for pixel in imgbuf.pixels_mut() {
+        *pixel = bg_color;
+    }
+
+    // If no measures or max_nps <= 0, just save the background image and return.
+    if measure_nps_vec.is_empty() || max_nps <= 0.0 {
+        let filename = format!("{}.png", short_hash);
+        imgbuf.save(&filename)?;
+        return Ok(());
+    }
+
+    // Each measure’s column width.
+    let measure_width = IMAGE_WIDTH as f64 / measure_nps_vec.len() as f64;
+
+    // A small helper function to interpolate between two channels a..b by fraction t in [0..1].
+    fn lerp(a: u8, b: u8, t: f64) -> u8 {
+        let t = t.clamp(0.0, 1.0);
+        let af = a as f64;
+        let bf = b as f64;
+        (af + (bf - af) * t).round() as u8
+    }
+
+    /*
+        We'll use a single, image-wide gradient from bottom_color at the bottom (y=GRAPH_HEIGHT-1)
+        to top_color at the top (y=0). For each bar, we only fill the range [y_top..(GRAPH_HEIGHT-1)]
+        with the appropriate portion of that gradient. Above y_top remains the background color.
+    */
+
+    for (i, &nps) in measure_nps_vec.iter().enumerate() {
+        // X range for this measure
+        let x_start = (i as f64 * measure_width).round() as u32;
+        let x_end   = (((i + 1) as f64 * measure_width).round() as u32).min(IMAGE_WIDTH);
+
+        // Bar height in pixels
+        let height_fraction = nps / max_nps; 
+        let bar_height = (height_fraction * GRAPH_HEIGHT as f64).round() as i32;
+
+        // The top of the bar in image coords (0 = top, GRAPH_HEIGHT-1 = bottom)
+        let y_top = GRAPH_HEIGHT as i32 - bar_height;
+
+        // Fill from y_top down to the bottom (GRAPH_HEIGHT-1) with our gradient.
+        // Above y_top remains the background color you already filled in.
+        for x in x_start..x_end {
+            for y in y_top..(GRAPH_HEIGHT as i32) {
+                // safety checks
+                if y < 0 || y >= GRAPH_HEIGHT as i32 || x >= IMAGE_WIDTH {
+                    continue;
+                }
+                // y=GRAPH_HEIGHT-1 => fraction=0 => bottom color
+                // y=0 => fraction=1 => top color
+                // so fraction = (GRAPH_HEIGHT-1 - y) / (GRAPH_HEIGHT-1)
+                let dist_from_bottom = (GRAPH_HEIGHT as i32 - 1 - y) as f64;
+                let frac = dist_from_bottom / (GRAPH_HEIGHT as f64 - 1.0);
+
+                let rr = lerp(bottom_color.0, top_color.0, frac);
+                let gg = lerp(bottom_color.1, top_color.1, frac);
+                let bb = lerp(bottom_color.2, top_color.2, frac);
+
+                *imgbuf.get_pixel_mut(x, y as u32) = Rgb([rr, gg, bb]);
+            }
+        }
+    }
+
+    // Finally, save the image as short_hash.png
+    let output_file = format!("{}.png", short_hash);
+    imgbuf.save(&output_file)?;
+
+    Ok(())
+}
+
+// --------------------------------------------------------------------
 // Main
 // --------------------------------------------------------------------
 
@@ -935,7 +1031,7 @@ fn main() -> io::Result<()> {
     let before = Instant::now();
     let args: Vec<String> = args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: {} <simfile_path>", args[0]);
+        eprintln!("Usage: {} <simfile_path> [--png]", args[0]);
         std::process::exit(1);
     }
 
@@ -943,6 +1039,9 @@ fn main() -> io::Result<()> {
     let mut file = File::open(simfile_path)?;
     let mut simfile_data = Vec::new();
     file.read_to_end(&mut simfile_data)?;
+
+    // Check if we have a --png among the arguments
+    let generate_png = args.iter().any(|a| a == "--png");
 
     let (
         title_opt,
@@ -1055,72 +1154,79 @@ fn main() -> io::Result<()> {
     let pattern_stats = do_pattern_analysis(&bitmasks, stats.total_arrows);
 
     // Print
-    println!("Elapsed time: {:.2?}", before.elapsed());
-    println!("Title: {}", title_str);
-    println!("Title translate: {}", titletranslit_str);
-    println!("Subtitle: {}", subtitle_str);
-    println!("Subtitle translate: {}", subtitletranslit_str);
-    println!("Artist: {}", artist_str);
-    println!("Artist translate: {}", artisttranslit_str);
-    println!("Normalized BPMs: {}", normalized_bpms);
-    println!("Steptype: {}", step_type_str);
-    println!("Difficulty: {}", difficulty_str);
-    println!("Rating: {}", rating_str);
-    println!("Hash (first 16 hex chars): {}", short_hash);
+    if generate_png {
+        // We only output a PNG and *no* text.
+        // Map from ImageResult<()> to io::Result<()>
+        generate_density_graph_png(&measure_nps_vec, max_nps, short_hash)
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+    } else {
+        println!("Elapsed time: {:.2?}", before.elapsed());
+        println!("Title: {}", title_str);
+        println!("Title translate: {}", titletranslit_str);
+        println!("Subtitle: {}", subtitle_str);
+        println!("Subtitle translate: {}", subtitletranslit_str);
+        println!("Artist: {}", artist_str);
+        println!("Artist translate: {}", artisttranslit_str);
+        println!("Normalized BPMs: {}", normalized_bpms);
+        println!("Steptype: {}", step_type_str);
+        println!("Difficulty: {}", difficulty_str);
+        println!("Rating: {}", rating_str);
+        println!("Hash (first 16 hex chars): {}", short_hash);
 
-    println!("--- Arrow Stats ---");
-    println!("Left: {}",   stats.left);
-    println!("Down: {}",   stats.down);
-    println!("Up: {}",     stats.up);
-    println!("Right: {}",  stats.right);
-    println!("Total arrows: {}", stats.total_arrows);
-    println!("Total steps: {}",  stats.total_steps);
-    println!("Jumps (2-arrow steps): {}", stats.jumps);
-    println!("Hands (3+ arrow steps): {}", stats.hands);
-    println!("Holds: {}", stats.holds);
-    println!("Rolls: {}", stats.rolls);
-    println!("Mines: {}", stats.mines);
+        println!("--- Arrow Stats ---");
+        println!("Left: {}",   stats.left);
+        println!("Down: {}",   stats.down);
+        println!("Up: {}",     stats.up);
+        println!("Right: {}",  stats.right);
+        println!("Total arrows: {}", stats.total_arrows);
+        println!("Total steps: {}",  stats.total_steps);
+        println!("Jumps (2-arrow steps): {}", stats.jumps);
+        println!("Hands (3+ arrow steps): {}", stats.hands);
+        println!("Holds: {}", stats.holds);
+        println!("Rolls: {}", stats.rolls);
+        println!("Mines: {}", stats.mines);
 
-    println!("--- Stream Counts ---");
-    println!("16th streams: {}",  stream_counts.run16_streams);
-    println!("20th streams: {}",  stream_counts.run20_streams);
-    println!("24th streams: {}",  stream_counts.run24_streams);
-    println!("32nd streams: {}",  stream_counts.run32_streams);
-    println!("Total breaks: {}",  stream_counts.total_breaks);
+        println!("--- Stream Counts ---");
+        println!("16th streams: {}",  stream_counts.run16_streams);
+        println!("20th streams: {}",  stream_counts.run20_streams);
+        println!("24th streams: {}",  stream_counts.run24_streams);
+        println!("32nd streams: {}",  stream_counts.run32_streams);
+        println!("Total breaks: {}",  stream_counts.total_breaks);
 
-    println!("Detailed breakdown:      {}", detailed);
-    println!("Partially simplified:    {}", partial);
-    println!("Simplified breakdown:    {}", simple);
+        println!("Detailed breakdown:      {}", detailed);
+        println!("Partially simplified:    {}", partial);
+        println!("Simplified breakdown:    {}", simple);
 
-    println!("--- Additional Chart Info ---");
-    println!("Min BPM: {:.2}", min_bpm);
-    println!("Max BPM: {:.2}", max_bpm);
-    println!("Chart length (seconds): {:.2}", total_length_seconds);
-    println!("Max NPS: {:.2}", max_nps);
-    println!("Median NPS: {:.2}", median_nps);
+        println!("--- Additional Chart Info ---");
+        println!("Min BPM: {:.2}", min_bpm);
+        println!("Max BPM: {:.2}", max_bpm);
+        println!("Chart length (seconds): {:.2}", total_length_seconds);
+        println!("Max NPS: {:.2}", max_nps);
+        println!("Median NPS: {:.2}", median_nps);
 
-    println!("--- Pattern Stats ---");
-    println!("left_foot_candles: {}", pattern_stats.left_foot_candles);
-    println!("right_foot_candles: {}", pattern_stats.right_foot_candles);
-    println!("total_candles: {}", pattern_stats.total_candles);
-    println!("candles_percent: {:.2}", pattern_stats.candles_percent);
-    println!("ld_ru_mono: {}", pattern_stats.ld_ru_mono);
-    println!("lu_rd_mono: {}", pattern_stats.lu_rd_mono);
-    println!("mono_percent: {:.2}", pattern_stats.mono_percent);
-    println!("lr_boxes: {}", pattern_stats.lr_boxes);
-    println!("ud_boxes: {}", pattern_stats.ud_boxes);
-    println!("corner_ld_boxes: {}", pattern_stats.corner_ld_boxes);
-    println!("corner_lu_boxes: {}", pattern_stats.corner_lu_boxes);
-    println!("corner_rd_boxes: {}", pattern_stats.corner_rd_boxes);
-    println!("corner_ru_boxes: {}", pattern_stats.corner_ru_boxes);
-    println!("anchor_left: {}", pattern_stats.anchor_left);
-    println!("anchor_down: {}", pattern_stats.anchor_down);
-    println!("anchor_up: {}", pattern_stats.anchor_up);
-    println!("anchor_right: {}", pattern_stats.anchor_right);
-    println!("right_dorito: {}", pattern_stats.right_dorito);
-    println!("left_dorito: {}", pattern_stats.left_dorito);
-    println!("inv_right_dorito: {}", pattern_stats.inv_right_dorito);
-    println!("inv_left_dorito: {}", pattern_stats.inv_left_dorito);
+        println!("--- Pattern Stats ---");
+        println!("left_foot_candles: {}", pattern_stats.left_foot_candles);
+        println!("right_foot_candles: {}", pattern_stats.right_foot_candles);
+        println!("total_candles: {}", pattern_stats.total_candles);
+        println!("candles_percent: {:.2}", pattern_stats.candles_percent);
+        println!("ld_ru_mono: {}", pattern_stats.ld_ru_mono);
+        println!("lu_rd_mono: {}", pattern_stats.lu_rd_mono);
+        println!("mono_percent: {:.2}", pattern_stats.mono_percent);
+        println!("lr_boxes: {}", pattern_stats.lr_boxes);
+        println!("ud_boxes: {}", pattern_stats.ud_boxes);
+        println!("corner_ld_boxes: {}", pattern_stats.corner_ld_boxes);
+        println!("corner_lu_boxes: {}", pattern_stats.corner_lu_boxes);
+        println!("corner_rd_boxes: {}", pattern_stats.corner_rd_boxes);
+        println!("corner_ru_boxes: {}", pattern_stats.corner_ru_boxes);
+        println!("anchor_left: {}", pattern_stats.anchor_left);
+        println!("anchor_down: {}", pattern_stats.anchor_down);
+        println!("anchor_up: {}", pattern_stats.anchor_up);
+        println!("anchor_right: {}", pattern_stats.anchor_right);
+        println!("right_dorito: {}", pattern_stats.right_dorito);
+        println!("left_dorito: {}", pattern_stats.left_dorito);
+        println!("inv_right_dorito: {}", pattern_stats.inv_right_dorito);
+        println!("inv_left_dorito: {}", pattern_stats.inv_left_dorito);
+    }
 
     Ok(())
 }
