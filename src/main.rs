@@ -87,7 +87,6 @@ fn is_all_zero(line: &[u8; 4]) -> bool {
 }
 
 fn minimize_measure(measure: &mut Vec<[u8; 4]>) {
-    // same logic as before
     while measure.len() >= 2 && measure.len() % 2 == 0 {
         if (1..measure.len()).step_by(2).any(|i| !is_all_zero(&measure[i])) {
             break;
@@ -402,8 +401,9 @@ fn generate_breakdown(measure_densities: &[usize], mode: BreakdownMode) -> Strin
 }
 
 // --------------------------------------------------------------------
-// Normalizes BPM floats
+// BPM utilities
 // --------------------------------------------------------------------
+
 fn normalize_float_digits(param: &str) -> String {
     let mut output = String::with_capacity(param.len());
     let mut first = true;
@@ -427,6 +427,105 @@ fn normalize_float_digits(param: &str) -> String {
         }
     }
     output
+}
+
+fn parse_bpm_map(normalized_bpms: &str) -> Vec<(f64, f64)> {
+    let mut bpms_vec = Vec::new();
+    for chunk in normalized_bpms.split(',') {
+        let chunk = chunk.trim();
+        if let Some(eq_pos) = chunk.find('=') {
+            let left = &chunk[..eq_pos].trim();
+            let right = &chunk[eq_pos + 1..].trim();
+            if let (Ok(beat), Ok(bpm)) = (left.parse::<f64>(), right.parse::<f64>()) {
+                bpms_vec.push((beat, bpm));
+            }
+        }
+    }
+    bpms_vec.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    bpms_vec
+}
+
+/// Returns the BPM in effect at a given beat
+fn get_current_bpm(beat: f64, bpm_map: &[(f64, f64)]) -> f64 {
+    let mut curr_bpm = if !bpm_map.is_empty() { bpm_map[0].1 } else { 0.0 };
+    for &(b_beat, b_bpm) in bpm_map {
+        if beat >= b_beat {
+            curr_bpm = b_bpm;
+        } else {
+            break;
+        }
+    }
+    curr_bpm
+}
+
+/// Compute min_bpm/max_bpm from the entire BPM map (or (0,0) if empty).
+fn compute_bpm_range(bpm_map: &[(f64, f64)]) -> (f64, f64) {
+    if bpm_map.is_empty() {
+        return (0.0, 0.0);
+    }
+    let mut min_bpm = f64::MAX;
+    let mut max_bpm = f64::MIN;
+    for &(_, bpm) in bpm_map {
+        if bpm < min_bpm {
+            min_bpm = bpm;
+        }
+        if bpm > max_bpm {
+            max_bpm = bpm;
+        }
+    }
+    (min_bpm, max_bpm)
+}
+
+// --------------------------------------------------------------------
+// Chart length (in seconds, int).
+// --------------------------------------------------------------------
+
+fn compute_total_chart_length(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> i32 {
+    let mut total_length_seconds = 0.0;
+    for (i, _) in measure_densities.iter().enumerate() {
+        let measure_start_beat = i as f64 * 4.0;
+        let curr_bpm = get_current_bpm(measure_start_beat, bpm_map);
+        if curr_bpm <= 0.0 {
+            continue;
+        }
+        let measure_length_s = (4.0 / curr_bpm) * 60.0;
+        total_length_seconds += measure_length_s;
+    }
+    total_length_seconds.round() as i32
+}
+
+// --------------------------------------------------------------------
+// NPS calculations
+// --------------------------------------------------------------------
+
+/// Computes a per-measure NPS vector (notes-per-second) from measure densities.
+fn compute_measure_nps_vec(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> Vec<f64> {
+    let mut measure_nps_vec = Vec::with_capacity(measure_densities.len());
+    for (i, &density) in measure_densities.iter().enumerate() {
+        let measure_start_beat = i as f64 * 4.0;
+        let curr_bpm = get_current_bpm(measure_start_beat, bpm_map);
+        if curr_bpm <= 0.0 {
+            measure_nps_vec.push(0.0);
+            continue;
+        }
+        // measure_nps = (notes in measure) / measure duration
+        // measure duration = 4 beats / curr_bpm => * 60 for sec => so 4/curr_bpm*60.
+        // dividing density by measure length => density / (4/curr_bpm*60) => density*(curr_bpm/4)/60
+        let measure_nps = density as f64 * (curr_bpm / 4.0) / 60.0;
+        measure_nps_vec.push(measure_nps);
+    }
+    measure_nps_vec
+}
+
+/// Returns `(max_nps, median_nps)` from the measure_nps_vec.
+fn get_nps_stats(measure_nps_vec: &[f64]) -> (f64, f64) {
+    let max_nps = if measure_nps_vec.is_empty() {
+        0.0
+    } else {
+        measure_nps_vec.iter().fold(f64::MIN, |a, &b| a.max(b))
+    };
+    let median_nps = median(measure_nps_vec);
+    (max_nps, median_nps)
 }
 
 // --------------------------------------------------------------------
@@ -546,40 +645,6 @@ fn split_notes_fields<'a>(notes_block: &'a [u8]) -> (Vec<&'a [u8]>, &'a [u8]) {
 }
 
 // --------------------------------------------------------------------
-// Parsing the BPM map
-// --------------------------------------------------------------------
-fn parse_bpm_map(normalized_bpms: &str) -> Vec<(f64, f64)> {
-    let mut bpms_vec = Vec::new();
-    for chunk in normalized_bpms.split(',') {
-        let chunk = chunk.trim();
-        if let Some(eq_pos) = chunk.find('=') {
-            let left = &chunk[..eq_pos].trim();
-            let right = &chunk[eq_pos + 1..].trim();
-            if let (Ok(beat), Ok(bpm)) = (left.parse::<f64>(), right.parse::<f64>()) {
-                bpms_vec.push((beat, bpm));
-            }
-        }
-    }
-    bpms_vec.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    bpms_vec
-}
-
-// --------------------------------------------------------------------
-// Returns the BPM in effect at a given beat
-// --------------------------------------------------------------------
-fn get_current_bpm(beat: f64, bpm_map: &[(f64, f64)]) -> f64 {
-    let mut curr_bpm = if !bpm_map.is_empty() { bpm_map[0].1 } else { 0.0 };
-    for &(b_beat, b_bpm) in bpm_map {
-        if beat >= b_beat {
-            curr_bpm = b_bpm;
-        } else {
-            break;
-        }
-    }
-    curr_bpm
-}
-
-// --------------------------------------------------------------------
 // Compute median of a slice of f64
 // --------------------------------------------------------------------
 fn median(arr: &[f64]) -> f64 {
@@ -600,12 +665,9 @@ fn median(arr: &[f64]) -> f64 {
 // Pattern Analysis
 // --------------------------------------------------------------------
 
-/// Convert a single line of up to 4 bytes (e.g. "1000") into a bitmask.
-/// bit 0 => left, bit 1 => down, bit 2 => up, bit 3 => right.
 #[inline]
 fn line_to_bitmask(line: &[u8]) -> u8 {
     let mut mask = 0u8;
-    // We assume line has length >= 4 from previous checks
     if matches!(line[0], b'1' | b'2' | b'4') {
         mask |= 1 << 0;
     }
@@ -636,17 +698,11 @@ fn parse_bitmask_chart(chart_data: &[u8]) -> Vec<u8> {
     bitmasks
 }
 
-/// Count left-foot candles and right-foot candles by scanning bitmask lines.
-/// We'll define pattern arrays for both left and right candles, then loop
-/// over bitmasks in steps of 1 (no skip on match).
 fn count_candles(bitmasks: &[u8]) -> (u32, u32) {
-    // Each candle is 3 lines. We store them as arrays of `[u8; 3]`.
-    // L-foot: (Down -> Right -> Up) or (Up -> Right -> Down)
     const LEFT_FOOT_PATTERNS: &[[u8; 3]] = &[
         [0b0010, 0b1000, 0b0100],
         [0b0100, 0b1000, 0b0010],
     ];
-    // R-foot: (Down -> Left -> Up) or (Up -> Left -> Down)
     const RIGHT_FOOT_PATTERNS: &[[u8; 3]] = &[
         [0b0010, 0b0001, 0b0100],
         [0b0100, 0b0001, 0b0010],
@@ -659,15 +715,11 @@ fn count_candles(bitmasks: &[u8]) -> (u32, u32) {
         return (0, 0);
     }
 
-    // Overlapping scan
     for i in 0..(bitmasks.len() - 2) {
         let block = [bitmasks[i], bitmasks[i + 1], bitmasks[i + 2]];
-
-        // If this 3-line block matches any L-foot pattern, increment left_foot
         if LEFT_FOOT_PATTERNS.iter().any(|pat| *pat == block) {
             left_foot += 1;
         }
-        // If it matches any R-foot pattern, increment right_foot
         if RIGHT_FOOT_PATTERNS.iter().any(|pat| *pat == block) {
             right_foot += 1;
         }
@@ -675,8 +727,6 @@ fn count_candles(bitmasks: &[u8]) -> (u32, u32) {
     (left_foot, right_foot)
 }
 
-/// Count monos (LD_RU or LU_RD) by scanning 4 consecutive lines with "skip on match".
-/// We'll define 2 pattern arrays, one for LD_RU, one for LU_RD.
 fn count_monos(bitmasks: &[u8]) -> (u32, u32) {
     const VALID_LD_RU: &[[u8; 4]] = &[
         [0b0001, 0b0100, 0b0010, 0b1000],
@@ -706,20 +756,17 @@ fn count_monos(bitmasks: &[u8]) -> (u32, u32) {
         return (0, 0);
     }
 
-    // We do a while loop so we can skip on match.
     let mut i = 0;
     while i + 3 < bitmasks.len() {
         let block = &bitmasks[i..i + 4];
-
-        // skip blocks where any line has 0 or >1 arrows pressed
         if block.iter().all(|&b| b.count_ones() == 1) {
             if VALID_LD_RU.iter().any(|pat| pat == block) {
                 ld_ru += 1;
-                i += 4; // skip on match
+                i += 4;
                 continue;
             } else if VALID_LU_RD.iter().any(|pat| pat == block) {
                 lu_rd += 1;
-                i += 4; // skip on match
+                i += 4;
                 continue;
             }
         }
@@ -728,8 +775,6 @@ fn count_monos(bitmasks: &[u8]) -> (u32, u32) {
     (ld_ru, lu_rd)
 }
 
-/// Count boxes by scanning 4 consecutive lines (overlapping).
-/// We'll define multiple box types in arrays, then check each 4-line block.
 fn count_boxes(bitmasks: &[u8]) -> (u32, u32, u32, u32, u32, u32) {
     const LR_BOXES: &[[u8; 4]] = &[
         [0b0001, 0b1000, 0b0001, 0b1000],
@@ -767,10 +812,8 @@ fn count_boxes(bitmasks: &[u8]) -> (u32, u32, u32, u32, u32, u32) {
         return (0, 0, 0, 0, 0, 0);
     }
 
-    // Overlapping scan
     for i in 0..(bitmasks.len() - 3) {
         let block = [bitmasks[i], bitmasks[i + 1], bitmasks[i + 2], bitmasks[i + 3]];
-
         if LR_BOXES.iter().any(|pat| *pat == block) {
             lr += 1;
         }
@@ -793,10 +836,8 @@ fn count_boxes(bitmasks: &[u8]) -> (u32, u32, u32, u32, u32, u32) {
     (lr, ud, corner_ld, corner_lu, corner_rd, corner_ru)
 }
 
-/// Same as your original dorito logic, but with const arrays:
 #[inline]
 fn count_doritos(bitmasks: &[u8]) -> (u32, u32, u32, u32) {
-    // define patterns as arrays of 5 bitmasks:
     const RIGHT_DORITO: [u8; 5] = [
         0b1000, 0b0100, 0b0010, 0b0100, 0b1000
     ];
@@ -820,9 +861,7 @@ fn count_doritos(bitmasks: &[u8]) -> (u32, u32, u32, u32) {
     }
 
     let mut i = 0;
-    // skip-on-match approach
     while i + 4 < bitmasks.len() {
-        // each line must have exactly 1 arrow
         if bitmasks[i..i+5].iter().all(|&b| b.count_ones() == 1) {
             let block = &bitmasks[i..i+5];
             if block == &RIGHT_DORITO {
@@ -849,11 +888,10 @@ fn count_doritos(bitmasks: &[u8]) -> (u32, u32, u32, u32) {
     (rd_count, ld_count, ird_count, ild_count)
 }
 
-/// Count anchors (same arrow repeated among lines spaced out).
 fn count_anchors(bitmasks: &[u8], arrow_bit: u8) -> u32 {
     let mut count = 0;
     let n = bitmasks.len();
-    let mask = 1 << arrow_bit; 
+    let mask = 1 << arrow_bit;
     let mut i = 0;
 
     while i + 4 < n {
@@ -862,7 +900,7 @@ fn count_anchors(bitmasks: &[u8], arrow_bit: u8) -> u32 {
             && (bitmasks[i + 4] & mask) != 0
         {
             count += 1;
-            i += 5; 
+            i += 5;
         } else {
             i += 1;
         }
@@ -870,7 +908,6 @@ fn count_anchors(bitmasks: &[u8], arrow_bit: u8) -> u32 {
     count
 }
 
-/// Full pattern analysis on the minimized chart lines.
 fn do_pattern_analysis(bitmasks: &[u8], total_arrows: u32) -> PatternStats {
     let (left_foot_candles, right_foot_candles) = count_candles(bitmasks);
     let total_candles = left_foot_candles + right_foot_candles;
@@ -941,33 +978,21 @@ fn generate_density_graph_png(
     const IMAGE_WIDTH: u32 = 1000;
     const GRAPH_HEIGHT: u32 = 400;
 
-    // Create a new RGB image buffer.
     let mut imgbuf: RgbImage = ImageBuffer::new(IMAGE_WIDTH, GRAPH_HEIGHT);
 
-    // Background color = #03112c
     let bg_color = Rgb([0x03, 0x11, 0x2c]);
-
-    // Bottom color of gradient = #00b8cc
-    let bottom_color = (0x00, 0xb8, 0xcc);
-    // Top color of gradient = #8200a1
-    let top_color = (0x82, 0x00, 0xa1);
-
-    // Fill the entire image with the background first.
     for pixel in imgbuf.pixels_mut() {
         *pixel = bg_color;
     }
 
-    // If no measures or max_nps <= 0, just save the background image and return.
     if measure_nps_vec.is_empty() || max_nps <= 0.0 {
         let filename = format!("{}.png", short_hash);
         imgbuf.save(&filename)?;
         return Ok(());
     }
 
-    // Each measure’s column width.
     let measure_width = IMAGE_WIDTH as f64 / measure_nps_vec.len() as f64;
 
-    // A small helper function to interpolate between two channels a..b by fraction t in [0..1].
     fn lerp(a: u8, b: u8, t: f64) -> u8 {
         let t = t.clamp(0.0, 1.0);
         let af = a as f64;
@@ -975,35 +1000,23 @@ fn generate_density_graph_png(
         (af + (bf - af) * t).round() as u8
     }
 
-    /*
-        We'll use a single, image-wide gradient from bottom_color at the bottom (y=GRAPH_HEIGHT-1)
-        to top_color at the top (y=0). For each bar, we only fill the range [y_top..(GRAPH_HEIGHT-1)]
-        with the appropriate portion of that gradient. Above y_top remains the background color.
-    */
+    // gradient from bottom_color => top_color
+    let bottom_color = (0x00, 0xb8, 0xcc);
+    let top_color    = (0x82, 0x00, 0xa1);
 
     for (i, &nps) in measure_nps_vec.iter().enumerate() {
-        // X range for this measure
         let x_start = (i as f64 * measure_width).round() as u32;
         let x_end   = (((i + 1) as f64 * measure_width).round() as u32).min(IMAGE_WIDTH);
 
-        // Bar height in pixels
-        let height_fraction = nps / max_nps; 
+        let height_fraction = nps / max_nps;
         let bar_height = (height_fraction * GRAPH_HEIGHT as f64).round() as i32;
-
-        // The top of the bar in image coords (0 = top, GRAPH_HEIGHT-1 = bottom)
         let y_top = GRAPH_HEIGHT as i32 - bar_height;
 
-        // Fill from y_top down to the bottom (GRAPH_HEIGHT-1) with our gradient.
-        // Above y_top remains the background color you already filled in.
         for x in x_start..x_end {
             for y in y_top..(GRAPH_HEIGHT as i32) {
-                // safety checks
                 if y < 0 || y >= GRAPH_HEIGHT as i32 || x >= IMAGE_WIDTH {
                     continue;
                 }
-                // y=GRAPH_HEIGHT-1 => fraction=0 => bottom color
-                // y=0 => fraction=1 => top color
-                // so fraction = (GRAPH_HEIGHT-1 - y) / (GRAPH_HEIGHT-1)
                 let dist_from_bottom = (GRAPH_HEIGHT as i32 - 1 - y) as f64;
                 let frac = dist_from_bottom / (GRAPH_HEIGHT as f64 - 1.0);
 
@@ -1016,7 +1029,6 @@ fn generate_density_graph_png(
         }
     }
 
-    // Finally, save the image as short_hash.png
     let output_file = format!("{}.png", short_hash);
     imgbuf.save(&output_file)?;
 
@@ -1028,10 +1040,12 @@ fn generate_density_graph_png(
 // --------------------------------------------------------------------
 
 fn main() -> io::Result<()> {
-    let before = Instant::now();
+    // Start timer BEFORE any processing:
+    let start_time = Instant::now();
+
     let args: Vec<String> = args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: {} <simfile_path> [--png]", args[0]);
+        eprintln!("Usage: {} <simfile_path> [--png] [--json]", args[0]);
         std::process::exit(1);
     }
 
@@ -1040,8 +1054,8 @@ fn main() -> io::Result<()> {
     let mut simfile_data = Vec::new();
     file.read_to_end(&mut simfile_data)?;
 
-    // Check if we have a --png among the arguments
-    let generate_png = args.iter().any(|a| a == "--png");
+    let generate_png  = args.iter().any(|a| a == "--png");
+    let generate_json = args.iter().any(|a| a == "--json");
 
     let (
         title_opt,
@@ -1064,7 +1078,6 @@ fn main() -> io::Result<()> {
         .unwrap_or("<invalid-bpms>");
     let normalized_bpms = normalize_float_digits(bpms_raw);
 
-    // Handle transliterated fields
     let titletranslit_str = std::str::from_utf8(titletranslit_opt.unwrap_or(b""))
         .unwrap_or("");
     let subtitletranslit_str = std::str::from_utf8(subtitletranslit_opt.unwrap_or(b""))
@@ -1083,23 +1096,18 @@ fn main() -> io::Result<()> {
     let difficulty_str = std::str::from_utf8(fields[2]).unwrap_or("").trim();
     let rating_str     = std::str::from_utf8(fields[3]).unwrap_or("").trim();
 
-    // Minimize + count arrows
     let (mut minimized_chart, stats, measure_densities) = minimize_chart_and_count(chart_data);
 
-    // remove trailing newlines
     if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
         minimized_chart.truncate(pos + 1);
     }
 
-    // Compute stream counts
     let stream_counts = compute_stream_counts(&measure_densities);
-
-    // Generate breakdowns
     let detailed = generate_breakdown(&measure_densities, BreakdownMode::Detailed);
     let partial  = generate_breakdown(&measure_densities, BreakdownMode::Partial);
     let simple   = generate_breakdown(&measure_densities, BreakdownMode::Simplified);
 
-    // Build hash
+    // Hash
     let mut hasher = Sha1::new();
     hasher.update(&minimized_chart);
     hasher.update(normalized_bpms.as_bytes());
@@ -1107,60 +1115,118 @@ fn main() -> io::Result<()> {
     let hash_hex = hex::encode(hash_result);
     let short_hash = &hash_hex[..16];
 
-    // Prepare BPM map, compute length, max_nps, median_nps, plus min_bpm, max_bpm
+    // BPM map and range
     let bpm_map = parse_bpm_map(&normalized_bpms);
-    let (mut min_bpm, mut max_bpm) = (f64::MAX, f64::MIN);
-    for &(_, bpm) in &bpm_map {
-        if bpm < min_bpm {
-            min_bpm = bpm;
-        }
-        if bpm > max_bpm {
-            max_bpm = bpm;
-        }
-    }
-    if bpm_map.is_empty() {
-        min_bpm = 0.0;
-        max_bpm = 0.0;
-    }
+    let (min_bpm, max_bpm) = compute_bpm_range(&bpm_map);
 
-    let mut measure_nps_vec = Vec::with_capacity(measure_densities.len());
-    let mut total_length_seconds = 0.0;
-    for (i, &density) in measure_densities.iter().enumerate() {
-        let measure_start_beat = i as f64 * 4.0;
-        let curr_bpm = get_current_bpm(measure_start_beat, &bpm_map);
-        if curr_bpm <= 0.0 {
-            measure_nps_vec.push(0.0);
-            continue;
-        }
-        let measure_length_s = (4.0 / curr_bpm) * 60.0;
-        total_length_seconds += measure_length_s;
+    // NPS vector + stats
+    let measure_nps_vec = compute_measure_nps_vec(&measure_densities, &bpm_map);
+    let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
 
-        let measure_nps = density as f64 * (curr_bpm / 4.0) / 60.0;
-        measure_nps_vec.push(measure_nps);
-    }
+    // Chart length (seconds) as int
+    let total_length = compute_total_chart_length(&measure_densities, &bpm_map);
 
-    let max_nps = if measure_nps_vec.is_empty() {
-        0.0
-    } else {
-        measure_nps_vec.iter().fold(f64::MIN, |a, &b| a.max(b))
-    };
-    let median_nps = median(&measure_nps_vec);
-
-    // --------------------------------------------------------------------
-    // Pattern analysis 
-    // Convert minimized chart to bitmasks => measure all patterns.
-    // --------------------------------------------------------------------
+    // Pattern stats
     let bitmasks = parse_bitmask_chart(&minimized_chart);
     let pattern_stats = do_pattern_analysis(&bitmasks, stats.total_arrows);
 
-    // Print
+    // Generate PNG if requested (but DO NOT return yet).
     if generate_png {
-        // We only output a PNG and *no* text.
-        // Map from ImageResult<()> to io::Result<()>
+        // If there's an error in PNG generation, convert to io::Error
         generate_density_graph_png(&measure_nps_vec, max_nps, short_hash)
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+    }
+
+    // Finally, print elapsed time at the END
+    let elapsed = start_time.elapsed();
+
+    // Now do JSON or text output (or neither).
+    if generate_json {
+        println!("{{");
+        // We place elapsed time at the END, so skip for now.
+
+        // Basic info
+        println!("  \"title\": \"{}\",", escape_json(title_str));
+        println!("  \"title_translit\": \"{}\",", escape_json(titletranslit_str));
+        println!("  \"subtitle\": \"{}\",", escape_json(subtitle_str));
+        println!("  \"subtitle_translit\": \"{}\",", escape_json(subtitletranslit_str));
+        println!("  \"artist\": \"{}\",", escape_json(artist_str));
+        println!("  \"artist_translit\": \"{}\",", escape_json(artisttranslit_str));
+        println!("  \"bpms\": \"{}\",", escape_json(&normalized_bpms));
+        println!("  \"step_type\": \"{}\",", escape_json(step_type_str));
+        println!("  \"difficulty\": \"{}\",", escape_json(difficulty_str));
+        println!("  \"rating\": \"{}\",", escape_json(rating_str));
+        println!("  \"hash_short\": \"{}\",", short_hash);
+
+        // Arrow Stats
+        println!("  \"arrow_stats\": {{");
+        println!("     \"left\": {},", stats.left);
+        println!("     \"down\": {},", stats.down);
+        println!("     \"up\": {},", stats.up);
+        println!("     \"right\": {},", stats.right);
+        println!("     \"total_arrows\": {},", stats.total_arrows);
+        println!("     \"total_steps\": {},", stats.total_steps);
+        println!("     \"jumps\": {},", stats.jumps);
+        println!("     \"hands\": {},", stats.hands);
+        println!("     \"holds\": {},", stats.holds);
+        println!("     \"rolls\": {},", stats.rolls);
+        println!("     \"mines\": {}", stats.mines);
+        println!("  }},");
+
+        // Stream Counts
+        println!("  \"stream_counts\": {{");
+        println!("     \"run16_streams\": {},", stream_counts.run16_streams);
+        println!("     \"run20_streams\": {},", stream_counts.run20_streams);
+        println!("     \"run24_streams\": {},", stream_counts.run24_streams);
+        println!("     \"run32_streams\": {},", stream_counts.run32_streams);
+        println!("     \"total_breaks\": {}", stream_counts.total_breaks);
+        println!("  }},");
+
+        // Breakdown
+        println!("  \"breakdown\": {{");
+        println!("     \"detailed\": \"{}\",", escape_json(&detailed));
+        println!("     \"partial\": \"{}\",", escape_json(&partial));
+        println!("     \"simple\": \"{}\"", escape_json(&simple));
+        println!("  }},");
+
+        // BPM info
+        println!("  \"bpm_info\": {{");
+        println!("     \"min_bpm\": {:.2},", min_bpm);
+        println!("     \"max_bpm\": {:.2},", max_bpm);
+        println!("     \"chart_length_s\": {},", total_length);
+        println!("     \"max_nps\": {:.2},", max_nps);
+        println!("     \"median_nps\": {:.2}", median_nps);
+        println!("  }},");
+
+        // Pattern stats
+        println!("  \"pattern_stats\": {{");
+        println!("     \"left_foot_candles\": {},", pattern_stats.left_foot_candles);
+        println!("     \"right_foot_candles\": {},", pattern_stats.right_foot_candles);
+        println!("     \"total_candles\": {},", pattern_stats.total_candles);
+        println!("     \"candles_percent\": {:.2},", pattern_stats.candles_percent);
+        println!("     \"ld_ru_mono\": {},", pattern_stats.ld_ru_mono);
+        println!("     \"lu_rd_mono\": {},", pattern_stats.lu_rd_mono);
+        println!("     \"mono_percent\": {:.2},", pattern_stats.mono_percent);
+        println!("     \"lr_boxes\": {},", pattern_stats.lr_boxes);
+        println!("     \"ud_boxes\": {},", pattern_stats.ud_boxes);
+        println!("     \"corner_ld_boxes\": {},", pattern_stats.corner_ld_boxes);
+        println!("     \"corner_lu_boxes\": {},", pattern_stats.corner_lu_boxes);
+        println!("     \"corner_rd_boxes\": {},", pattern_stats.corner_rd_boxes);
+        println!("     \"corner_ru_boxes\": {},", pattern_stats.corner_ru_boxes);
+        println!("     \"anchor_left\": {},", pattern_stats.anchor_left);
+        println!("     \"anchor_down\": {},", pattern_stats.anchor_down);
+        println!("     \"anchor_up\": {},", pattern_stats.anchor_up);
+        println!("     \"anchor_right\": {},", pattern_stats.anchor_right);
+        println!("     \"right_dorito\": {},", pattern_stats.right_dorito);
+        println!("     \"left_dorito\": {},", pattern_stats.left_dorito);
+        println!("     \"inv_right_dorito\": {},", pattern_stats.inv_right_dorito);
+        println!("     \"inv_left_dorito\": {}", pattern_stats.inv_left_dorito);
+        println!("  }},");
+
+        // Execution time
+        println!("  \"elapsed\": \"{:?}\",", elapsed);
+        println!("}}");
     } else {
-        println!("Elapsed time: {:.2?}", before.elapsed());
         println!("Title: {}", title_str);
         println!("Title translate: {}", titletranslit_str);
         println!("Subtitle: {}", subtitle_str);
@@ -1200,7 +1266,7 @@ fn main() -> io::Result<()> {
         println!("--- Additional Chart Info ---");
         println!("Min BPM: {:.2}", min_bpm);
         println!("Max BPM: {:.2}", max_bpm);
-        println!("Chart length (seconds): {:.2}", total_length_seconds);
+        println!("Chart length (seconds): {}", total_length);
         println!("Max NPS: {:.2}", max_nps);
         println!("Median NPS: {:.2}", median_nps);
 
@@ -1226,7 +1292,25 @@ fn main() -> io::Result<()> {
         println!("left_dorito: {}", pattern_stats.left_dorito);
         println!("inv_right_dorito: {}", pattern_stats.inv_right_dorito);
         println!("inv_left_dorito: {}", pattern_stats.inv_left_dorito);
+        println!("---");
+        println!("Elapsed time: {:?}", elapsed);
     }
 
     Ok(())
+}
+
+/// Minimal “escape” function for JSON strings (handle quotes, backslashes, etc.).
+fn escape_json(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for c in input.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
