@@ -338,90 +338,111 @@ fn format_run_symbol(cat: RunDensity, length: usize, star: bool) -> String {
     }
 }
 
-/// The single function that builds tokens, merges them based on BreakdownMode,
-/// and outputs the final string.
+/// Build and merge tokens according to the breakdown mode.
 fn generate_breakdown(measure_densities: &[usize], mode: BreakdownMode) -> String {
+    // 1) categorize
     let cats: Vec<RunDensity> = measure_densities
         .iter()
         .map(|&d| categorize_measure_density(d))
         .collect();
 
-    // skip leading/trailing breaks
+    // 2) skip leading/trailing breaks
     let first_run = cats.iter().position(|&c| c != RunDensity::Break);
     let last_run  = cats.iter().rposition(|&c| c != RunDensity::Break);
     if first_run.is_none() || last_run.is_none() {
         return String::new();
     }
 
-    // build run-length tokens
+    // 3) Build tokens
     let mut tokens = Vec::new();
     {
         let mut i = first_run.unwrap();
         let end = last_run.unwrap();
         while i <= end {
-            let c = cats[i];
+            let cat = cats[i];
             let mut length = 1;
             let mut j = i + 1;
-            while j <= end && cats[j] == c {
+            while j <= end && cats[j] == cat {
                 length += 1;
                 j += 1;
             }
-            if c == RunDensity::Break {
+            if cat == RunDensity::Break {
                 tokens.push(Token::Break(length));
             } else {
-                tokens.push(Token::Run(c, length));
+                tokens.push(Token::Run(cat, length));
             }
             i = j;
         }
     }
 
-    // merges if needed
+    // 4) final output
     let mut output = Vec::new();
     let mut idx = 0;
 
+    // partial => threshold=1
+    // simplified => threshold=4
+    let threshold = match mode {
+        BreakdownMode::Partial => 1,
+        BreakdownMode::Simplified => 4,
+        BreakdownMode::Detailed => 0, // for clarity
+    };
+
     while idx < tokens.len() {
         match tokens[idx] {
-            Token::Run(cat, mut run_len) => {
+            Token::Run(curr_cat, mut curr_len) => {
                 let mut star = false;
+
                 if mode != BreakdownMode::Detailed {
-                    while idx + 2 < tokens.len() {
-                        let can_merge = match (&tokens[idx + 1], &tokens[idx + 2]) {
-                            (Token::Break(bk_len), Token::Run(next_cat, next_len)) => {
-                                if cat == *next_cat {
-                                    match mode {
-                                        BreakdownMode::Partial => {
-                                            if *bk_len == 1 {
-                                                run_len += bk_len + *next_len;
-                                                true
-                                            } else {
-                                                false
-                                            }
-                                        }
-                                        BreakdownMode::Simplified => {
-                                            if *bk_len <= 4 {
-                                                run_len += bk_len + *next_len;
-                                                true
-                                            } else {
-                                                false
-                                            }
-                                        }
-                                        BreakdownMode::Detailed => false,
-                                    }
-                                } else {
-                                    false
-                                }
-                            }
-                            _ => false,
-                        };
-                        if can_merge {
-                            star = true;
-                            idx += 2;
-                        } else {
+                    'merge_loop: loop {
+                        if idx + 1 >= tokens.len() {
                             break;
+                        }
+                        // next token must be a Break
+                        let Token::Break(bk_len) = tokens[idx + 1] else {
+                            break;
+                        };
+
+                        // if break is bigger than threshold => no merge
+                        if bk_len > threshold {
+                            break;
+                        }
+
+                        // we do have a small break => check if there's a run after it
+                        if idx + 2 >= tokens.len() {
+                            break;
+                        }
+
+                        if let Token::Run(next_cat, next_len) = tokens[idx + 2] {
+                            if next_cat == curr_cat {
+                                // same category => fold break + run
+                                curr_len += bk_len + next_len;
+                                star = true;
+                                // remove
+                                tokens.remove(idx + 1); // break
+                                tokens.remove(idx + 1); // run
+                                continue 'merge_loop;
+                            } else {
+                                // different category
+                                // unify: if bk_len == 1 => DO NOT MERGE for both partial/simplified
+                                if bk_len == 1 {
+                                    break 'merge_loop;
+                                }
+                                // else bk_len is 2..=4 in Simplified => fold break only
+                                if mode == BreakdownMode::Simplified {
+                                    curr_len += bk_len;
+                                    star = true;
+                                    tokens.remove(idx + 1); // remove break
+                                }
+                                // stop, do not remove next run
+                                break 'merge_loop;
+                            }
+                        } else {
+                            break 'merge_loop;
                         }
                     }
                 }
-                let s = format_run_symbol(cat, run_len, star);
+
+                let s = format_run_symbol(curr_cat, curr_len, star);
                 output.push(s);
                 idx += 1;
             }
@@ -457,6 +478,7 @@ fn generate_breakdown(measure_densities: &[usize], mode: BreakdownMode) -> Strin
             }
         }
     }
+
     output.join(" ")
 }
 
