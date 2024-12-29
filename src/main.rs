@@ -1176,6 +1176,13 @@ fn main() -> io::Result<()> {
     }
 
     let stream_counts = compute_stream_counts(&measure_densities);
+
+    // Compute total_streams as the sum of individual stream counts
+    let total_streams = stream_counts.run16_streams
+    + stream_counts.run20_streams
+    + stream_counts.run24_streams
+    + stream_counts.run32_streams;
+
     let detailed = generate_breakdown(&measure_densities, BreakdownMode::Detailed);
     let partial  = generate_breakdown(&measure_densities, BreakdownMode::Partial);
     let simple   = generate_breakdown(&measure_densities, BreakdownMode::Simplified);
@@ -1252,6 +1259,7 @@ fn main() -> io::Result<()> {
         println!("     \"run20_streams\": {},", stream_counts.run20_streams);
         println!("     \"run24_streams\": {},", stream_counts.run24_streams);
         println!("     \"run32_streams\": {},", stream_counts.run32_streams);
+        println!("     \"total_streams\": {},", total_streams);
         println!("     \"total_breaks\": {}", stream_counts.total_breaks);
         println!("  }},");
 
@@ -1330,6 +1338,7 @@ fn main() -> io::Result<()> {
         println!("20th streams: {}", stream_counts.run20_streams);
         println!("24th streams: {}", stream_counts.run24_streams);
         println!("32nd streams: {}", stream_counts.run32_streams);
+        println!("Total streams: {}", total_streams);
         println!("Total breaks: {}", stream_counts.total_breaks);
 
         println!("Detailed breakdown: {}", detailed);
