@@ -7,6 +7,44 @@ use std::fmt::Write; // for normalize_float_digits
 use sha1::{Digest, Sha1};
 use image::{ImageBuffer, Rgb, RgbImage, ImageError};
 
+/// Strip bracketed numeric tags (e.g. [16] [300]) and leading numeric prefixes (e.g. "8. - ")
+/// from a title string.
+fn strip_title_tags(title: &str) -> String {
+    let mut s = title.trim_start();
+
+    loop {
+        if s.starts_with('[') {
+            if let Some(end_bracket) = s.find(']') {
+                let tag_content = &s[1..end_bracket];
+                // Only strip if the bracket contents are digits or periods (e.g. [16], [300], [2.5])
+                if tag_content.chars().all(|c| c.is_ascii_digit() || c == '.') {
+                    // Advance past the bracket and trim again
+                    s = s[end_bracket + 1..].trim_start();
+                    continue;
+                }
+            }
+        } else {
+            // Also strip leading numeric prefixes like "8. - "
+            let mut chars = s.char_indices();
+            let mut pos = 0;
+            while let Some((i, c)) = chars.next() {
+                if c.is_ascii_digit() || c == '.' {
+                    pos = i + c.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            if pos > 0 && s[pos..].starts_with("- ") {
+                s = s[pos + 2..].trim_start();
+                continue;
+            }
+        }
+        break;
+    }
+
+    s.to_string()
+}
+
 /// All arrow/step-related counts.
 #[derive(Default)]
 struct ArrowStats {
@@ -278,7 +316,7 @@ fn format_run_symbol(cat: RunDensity, length: usize, star: bool) -> String {
     }
 }
 
-/// The single function that builds tokens, merges them based on `BreakdownMode`,
+/// The single function that builds tokens, merges them based on BreakdownMode,
 /// and outputs the final string.
 fn generate_breakdown(measure_densities: &[usize], mode: BreakdownMode) -> String {
     let cats: Vec<RunDensity> = measure_densities
@@ -517,7 +555,7 @@ fn compute_measure_nps_vec(measure_densities: &[usize], bpm_map: &[(f64, f64)]) 
     measure_nps_vec
 }
 
-/// Returns `(max_nps, median_nps)` from the measure_nps_vec.
+/// Returns (max_nps, median_nps) from the measure_nps_vec.
 fn get_nps_stats(measure_nps_vec: &[f64]) -> (f64, f64) {
     let max_nps = if measure_nps_vec.is_empty() {
         0.0
@@ -1045,7 +1083,7 @@ fn main() -> io::Result<()> {
 
     let args: Vec<String> = args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: {} <simfile_path> [--png] [--json]", args[0]);
+        eprintln!("Usage: {} <simfile_path> [--png] [--json] [--strip-tags]", args[0]);
         std::process::exit(1);
     }
 
@@ -1056,6 +1094,7 @@ fn main() -> io::Result<()> {
 
     let generate_png  = args.iter().any(|a| a == "--png");
     let generate_json = args.iter().any(|a| a == "--json");
+    let strip_tags    = args.iter().any(|a| a == "--strip-tags");
 
     let (
         title_opt,
@@ -1068,8 +1107,16 @@ fn main() -> io::Result<()> {
         notes_opt,
     ) = extract_sections(&simfile_data)?;
 
-    let title_str = std::str::from_utf8(title_opt.unwrap_or(b"<invalid-title>"))
-        .unwrap_or("<invalid-title>");
+    // Convert to owned String so we can conditionally strip tags.
+    let mut title_str = std::str::from_utf8(title_opt.unwrap_or(b"<invalid-title>"))
+        .unwrap_or("<invalid-title>")
+        .to_owned();
+    
+    // If --strip-tags is present, remove bracketed numeric tags from the title
+    if strip_tags {
+        title_str = strip_title_tags(&title_str);
+    }
+
     let subtitle_str = std::str::from_utf8(subtitle_opt.unwrap_or(b"<invalid-subtitle>"))
         .unwrap_or("<invalid-subtitle>");
     let artist_str = std::str::from_utf8(artist_opt.unwrap_or(b"<invalid-artist>"))
@@ -1146,7 +1193,7 @@ fn main() -> io::Result<()> {
         // We place elapsed time at the END, so skip for now.
 
         // Basic info
-        println!("  \"title\": \"{}\",", escape_json(title_str));
+        println!("  \"title\": \"{}\",", escape_json(&title_str));
         println!("  \"title_translit\": \"{}\",", escape_json(titletranslit_str));
         println!("  \"subtitle\": \"{}\",", escape_json(subtitle_str));
         println!("  \"subtitle_translit\": \"{}\",", escape_json(subtitletranslit_str));
@@ -1224,7 +1271,7 @@ fn main() -> io::Result<()> {
         println!("  }},");
 
         // Execution time
-        println!("  \"elapsed\": \"{:?}\",", elapsed);
+        println!("  \"elapsed\": \"{:?}\"", elapsed);
         println!("}}");
     } else {
         println!("Title: {}", title_str);
