@@ -1,6 +1,6 @@
 [package]
 name = "rssp"
-version = "0.2.10"
+version = "0.2.11"
 edition = "2021"
 authors = ["Patrik Nilsson <patrik.n@pm.me>"]
 description = "A high-performance simfile parser for StepMania built in Rust."
