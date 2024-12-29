@@ -1,143 +1,103 @@
-use clap::Parser;
-use colored::*;
-use colored::Colorize; // Import the Colorize trait explicitly
-use serde::Deserialize;
-use std::fs;
-use std::io::{self};
-use std::path::Path;
-use std::process::Command;
+use std::env::args;
+use std::fs::File;
+use std::io;
+use std::io::Read;
+use std::time::Instant;
+use std::fmt::Write; // for normalize_float_digits
+use sha1::{Digest, Sha1};
+use image::{ImageBuffer, Rgb, RgbImage, ImageError};
 
-/// RSSP Test Program
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    /// Path to the rssp binary
-    #[arg(short, long, value_name = "BINARY_PATH", default_value = "/home/perfecttaste/rssp/target/release/rssp")]
-    binary_path: String,
+/// Strip bracketed numeric tags (e.g. [16] [300]) and leading numeric prefixes (e.g. "8. - ")
+/// from a title string.
+fn strip_title_tags(title: &str) -> String {
+    let mut s = title.trim_start();
 
-    /// Directory containing .sm and .json files
-    #[arg(short, long, value_name = "SIMFILES_DIR", default_value = "/home/perfecttaste/rssp/simfiles/")]
-    simfiles_dir: String,
+    loop {
+        if s.starts_with('[') {
+            if let Some(end_bracket) = s.find(']') {
+                let tag_content = &s[1..end_bracket];
+                // Only strip if the bracket contents are digits or periods (e.g. [16], [300], [2.5])
+                if tag_content.chars().all(|c| c.is_ascii_digit() || c == '.') {
+                    // Advance past the bracket and trim again
+                    s = s[end_bracket + 1..].trim_start();
+                    continue;
+                }
+            }
+        } else {
+            // Also strip leading numeric prefixes like "8. - "
+            let mut chars = s.char_indices();
+            let mut pos = 0;
+            while let Some((i, c)) = chars.next() {
+                if c.is_ascii_digit() || c == '.' {
+                    pos = i + c.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            if pos > 0 && s[pos..].starts_with("- ") {
+                s = s[pos + 2..].trim_start();
+                continue;
+            }
+        }
+        break;
+    }
 
-    /// Specify a single .sm file to test
-    #[arg(short = 'f', long = "test-file", value_name = "FILE_PATH")]
-    test_file: Option<String>,
+    s.to_string()
 }
 
-// Structs to represent the JSON output from the rssp binary
-#[derive(Debug, Deserialize)]
-struct RsspOutput {
-    title: String,
-    title_translit: Option<String>,
-    subtitle: Option<String>,
-    subtitle_translit: Option<String>,
-    artist: String,
-    artist_translit: Option<String>,
-    bpms: Option<String>,
-    step_type: Option<String>,
-    difficulty: Option<String>,
-    rating: Option<String>,
-    hash_short: Option<String>,
-    arrow_stats: Option<ArrowStats>,
-    stream_counts: Option<StreamCounts>,
-    breakdown: Option<Breakdown>,
-    bpm_info: Option<BpmInfo>,
-    pattern_stats: Option<PatternStats>,
-    elapsed: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
+/// All arrow/step-related counts.
+#[derive(Default)]
 struct ArrowStats {
-    left: Option<u32>,
-    down: Option<u32>,
-    up: Option<u32>,
-    right: Option<u32>,
-    total_arrows: Option<u32>,
-    total_steps: Option<u32>,
-    jumps: Option<u32>,
-    hands: Option<u32>,
-    holds: Option<u32>,
-    rolls: Option<u32>,
-    mines: Option<u32>,
-}
-
-#[derive(Debug, Deserialize)]
-struct StreamCounts {
-    run16_streams: Option<u32>,
-    run20_streams: Option<u32>,
-    run24_streams: Option<u32>,
-    run32_streams: Option<u32>,
-    total_streams: Option<u32>,
-    total_breaks: Option<u32>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Breakdown {
-    detailed: Option<String>,
-    partial: Option<String>,
-    simple: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct BpmInfo {
-    min_bpm: Option<f64>,
-    max_bpm: Option<f64>,
-    chart_length_s: Option<u32>,
-    max_nps: Option<f64>,
-    median_nps: Option<f64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PatternStats {
-    left_foot_candles: Option<u32>,
-    right_foot_candles: Option<u32>,
-    total_candles: Option<u32>,
-    candles_percent: Option<f64>,
-    mono_percent: Option<f64>,
-    lr_boxes: Option<u32>,
-    ud_boxes: Option<u32>,
-    corner_ld_boxes: Option<u32>,
-    corner_lu_boxes: Option<u32>,
-    corner_rd_boxes: Option<u32>,
-    corner_ru_boxes: Option<u32>,
-    anchor_left: Option<u32>,
-    anchor_down: Option<u32>,
-    anchor_up: Option<u32>,
-    anchor_right: Option<u32>,
-    right_dorito: Option<u32>,
-    left_dorito: Option<u32>,
-    inv_right_dorito: Option<u32>,
-    inv_left_dorito: Option<u32>,
-}
-
-// Struct to represent the expected JSON file
-#[derive(Debug, Deserialize)]
-struct ExpectedJson {
-    song_id: u32,
-    title: String,
-    subtitle: Option<String>, // Made optional
-    artist: String,
-    pack_id: u32,
-    rating: f64,
-    matrix_rating: f64,
-    length: u32,
-    bpm: u32,
-    tier_id: u32,
-    notes: u32,
+    total_arrows: u32,
+    left: u32,
+    down: u32,
+    up: u32,
+    right: u32,
+    total_steps: u32,
     jumps: u32,
-    holds: u32,
-    mines: u32,
     hands: u32,
+    mines: u32,
+    holds: u32,
     rolls: u32,
-    total_stream: u32,
-    total_break: u32,
-    breakdown: String,
-    partial_breakdown: String,
-    simple_breakdown: String,
+}
+
+/// Tracks how many dense measures appear at each run level.
+#[derive(Default)]
+struct StreamCounts {
+    run16_streams: u32,
+    run20_streams: u32,
+    run24_streams: u32,
+    run32_streams: u32,
+    total_breaks: u32,
+}
+
+/// A measure’s “density” category.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum RunDensity {
+    Run32,
+    Run24,
+    Run20,
+    Run16,
+    Break,
+}
+
+/// Which kind of breakdown are we generating?
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum BreakdownMode {
+    Detailed,
+    Partial,
+    Simplified,
+}
+
+/// Pattern stats (foot candles, anchors, boxes, etc.).
+#[derive(Default)]
+struct PatternStats {
     left_foot_candles: u32,
     right_foot_candles: u32,
     total_candles: u32,
     candles_percent: f64,
+    ld_ru_mono: u32,
+    lu_rd_mono: u32,
     mono_percent: f64,
     lr_boxes: u32,
     ud_boxes: u32,
@@ -149,1261 +109,1290 @@ struct ExpectedJson {
     anchor_down: u32,
     anchor_up: u32,
     anchor_right: u32,
-    max_bpm: u32,
-    min_bpm: u32,
-    max_nps: f64,
-    median_nps: f64,
-    md5: String,
-    sha1: String,
-    has_bg: bool,
-    has_bn: bool,
-    created_at: String,
+    right_dorito: u32,
+    left_dorito: u32,
+    inv_right_dorito: u32,
+    inv_left_dorito: u32,
 }
 
-// Struct to store information about a failed test
-struct FailedTest {
-    file: String,
-    test_name: String,
-    expected: String,
-    actual: String,
+// --------------------------------------------------------------------
+// Minimization & Counting
+// --------------------------------------------------------------------
+
+#[inline]
+fn is_all_zero(line: &[u8; 4]) -> bool {
+    line.iter().all(|&b| b == b'0')
 }
 
-fn main() -> io::Result<()> {
-    // Parse command-line arguments
-    let args = Args::parse();
-
-    // Paths configuration
-    let binary_path = &args.binary_path;
-    let simfiles_dir = &args.simfiles_dir;
-
-    // Counters
-    let mut pass = 0;
-    let mut total = 0;
-
-    // Vector to store failed tests
-    let mut failed_tests: Vec<FailedTest> = Vec::new();
-
-    // Check if rssp binary exists and is executable
-    if !Path::new(binary_path).exists() {
-        eprintln!(
-            "{}",
-            "Error: rssp binary not found at the specified path.".red()
-        );
-        std::process::exit(1);
-    }
-
-    // Determine which files to process
-    let sm_files = if let Some(test_file_path) = &args.test_file {
-        let path = Path::new(test_file_path);
-        if path.exists() && path.extension().and_then(|s| s.to_str()) == Some("sm") {
-            vec![path.to_path_buf()]
-        } else {
-            eprintln!(
-                "{} - The specified test file does not exist or is not a .sm file: {}",
-                "Error".red(),
-                test_file_path
-            );
-            std::process::exit(1);
+fn minimize_measure(measure: &mut Vec<[u8; 4]>) {
+    while measure.len() >= 2 && measure.len() % 2 == 0 {
+        if (1..measure.len()).step_by(2).any(|i| !is_all_zero(&measure[i])) {
+            break;
         }
-    } else {
-        // Read all .sm files in the simfiles directory
-        fs::read_dir(simfiles_dir)?
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let path = entry.path();
-                if path.extension()?.to_str()? == "sm" {
-                    Some(path)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-    };
-
-    if sm_files.is_empty() {
-        eprintln!(
-            "{}",
-            format!("No .sm files found in {}", simfiles_dir).red()
-        );
-        std::process::exit(1);
+        let half_len = measure.len() / 2;
+        for i in 0..half_len {
+            measure[i] = measure[i * 2];
+        }
+        measure.truncate(half_len);
     }
 
-    for sm_path in sm_files {
-        let filename = sm_path
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
-        let expected_hash = filename.trim_end_matches(".sm").to_string();
+    // If everything is zero, keep only 1 line
+    if !measure.is_empty() && measure.iter().all(is_all_zero) {
+        measure.truncate(1);
+    }
+}
 
-        // Run the rssp binary with --json flag
-        let output = Command::new(binary_path)
-            .arg(&sm_path)
-            .arg("--json")
-            .arg("--strip-tags")
-            .output()
-            .expect("Failed to execute rssp binary");
-
-        if !output.status.success() {
-            eprintln!(
-                "{} - Failed to execute rssp for file: {}",
-                "FAILED".red(),
-                filename
-            );
-            // Assuming 17 checks per file as in the Bash script
-            total += 17;
-            // Record all 17 tests as failed for this file
-            for i in 1..=17 {
-                failed_tests.push(FailedTest {
-                    file: filename.clone(),
-                    test_name: format!("Test {}", i),
-                    expected: "N/A".to_string(),
-                    actual: "rssp execution failed".to_string(),
-                });
+fn count_line(line: &[u8; 4], stats: &mut ArrowStats) -> bool {
+    let mut pressed = 0u32;
+    for &ch in line {
+        match ch {
+            b'1' => pressed += 1,
+            b'2' => {
+                stats.holds += 1;
+                pressed += 1;
             }
+            b'4' => {
+                stats.rolls += 1;
+                pressed += 1;
+            }
+            b'M' => {
+                stats.mines += 1;
+            }
+            _ => {}
+        }
+    }
+
+    // Column-based counting
+    if line[0] == b'1' || line[0] == b'2' || line[0] == b'4' {
+        stats.left += 1;
+    }
+    if line[1] == b'1' || line[1] == b'2' || line[1] == b'4' {
+        stats.down += 1;
+    }
+    if line[2] == b'1' || line[2] == b'2' || line[2] == b'4' {
+        stats.up += 1;
+    }
+    if line[3] == b'1' || line[3] == b'2' || line[3] == b'4' {
+        stats.right += 1;
+    }
+
+    if pressed > 0 {
+        stats.total_steps += 1;
+    }
+    if pressed == 2 {
+        stats.jumps += 1;
+    } else if pressed >= 3 {
+        stats.hands += 1;
+    }
+    stats.total_arrows += pressed;
+
+    pressed > 0
+}
+
+/// Minimizes chart + counts arrows, returning (final chart bytes, arrow stats, measure densities).
+fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<usize>) {
+    let mut output = Vec::with_capacity(notes_data.len());
+    let mut measure = Vec::with_capacity(64);
+
+    let mut stats = ArrowStats::default();
+    let mut measure_densities = Vec::new();
+    let mut saw_semicolon = false;
+
+    #[inline]
+    fn finalize_measure(
+        measure: &mut Vec<[u8; 4]>,
+        output: &mut Vec<u8>,
+        stats: &mut ArrowStats,
+        measure_densities: &mut Vec<usize>,
+    ) {
+        if measure.is_empty() {
+            measure_densities.push(0);
+            return;
+        }
+        minimize_measure(measure);
+        output.reserve(measure.len() * 5);
+
+        let mut density = 0usize;
+        for mline in measure.iter() {
+            if count_line(mline, stats) {
+                density += 1;
+            }
+            output.extend_from_slice(mline);
+            output.push(b'\n');
+        }
+        measure.clear();
+        measure_densities.push(density);
+    }
+
+    for line in notes_data.split(|&b| b == b'\n') {
+        if line.is_empty() {
             continue;
         }
-
-        // Parse the JSON output
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let rssp_json: RsspOutput = match serde_json::from_str(&stdout) {
-            Ok(json) => json,
-            Err(e) => {
-                eprintln!(
-                    "{} - Invalid JSON output for file: {}",
-                    "FAILED".red(),
-                    filename
-                );
-                eprintln!("Error: {}", e);
-                eprintln!("Raw Output:\n{}", stdout);
-                // Assuming 17 checks per file
-                total += 17;
-                // Record all 17 tests as failed due to JSON parsing error
-                for i in 1..=17 {
-                    failed_tests.push(FailedTest {
-                        file: filename.clone(),
-                        test_name: format!("Test {}", i),
-                        expected: "N/A".to_string(),
-                        actual: format!("Invalid JSON: {}", e),
-                    });
-                }
-                continue;
+        match line[0] {
+            b',' => {
+                finalize_measure(&mut measure, &mut output, &mut stats, &mut measure_densities);
+                output.extend_from_slice(b",\n");
             }
-        };
-
-        // Read the expected JSON file
-        let expected_json_path = format!("{}/{}.json", simfiles_dir, expected_hash);
-        let expected_json: ExpectedJson = match fs::read_to_string(&expected_json_path) {
-            Ok(content) => match serde_json::from_str(&content) {
-                Ok(json) => json,
-                Err(e) => {
-                    eprintln!(
-                        "{} - Failed to parse expected JSON file: {}",
-                        "FAILED".red(),
-                        expected_json_path
-                    );
-                    eprintln!("Error: {}", e);
-                    // Assuming 17 checks per file
-                    total += 17;
-                    // Record all 17 tests as failed due to expected JSON parsing error
-                    for i in 1..=17 {
-                        failed_tests.push(FailedTest {
-                            file: filename.clone(),
-                            test_name: format!("Test {}", i),
-                            expected: "N/A".to_string(),
-                            actual: format!("Invalid expected JSON: {}", e),
-                        });
-                    }
+            b';' => {
+                finalize_measure(&mut measure, &mut output, &mut stats, &mut measure_densities);
+                saw_semicolon = true;
+                break;
+            }
+            b' ' => {
+                // skip lines of only spaces
+            }
+            _ => {
+                if line.len() < 4 {
+                    // skip malformed lines
                     continue;
                 }
-            },
-            Err(_) => {
-                eprintln!(
-                    "{} - Expected JSON file not found: {}",
-                    "FAILED".red(),
-                    expected_json_path
-                );
-                // Assuming 17 checks per file
-                total += 17;
-                // Record all 17 tests as failed due to missing expected JSON
-                for i in 1..=17 {
-                    failed_tests.push(FailedTest {
-                        file: filename.clone(),
-                        test_name: format!("Test {}", i),
-                        expected: "N/A".to_string(),
-                        actual: "Expected JSON file not found".to_string(),
-                    });
-                }
-                continue;
+                let mut arr = [0u8; 4];
+                arr.copy_from_slice(&line[..4]);
+                measure.push(arr);
             }
-        };
-
-        println!("Testing file: {}", filename);
-
-        // **Hash Verification**
-        total += 1;
-        if let Some(hash_short) = rssp_json.hash_short {
-            if expected_hash == hash_short {
-                println!(
-                    "{}",
-                    format!(
-                        "\tHash: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_hash,
-                        hash_short,
-                        "PASSED".green()
-                    )
-                );
-                pass += 1;
-            } else {
-                println!(
-                    "{}",
-                    format!(
-                        "\tHash: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_hash,
-                        hash_short,
-                        "NOT PASSED".red()
-                    )
-                );
-                // Record the failed test
-                failed_tests.push(FailedTest {
-                    file: filename.clone(),
-                    test_name: "Hash Verification".to_string(),
-                    expected: expected_hash.clone(),
-                    actual: hash_short,
-                });
-            }
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tHash: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_hash,
-                    "None",
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Hash Verification".to_string(),
-                expected: expected_hash.clone(),
-                actual: "None".to_string(),
-            });
         }
-
-        // **Title Verification**
-        total += 1;
-        if expected_json.title == rssp_json.title {
-            println!(
-                "{}",
-                format!(
-                    "\tTitle: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_json.title,
-                    rssp_json.title,
-                    "PASSED".green()
-                )
-            );
-            pass += 1;
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tTitle: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_json.title,
-                    rssp_json.title,
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Title Verification".to_string(),
-                expected: expected_json.title.clone(),
-                actual: rssp_json.title.clone(),
-            });
-        }
-
-        // **Artist Name Verification**
-        total += 1;
-        if expected_json.artist == rssp_json.artist {
-            println!(
-                "{}",
-                format!(
-                    "\tArtist: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_json.artist,
-                    rssp_json.artist,
-                    "PASSED".green()
-                )
-            );
-            pass += 1;
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tArtist: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_json.artist,
-                    rssp_json.artist,
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Artist Name Verification".to_string(),
-                expected: expected_json.artist.clone(),
-                actual: rssp_json.artist.clone(),
-            });
-        }
-
-        // **Diff Number (Rating) Verification**
-        total += 1;
-        if let Some(rating_str) = rssp_json.rating {
-            if let Ok(rating) = rating_str.parse::<f64>() {
-                if expected_json.rating == rating {
-                    println!(
-                        "{}",
-                        format!(
-                            "\tRating (diff_number): Expected: \"{}\" | Actual: \"{}\" - {}",
-                            expected_json.rating,
-                            rating,
-                            "PASSED".green()
-                        )
-                    );
-                    pass += 1;
-                } else {
-                    println!(
-                        "{}",
-                        format!(
-                            "\tRating (diff_number): Expected: \"{}\" | Actual: \"{}\" - {}",
-                            expected_json.rating,
-                            rating,
-                            "NOT PASSED".red()
-                        )
-                    );
-                    // Record the failed test
-                    failed_tests.push(FailedTest {
-                        file: filename.clone(),
-                        test_name: "Diff Number (Rating) Verification".to_string(),
-                        expected: expected_json.rating.to_string(),
-                        actual: rating.to_string(),
-                    });
-                }
-            } else {
-                println!(
-                    "{}",
-                    format!(
-                        "\tRating (diff_number): Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.rating,
-                        rating_str,
-                        "NOT PASSED".red()
-                    )
-                );
-                // Record the failed test
-                failed_tests.push(FailedTest {
-                    file: filename.clone(),
-                    test_name: "Diff Number (Rating) Verification".to_string(),
-                    expected: expected_json.rating.to_string(),
-                    actual: rating_str.clone(),
-                });
-            }
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tRating (diff_number): Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_json.rating,
-                    "None",
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Diff Number (Rating) Verification".to_string(),
-                expected: expected_json.rating.to_string(),
-                actual: "None".to_string(),
-            });
-        }
-
-        // **Subtitle Verification**
-        total += 1;
-        let expected_subtitle = match &expected_json.subtitle {
-            Some(s) if s == "null" => "".to_string(),
-            Some(s) => s.clone(),
-            None => "".to_string(),
-        };
-        let actual_subtitle = rssp_json.subtitle.unwrap_or_default();
-        if expected_subtitle == actual_subtitle {
-            println!(
-                "{}",
-                format!(
-                    "\tSubtitle: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_subtitle,
-                    actual_subtitle,
-                    "PASSED".green()
-                )
-            );
-            pass += 1;
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tSubtitle: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_subtitle,
-                    actual_subtitle,
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Subtitle Verification".to_string(),
-                expected: expected_subtitle.clone(),
-                actual: actual_subtitle.clone(),
-            });
-        }
-
-        // **Notes (Steps) Verification**
-        total += 1;
-        if let Some(total_steps) = rssp_json.arrow_stats.as_ref().and_then(|a| a.total_steps) {
-            if expected_json.notes == total_steps {
-                println!(
-                    "{}",
-                    format!(
-                        "\tNotes (Steps): Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.notes,
-                        total_steps,
-                        "PASSED".green()
-                    )
-                );
-                pass += 1;
-            } else {
-                println!(
-                    "{}",
-                    format!(
-                        "\tNotes (Steps): Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.notes,
-                        total_steps,
-                        "NOT PASSED".red()
-                    )
-                );
-                // Record the failed test
-                failed_tests.push(FailedTest {
-                    file: filename.clone(),
-                    test_name: "Notes (Steps) Verification".to_string(),
-                    expected: expected_json.notes.to_string(),
-                    actual: total_steps.to_string(),
-                });
-            }
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tNotes (Steps): Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_json.notes,
-                    "None",
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Notes (Steps) Verification".to_string(),
-                expected: expected_json.notes.to_string(),
-                actual: "None".to_string(),
-            });
-        }
-
-        // **Jumps Verification**
-        total += 1;
-        if let Some(jumps) = rssp_json.arrow_stats.as_ref().and_then(|a| a.jumps) {
-            if expected_json.jumps == jumps {
-                println!(
-                    "{}",
-                    format!(
-                        "\tJumps: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.jumps,
-                        jumps,
-                        "PASSED".green()
-                    )
-                );
-                pass += 1;
-            } else {
-                println!(
-                    "{}",
-                    format!(
-                        "\tJumps: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.jumps,
-                        jumps,
-                        "NOT PASSED".red()
-                    )
-                );
-                // Record the failed test
-                failed_tests.push(FailedTest {
-                    file: filename.clone(),
-                    test_name: "Jumps Verification".to_string(),
-                    expected: expected_json.jumps.to_string(),
-                    actual: jumps.to_string(),
-                });
-            }
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tJumps: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_json.jumps,
-                    "None",
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Jumps Verification".to_string(),
-                expected: expected_json.jumps.to_string(),
-                actual: "None".to_string(),
-            });
-        }
-
-        // **Holds Verification**
-        total += 1;
-        if let Some(holds) = rssp_json.arrow_stats.as_ref().and_then(|a| a.holds) {
-            if expected_json.holds == holds {
-                println!(
-                    "{}",
-                    format!(
-                        "\tHolds: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.holds,
-                        holds,
-                        "PASSED".green()
-                    )
-                );
-                pass += 1;
-            } else {
-                println!(
-                    "{}",
-                    format!(
-                        "\tHolds: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.holds,
-                        holds,
-                        "NOT PASSED".red()
-                    )
-                );
-                // Record the failed test
-                failed_tests.push(FailedTest {
-                    file: filename.clone(),
-                    test_name: "Holds Verification".to_string(),
-                    expected: expected_json.holds.to_string(),
-                    actual: holds.to_string(),
-                });
-            }
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tHolds: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_json.holds,
-                    "None",
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Holds Verification".to_string(),
-                expected: expected_json.holds.to_string(),
-                actual: "None".to_string(),
-            });
-        }
-
-        // **Mines Verification**
-        total += 1;
-        if let Some(mines) = rssp_json.arrow_stats.as_ref().and_then(|a| a.mines) {
-            if expected_json.mines == mines {
-                println!(
-                    "{}",
-                    format!(
-                        "\tMines: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.mines,
-                        mines,
-                        "PASSED".green()
-                    )
-                );
-                pass += 1;
-            } else {
-                println!(
-                    "{}",
-                    format!(
-                        "\tMines: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.mines,
-                        mines,
-                        "NOT PASSED".red()
-                    )
-                );
-                // Record the failed test
-                failed_tests.push(FailedTest {
-                    file: filename.clone(),
-                    test_name: "Mines Verification".to_string(),
-                    expected: expected_json.mines.to_string(),
-                    actual: mines.to_string(),
-                });
-            }
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tMines: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_json.mines,
-                    "None",
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Mines Verification".to_string(),
-                expected: expected_json.mines.to_string(),
-                actual: "None".to_string(),
-            });
-        }
-
-        // **Hands Verification**
-        total += 1;
-        if let Some(hands) = rssp_json.arrow_stats.as_ref().and_then(|a| a.hands) {
-            if expected_json.hands == hands {
-                println!(
-                    "{}",
-                    format!(
-                        "\tHands: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.hands,
-                        hands,
-                        "PASSED".green()
-                    )
-                );
-                pass += 1;
-            } else {
-                println!(
-                    "{}",
-                    format!(
-                        "\tHands: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.hands,
-                        hands,
-                        "NOT PASSED".red()
-                    )
-                );
-                // Record the failed test
-                failed_tests.push(FailedTest {
-                    file: filename.clone(),
-                    test_name: "Hands Verification".to_string(),
-                    expected: expected_json.hands.to_string(),
-                    actual: hands.to_string(),
-                });
-            }
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tHands: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_json.hands,
-                    "None",
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Hands Verification".to_string(),
-                expected: expected_json.hands.to_string(),
-                actual: "None".to_string(),
-            });
-        }
-
-        // **Rolls Verification**
-        total += 1;
-        if let Some(rolls) = rssp_json.arrow_stats.as_ref().and_then(|a| a.rolls) {
-            if expected_json.rolls == rolls {
-                println!(
-                    "{}",
-                    format!(
-                        "\tRolls: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.rolls,
-                        rolls,
-                        "PASSED".green()
-                    )
-                );
-                pass += 1;
-            } else {
-                println!(
-                    "{}",
-                    format!(
-                        "\tRolls: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.rolls,
-                        rolls,
-                        "NOT PASSED".red()
-                    )
-                );
-                // Record the failed test
-                failed_tests.push(FailedTest {
-                    file: filename.clone(),
-                    test_name: "Rolls Verification".to_string(),
-                    expected: expected_json.rolls.to_string(),
-                    actual: rolls.to_string(),
-                });
-            }
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tRolls: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_json.rolls,
-                    "None",
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Rolls Verification".to_string(),
-                expected: expected_json.rolls.to_string(),
-                actual: "None".to_string(),
-            });
-        }
-
-        // **Detailed Breakdown Verification**
-        total += 1;
-        if let Some(detailed_breakdown) = rssp_json.breakdown.as_ref().and_then(|b| b.detailed.as_ref()) {
-            if expected_json.breakdown == *detailed_breakdown {
-                println!(
-                    "{}",
-                    format!(
-                        "\tDetailed Breakdown: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.breakdown,
-                        detailed_breakdown,
-                        "PASSED".green()
-                    )
-                );
-                pass += 1;
-            } else {
-                println!(
-                    "{}",
-                    format!(
-                        "\tDetailed Breakdown: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.breakdown,
-                        detailed_breakdown,
-                        "NOT PASSED".red()
-                    )
-                );
-                // Record the failed test
-                failed_tests.push(FailedTest {
-                    file: filename.clone(),
-                    test_name: "Detailed Breakdown Verification".to_string(),
-                    expected: expected_json.breakdown.clone(),
-                    actual: detailed_breakdown.clone(),
-                });
-            }
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tDetailed Breakdown: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_json.breakdown,
-                    "None",
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Detailed Breakdown Verification".to_string(),
-                expected: expected_json.breakdown.clone(),
-                actual: "None".to_string(),
-            });
-        }
-
-        // **Partially Simplified Breakdown Verification**
-        total += 1;
-        let normalized_expected_partial = normalize_string(&expected_json.partial_breakdown);
-        let normalized_actual_partial = rssp_json
-            .breakdown
-            .as_ref()
-            .and_then(|b| b.partial.as_ref())
-            .map(|s| normalize_string(s))
-            .unwrap_or_default();
-        if normalized_expected_partial == normalized_actual_partial {
-            println!(
-                "{}",
-                format!(
-                    "\tPartially Simplified Breakdown: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    normalized_expected_partial, // Use normalized expected
-                    normalized_actual_partial,
-                    "PASSED".green()
-                )
-            );
-            pass += 1;
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tPartially Simplified Breakdown: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    normalized_expected_partial, // Use normalized expected
-                    normalized_actual_partial,
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Partially Simplified Breakdown Verification".to_string(),
-                expected: normalized_expected_partial,
-                actual: normalized_actual_partial,
-            });
-        }
-
-        // **Simplified Breakdown Verification**
-        total += 1;
-        let normalized_expected_simple = normalize_string(&expected_json.simple_breakdown);
-        let normalized_actual_simple = rssp_json
-            .breakdown
-            .as_ref()
-            .and_then(|b| b.simple.as_ref())
-            .map(|s| normalize_string(s))
-            .unwrap_or_default();
-        if normalized_expected_simple == normalized_actual_simple {
-            println!(
-                "{}",
-                format!(
-                    "\tSimplified Breakdown: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    normalized_expected_simple, // Use normalized expected
-                    normalized_actual_simple,
-                    "PASSED".green()
-                )
-            );
-            pass += 1;
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tSimplified Breakdown: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    normalized_expected_simple, // Use normalized expected
-                    normalized_actual_simple,
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Simplified Breakdown Verification".to_string(),
-                expected: normalized_expected_simple,
-                actual: normalized_actual_simple,
-            });
-        }
-
-        // **Length Verification**
-        total += 1;
-        if let Some(chart_length_s) = rssp_json.bpm_info.as_ref().and_then(|b| b.chart_length_s) {
-            if expected_json.length == chart_length_s {
-                println!(
-                    "{}",
-                    format!(
-                        "\tLength: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.length,
-                        chart_length_s,
-                        "PASSED".green()
-                    )
-                );
-                pass += 1;
-            } else {
-                println!(
-                    "{}",
-                    format!(
-                        "\tLength: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.length,
-                        chart_length_s,
-                        "NOT PASSED".red()
-                    )
-                );
-                // Record the failed test
-                failed_tests.push(FailedTest {
-                    file: filename.clone(),
-                    test_name: "Length Verification".to_string(),
-                    expected: expected_json.length.to_string(),
-                    actual: chart_length_s.to_string(),
-                });
-            }
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tLength: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_json.length,
-                    "None",
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Length Verification".to_string(),
-                expected: expected_json.length.to_string(),
-                actual: "None".to_string(),
-            });
-        }
-
-        // **Streams Total Verification**
-        total += 1;
-        if let Some(total_stream) = rssp_json.stream_counts.as_ref().and_then(|s| s.total_streams) {
-            if expected_json.total_stream == total_stream {
-                println!(
-                    "{}",
-                    format!(
-                        "\tStreams Total: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.total_stream,
-                        total_stream,
-                        "PASSED".green()
-                    )
-                );
-                pass += 1;
-            } else {
-                println!(
-                    "{}",
-                    format!(
-                        "\tStreams Total: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.total_stream,
-                        total_stream,
-                        "NOT PASSED".red()
-                    )
-                );
-                // Record the failed test
-                failed_tests.push(FailedTest {
-                    file: filename.clone(),
-                    test_name: "Streams Total Verification".to_string(),
-                    expected: expected_json.total_stream.to_string(),
-                    actual: total_stream.to_string(),
-                });
-            }
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tStreams Total: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_json.total_stream,
-                    "None",
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Streams Total Verification".to_string(),
-                expected: expected_json.total_stream.to_string(),
-                actual: "None".to_string(),
-            });
-        }
-
-        // **Total Break Verification**
-        total += 1;
-        if let Some(total_breaks) = rssp_json.stream_counts.as_ref().and_then(|s| s.total_breaks) {
-            if expected_json.total_break == total_breaks {
-                println!(
-                    "{}",
-                    format!(
-                        "\tTotal Break: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.total_break,
-                        total_breaks,
-                        "PASSED".green()
-                    )
-                );
-                pass += 1;
-            } else {
-                println!(
-                    "{}",
-                    format!(
-                        "\tTotal Break: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.total_break,
-                        total_breaks,
-                        "NOT PASSED".red()
-                    )
-                );
-                // Record the failed test
-                failed_tests.push(FailedTest {
-                    file: filename.clone(),
-                    test_name: "Total Break Verification".to_string(),
-                    expected: expected_json.total_break.to_string(),
-                    actual: total_breaks.to_string(),
-                });
-            }
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tTotal Break: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_json.total_break,
-                    "None",
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Total Break Verification".to_string(),
-                expected: expected_json.total_break.to_string(),
-                actual: "None".to_string(),
-            });
-        }
-
-        // **Max BPM Verification**
-        total += 1;
-        if let Some(max_bpm) = rssp_json.bpm_info.as_ref().and_then(|b| b.max_bpm) {
-            if expected_json.max_bpm == max_bpm as u32 {
-                println!(
-                    "{}",
-                    format!(
-                        "\tMax BPM: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.max_bpm,
-                        max_bpm,
-                        "PASSED".green()
-                    )
-                );
-                pass += 1;
-            } else {
-                println!(
-                    "{}",
-                    format!(
-                        "\tMax BPM: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.max_bpm,
-                        max_bpm,
-                        "NOT PASSED".red()
-                    )
-                );
-                // Record the failed test
-                failed_tests.push(FailedTest {
-                    file: filename.clone(),
-                    test_name: "Max BPM Verification".to_string(),
-                    expected: expected_json.max_bpm.to_string(),
-                    actual: max_bpm.to_string(),
-                });
-            }
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tMax BPM: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_json.max_bpm,
-                    "None",
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Max BPM Verification".to_string(),
-                expected: expected_json.max_bpm.to_string(),
-                actual: "None".to_string(),
-            });
-        }
-
-        // **Min BPM Verification**
-        total += 1;
-        if let Some(min_bpm) = rssp_json.bpm_info.as_ref().and_then(|b| b.min_bpm) {
-            if expected_json.min_bpm == min_bpm as u32 {
-                println!(
-                    "{}",
-                    format!(
-                        "\tMin BPM: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.min_bpm,
-                        min_bpm,
-                        "PASSED".green()
-                    )
-                );
-                pass += 1;
-            } else {
-                println!(
-                    "{}",
-                    format!(
-                        "\tMin BPM: Expected: \"{}\" | Actual: \"{}\" - {}",
-                        expected_json.min_bpm,
-                        min_bpm,
-                        "NOT PASSED".red()
-                    )
-                );
-                // Record the failed test
-                failed_tests.push(FailedTest {
-                    file: filename.clone(),
-                    test_name: "Min BPM Verification".to_string(),
-                    expected: expected_json.min_bpm.to_string(),
-                    actual: min_bpm.to_string(),
-                });
-            }
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tMin BPM: Expected: \"{}\" | Actual: \"{}\" - {}",
-                    expected_json.min_bpm,
-                    "None",
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Min BPM Verification".to_string(),
-                expected: expected_json.min_bpm.to_string(),
-                actual: "None".to_string(),
-            });
-        }
-
-        // **Max NPS Verification**
-        total += 1;
-        if let Some(max_nps) = rssp_json.bpm_info.as_ref().and_then(|b| b.max_nps) {
-            if float_compare(expected_json.max_nps, max_nps) {
-                println!(
-                    "{}",
-                    format!(
-                        "\tMax NPS: Expected: \"{:.2}\" | Actual: \"{:.2}\" - {}",
-                        expected_json.max_nps,
-                        max_nps,
-                        "PASSED".green()
-                    )
-                );
-                pass += 1;
-            } else {
-                println!(
-                    "{}",
-                    format!(
-                        "\tMax NPS: Expected: \"{:.2}\" | Actual: \"{:.2}\" - {}",
-                        expected_json.max_nps,
-                        max_nps,
-                        "NOT PASSED".red()
-                    )
-                );
-                // Record the failed test
-                failed_tests.push(FailedTest {
-                    file: filename.clone(),
-                    test_name: "Max NPS Verification".to_string(),
-                    expected: format!("{:.2}", expected_json.max_nps),
-                    actual: format!("{:.2}", max_nps),
-                });
-            }
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tMax NPS: Expected: \"{:.2}\" | Actual: \"{}\" - {}",
-                    expected_json.max_nps,
-                    "None",
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Max NPS Verification".to_string(),
-                expected: format!("{:.2}", expected_json.max_nps),
-                actual: "None".to_string(),
-            });
-        }
-
-        // **Median NPS Verification**
-        total += 1;
-        if let Some(median_nps) = rssp_json.bpm_info.as_ref().and_then(|b| b.median_nps) {
-            if float_compare(expected_json.median_nps, median_nps) {
-                println!(
-                    "{}",
-                    format!(
-                        "\tMedian NPS: Expected: \"{:.2}\" | Actual: \"{:.2}\" - {}",
-                        expected_json.median_nps,
-                        median_nps,
-                        "PASSED".green()
-                    )
-                );
-                pass += 1;
-            } else {
-                println!(
-                    "{}",
-                    format!(
-                        "\tMedian NPS: Expected: \"{:.2}\" | Actual: \"{:.2}\" - {}",
-                        expected_json.median_nps,
-                        median_nps,
-                        "NOT PASSED".red()
-                    )
-                );
-                // Record the failed test
-                failed_tests.push(FailedTest {
-                    file: filename.clone(),
-                    test_name: "Median NPS Verification".to_string(),
-                    expected: format!("{:.2}", expected_json.median_nps),
-                    actual: format!("{:.2}", median_nps),
-                });
-            }
-        } else {
-            println!(
-                "{}",
-                format!(
-                    "\tMedian NPS: Expected: \"{:.2}\" | Actual: \"{}\" - {}",
-                    expected_json.median_nps,
-                    "None",
-                    "NOT PASSED".red()
-                )
-            );
-            // Record the failed test
-            failed_tests.push(FailedTest {
-                file: filename.clone(),
-                test_name: "Median NPS Verification".to_string(),
-                expected: format!("{:.2}", expected_json.median_nps),
-                actual: "None".to_string(),
-            });
-        }
-
-        println!(); // Blank line between files
     }
 
-    // Print the summary
-    println!("\n{}", "Summary:".bold());
-    println!(
-        "{} out of {} passed the test.",
-        pass.to_string().green(),
-        total.to_string().green()
-    );
+    if !saw_semicolon && !measure.is_empty() {
+        finalize_measure(&mut measure, &mut output, &mut stats, &mut measure_densities);
+    }
 
-    // If there are any failed tests, list them
-    if !failed_tests.is_empty() {
-        println!("\n{}", "Failed Tests:".bold().red());
-        for failure in failed_tests {
-            println!(
-                "- File: {}\n  Test: {}\n  Expected: {}\n  Actual: {}\n",
-                failure.file, failure.test_name, failure.expected, failure.actual
-            );
+    // remove trailing ",\n"
+    if output.ends_with(&[b',', b'\n']) {
+        output.truncate(output.len() - 2);
+    }
+
+    (output, stats, measure_densities)
+}
+
+#[inline]
+fn categorize_measure_density(d: usize) -> RunDensity {
+    match d {
+        d if d >= 32 => RunDensity::Run32,
+        d if d >= 24 => RunDensity::Run24,
+        d if d >= 20 => RunDensity::Run20,
+        d if d >= 16 => RunDensity::Run16,
+        _ => RunDensity::Break,
+    }
+}
+
+fn compute_stream_counts(measure_densities: &[usize]) -> StreamCounts {
+    let mut sc = StreamCounts::default();
+
+    // First, convert measures to their density category
+    let cats: Vec<RunDensity> = measure_densities
+        .iter()
+        .map(|&d| categorize_measure_density(d))
+        .collect();
+
+    // Find the first measure that isn't a break
+    let first_run = cats.iter().position(|&c| c != RunDensity::Break);
+    // Find the last measure that isn't a break
+    let last_run  = cats.iter().rposition(|&c| c != RunDensity::Break);
+
+    // If everything is a break (or empty), just return defaults
+    if first_run.is_none() || last_run.is_none() {
+        return sc;
+    }
+
+    let start_idx = first_run.unwrap();
+    let end_idx   = last_run.unwrap();
+
+    // Only count categories from first_run..=last_run
+    for &cat in &cats[start_idx..=end_idx] {
+        match cat {
+            RunDensity::Run16 => sc.run16_streams += 1,
+            RunDensity::Run20 => sc.run20_streams += 1,
+            RunDensity::Run24 => sc.run24_streams += 1,
+            RunDensity::Run32 => sc.run32_streams += 1,
+            RunDensity::Break => sc.total_breaks += 1,
+        }
+    }
+
+    sc
+}
+
+// --------------------------------------------------------------------
+// Single function for all 3 breakdowns
+// --------------------------------------------------------------------
+
+/// A token for run or break.
+#[derive(Debug)]
+enum Token {
+    Run(RunDensity, usize), // e.g. (Run16, length=3)
+    Break(usize),           // e.g. (5)
+}
+
+fn format_run_symbol(cat: RunDensity, length: usize, star: bool) -> String {
+    let base = match cat {
+        RunDensity::Run16 => format!("{}", length),
+        RunDensity::Run20 => format!("~{}~", length),
+        RunDensity::Run24 => format!(r"\{}\", length),
+        RunDensity::Run32 => format!("={}=", length),
+        RunDensity::Break => unreachable!(),
+    };
+    if star {
+        format!("{}*", base)
+    } else {
+        base
+    }
+}
+
+/// The single function that builds tokens, merges them based on BreakdownMode,
+/// and outputs the final string.
+fn generate_breakdown(measure_densities: &[usize], mode: BreakdownMode) -> String {
+    let cats: Vec<RunDensity> = measure_densities
+        .iter()
+        .map(|&d| categorize_measure_density(d))
+        .collect();
+
+    // skip leading/trailing breaks
+    let first_run = cats.iter().position(|&c| c != RunDensity::Break);
+    let last_run  = cats.iter().rposition(|&c| c != RunDensity::Break);
+    if first_run.is_none() || last_run.is_none() {
+        return String::new();
+    }
+
+    // build run-length tokens
+    let mut tokens = Vec::new();
+    {
+        let mut i = first_run.unwrap();
+        let end = last_run.unwrap();
+        while i <= end {
+            let c = cats[i];
+            let mut length = 1;
+            let mut j = i + 1;
+            while j <= end && cats[j] == c {
+                length += 1;
+                j += 1;
+            }
+            if c == RunDensity::Break {
+                tokens.push(Token::Break(length));
+            } else {
+                tokens.push(Token::Run(c, length));
+            }
+            i = j;
+        }
+    }
+
+    // merges if needed
+    let mut output = Vec::new();
+    let mut idx = 0;
+
+    while idx < tokens.len() {
+        match tokens[idx] {
+            Token::Run(cat, mut run_len) => {
+                let mut star = false;
+                if mode != BreakdownMode::Detailed {
+                    while idx + 2 < tokens.len() {
+                        let can_merge = match (&tokens[idx + 1], &tokens[idx + 2]) {
+                            (Token::Break(bk_len), Token::Run(next_cat, next_len)) => {
+                                if cat == *next_cat {
+                                    match mode {
+                                        BreakdownMode::Partial => {
+                                            if *bk_len == 1 {
+                                                run_len += bk_len + *next_len;
+                                                true
+                                            } else {
+                                                false
+                                            }
+                                        }
+                                        BreakdownMode::Simplified => {
+                                            if *bk_len <= 4 {
+                                                run_len += bk_len + *next_len;
+                                                true
+                                            } else {
+                                                false
+                                            }
+                                        }
+                                        BreakdownMode::Detailed => false,
+                                    }
+                                } else {
+                                    false
+                                }
+                            }
+                            _ => false,
+                        };
+                        if can_merge {
+                            star = true;
+                            idx += 2;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                let s = format_run_symbol(cat, run_len, star);
+                output.push(s);
+                idx += 1;
+            }
+            Token::Break(bk_len) => {
+                match mode {
+                    BreakdownMode::Detailed => {
+                        if bk_len > 1 {
+                            output.push(format!("({})", bk_len));
+                        }
+                    }
+                    BreakdownMode::Partial => {
+                        if bk_len == 1 {
+                            // skip
+                        } else if bk_len <= 4 {
+                            output.push("-".to_string());
+                        } else if bk_len <= 32 {
+                            output.push("/".to_string());
+                        } else {
+                            output.push("|".to_string());
+                        }
+                    }
+                    BreakdownMode::Simplified => {
+                        if bk_len <= 4 {
+                            // skip
+                        } else if bk_len <= 32 {
+                            output.push("/".to_string());
+                        } else {
+                            output.push("|".to_string());
+                        }
+                    }
+                }
+                idx += 1;
+            }
+        }
+    }
+    output.join(" ")
+}
+
+// --------------------------------------------------------------------
+// BPM utilities
+// --------------------------------------------------------------------
+
+fn normalize_float_digits(param: &str) -> String {
+    let mut output = String::with_capacity(param.len());
+    let mut first = true;
+    for beat_bpm in param.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        if !first {
+            output.push(',');
+        } else {
+            first = false;
+        }
+
+        let mut eq_split = beat_bpm.split('=');
+        let beat_str = eq_split.next().unwrap_or("").trim_matches(|c: char| c.is_control());
+        let bpm_str  = eq_split.next().unwrap_or("").trim_matches(|c: char| c.is_control());
+
+        if let (Ok(beat_val), Ok(bpm_val)) = (beat_str.parse::<f64>(), bpm_str.parse::<f64>()) {
+            let beat_rounded = (beat_val * 1000.0).round() / 1000.0;
+            let bpm_rounded  = (bpm_val * 1000.0).round() / 1000.0;
+            let _ = write!(&mut output, "{:.3}={:.3}", beat_rounded, bpm_rounded);
+        } else {
+            output.push_str(beat_bpm);
+        }
+    }
+    output
+}
+
+fn parse_bpm_map(normalized_bpms: &str) -> Vec<(f64, f64)> {
+    let mut bpms_vec = Vec::new();
+    for chunk in normalized_bpms.split(',') {
+        let chunk = chunk.trim();
+        if let Some(eq_pos) = chunk.find('=') {
+            let left = &chunk[..eq_pos].trim();
+            let right = &chunk[eq_pos + 1..].trim();
+            if let (Ok(beat), Ok(bpm)) = (left.parse::<f64>(), right.parse::<f64>()) {
+                bpms_vec.push((beat, bpm));
+            }
+        }
+    }
+    bpms_vec.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    bpms_vec
+}
+
+/// Returns the BPM in effect at a given beat
+fn get_current_bpm(beat: f64, bpm_map: &[(f64, f64)]) -> f64 {
+    let mut curr_bpm = if !bpm_map.is_empty() { bpm_map[0].1 } else { 0.0 };
+    for &(b_beat, b_bpm) in bpm_map {
+        if beat >= b_beat {
+            curr_bpm = b_bpm;
+        } else {
+            break;
+        }
+    }
+    curr_bpm
+}
+
+/// Compute min_bpm/max_bpm from the entire BPM map (or (0,0) if empty).
+fn compute_bpm_range(bpm_map: &[(f64, f64)]) -> (i32, i32) {
+    if bpm_map.is_empty() {
+        return (0, 0);
+    }
+    let mut min_bpm = f64::MAX;
+    let mut max_bpm = f64::MIN;
+    for &(_, bpm) in bpm_map {
+        if bpm < min_bpm {
+            min_bpm = bpm;
+        }
+        if bpm > max_bpm {
+            max_bpm = bpm;
+        }
+    }
+    // Use round() for standard rounding:
+    (
+        min_bpm.round() as i32,
+        max_bpm.round() as i32,
+    )
+}
+
+// --------------------------------------------------------------------
+// Chart length (in seconds, int).
+// --------------------------------------------------------------------
+
+fn compute_total_chart_length(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> i32 {
+    let mut total_length_seconds = 0.0;
+    for (i, _) in measure_densities.iter().enumerate() {
+        let measure_start_beat = i as f64 * 4.0;
+        let curr_bpm = get_current_bpm(measure_start_beat, bpm_map);
+        if curr_bpm <= 0.0 {
+            continue;
+        }
+        let measure_length_s = (4.0 / curr_bpm) * 60.0;
+        total_length_seconds += measure_length_s;
+    }
+    total_length_seconds.floor() as i32
+}
+
+// --------------------------------------------------------------------
+// NPS calculations
+// --------------------------------------------------------------------
+
+/// Computes a per-measure NPS vector (notes-per-second) from measure densities.
+fn compute_measure_nps_vec(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> Vec<f64> {
+    let mut measure_nps_vec = Vec::with_capacity(measure_densities.len());
+    for (i, &density) in measure_densities.iter().enumerate() {
+        let measure_start_beat = i as f64 * 4.0;
+        let curr_bpm = get_current_bpm(measure_start_beat, bpm_map);
+        if curr_bpm <= 0.0 {
+            measure_nps_vec.push(0.0);
+            continue;
+        }
+        // measure_nps = (notes in measure) / measure duration
+        // measure duration = 4 beats / curr_bpm => * 60 for sec => so 4/curr_bpm*60.
+        // dividing density by measure length => density / (4/curr_bpm*60) => density*(curr_bpm/4)/60
+        let measure_nps = density as f64 * (curr_bpm / 4.0) / 60.0;
+        measure_nps_vec.push(measure_nps);
+    }
+    measure_nps_vec
+}
+
+/// Returns (max_nps, median_nps) from the measure_nps_vec.
+fn get_nps_stats(measure_nps_vec: &[f64]) -> (f64, f64) {
+    let max_nps = if measure_nps_vec.is_empty() {
+        0.0
+    } else {
+        measure_nps_vec.iter().fold(f64::MIN, |a, &b| a.max(b))
+    };
+    let median_nps = median(measure_nps_vec);
+    (max_nps, median_nps)
+}
+
+// --------------------------------------------------------------------
+// Extract sections
+// --------------------------------------------------------------------
+fn extract_sections(
+    data: &[u8],
+) -> io::Result<(
+    Option<&[u8]>, // title
+    Option<&[u8]>, // subtitle
+    Option<&[u8]>, // artist
+    Option<&[u8]>, // titletranslit
+    Option<&[u8]>, // subtitletranslit
+    Option<&[u8]>, // artisttranslit
+    Option<&[u8]>, // bpms
+    Option<&[u8]>, // notes
+)> {
+    let mut title = None;
+    let mut subtitle = None;
+    let mut artist = None;
+    let mut titletranslit = None;
+    let mut subtitletranslit = None;
+    let mut artisttranslit = None;
+    let mut bpms = None;
+    let mut notes = None;
+
+    let mut i = 0;
+    while i < data.len() {
+        if title.is_some()
+            && subtitle.is_some()
+            && artist.is_some()
+            && bpms.is_some()
+            && notes.is_some()
+        {
+            break;
+        }
+
+        #[inline]
+        fn parse_tag<'a>(
+            data: &'a [u8],
+            idx: &mut usize,
+            tag_len: usize
+        ) -> Option<&'a [u8]> {
+            let start_idx = *idx + tag_len;
+            if start_idx > data.len() {
+                return None;
+            }
+            if let Some(end_off) = data[start_idx..].iter().position(|&b| b == b';') {
+                let result = &data[start_idx..start_idx + end_off];
+                *idx = start_idx + end_off + 1;
+                Some(result)
+            } else {
+                None
+            }
+        }
+
+        let slice = &data[i..];
+        if slice.starts_with(b"#TITLE:") && title.is_none() {
+            title = parse_tag(data, &mut i, b"#TITLE:".len());
+            continue;
+        } else if slice.starts_with(b"#SUBTITLE:") && subtitle.is_none() {
+            subtitle = parse_tag(data, &mut i, b"#SUBTITLE:".len());
+            continue;
+        } else if slice.starts_with(b"#ARTIST:") && artist.is_none() {
+            artist = parse_tag(data, &mut i, b"#ARTIST:".len());
+            continue;
+        } else if slice.starts_with(b"#TITLETRANSLIT:") && titletranslit.is_none() {
+            titletranslit = parse_tag(data, &mut i, b"#TITLETRANSLIT:".len());
+            continue;
+        } else if slice.starts_with(b"#SUBTITLETRANSLIT:") && subtitletranslit.is_none() {
+            subtitletranslit = parse_tag(data, &mut i, b"#SUBTITLETRANSLIT:".len());
+            continue;
+        } else if slice.starts_with(b"#ARTISTTRANSLIT:") && artisttranslit.is_none() {
+            artisttranslit = parse_tag(data, &mut i, b"#ARTISTTRANSLIT:".len());
+            continue;
+        } else if slice.starts_with(b"#BPMS:") && bpms.is_none() {
+            bpms = parse_tag(data, &mut i, b"#BPMS:".len());
+            continue;
+        } else if slice.starts_with(b"#NOTES:") && notes.is_none() {
+            let start_idx = i + b"#NOTES:".len();
+            if start_idx < data.len() {
+                notes = Some(&data[start_idx..]);
+            }
+            break;
+        }
+        i += 1;
+    }
+
+    Ok((
+        title,
+        subtitle,
+        artist,
+        titletranslit,
+        subtitletranslit,
+        artisttranslit,
+        bpms,
+        notes,
+    ))
+}
+
+fn split_notes_fields<'a>(notes_block: &'a [u8]) -> (Vec<&'a [u8]>, &'a [u8]) {
+    let mut fields = Vec::with_capacity(5);
+    let mut colon_count = 0;
+    let mut start = 0;
+    for (i, &b) in notes_block.iter().enumerate() {
+        if b == b':' {
+            fields.push(&notes_block[start..i]);
+            start = i + 1;
+            colon_count += 1;
+            if colon_count == 5 {
+                let remainder = &notes_block[start..];
+                return (fields, remainder);
+            }
+        }
+    }
+    (fields, &notes_block[notes_block.len()..])
+}
+
+// --------------------------------------------------------------------
+// Compute median of a slice of f64
+// --------------------------------------------------------------------
+fn median(arr: &[f64]) -> f64 {
+    if arr.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = arr.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let len = sorted.len();
+    if len % 2 == 0 {
+        (sorted[len / 2 - 1] + sorted[len / 2]) / 2.0
+    } else {
+        sorted[len / 2]
+    }
+}
+
+// --------------------------------------------------------------------
+// Pattern Analysis
+// --------------------------------------------------------------------
+
+#[inline]
+fn line_to_bitmask(line: &[u8]) -> u8 {
+    let mut mask = 0u8;
+    if matches!(line[0], b'1' | b'2' | b'4') {
+        mask |= 1 << 0;
+    }
+    if matches!(line[1], b'1' | b'2' | b'4') {
+        mask |= 1 << 1;
+    }
+    if matches!(line[2], b'1' | b'2' | b'4') {
+        mask |= 1 << 2;
+    }
+    if matches!(line[3], b'1' | b'2' | b'4') {
+        mask |= 1 << 3;
+    }
+    mask
+}
+
+/// Parse lines from minimized chart => produce a Vec<u8> of bitmasks.
+fn parse_bitmask_chart(chart_data: &[u8]) -> Vec<u8> {
+    let mut bitmasks = Vec::new();
+    for line in chart_data.split(|&b| b == b'\n') {
+        if line.len() >= 4 {
+            let m = line_to_bitmask(line);
+            // Also check if it's not just commas or spaces
+            if m != 0 || line.iter().any(|&b| !(b == b',' || b == b' ')) {
+                bitmasks.push(m);
+            }
+        }
+    }
+    bitmasks
+}
+
+fn count_candles(bitmasks: &[u8]) -> (u32, u32) {
+    const LEFT_FOOT_PATTERNS: &[[u8; 3]] = &[
+        [0b0010, 0b1000, 0b0100],
+        [0b0100, 0b1000, 0b0010],
+    ];
+    const RIGHT_FOOT_PATTERNS: &[[u8; 3]] = &[
+        [0b0010, 0b0001, 0b0100],
+        [0b0100, 0b0001, 0b0010],
+    ];
+
+    let mut left_foot = 0u32;
+    let mut right_foot = 0u32;
+
+    if bitmasks.len() < 3 {
+        return (0, 0);
+    }
+
+    for i in 0..(bitmasks.len() - 2) {
+        let block = [bitmasks[i], bitmasks[i + 1], bitmasks[i + 2]];
+        if LEFT_FOOT_PATTERNS.iter().any(|pat| *pat == block) {
+            left_foot += 1;
+        }
+        if RIGHT_FOOT_PATTERNS.iter().any(|pat| *pat == block) {
+            right_foot += 1;
+        }
+    }
+    (left_foot, right_foot)
+}
+
+fn count_monos(bitmasks: &[u8]) -> (u32, u32) {
+    const VALID_LD_RU: &[[u8; 4]] = &[
+        [0b0001, 0b0100, 0b0010, 0b1000],
+        [0b0001, 0b1000, 0b0010, 0b0100],
+        [0b0010, 0b0100, 0b0001, 0b1000],
+        [0b0010, 0b1000, 0b0001, 0b0100],
+        [0b0100, 0b0001, 0b1000, 0b0010],
+        [0b0100, 0b0010, 0b1000, 0b0001],
+        [0b1000, 0b0001, 0b0100, 0b0010],
+        [0b1000, 0b0010, 0b0100, 0b0001],
+    ];
+    const VALID_LU_RD: &[[u8; 4]] = &[
+        [0b0001, 0b0010, 0b0100, 0b1000],
+        [0b0001, 0b1000, 0b0100, 0b0010],
+        [0b0100, 0b0010, 0b0001, 0b1000],
+        [0b0100, 0b1000, 0b0001, 0b0010],
+        [0b0010, 0b0001, 0b1000, 0b0100],
+        [0b0010, 0b0100, 0b1000, 0b0001],
+        [0b1000, 0b0001, 0b0010, 0b0100],
+        [0b1000, 0b0100, 0b0010, 0b0001],
+    ];
+
+    let mut ld_ru = 0u32;
+    let mut lu_rd = 0u32;
+
+    if bitmasks.len() < 4 {
+        return (0, 0);
+    }
+
+    let mut i = 0;
+    while i + 3 < bitmasks.len() {
+        let block = &bitmasks[i..i + 4];
+        if block.iter().all(|&b| b.count_ones() == 1) {
+            if VALID_LD_RU.iter().any(|pat| pat == block) {
+                ld_ru += 1;
+                i += 4;
+                continue;
+            } else if VALID_LU_RD.iter().any(|pat| pat == block) {
+                lu_rd += 1;
+                i += 4;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    (ld_ru, lu_rd)
+}
+
+fn count_boxes(bitmasks: &[u8]) -> (u32, u32, u32, u32, u32, u32) {
+    const LR_BOXES: &[[u8; 4]] = &[
+        [0b0001, 0b1000, 0b0001, 0b1000],
+        [0b1000, 0b0001, 0b1000, 0b0001],
+    ];
+    const UD_BOXES: &[[u8; 4]] = &[
+        [0b0100, 0b0010, 0b0100, 0b0010],
+        [0b0010, 0b0100, 0b0010, 0b0100],
+    ];
+    const CORNER_LD_BOXES: &[[u8; 4]] = &[
+        [0b0001, 0b0010, 0b0001, 0b0010],
+        [0b0010, 0b0001, 0b0010, 0b0001],
+    ];
+    const CORNER_LU_BOXES: &[[u8; 4]] = &[
+        [0b0001, 0b0100, 0b0001, 0b0100],
+        [0b0100, 0b0001, 0b0100, 0b0001],
+    ];
+    const CORNER_RD_BOXES: &[[u8; 4]] = &[
+        [0b1000, 0b0010, 0b1000, 0b0010],
+        [0b0010, 0b1000, 0b0010, 0b1000],
+    ];
+    const CORNER_RU_BOXES: &[[u8; 4]] = &[
+        [0b1000, 0b0100, 0b1000, 0b0100],
+        [0b0100, 0b1000, 0b0100, 0b1000],
+    ];
+
+    let mut lr = 0;
+    let mut ud = 0;
+    let mut corner_ld = 0;
+    let mut corner_lu = 0;
+    let mut corner_rd = 0;
+    let mut corner_ru = 0;
+
+    if bitmasks.len() < 4 {
+        return (0, 0, 0, 0, 0, 0);
+    }
+
+    for i in 0..(bitmasks.len() - 3) {
+        let block = [bitmasks[i], bitmasks[i + 1], bitmasks[i + 2], bitmasks[i + 3]];
+        if LR_BOXES.iter().any(|pat| *pat == block) {
+            lr += 1;
+        }
+        if UD_BOXES.iter().any(|pat| *pat == block) {
+            ud += 1;
+        }
+        if CORNER_LD_BOXES.iter().any(|pat| *pat == block) {
+            corner_ld += 1;
+        }
+        if CORNER_LU_BOXES.iter().any(|pat| *pat == block) {
+            corner_lu += 1;
+        }
+        if CORNER_RD_BOXES.iter().any(|pat| *pat == block) {
+            corner_rd += 1;
+        }
+        if CORNER_RU_BOXES.iter().any(|pat| *pat == block) {
+            corner_ru += 1;
+        }
+    }
+    (lr, ud, corner_ld, corner_lu, corner_rd, corner_ru)
+}
+
+#[inline]
+fn count_doritos(bitmasks: &[u8]) -> (u32, u32, u32, u32) {
+    const RIGHT_DORITO: [u8; 5] = [
+        0b1000, 0b0100, 0b0010, 0b0100, 0b1000
+    ];
+    const LEFT_DORITO: [u8; 5] = [
+        0b0001, 0b0010, 0b0100, 0b0010, 0b0001
+    ];
+    const INV_RIGHT_DORITO: [u8; 5] = [
+        0b1000, 0b0010, 0b0100, 0b0010, 0b1000
+    ];
+    const INV_LEFT_DORITO: [u8; 5] = [
+        0b0001, 0b0100, 0b0010, 0b0100, 0b0001
+    ];
+
+    let mut rd_count = 0;
+    let mut ld_count = 0;
+    let mut ird_count = 0;
+    let mut ild_count = 0;
+
+    if bitmasks.len() < 5 {
+        return (0, 0, 0, 0);
+    }
+
+    let mut i = 0;
+    while i + 4 < bitmasks.len() {
+        if bitmasks[i..i+5].iter().all(|&b| b.count_ones() == 1) {
+            let block = &bitmasks[i..i+5];
+            if block == &RIGHT_DORITO {
+                rd_count += 1;
+                i += 5;
+                continue;
+            } else if block == &LEFT_DORITO {
+                ld_count += 1;
+                i += 5;
+                continue;
+            } else if block == &INV_RIGHT_DORITO {
+                ird_count += 1;
+                i += 5;
+                continue;
+            } else if block == &INV_LEFT_DORITO {
+                ild_count += 1;
+                i += 5;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    (rd_count, ld_count, ird_count, ild_count)
+}
+
+fn count_anchors(bitmasks: &[u8], arrow_bit: u8) -> u32 {
+    let mut count = 0;
+    let n = bitmasks.len();
+    let mask = 1 << arrow_bit;
+    let mut i = 0;
+
+    while i + 4 < n {
+        if (bitmasks[i] & mask) != 0
+            && (bitmasks[i + 2] & mask) != 0
+            && (bitmasks[i + 4] & mask) != 0
+        {
+            count += 1;
+            i += 5;
+        } else {
+            i += 1;
+        }
+    }
+    count
+}
+
+fn do_pattern_analysis(bitmasks: &[u8], total_arrows: u32) -> PatternStats {
+    let (left_foot_candles, right_foot_candles) = count_candles(bitmasks);
+    let total_candles = left_foot_candles + right_foot_candles;
+
+    let candles_percent = if total_arrows > 1 {
+        let denom = ((total_arrows.saturating_sub(1) / 2) as f64).floor();
+        if denom > 0.0 {
+            (total_candles as f64 / denom) * 100.0
+        } else {
+            0.0
         }
     } else {
-        println!("{}", "\nAll tests passed successfully!".green());
+        0.0
+    };
+
+    let (ld_ru_mono, lu_rd_mono) = count_monos(bitmasks);
+    let total_mono_arrows = (ld_ru_mono + lu_rd_mono) * 4;
+    let mono_percent = if total_arrows > 0 {
+        (total_mono_arrows as f64 / total_arrows as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    let (lr_boxes, ud_boxes, corner_ld_boxes, corner_lu_boxes, corner_rd_boxes, corner_ru_boxes)
+        = count_boxes(bitmasks);
+
+    let anchor_left  = count_anchors(bitmasks, 0);
+    let anchor_down  = count_anchors(bitmasks, 1);
+    let anchor_up    = count_anchors(bitmasks, 2);
+    let anchor_right = count_anchors(bitmasks, 3);
+
+    let (rd, ld, ird, ild) = count_doritos(bitmasks);
+
+    PatternStats {
+        left_foot_candles,
+        right_foot_candles,
+        total_candles,
+        candles_percent,
+        ld_ru_mono,
+        lu_rd_mono,
+        mono_percent,
+        lr_boxes,
+        ud_boxes,
+        corner_ld_boxes,
+        corner_lu_boxes,
+        corner_rd_boxes,
+        corner_ru_boxes,
+        anchor_left,
+        anchor_down,
+        anchor_up,
+        anchor_right,
+        right_dorito: rd,
+        left_dorito: ld,
+        inv_right_dorito: ird,
+        inv_left_dorito: ild,
+    }
+}
+
+// --------------------------------------------------------------------
+// Density Graph PNG
+// --------------------------------------------------------------------
+
+fn generate_density_graph_png(
+    measure_nps_vec: &[f64],
+    max_nps: f64,
+    short_hash: &str,
+) -> Result<(), ImageError> {
+    const IMAGE_WIDTH: u32 = 1000;
+    const GRAPH_HEIGHT: u32 = 400;
+
+    let mut imgbuf: RgbImage = ImageBuffer::new(IMAGE_WIDTH, GRAPH_HEIGHT);
+
+    let bg_color = Rgb([0x03, 0x11, 0x2c]);
+    for pixel in imgbuf.pixels_mut() {
+        *pixel = bg_color;
+    }
+
+    if measure_nps_vec.is_empty() || max_nps <= 0.0 {
+        let filename = format!("{}.png", short_hash);
+        imgbuf.save(&filename)?;
+        return Ok(());
+    }
+
+    let measure_width = IMAGE_WIDTH as f64 / measure_nps_vec.len() as f64;
+
+    fn lerp(a: u8, b: u8, t: f64) -> u8 {
+        let t = t.clamp(0.0, 1.0);
+        let af = a as f64;
+        let bf = b as f64;
+        (af + (bf - af) * t).round() as u8
+    }
+
+    // gradient from bottom_color => top_color
+    let bottom_color = (0x00, 0xb8, 0xcc);
+    let top_color    = (0x82, 0x00, 0xa1);
+
+    for (i, &nps) in measure_nps_vec.iter().enumerate() {
+        let x_start = (i as f64 * measure_width).round() as u32;
+        let x_end   = (((i + 1) as f64 * measure_width).round() as u32).min(IMAGE_WIDTH);
+
+        let height_fraction = nps / max_nps;
+        let bar_height = (height_fraction * GRAPH_HEIGHT as f64).round() as i32;
+        let y_top = GRAPH_HEIGHT as i32 - bar_height;
+
+        for x in x_start..x_end {
+            for y in y_top..(GRAPH_HEIGHT as i32) {
+                if y < 0 || y >= GRAPH_HEIGHT as i32 || x >= IMAGE_WIDTH {
+                    continue;
+                }
+                let dist_from_bottom = (GRAPH_HEIGHT as i32 - 1 - y) as f64;
+                let frac = dist_from_bottom / (GRAPH_HEIGHT as f64 - 1.0);
+
+                let rr = lerp(bottom_color.0, top_color.0, frac);
+                let gg = lerp(bottom_color.1, top_color.1, frac);
+                let bb = lerp(bottom_color.2, top_color.2, frac);
+
+                *imgbuf.get_pixel_mut(x, y as u32) = Rgb([rr, gg, bb]);
+            }
+        }
+    }
+
+    let output_file = format!("{}.png", short_hash);
+    imgbuf.save(&output_file)?;
+
+    Ok(())
+}
+
+// --------------------------------------------------------------------
+// Main
+// --------------------------------------------------------------------
+
+fn main() -> io::Result<()> {
+    // Start timer BEFORE any processing:
+    let start_time = Instant::now();
+
+    let args: Vec<String> = args().collect();
+    if args.len() < 2 {
+        eprintln!("Usage: {} <simfile_path> [--png] [--json] [--strip-tags]", args[0]);
+        std::process::exit(1);
+    }
+
+    let simfile_path = &args[1];
+    let mut file = File::open(simfile_path)?;
+    let mut simfile_data = Vec::new();
+    file.read_to_end(&mut simfile_data)?;
+
+    let generate_png  = args.iter().any(|a| a == "--png");
+    let generate_json = args.iter().any(|a| a == "--json");
+    let strip_tags    = args.iter().any(|a| a == "--strip-tags");
+
+    let (
+        title_opt,
+        subtitle_opt,
+        artist_opt,
+        titletranslit_opt,
+        subtitletranslit_opt,
+        artisttranslit_opt,
+        bpms_opt,
+        notes_opt,
+    ) = extract_sections(&simfile_data)?;
+
+    // Convert to owned String so we can conditionally strip tags.
+    let mut title_str = std::str::from_utf8(title_opt.unwrap_or(b"<invalid-title>"))
+        .unwrap_or("<invalid-title>")
+        .to_owned();
+    
+    // If --strip-tags is present, remove bracketed numeric tags from the title
+    if strip_tags {
+        title_str = strip_title_tags(&title_str);
+    }
+
+    let subtitle_str = std::str::from_utf8(subtitle_opt.unwrap_or(b"<invalid-subtitle>"))
+        .unwrap_or("<invalid-subtitle>");
+    let artist_str = std::str::from_utf8(artist_opt.unwrap_or(b"<invalid-artist>"))
+        .unwrap_or("<invalid-artist>");
+    let bpms_raw = std::str::from_utf8(bpms_opt.unwrap_or(b"<invalid-bpms>"))
+        .unwrap_or("<invalid-bpms>");
+    let normalized_bpms = normalize_float_digits(bpms_raw);
+
+    let titletranslit_str = std::str::from_utf8(titletranslit_opt.unwrap_or(b""))
+        .unwrap_or("");
+    let subtitletranslit_str = std::str::from_utf8(subtitletranslit_opt.unwrap_or(b""))
+        .unwrap_or("");
+    let artisttranslit_str = std::str::from_utf8(artisttranslit_opt.unwrap_or(b""))
+        .unwrap_or("");
+
+    let notes_bytes = notes_opt.unwrap_or(b"<invalid-notes>");
+    let (fields, chart_data) = split_notes_fields(notes_bytes);
+    if fields.len() < 5 {
+        eprintln!("#NOTES section is incomplete.");
+        std::process::exit(1);
+    }
+
+    let step_type_str  = std::str::from_utf8(fields[0]).unwrap_or("").trim();
+    let difficulty_str = std::str::from_utf8(fields[2]).unwrap_or("").trim();
+    let rating_str     = std::str::from_utf8(fields[3]).unwrap_or("").trim();
+
+    let (mut minimized_chart, stats, measure_densities) = minimize_chart_and_count(chart_data);
+
+    if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
+        minimized_chart.truncate(pos + 1);
+    }
+
+    let stream_counts = compute_stream_counts(&measure_densities);
+
+    // Compute total_streams as the sum of individual stream counts
+    let total_streams = stream_counts.run16_streams
+    + stream_counts.run20_streams
+    + stream_counts.run24_streams
+    + stream_counts.run32_streams;
+
+    let detailed = generate_breakdown(&measure_densities, BreakdownMode::Detailed);
+    let partial  = generate_breakdown(&measure_densities, BreakdownMode::Partial);
+    let simple   = generate_breakdown(&measure_densities, BreakdownMode::Simplified);
+
+    // Hash
+    let mut hasher = Sha1::new();
+    hasher.update(&minimized_chart);
+    hasher.update(normalized_bpms.as_bytes());
+    let hash_result = hasher.finalize();
+    let hash_hex = hex::encode(hash_result);
+    let short_hash = &hash_hex[..16];
+
+    // BPM map and range
+    let bpm_map = parse_bpm_map(&normalized_bpms);
+    let (min_bpm, max_bpm) = compute_bpm_range(&bpm_map);
+
+    // NPS vector + stats
+    let measure_nps_vec = compute_measure_nps_vec(&measure_densities, &bpm_map);
+    let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
+
+    // Chart length (seconds) as int
+    let total_length = compute_total_chart_length(&measure_densities, &bpm_map);
+
+    // Pattern stats
+    let bitmasks = parse_bitmask_chart(&minimized_chart);
+    let pattern_stats = do_pattern_analysis(&bitmasks, stats.total_arrows);
+
+    // Generate PNG if requested (but DO NOT return yet).
+    if generate_png {
+        // If there's an error in PNG generation, convert to io::Error
+        generate_density_graph_png(&measure_nps_vec, max_nps, short_hash)
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+    }
+
+    // Finally, print elapsed time at the END
+    let elapsed = start_time.elapsed();
+
+    // Now do JSON or text output (or neither).
+    if generate_json {
+        println!("{{");
+        // We place elapsed time at the END, so skip for now.
+
+        // Basic info
+        println!("  \"title\": \"{}\",", escape_json(&title_str));
+        println!("  \"title_translit\": \"{}\",", escape_json(titletranslit_str));
+        println!("  \"subtitle\": \"{}\",", escape_json(subtitle_str));
+        println!("  \"subtitle_translit\": \"{}\",", escape_json(subtitletranslit_str));
+        println!("  \"artist\": \"{}\",", escape_json(artist_str));
+        println!("  \"artist_translit\": \"{}\",", escape_json(artisttranslit_str));
+        println!("  \"bpms\": \"{}\",", escape_json(&normalized_bpms));
+        println!("  \"step_type\": \"{}\",", escape_json(step_type_str));
+        println!("  \"difficulty\": \"{}\",", escape_json(difficulty_str));
+        println!("  \"rating\": \"{}\",", escape_json(rating_str));
+        println!("  \"hash_short\": \"{}\",", short_hash);
+
+        // Arrow Stats
+        println!("  \"arrow_stats\": {{");
+        println!("     \"left\": {},", stats.left);
+        println!("     \"down\": {},", stats.down);
+        println!("     \"up\": {},", stats.up);
+        println!("     \"right\": {},", stats.right);
+        println!("     \"total_arrows\": {},", stats.total_arrows);
+        println!("     \"total_steps\": {},", stats.total_steps);
+        println!("     \"jumps\": {},", stats.jumps);
+        println!("     \"hands\": {},", stats.hands);
+        println!("     \"holds\": {},", stats.holds);
+        println!("     \"rolls\": {},", stats.rolls);
+        println!("     \"mines\": {}", stats.mines);
+        println!("  }},");
+
+        // Stream Counts
+        println!("  \"stream_counts\": {{");
+        println!("     \"run16_streams\": {},", stream_counts.run16_streams);
+        println!("     \"run20_streams\": {},", stream_counts.run20_streams);
+        println!("     \"run24_streams\": {},", stream_counts.run24_streams);
+        println!("     \"run32_streams\": {},", stream_counts.run32_streams);
+        println!("     \"total_streams\": {},", total_streams);
+        println!("     \"total_breaks\": {}", stream_counts.total_breaks);
+        println!("  }},");
+
+        // Breakdown
+        println!("  \"breakdown\": {{");
+        println!("     \"detailed\": \"{}\",", escape_json(&detailed));
+        println!("     \"partial\": \"{}\",", escape_json(&partial));
+        println!("     \"simple\": \"{}\"", escape_json(&simple));
+        println!("  }},");
+
+        // BPM info
+        println!("  \"bpm_info\": {{");
+        println!("     \"min_bpm\": {:.2},", min_bpm);
+        println!("     \"max_bpm\": {:.2},", max_bpm);
+        println!("     \"chart_length_s\": {},", total_length);
+        println!("     \"max_nps\": {:.2},", max_nps);
+        println!("     \"median_nps\": {:.2}", median_nps);
+        println!("  }},");
+
+        // Pattern stats
+        println!("  \"pattern_stats\": {{");
+        println!("     \"left_foot_candles\": {},", pattern_stats.left_foot_candles);
+        println!("     \"right_foot_candles\": {},", pattern_stats.right_foot_candles);
+        println!("     \"total_candles\": {},", pattern_stats.total_candles);
+        println!("     \"candles_percent\": {:.2},", pattern_stats.candles_percent);
+        println!("     \"ld_ru_mono\": {},", pattern_stats.ld_ru_mono);
+        println!("     \"lu_rd_mono\": {},", pattern_stats.lu_rd_mono);
+        println!("     \"mono_percent\": {:.2},", pattern_stats.mono_percent);
+        println!("     \"lr_boxes\": {},", pattern_stats.lr_boxes);
+        println!("     \"ud_boxes\": {},", pattern_stats.ud_boxes);
+        println!("     \"corner_ld_boxes\": {},", pattern_stats.corner_ld_boxes);
+        println!("     \"corner_lu_boxes\": {},", pattern_stats.corner_lu_boxes);
+        println!("     \"corner_rd_boxes\": {},", pattern_stats.corner_rd_boxes);
+        println!("     \"corner_ru_boxes\": {},", pattern_stats.corner_ru_boxes);
+        println!("     \"anchor_left\": {},", pattern_stats.anchor_left);
+        println!("     \"anchor_down\": {},", pattern_stats.anchor_down);
+        println!("     \"anchor_up\": {},", pattern_stats.anchor_up);
+        println!("     \"anchor_right\": {},", pattern_stats.anchor_right);
+        println!("     \"right_dorito\": {},", pattern_stats.right_dorito);
+        println!("     \"left_dorito\": {},", pattern_stats.left_dorito);
+        println!("     \"inv_right_dorito\": {},", pattern_stats.inv_right_dorito);
+        println!("     \"inv_left_dorito\": {}", pattern_stats.inv_left_dorito);
+        println!("  }},");
+
+        // Execution time
+        println!("  \"elapsed\": \"{:?}\"", elapsed);
+        println!("}}");
+    } else {
+        println!("Title: {}", title_str);
+        println!("Title translate: {}", titletranslit_str);
+        println!("Subtitle: {}", subtitle_str);
+        println!("Subtitle translate: {}", subtitletranslit_str);
+        println!("Artist: {}", artist_str);
+        println!("Artist translate: {}", artisttranslit_str);
+        println!("Normalized BPMs: {}", normalized_bpms);
+        println!("Steptype: {}", step_type_str);
+        println!("Difficulty: {}", difficulty_str);
+        println!("Rating: {}", rating_str);
+        println!("Hash (first 16 hex chars): {}", short_hash);
+
+        println!("--- Arrow Stats ---");
+        println!("Left: {}", stats.left);
+        println!("Down: {}", stats.down);
+        println!("Up: {}", stats.up);
+        println!("Right: {}", stats.right);
+        println!("Total arrows: {}", stats.total_arrows);
+        println!("Total steps: {}", stats.total_steps);
+        println!("Jumps (2-arrow steps): {}", stats.jumps);
+        println!("Hands (3+ arrow steps): {}", stats.hands);
+        println!("Holds: {}", stats.holds);
+        println!("Rolls: {}", stats.rolls);
+        println!("Mines: {}", stats.mines);
+
+        println!("--- Stream Counts ---");
+        println!("16th streams: {}", stream_counts.run16_streams);
+        println!("20th streams: {}", stream_counts.run20_streams);
+        println!("24th streams: {}", stream_counts.run24_streams);
+        println!("32nd streams: {}", stream_counts.run32_streams);
+        println!("Total streams: {}", total_streams);
+        println!("Total breaks: {}", stream_counts.total_breaks);
+
+        println!("Detailed breakdown: {}", detailed);
+        println!("Partially simplified: {}", partial);
+        println!("Simplified breakdown: {}", simple);
+
+        println!("--- Additional Chart Info ---");
+        println!("Min BPM: {:.2}", min_bpm);
+        println!("Max BPM: {:.2}", max_bpm);
+        println!("Chart length (seconds): {}", total_length);
+        println!("Max NPS: {:.2}", max_nps);
+        println!("Median NPS: {:.2}", median_nps);
+
+        println!("--- Pattern Stats ---");
+        println!("left_foot_candles: {}", pattern_stats.left_foot_candles);
+        println!("right_foot_candles: {}", pattern_stats.right_foot_candles);
+        println!("total_candles: {}", pattern_stats.total_candles);
+        println!("candles_percent: {:.2}", pattern_stats.candles_percent);
+        println!("ld_ru_mono: {}", pattern_stats.ld_ru_mono);
+        println!("lu_rd_mono: {}", pattern_stats.lu_rd_mono);
+        println!("mono_percent: {:.2}", pattern_stats.mono_percent);
+        println!("lr_boxes: {}", pattern_stats.lr_boxes);
+        println!("ud_boxes: {}", pattern_stats.ud_boxes);
+        println!("corner_ld_boxes: {}", pattern_stats.corner_ld_boxes);
+        println!("corner_lu_boxes: {}", pattern_stats.corner_lu_boxes);
+        println!("corner_rd_boxes: {}", pattern_stats.corner_rd_boxes);
+        println!("corner_ru_boxes: {}", pattern_stats.corner_ru_boxes);
+        println!("anchor_left: {}", pattern_stats.anchor_left);
+        println!("anchor_down: {}", pattern_stats.anchor_down);
+        println!("anchor_up: {}", pattern_stats.anchor_up);
+        println!("anchor_right: {}", pattern_stats.anchor_right);
+        println!("right_dorito: {}", pattern_stats.right_dorito);
+        println!("left_dorito: {}", pattern_stats.left_dorito);
+        println!("inv_right_dorito: {}", pattern_stats.inv_right_dorito);
+        println!("inv_left_dorito: {}", pattern_stats.inv_left_dorito);
+        println!("---");
+        println!("Elapsed time: {:?}", elapsed);
     }
 
     Ok(())
 }
 
-// Function to normalize strings by replacing backslashes with 'x'
-fn normalize_string(input: &str) -> String {
-    let mut result = String::new();
-    let mut in_escape = false;
-
+/// Minimal “escape” function for JSON strings (handle quotes, backslashes, etc.).
+fn escape_json(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
     for c in input.chars() {
-        if c == '\\' {
-            if !in_escape {
-                result.push('x');
-                in_escape = true;
-            }
-            // If already in escape, skip adding another 'x'
-        } else {
-            result.push(c);
-            in_escape = false;
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
         }
     }
-
-    result
-}
-
-// Function to compare floating-point numbers with precision
-fn float_compare(a: f64, b: f64) -> bool {
-    (a - b).abs() < 0.01
+    out
 }
