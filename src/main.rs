@@ -519,9 +519,9 @@ fn get_current_bpm(beat: f64, bpm_map: &[(f64, f64)]) -> f64 {
 }
 
 /// Compute min_bpm/max_bpm from the entire BPM map (or (0,0) if empty).
-fn compute_bpm_range(bpm_map: &[(f64, f64)]) -> (f64, f64) {
+fn compute_bpm_range(bpm_map: &[(f64, f64)]) -> (i32, i32) {
     if bpm_map.is_empty() {
-        return (0.0, 0.0);
+        return (0, 0);
     }
     let mut min_bpm = f64::MAX;
     let mut max_bpm = f64::MIN;
@@ -533,7 +533,11 @@ fn compute_bpm_range(bpm_map: &[(f64, f64)]) -> (f64, f64) {
             max_bpm = bpm;
         }
     }
-    (min_bpm, max_bpm)
+    // Use round() for standard rounding:
+    (
+        min_bpm.round() as i32,
+        max_bpm.round() as i32,
+    )
 }
 
 // --------------------------------------------------------------------
