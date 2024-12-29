@@ -555,7 +555,7 @@ fn compute_total_chart_length(measure_densities: &[usize], bpm_map: &[(f64, f64)
         let measure_length_s = (4.0 / curr_bpm) * 60.0;
         total_length_seconds += measure_length_s;
     }
-    total_length_seconds.round() as i32
+    total_length_seconds.floor() as i32
 }
 
 // --------------------------------------------------------------------
