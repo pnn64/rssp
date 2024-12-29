@@ -241,6 +241,9 @@ fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<usiz
             b' ' => {
                 // skip lines of only spaces
             }
+            b'/' => {
+                // skip lines starting with a comment
+            }
             _ => {
                 if line.len() < 4 {
                     // skip malformed lines
