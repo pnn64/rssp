@@ -1,8 +1,8 @@
 [package]
 name = "rssp"
-version = "0.2.13"
+version = "0.2.15"
 edition = "2021"
-authors = ["Patrik Nilsson <patrik.n@pm.me>"]
+authors = ["Patrik Nilsson <perfecttaste@pm.me>"]
 description = "A high-performance simfile parser for StepMania built in Rust."
 repository = "https://github.com/pnn64/rssp"
 license = "MIT"
