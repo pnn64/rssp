@@ -278,15 +278,37 @@ fn categorize_measure_density(d: usize) -> RunDensity {
 
 fn compute_stream_counts(measure_densities: &[usize]) -> StreamCounts {
     let mut sc = StreamCounts::default();
-    for &d in measure_densities {
-        match categorize_measure_density(d) {
-            RunDensity::Run32 => sc.run32_streams += 1,
-            RunDensity::Run24 => sc.run24_streams += 1,
-            RunDensity::Run20 => sc.run20_streams += 1,
+
+    // First, convert measures to their density category
+    let cats: Vec<RunDensity> = measure_densities
+        .iter()
+        .map(|&d| categorize_measure_density(d))
+        .collect();
+
+    // Find the first measure that isn't a break
+    let first_run = cats.iter().position(|&c| c != RunDensity::Break);
+    // Find the last measure that isn't a break
+    let last_run  = cats.iter().rposition(|&c| c != RunDensity::Break);
+
+    // If everything is a break (or empty), just return defaults
+    if first_run.is_none() || last_run.is_none() {
+        return sc;
+    }
+
+    let start_idx = first_run.unwrap();
+    let end_idx   = last_run.unwrap();
+
+    // Only count categories from first_run..=last_run
+    for &cat in &cats[start_idx..=end_idx] {
+        match cat {
             RunDensity::Run16 => sc.run16_streams += 1,
+            RunDensity::Run20 => sc.run20_streams += 1,
+            RunDensity::Run24 => sc.run24_streams += 1,
+            RunDensity::Run32 => sc.run32_streams += 1,
             RunDensity::Break => sc.total_breaks += 1,
         }
     }
+
     sc
 }
 
