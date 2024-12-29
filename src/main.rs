@@ -155,7 +155,7 @@ fn count_line(line: &[u8; 4], stats: &mut ArrowStats) -> bool {
                 stats.rolls += 1;
                 pressed += 1;
             }
-            b'M' | b'm' => {
+            b'M' => {
                 stats.mines += 1;
             }
             _ => {}
