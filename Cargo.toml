@@ -1,6 +1,6 @@
 [package]
 name = "rssp"
-version = "0.2.15"
+version = "0.2.16"
 edition = "2021"
 authors = ["Patrik Nilsson <perfecttaste@pm.me>"]
 description = "A high-performance simfile parser for StepMania built in Rust."
@@ -9,7 +9,7 @@ license = "MIT"
 keywords = ["stepmania", "simfile", "parser", "rust", "rssp"]
 
 [dependencies]
-image = "0.25.5"
+png = "0.17.16"
 hex = { version = "0.4.3", default-features = false, features = ["std"] }
 sha1 = { version = "0.10.6", default-features = false }
 
