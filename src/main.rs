@@ -1,11 +1,10 @@
 use std::env::args;
 use std::fs::File;
-use std::io;
-use std::io::Read;
+use std::io::{self, Read, Write};
 use std::time::Instant;
-use std::fmt::Write; // for normalize_float_digits
+use std::fmt::Write as FmtWrite;
 use sha1::{Digest, Sha1};
-use image::{ImageBuffer, Rgb, RgbImage, ImageError};
+use png;
 
 /// Strip bracketed numeric tags (e.g. [16] [300]) and leading numeric prefixes (e.g. "8. - ")
 /// from a title string.
@@ -1063,63 +1062,75 @@ fn generate_density_graph_png(
     measure_nps_vec: &[f64],
     max_nps: f64,
     short_hash: &str,
-) -> Result<(), ImageError> {
+) -> io::Result<()> {
     const IMAGE_WIDTH: u32 = 1000;
     const GRAPH_HEIGHT: u32 = 400;
 
-    let mut imgbuf: RgbImage = ImageBuffer::new(IMAGE_WIDTH, GRAPH_HEIGHT);
+    // Define colors as RGB tuples
+    let bg_color = [3, 17, 44]; // [0x03, 0x11, 0x2c]
+    let bottom_color = [0, 184, 204]; // [0x00, 0xb8, 0xcc]
+    let top_color = [130, 0, 161]; // [0x82, 0x00, 0xa1]
 
-    let bg_color = Rgb([0x03, 0x11, 0x2c]);
-    for pixel in imgbuf.pixels_mut() {
-        *pixel = bg_color;
+    // Initialize the image buffer with the background color
+    // The buffer will store RGB values sequentially: R, G, B, R, G, B, ...
+    let mut img_buffer = vec![0u8; (IMAGE_WIDTH * GRAPH_HEIGHT * 3) as usize];
+    for y in 0..GRAPH_HEIGHT {
+        for x in 0..IMAGE_WIDTH {
+            let idx = ((y * IMAGE_WIDTH + x) * 3) as usize;
+            img_buffer[idx] = bg_color[0];
+            img_buffer[idx + 1] = bg_color[1];
+            img_buffer[idx + 2] = bg_color[2];
+        }
     }
 
-    if measure_nps_vec.is_empty() || max_nps <= 0.0 {
-        let filename = format!("{}.png", short_hash);
-        imgbuf.save(&filename)?;
-        return Ok(());
-    }
+    if !measure_nps_vec.is_empty() && max_nps > 0.0 {
+        let measure_width = IMAGE_WIDTH as f64 / measure_nps_vec.len() as f64;
 
-    let measure_width = IMAGE_WIDTH as f64 / measure_nps_vec.len() as f64;
+        for (i, &nps) in measure_nps_vec.iter().enumerate() {
+            let x_start = (i as f64 * measure_width).round() as u32;
+            let x_end = ((i as f64 + 1.0) * measure_width).round() as u32;
+            let x_end = if x_end > IMAGE_WIDTH { IMAGE_WIDTH } else { x_end };
 
-    fn lerp(a: u8, b: u8, t: f64) -> u8 {
-        let t = t.clamp(0.0, 1.0);
-        let af = a as f64;
-        let bf = b as f64;
-        (af + (bf - af) * t).round() as u8
-    }
+            let height_fraction = (nps / max_nps).min(1.0);
+            let bar_height = (height_fraction * GRAPH_HEIGHT as f64).round() as u32;
+            let y_top = GRAPH_HEIGHT - bar_height;
 
-    // gradient from bottom_color => top_color
-    let bottom_color = (0x00, 0xb8, 0xcc);
-    let top_color    = (0x82, 0x00, 0xa1);
+            for x in x_start..x_end {
+                for y in y_top..GRAPH_HEIGHT {
+                    let dist_from_bottom = (GRAPH_HEIGHT - 1 - y) as f64;
+                    let frac = dist_from_bottom / (GRAPH_HEIGHT as f64 - 1.0);
 
-    for (i, &nps) in measure_nps_vec.iter().enumerate() {
-        let x_start = (i as f64 * measure_width).round() as u32;
-        let x_end   = (((i + 1) as f64 * measure_width).round() as u32).min(IMAGE_WIDTH);
+                    let r = ((bottom_color[0] as f64)
+                        + ((top_color[0] as f64 - bottom_color[0] as f64) * frac))
+                        .round() as u8;
+                    let g = ((bottom_color[1] as f64)
+                        + ((top_color[1] as f64 - bottom_color[1] as f64) * frac))
+                        .round() as u8;
+                    let b = ((bottom_color[2] as f64)
+                        + ((top_color[2] as f64 - bottom_color[2] as f64) * frac))
+                        .round() as u8;
 
-        let height_fraction = nps / max_nps;
-        let bar_height = (height_fraction * GRAPH_HEIGHT as f64).round() as i32;
-        let y_top = GRAPH_HEIGHT as i32 - bar_height;
-
-        for x in x_start..x_end {
-            for y in y_top..(GRAPH_HEIGHT as i32) {
-                if y < 0 || y >= GRAPH_HEIGHT as i32 || x >= IMAGE_WIDTH {
-                    continue;
+                    let idx = ((y * IMAGE_WIDTH + x) * 3) as usize;
+                    img_buffer[idx] = r;
+                    img_buffer[idx + 1] = g;
+                    img_buffer[idx + 2] = b;
                 }
-                let dist_from_bottom = (GRAPH_HEIGHT as i32 - 1 - y) as f64;
-                let frac = dist_from_bottom / (GRAPH_HEIGHT as f64 - 1.0);
-
-                let rr = lerp(bottom_color.0, top_color.0, frac);
-                let gg = lerp(bottom_color.1, top_color.1, frac);
-                let bb = lerp(bottom_color.2, top_color.2, frac);
-
-                *imgbuf.get_pixel_mut(x, y as u32) = Rgb([rr, gg, bb]);
             }
         }
     }
 
-    let output_file = format!("{}.png", short_hash);
-    imgbuf.save(&output_file)?;
+    // Create the output file
+    let filename = format!("{}.png", short_hash);
+    let file = File::create(filename)?;
+
+    // Initialize the PNG encoder
+    let mut encoder = png::Encoder::new(file, IMAGE_WIDTH, GRAPH_HEIGHT); // Make encoder mutable
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header()?;
+
+    // Write the image data
+    writer.write_image_data(&img_buffer)?;
 
     Ok(())
 }
@@ -1237,9 +1248,8 @@ fn main() -> io::Result<()> {
 
     // Generate PNG if requested (but DO NOT return yet).
     if generate_png {
-        // If there's an error in PNG generation, convert to io::Error
-        generate_density_graph_png(&measure_nps_vec, max_nps, short_hash)
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        // The updated function returns io::Result, so propagate the error directly
+        generate_density_graph_png(&measure_nps_vec, max_nps, short_hash)?;
     }
 
     // Finally, print elapsed time at the END
