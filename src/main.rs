@@ -1,8 +1,11 @@
 use std::env::args;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::time::Instant;
 use std::fmt::Write as FmtWrite;
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
 use sha1::{Digest, Sha1};
 use png;
 
@@ -44,7 +47,6 @@ fn strip_title_tags(title: &str) -> String {
     s.to_string()
 }
 
-/// All arrow/step-related counts.
 #[derive(Default)]
 struct ArrowStats {
     total_arrows: u32,
@@ -60,7 +62,6 @@ struct ArrowStats {
     rolls: u32,
 }
 
-/// Tracks how many dense measures appear at each run level.
 #[derive(Default)]
 struct StreamCounts {
     run16_streams: u32,
@@ -70,7 +71,6 @@ struct StreamCounts {
     total_breaks: u32,
 }
 
-/// A measure’s “density” category.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum RunDensity {
     Run32,
@@ -80,7 +80,6 @@ enum RunDensity {
     Break,
 }
 
-/// Which kind of breakdown are we generating?
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum BreakdownMode {
     Detailed,
@@ -88,41 +87,12 @@ enum BreakdownMode {
     Simplified,
 }
 
-/// Pattern stats (foot candles, anchors, boxes, etc.).
-#[derive(Default)]
-struct PatternStats {
-    left_foot_candles: u32,
-    right_foot_candles: u32,
-    total_candles: u32,
-    candles_percent: f64,
-    ld_ru_mono: u32,
-    lu_rd_mono: u32,
-    mono_percent: f64,
-    lr_boxes: u32,
-    ud_boxes: u32,
-    corner_ld_boxes: u32,
-    corner_lu_boxes: u32,
-    corner_rd_boxes: u32,
-    corner_ru_boxes: u32,
-    anchor_left: u32,
-    anchor_down: u32,
-    anchor_up: u32,
-    anchor_right: u32,
-    right_dorito: u32,
-    left_dorito: u32,
-    inv_right_dorito: u32,
-    inv_left_dorito: u32,
-}
-
-// --------------------------------------------------------------------
-// Minimization & Counting
-// --------------------------------------------------------------------
-
 #[inline]
 fn is_all_zero(line: &[u8; 4]) -> bool {
     line.iter().all(|&b| b == b'0')
 }
 
+#[inline]
 fn minimize_measure(measure: &mut Vec<[u8; 4]>) {
     while measure.len() >= 2 && measure.len() % 2 == 0 {
         if (1..measure.len()).step_by(2).any(|i| !is_all_zero(&measure[i])) {
@@ -141,6 +111,7 @@ fn minimize_measure(measure: &mut Vec<[u8; 4]>) {
     }
 }
 
+#[inline]
 fn count_line(line: &[u8; 4], stats: &mut ArrowStats) -> bool {
     let mut pressed = 0u32;
     for &ch in line {
@@ -241,11 +212,10 @@ fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<usiz
                 // skip lines of only spaces
             }
             b'/' => {
-                // skip lines starting with a comment
+                // skip lines starting with comment
             }
             _ => {
                 if line.len() < 4 {
-                    // skip malformed lines
                     continue;
                 }
                 let mut arr = [0u8; 4];
@@ -281,18 +251,13 @@ fn categorize_measure_density(d: usize) -> RunDensity {
 fn compute_stream_counts(measure_densities: &[usize]) -> StreamCounts {
     let mut sc = StreamCounts::default();
 
-    // First, convert measures to their density category
     let cats: Vec<RunDensity> = measure_densities
         .iter()
         .map(|&d| categorize_measure_density(d))
         .collect();
 
-    // Find the first measure that isn't a break
     let first_run = cats.iter().position(|&c| c != RunDensity::Break);
-    // Find the last measure that isn't a break
     let last_run  = cats.iter().rposition(|&c| c != RunDensity::Break);
-
-    // If everything is a break (or empty), just return defaults
     if first_run.is_none() || last_run.is_none() {
         return sc;
     }
@@ -300,7 +265,6 @@ fn compute_stream_counts(measure_densities: &[usize]) -> StreamCounts {
     let start_idx = first_run.unwrap();
     let end_idx   = last_run.unwrap();
 
-    // Only count categories from first_run..=last_run
     for &cat in &cats[start_idx..=end_idx] {
         match cat {
             RunDensity::Run16 => sc.run16_streams += 1,
@@ -314,15 +278,10 @@ fn compute_stream_counts(measure_densities: &[usize]) -> StreamCounts {
     sc
 }
 
-// --------------------------------------------------------------------
-// Single function for all 3 breakdowns
-// --------------------------------------------------------------------
-
-/// A token for run or break.
 #[derive(Debug)]
 enum Token {
-    Run(RunDensity, usize), // e.g. (Run16, length=3)
-    Break(usize),           // e.g. (5)
+    Run(RunDensity, usize),
+    Break(usize),
 }
 
 fn format_run_symbol(cat: RunDensity, length: usize, star: bool) -> String {
@@ -340,22 +299,18 @@ fn format_run_symbol(cat: RunDensity, length: usize, star: bool) -> String {
     }
 }
 
-/// Build and merge tokens according to the breakdown mode.
 fn generate_breakdown(measure_densities: &[usize], mode: BreakdownMode) -> String {
-    // 1) categorize
     let cats: Vec<RunDensity> = measure_densities
         .iter()
         .map(|&d| categorize_measure_density(d))
         .collect();
 
-    // 2) skip leading/trailing breaks
     let first_run = cats.iter().position(|&c| c != RunDensity::Break);
     let last_run  = cats.iter().rposition(|&c| c != RunDensity::Break);
     if first_run.is_none() || last_run.is_none() {
         return String::new();
     }
 
-    // 3) Build tokens
     let mut tokens = Vec::new();
     {
         let mut i = first_run.unwrap();
@@ -377,16 +332,13 @@ fn generate_breakdown(measure_densities: &[usize], mode: BreakdownMode) -> Strin
         }
     }
 
-    // 4) final output
     let mut output = Vec::new();
     let mut idx = 0;
 
-    // partial => threshold=1
-    // simplified => threshold=4
     let threshold = match mode {
         BreakdownMode::Partial => 1,
         BreakdownMode::Simplified => 4,
-        BreakdownMode::Detailed => 0, // for clarity
+        BreakdownMode::Detailed => 0,
     };
 
     while idx < tokens.len() {
@@ -399,43 +351,32 @@ fn generate_breakdown(measure_densities: &[usize], mode: BreakdownMode) -> Strin
                         if idx + 1 >= tokens.len() {
                             break;
                         }
-                        // next token must be a Break
                         let Token::Break(bk_len) = tokens[idx + 1] else {
                             break;
                         };
-
-                        // if break is bigger than threshold => no merge
                         if bk_len > threshold {
                             break;
                         }
-
-                        // we do have a small break => check if there's a run after it
                         if idx + 2 >= tokens.len() {
                             break;
                         }
 
                         if let Token::Run(next_cat, next_len) = tokens[idx + 2] {
                             if next_cat == curr_cat {
-                                // same category => fold break + run
                                 curr_len += bk_len + next_len;
                                 star = true;
-                                // remove
-                                tokens.remove(idx + 1); // break
-                                tokens.remove(idx + 1); // run
+                                tokens.remove(idx + 1);
+                                tokens.remove(idx + 1);
                                 continue 'merge_loop;
                             } else {
-                                // different category
-                                // unify: if bk_len == 1 => DO NOT MERGE for both partial/simplified
                                 if bk_len == 1 {
                                     break 'merge_loop;
                                 }
-                                // else bk_len is 2..=4 in Simplified => fold break only
-                                if mode == BreakdownMode::Simplified {
+                                if mode == BreakdownMode::Simplified && bk_len <= 4 {
                                     curr_len += bk_len;
                                     star = true;
-                                    tokens.remove(idx + 1); // remove break
+                                    tokens.remove(idx + 1);
                                 }
-                                // stop, do not remove next run
                                 break 'merge_loop;
                             }
                         } else {
@@ -483,10 +424,6 @@ fn generate_breakdown(measure_densities: &[usize], mode: BreakdownMode) -> Strin
 
     output.join(" ")
 }
-
-// --------------------------------------------------------------------
-// BPM utilities
-// --------------------------------------------------------------------
 
 fn normalize_float_digits(param: &str) -> String {
     let mut output = String::with_capacity(param.len());
@@ -542,7 +479,6 @@ fn get_current_bpm(beat: f64, bpm_map: &[(f64, f64)]) -> f64 {
     curr_bpm
 }
 
-/// Compute min_bpm/max_bpm from the entire BPM map (or (0,0) if empty).
 fn compute_bpm_range(bpm_map: &[(f64, f64)]) -> (i32, i32) {
     if bpm_map.is_empty() {
         return (0, 0);
@@ -557,16 +493,11 @@ fn compute_bpm_range(bpm_map: &[(f64, f64)]) -> (i32, i32) {
             max_bpm = bpm;
         }
     }
-    // Use round() for standard rounding:
     (
         min_bpm.round() as i32,
         max_bpm.round() as i32,
     )
 }
-
-// --------------------------------------------------------------------
-// Chart length (in seconds, int).
-// --------------------------------------------------------------------
 
 fn compute_total_chart_length(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> i32 {
     let mut total_length_seconds = 0.0;
@@ -582,11 +513,6 @@ fn compute_total_chart_length(measure_densities: &[usize], bpm_map: &[(f64, f64)
     total_length_seconds.floor() as i32
 }
 
-// --------------------------------------------------------------------
-// NPS calculations
-// --------------------------------------------------------------------
-
-/// Computes a per-measure NPS vector (notes-per-second) from measure densities.
 fn compute_measure_nps_vec(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> Vec<f64> {
     let mut measure_nps_vec = Vec::with_capacity(measure_densities.len());
     for (i, &density) in measure_densities.iter().enumerate() {
@@ -596,16 +522,27 @@ fn compute_measure_nps_vec(measure_densities: &[usize], bpm_map: &[(f64, f64)]) 
             measure_nps_vec.push(0.0);
             continue;
         }
-        // measure_nps = (notes in measure) / measure duration
-        // measure duration = 4 beats / curr_bpm => * 60 for sec => so 4/curr_bpm*60.
-        // dividing density by measure length => density / (4/curr_bpm*60) => density*(curr_bpm/4)/60
         let measure_nps = density as f64 * (curr_bpm / 4.0) / 60.0;
         measure_nps_vec.push(measure_nps);
     }
     measure_nps_vec
 }
 
-/// Returns (max_nps, median_nps) from the measure_nps_vec.
+/// A small helper to compute median of a slice of f64.
+fn median(arr: &[f64]) -> f64 {
+    if arr.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = arr.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let len = sorted.len();
+    if len % 2 == 0 {
+        (sorted[len / 2 - 1] + sorted[len / 2]) / 2.0
+    } else {
+        sorted[len / 2]
+    }
+}
+
 fn get_nps_stats(measure_nps_vec: &[f64]) -> (f64, f64) {
     let max_nps = if measure_nps_vec.is_empty() {
         0.0
@@ -616,20 +553,17 @@ fn get_nps_stats(measure_nps_vec: &[f64]) -> (f64, f64) {
     (max_nps, median_nps)
 }
 
-// --------------------------------------------------------------------
-// Extract sections
-// --------------------------------------------------------------------
 fn extract_sections(
     data: &[u8],
 ) -> io::Result<(
-    Option<&[u8]>, // title
-    Option<&[u8]>, // subtitle
-    Option<&[u8]>, // artist
-    Option<&[u8]>, // titletranslit
-    Option<&[u8]>, // subtitletranslit
-    Option<&[u8]>, // artisttranslit
-    Option<&[u8]>, // bpms
-    Option<&[u8]>, // notes
+    Option<&[u8]>,
+    Option<&[u8]>,
+    Option<&[u8]>,
+    Option<&[u8]>,
+    Option<&[u8]>,
+    Option<&[u8]>,
+    Option<&[u8]>,
+    Option<&[u8]>,
 )> {
     let mut title = None;
     let mut subtitle = None;
@@ -702,16 +636,7 @@ fn extract_sections(
         i += 1;
     }
 
-    Ok((
-        title,
-        subtitle,
-        artist,
-        titletranslit,
-        subtitletranslit,
-        artisttranslit,
-        bpms,
-        notes,
-    ))
+    Ok((title, subtitle, artist, titletranslit, subtitletranslit, artisttranslit, bpms, notes))
 }
 
 fn split_notes_fields<'a>(notes_block: &'a [u8]) -> (Vec<&'a [u8]>, &'a [u8]) {
@@ -733,330 +658,172 @@ fn split_notes_fields<'a>(notes_block: &'a [u8]) -> (Vec<&'a [u8]>, &'a [u8]) {
 }
 
 // --------------------------------------------------------------------
-// Compute median of a slice of f64
-// --------------------------------------------------------------------
-fn median(arr: &[f64]) -> f64 {
-    if arr.is_empty() {
-        return 0.0;
-    }
-    let mut sorted = arr.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let len = sorted.len();
-    if len % 2 == 0 {
-        (sorted[len / 2 - 1] + sorted[len / 2]) / 2.0
-    } else {
-        sorted[len / 2]
-    }
-}
-
-// --------------------------------------------------------------------
-// Pattern Analysis
+// 8) Single-Pass detection for everything except anchors
 // --------------------------------------------------------------------
 
-#[inline]
-fn line_to_bitmask(line: &[u8]) -> u8 {
-    let mut mask = 0u8;
-    if matches!(line[0], b'1' | b'2' | b'4') {
-        mask |= 1 << 0;
-    }
-    if matches!(line[1], b'1' | b'2' | b'4') {
-        mask |= 1 << 1;
-    }
-    if matches!(line[2], b'1' | b'2' | b'4') {
-        mask |= 1 << 2;
-    }
-    if matches!(line[3], b'1' | b'2' | b'4') {
-        mask |= 1 << 3;
-    }
-    mask
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum PatternVariant {
+    CandleLeft,
+    CandleRight,
+    BoxLR,
+    BoxUD,
+    BoxCornerLD,
+    BoxCornerLU,
+    BoxCornerRD,
+    BoxCornerRU,
+    DoritoRight,
+    DoritoLeft,
+    DoritoInvRight,
+    DoritoInvLeft,
+    SpiralLeft,
+    SpiralRight,
+    CopterLeft,
+    CopterRight,
+    LuchiLeft,
+    LuchiRight,
+    HipBreakerLeft,
+    HipBreakerRight,
+    SweepLeft,
+    SweepRight,
+    SweepInvLeft,
+    SweepInvRight,
 }
 
-/// Parse lines from minimized chart => produce a Vec<u8> of bitmasks.
-fn parse_bitmask_chart(chart_data: &[u8]) -> Vec<u8> {
-    let mut bitmasks = Vec::new();
-    for line in chart_data.split(|&b| b == b'\n') {
-        if line.len() >= 4 {
-            let m = line_to_bitmask(line);
-            // Also check if it's not just commas or spaces
-            if m != 0 || line.iter().any(|&b| !(b == b',' || b == b' ')) {
-                bitmasks.push(m);
-            }
-        }
+fn string_to_pattern_bits(p: &str) -> Vec<u8> {
+    let mut result = Vec::with_capacity(p.len());
+    for c in p.chars() {
+        let mask = match c {
+            'L' => 0b0001,
+            'D' => 0b0010,
+            'U' => 0b0100,
+            'R' => 0b1000,
+            _ => 0b0000,
+        };
+        result.push(mask);
     }
-    bitmasks
+    result
 }
 
-fn count_candles(bitmasks: &[u8]) -> (u32, u32) {
-    const LEFT_FOOT_PATTERNS: &[[u8; 3]] = &[
-        [0b0010, 0b1000, 0b0100],
-        [0b0100, 0b1000, 0b0010],
-    ];
-    const RIGHT_FOOT_PATTERNS: &[[u8; 3]] = &[
-        [0b0010, 0b0001, 0b0100],
-        [0b0100, 0b0001, 0b0010],
-    ];
+static ALL_PATTERNS_NON_ANCHORS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::new(|| {
+    let mut patterns = Vec::new();
 
-    let mut left_foot = 0u32;
-    let mut right_foot = 0u32;
+    // Candles
+    patterns.push((PatternVariant::CandleLeft,  string_to_pattern_bits("ULD")));
+    patterns.push((PatternVariant::CandleLeft,  string_to_pattern_bits("DLU")));
+    patterns.push((PatternVariant::CandleRight, string_to_pattern_bits("URD")));
+    patterns.push((PatternVariant::CandleRight, string_to_pattern_bits("DRU")));
 
-    if bitmasks.len() < 3 {
-        return (0, 0);
-    }
+    // Boxes
+    patterns.push((PatternVariant::BoxLR,       string_to_pattern_bits("LRLR")));
+    patterns.push((PatternVariant::BoxLR,       string_to_pattern_bits("RLRL")));
+    patterns.push((PatternVariant::BoxUD,       string_to_pattern_bits("UDUD")));
+    patterns.push((PatternVariant::BoxUD,       string_to_pattern_bits("DUDU")));
+    patterns.push((PatternVariant::BoxCornerLD, string_to_pattern_bits("LDLD")));
+    patterns.push((PatternVariant::BoxCornerLD, string_to_pattern_bits("DLDL")));
+    patterns.push((PatternVariant::BoxCornerLU, string_to_pattern_bits("LULU")));
+    patterns.push((PatternVariant::BoxCornerLU, string_to_pattern_bits("ULUL")));
+    patterns.push((PatternVariant::BoxCornerRD, string_to_pattern_bits("RDRD")));
+    patterns.push((PatternVariant::BoxCornerRD, string_to_pattern_bits("DRDR")));
+    patterns.push((PatternVariant::BoxCornerRU, string_to_pattern_bits("RURU")));
+    patterns.push((PatternVariant::BoxCornerRU, string_to_pattern_bits("URUR")));
 
-    for i in 0..(bitmasks.len() - 2) {
-        let block = [bitmasks[i], bitmasks[i + 1], bitmasks[i + 2]];
-        if LEFT_FOOT_PATTERNS.iter().any(|pat| *pat == block) {
-            left_foot += 1;
-        }
-        if RIGHT_FOOT_PATTERNS.iter().any(|pat| *pat == block) {
-            right_foot += 1;
-        }
-    }
-    (left_foot, right_foot)
-}
+    // Doritos
+    patterns.push((PatternVariant::DoritoLeft,     string_to_pattern_bits("LDUDL")));
+    patterns.push((PatternVariant::DoritoRight,    string_to_pattern_bits("RUDUR")));
+    patterns.push((PatternVariant::DoritoInvLeft,  string_to_pattern_bits("LUDUL")));
+    patterns.push((PatternVariant::DoritoInvRight, string_to_pattern_bits("RDUDR")));
 
-fn count_monos(bitmasks: &[u8]) -> (u32, u32) {
-    const VALID_LD_RU: &[[u8; 4]] = &[
-        [0b0001, 0b0100, 0b0010, 0b1000],
-        [0b0001, 0b1000, 0b0010, 0b0100],
-        [0b0010, 0b0100, 0b0001, 0b1000],
-        [0b0010, 0b1000, 0b0001, 0b0100],
-        [0b0100, 0b0001, 0b1000, 0b0010],
-        [0b0100, 0b0010, 0b1000, 0b0001],
-        [0b1000, 0b0001, 0b0100, 0b0010],
-        [0b1000, 0b0010, 0b0100, 0b0001],
-    ];
-    const VALID_LU_RD: &[[u8; 4]] = &[
-        [0b0001, 0b0010, 0b0100, 0b1000],
-        [0b0001, 0b1000, 0b0100, 0b0010],
-        [0b0100, 0b0010, 0b0001, 0b1000],
-        [0b0100, 0b1000, 0b0001, 0b0010],
-        [0b0010, 0b0001, 0b1000, 0b0100],
-        [0b0010, 0b0100, 0b1000, 0b0001],
-        [0b1000, 0b0001, 0b0010, 0b0100],
-        [0b1000, 0b0100, 0b0010, 0b0001],
-    ];
+    // Spirals
+    patterns.push((PatternVariant::SpiralLeft,  string_to_pattern_bits("LDURDR")));
+    patterns.push((PatternVariant::SpiralRight, string_to_pattern_bits("RUDLUL")));
 
-    let mut ld_ru = 0u32;
-    let mut lu_rd = 0u32;
+    // Copters
+    patterns.push((PatternVariant::CopterLeft,  string_to_pattern_bits("LDURDULDURDU")));
+    patterns.push((PatternVariant::CopterLeft,  string_to_pattern_bits("DULDURDULDUR")));
+    patterns.push((PatternVariant::CopterRight, string_to_pattern_bits("RUDLUDRUDLUD")));
+    patterns.push((PatternVariant::CopterRight, string_to_pattern_bits("UDRUDLUDRUDL")));
 
-    if bitmasks.len() < 4 {
-        return (0, 0);
-    }
+    // Luchi
+    patterns.push((PatternVariant::LuchiLeft,  string_to_pattern_bits("LDLRURDRLULD")));
+    patterns.push((PatternVariant::LuchiRight, string_to_pattern_bits("RURLDLULRDRU")));
+
+    // Hip-Breakers
+    patterns.push((PatternVariant::HipBreakerLeft,  string_to_pattern_bits("LDUDLUDULDUDL")));
+    patterns.push((PatternVariant::HipBreakerRight, string_to_pattern_bits("RUDURDUDRUDUR")));
+
+    // Sweeps
+    patterns.push((PatternVariant::SweepLeft,     string_to_pattern_bits("LDURUDL")));
+    patterns.push((PatternVariant::SweepRight,    string_to_pattern_bits("RUDLDUR")));
+    patterns.push((PatternVariant::SweepInvLeft,  string_to_pattern_bits("LUDRDUL")));
+    patterns.push((PatternVariant::SweepInvRight, string_to_pattern_bits("RDULUDR")));
+
+    patterns
+});
+
+fn detect_all_patterns_non_anchors(bitmasks: &[u8]) -> HashMap<PatternVariant, u32> {
+    let mut results: HashMap<PatternVariant, u32> = HashMap::new();
+    let defs: &[(PatternVariant, Vec<u8>)] = ALL_PATTERNS_NON_ANCHORS.as_ref();
 
     let mut i = 0;
-    while i + 3 < bitmasks.len() {
-        let block = &bitmasks[i..i + 4];
-        if block.iter().all(|&b| b.count_ones() == 1) {
-            if VALID_LD_RU.iter().any(|pat| pat == block) {
-                ld_ru += 1;
-                i += 4;
-                continue;
-            } else if VALID_LU_RD.iter().any(|pat| pat == block) {
-                lu_rd += 1;
-                i += 4;
-                continue;
+    while i < bitmasks.len() {
+        let mut matched_any = false;
+        for (variant, pat_bits) in defs.iter() {
+            let plen = pat_bits.len();
+            if i + plen <= bitmasks.len() {
+                if bitmasks[i..i + plen] == pat_bits[..] {
+                    *results.entry(*variant).or_insert(0) += 1;
+                    i += plen; 
+                    matched_any = true;
+                    break;
+                }
             }
         }
-        i += 1;
-    }
-    (ld_ru, lu_rd)
-}
-
-fn count_boxes(bitmasks: &[u8]) -> (u32, u32, u32, u32, u32, u32) {
-    const LR_BOXES: &[[u8; 4]] = &[
-        [0b0001, 0b1000, 0b0001, 0b1000],
-        [0b1000, 0b0001, 0b1000, 0b0001],
-    ];
-    const UD_BOXES: &[[u8; 4]] = &[
-        [0b0100, 0b0010, 0b0100, 0b0010],
-        [0b0010, 0b0100, 0b0010, 0b0100],
-    ];
-    const CORNER_LD_BOXES: &[[u8; 4]] = &[
-        [0b0001, 0b0010, 0b0001, 0b0010],
-        [0b0010, 0b0001, 0b0010, 0b0001],
-    ];
-    const CORNER_LU_BOXES: &[[u8; 4]] = &[
-        [0b0001, 0b0100, 0b0001, 0b0100],
-        [0b0100, 0b0001, 0b0100, 0b0001],
-    ];
-    const CORNER_RD_BOXES: &[[u8; 4]] = &[
-        [0b1000, 0b0010, 0b1000, 0b0010],
-        [0b0010, 0b1000, 0b0010, 0b1000],
-    ];
-    const CORNER_RU_BOXES: &[[u8; 4]] = &[
-        [0b1000, 0b0100, 0b1000, 0b0100],
-        [0b0100, 0b1000, 0b0100, 0b1000],
-    ];
-
-    let mut lr = 0;
-    let mut ud = 0;
-    let mut corner_ld = 0;
-    let mut corner_lu = 0;
-    let mut corner_rd = 0;
-    let mut corner_ru = 0;
-
-    if bitmasks.len() < 4 {
-        return (0, 0, 0, 0, 0, 0);
-    }
-
-    for i in 0..(bitmasks.len() - 3) {
-        let block = [bitmasks[i], bitmasks[i + 1], bitmasks[i + 2], bitmasks[i + 3]];
-        if LR_BOXES.iter().any(|pat| *pat == block) {
-            lr += 1;
-        }
-        if UD_BOXES.iter().any(|pat| *pat == block) {
-            ud += 1;
-        }
-        if CORNER_LD_BOXES.iter().any(|pat| *pat == block) {
-            corner_ld += 1;
-        }
-        if CORNER_LU_BOXES.iter().any(|pat| *pat == block) {
-            corner_lu += 1;
-        }
-        if CORNER_RD_BOXES.iter().any(|pat| *pat == block) {
-            corner_rd += 1;
-        }
-        if CORNER_RU_BOXES.iter().any(|pat| *pat == block) {
-            corner_ru += 1;
-        }
-    }
-    (lr, ud, corner_ld, corner_lu, corner_rd, corner_ru)
-}
-
-#[inline]
-fn count_doritos(bitmasks: &[u8]) -> (u32, u32, u32, u32) {
-    const RIGHT_DORITO: [u8; 5] = [
-        0b1000, 0b0100, 0b0010, 0b0100, 0b1000
-    ];
-    const LEFT_DORITO: [u8; 5] = [
-        0b0001, 0b0010, 0b0100, 0b0010, 0b0001
-    ];
-    const INV_RIGHT_DORITO: [u8; 5] = [
-        0b1000, 0b0010, 0b0100, 0b0010, 0b1000
-    ];
-    const INV_LEFT_DORITO: [u8; 5] = [
-        0b0001, 0b0100, 0b0010, 0b0100, 0b0001
-    ];
-
-    let mut rd_count = 0;
-    let mut ld_count = 0;
-    let mut ird_count = 0;
-    let mut ild_count = 0;
-
-    if bitmasks.len() < 5 {
-        return (0, 0, 0, 0);
-    }
-
-    let mut i = 0;
-    while i + 4 < bitmasks.len() {
-        if bitmasks[i..i+5].iter().all(|&b| b.count_ones() == 1) {
-            let block = &bitmasks[i..i+5];
-            if block == &RIGHT_DORITO {
-                rd_count += 1;
-                i += 5;
-                continue;
-            } else if block == &LEFT_DORITO {
-                ld_count += 1;
-                i += 5;
-                continue;
-            } else if block == &INV_RIGHT_DORITO {
-                ird_count += 1;
-                i += 5;
-                continue;
-            } else if block == &INV_LEFT_DORITO {
-                ild_count += 1;
-                i += 5;
-                continue;
-            }
-        }
-        i += 1;
-    }
-
-    (rd_count, ld_count, ird_count, ild_count)
-}
-
-fn count_anchors(bitmasks: &[u8], arrow_bit: u8) -> u32 {
-    let mut count = 0;
-    let n = bitmasks.len();
-    let mask = 1 << arrow_bit;
-    let mut i = 0;
-
-    while i + 4 < n {
-        if (bitmasks[i] & mask) != 0
-            && (bitmasks[i + 2] & mask) != 0
-            && (bitmasks[i + 4] & mask) != 0
-        {
-            count += 1;
-            i += 5;
-        } else {
+        if !matched_any {
             i += 1;
         }
     }
-    count
+
+    results
 }
 
-fn do_pattern_analysis(bitmasks: &[u8], total_arrows: u32) -> PatternStats {
-    let (left_foot_candles, right_foot_candles) = count_candles(bitmasks);
-    let total_candles = left_foot_candles + right_foot_candles;
+fn count_anchors(bitmasks: &[u8]) -> (u32, u32, u32, u32) {
+    let mut anchor_left = 0;
+    let mut anchor_down = 0;
+    let mut anchor_up = 0;
+    let mut anchor_right = 0;
 
-    let candles_percent = if total_arrows > 1 {
-        let denom = ((total_arrows.saturating_sub(1) / 2) as f64).floor();
-        if denom > 0.0 {
-            (total_candles as f64 / denom) * 100.0
-        } else {
-            0.0
+    let n = bitmasks.len();
+    let mut i = 0;
+    while i + 4 < n {
+        if (bitmasks[i] & 0b0001) != 0
+            && (bitmasks[i + 2] & 0b0001) != 0
+            && (bitmasks[i + 4] & 0b0001) != 0
+        {
+            anchor_left += 1;
         }
-    } else {
-        0.0
-    };
-
-    let (ld_ru_mono, lu_rd_mono) = count_monos(bitmasks);
-    let total_mono_arrows = (ld_ru_mono + lu_rd_mono) * 4;
-    let mono_percent = if total_arrows > 0 {
-        (total_mono_arrows as f64 / total_arrows as f64) * 100.0
-    } else {
-        0.0
-    };
-
-    let (lr_boxes, ud_boxes, corner_ld_boxes, corner_lu_boxes, corner_rd_boxes, corner_ru_boxes)
-        = count_boxes(bitmasks);
-
-    let anchor_left  = count_anchors(bitmasks, 0);
-    let anchor_down  = count_anchors(bitmasks, 1);
-    let anchor_up    = count_anchors(bitmasks, 2);
-    let anchor_right = count_anchors(bitmasks, 3);
-
-    let (rd, ld, ird, ild) = count_doritos(bitmasks);
-
-    PatternStats {
-        left_foot_candles,
-        right_foot_candles,
-        total_candles,
-        candles_percent,
-        ld_ru_mono,
-        lu_rd_mono,
-        mono_percent,
-        lr_boxes,
-        ud_boxes,
-        corner_ld_boxes,
-        corner_lu_boxes,
-        corner_rd_boxes,
-        corner_ru_boxes,
-        anchor_left,
-        anchor_down,
-        anchor_up,
-        anchor_right,
-        right_dorito: rd,
-        left_dorito: ld,
-        inv_right_dorito: ird,
-        inv_left_dorito: ild,
+        if (bitmasks[i] & 0b0010) != 0
+            && (bitmasks[i + 2] & 0b0010) != 0
+            && (bitmasks[i + 4] & 0b0010) != 0
+        {
+            anchor_down += 1;
+        }
+        if (bitmasks[i] & 0b0100) != 0
+            && (bitmasks[i + 2] & 0b0100) != 0
+            && (bitmasks[i + 4] & 0b0100) != 0
+        {
+            anchor_up += 1;
+        }
+        if (bitmasks[i] & 0b1000) != 0
+            && (bitmasks[i + 2] & 0b1000) != 0
+            && (bitmasks[i + 4] & 0b1000) != 0
+        {
+            anchor_right += 1;
+        }
+        i += 1;
     }
-}
 
-// --------------------------------------------------------------------
-// Density Graph PNG
-// --------------------------------------------------------------------
+    (anchor_left, anchor_down, anchor_up, anchor_right)
+}
 
 fn generate_density_graph_png(
     measure_nps_vec: &[f64],
@@ -1066,13 +833,10 @@ fn generate_density_graph_png(
     const IMAGE_WIDTH: u32 = 1000;
     const GRAPH_HEIGHT: u32 = 400;
 
-    // Define colors as RGB tuples
-    let bg_color = [3, 17, 44]; // [0x03, 0x11, 0x2c]
-    let bottom_color = [0, 184, 204]; // [0x00, 0xb8, 0xcc]
-    let top_color = [130, 0, 161]; // [0x82, 0x00, 0xa1]
+    let bg_color = [3, 17, 44];
+    let bottom_color = [0, 184, 204];
+    let top_color = [130, 0, 161];
 
-    // Initialize the image buffer with the background color
-    // The buffer will store RGB values sequentially: R, G, B, R, G, B, ...
     let mut img_buffer = vec![0u8; (IMAGE_WIDTH * GRAPH_HEIGHT * 3) as usize];
     for y in 0..GRAPH_HEIGHT {
         for x in 0..IMAGE_WIDTH {
@@ -1089,11 +853,11 @@ fn generate_density_graph_png(
         for (i, &nps) in measure_nps_vec.iter().enumerate() {
             let x_start = (i as f64 * measure_width).round() as u32;
             let x_end = ((i as f64 + 1.0) * measure_width).round() as u32;
-            let x_end = if x_end > IMAGE_WIDTH { IMAGE_WIDTH } else { x_end };
+            let x_end = x_end.min(IMAGE_WIDTH);
 
             let height_fraction = (nps / max_nps).min(1.0);
             let bar_height = (height_fraction * GRAPH_HEIGHT as f64).round() as u32;
-            let y_top = GRAPH_HEIGHT - bar_height;
+            let y_top = GRAPH_HEIGHT.saturating_sub(bar_height);
 
             for x in x_start..x_end {
                 for y in y_top..GRAPH_HEIGHT {
@@ -1119,28 +883,23 @@ fn generate_density_graph_png(
         }
     }
 
-    // Create the output file
     let filename = format!("{}.png", short_hash);
     let file = File::create(filename)?;
 
-    // Initialize the PNG encoder
-    let mut encoder = png::Encoder::new(file, IMAGE_WIDTH, GRAPH_HEIGHT); // Make encoder mutable
+    let mut encoder = png::Encoder::new(file, IMAGE_WIDTH, GRAPH_HEIGHT);
     encoder.set_color(png::ColorType::Rgb);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder.write_header()?;
 
-    // Write the image data
     writer.write_image_data(&img_buffer)?;
-
     Ok(())
 }
 
 // --------------------------------------------------------------------
-// Main
+// 11) Main
 // --------------------------------------------------------------------
 
 fn main() -> io::Result<()> {
-    // Start timer BEFORE any processing:
     let start_time = Instant::now();
 
     let args: Vec<String> = args().collect();
@@ -1169,12 +928,9 @@ fn main() -> io::Result<()> {
         notes_opt,
     ) = extract_sections(&simfile_data)?;
 
-    // Convert to owned String so we can conditionally strip tags.
     let mut title_str = std::str::from_utf8(title_opt.unwrap_or(b"<invalid-title>"))
         .unwrap_or("<invalid-title>")
         .to_owned();
-    
-    // If --strip-tags is present, remove bracketed numeric tags from the title
     if strip_tags {
         title_str = strip_title_tags(&title_str);
     }
@@ -1206,24 +962,20 @@ fn main() -> io::Result<()> {
     let rating_str     = std::str::from_utf8(fields[3]).unwrap_or("").trim();
 
     let (mut minimized_chart, stats, measure_densities) = minimize_chart_and_count(chart_data);
-
     if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
         minimized_chart.truncate(pos + 1);
     }
 
     let stream_counts = compute_stream_counts(&measure_densities);
-
-    // Compute total_streams as the sum of individual stream counts
     let total_streams = stream_counts.run16_streams
-    + stream_counts.run20_streams
-    + stream_counts.run24_streams
-    + stream_counts.run32_streams;
+        + stream_counts.run20_streams
+        + stream_counts.run24_streams
+        + stream_counts.run32_streams;
 
     let detailed = generate_breakdown(&measure_densities, BreakdownMode::Detailed);
     let partial  = generate_breakdown(&measure_densities, BreakdownMode::Partial);
     let simple   = generate_breakdown(&measure_densities, BreakdownMode::Simplified);
 
-    // Hash
     let mut hasher = Sha1::new();
     hasher.update(&minimized_chart);
     hasher.update(normalized_bpms.as_bytes());
@@ -1231,36 +983,55 @@ fn main() -> io::Result<()> {
     let hash_hex = hex::encode(hash_result);
     let short_hash = &hash_hex[..16];
 
-    // BPM map and range
     let bpm_map = parse_bpm_map(&normalized_bpms);
     let (min_bpm, max_bpm) = compute_bpm_range(&bpm_map);
 
-    // NPS vector + stats
     let measure_nps_vec = compute_measure_nps_vec(&measure_densities, &bpm_map);
     let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
 
-    // Chart length (seconds) as int
     let total_length = compute_total_chart_length(&measure_densities, &bpm_map);
 
-    // Pattern stats
-    let bitmasks = parse_bitmask_chart(&minimized_chart);
-    let pattern_stats = do_pattern_analysis(&bitmasks, stats.total_arrows);
+    // Convert minimized chart into bitmasks
+    let bitmasks = {
+        let mut res = Vec::new();
+        for line in minimized_chart.split(|&b| b == b'\n') {
+            if line.len() >= 4 {
+                let mut mask = 0u8;
+                if matches!(line[0], b'1' | b'2' | b'4') {
+                    mask |= 1 << 0;
+                }
+                if matches!(line[1], b'1' | b'2' | b'4') {
+                    mask |= 1 << 1;
+                }
+                if matches!(line[2], b'1' | b'2' | b'4') {
+                    mask |= 1 << 2;
+                }
+                if matches!(line[3], b'1' | b'2' | b'4') {
+                    mask |= 1 << 3;
+                }
+                if mask != 0 || line.iter().any(|&b| !(b == b',' || b == b' ')) {
+                    res.push(mask);
+                }
+            }
+        }
+        res
+    };
 
-    // Generate PNG if requested (but DO NOT return yet).
-    if generate_png {
-        // The updated function returns io::Result, so propagate the error directly
-        generate_density_graph_png(&measure_nps_vec, max_nps, short_hash)?;
-    }
+    // Single-pass detection for all non-anchor patterns
+    let detected_non_anchors = detect_all_patterns_non_anchors(&bitmasks);
 
-    // Finally, print elapsed time at the END
+    // Specialized anchor detection
+    let (anchor_left, anchor_down, anchor_up, anchor_right) = count_anchors(&bitmasks);
+
     let elapsed = start_time.elapsed();
 
-    // Now do JSON or text output (or neither).
+    // For convenience, define a small helper to fetch counts.
+    fn c(d: &HashMap<PatternVariant, u32>, v: PatternVariant) -> u32 {
+        *d.get(&v).unwrap_or(&0)
+    }
+
     if generate_json {
         println!("{{");
-        // We place elapsed time at the END, so skip for now.
-
-        // Basic info
         println!("  \"title\": \"{}\",", escape_json(&title_str));
         println!("  \"title_translit\": \"{}\",", escape_json(titletranslit_str));
         println!("  \"subtitle\": \"{}\",", escape_json(subtitle_str));
@@ -1273,7 +1044,7 @@ fn main() -> io::Result<()> {
         println!("  \"rating\": \"{}\",", escape_json(rating_str));
         println!("  \"hash_short\": \"{}\",", short_hash);
 
-        // Arrow Stats
+        // Arrow stats
         println!("  \"arrow_stats\": {{");
         println!("     \"left\": {},", stats.left);
         println!("     \"down\": {},", stats.down);
@@ -1288,7 +1059,7 @@ fn main() -> io::Result<()> {
         println!("     \"mines\": {}", stats.mines);
         println!("  }},");
 
-        // Stream Counts
+        // Stream counts
         println!("  \"stream_counts\": {{");
         println!("     \"run16_streams\": {},", stream_counts.run16_streams);
         println!("     \"run20_streams\": {},", stream_counts.run20_streams);
@@ -1310,39 +1081,79 @@ fn main() -> io::Result<()> {
         println!("     \"min_bpm\": {:.2},", min_bpm);
         println!("     \"max_bpm\": {:.2},", max_bpm);
         println!("     \"chart_length_s\": {},", total_length);
-        println!("     \"max_nps\": {:.2},", max_nps);
-        println!("     \"median_nps\": {:.2}", median_nps);
+        println!("     \"max_nps\": {:.4},", max_nps);
+        println!("     \"median_nps\": {:.4}", median_nps);
         println!("  }},");
 
-        // Pattern stats
-        println!("  \"pattern_stats\": {{");
-        println!("     \"left_foot_candles\": {},", pattern_stats.left_foot_candles);
-        println!("     \"right_foot_candles\": {},", pattern_stats.right_foot_candles);
-        println!("     \"total_candles\": {},", pattern_stats.total_candles);
-        println!("     \"candles_percent\": {:.2},", pattern_stats.candles_percent);
-        println!("     \"ld_ru_mono\": {},", pattern_stats.ld_ru_mono);
-        println!("     \"lu_rd_mono\": {},", pattern_stats.lu_rd_mono);
-        println!("     \"mono_percent\": {:.2},", pattern_stats.mono_percent);
-        println!("     \"lr_boxes\": {},", pattern_stats.lr_boxes);
-        println!("     \"ud_boxes\": {},", pattern_stats.ud_boxes);
-        println!("     \"corner_ld_boxes\": {},", pattern_stats.corner_ld_boxes);
-        println!("     \"corner_lu_boxes\": {},", pattern_stats.corner_lu_boxes);
-        println!("     \"corner_rd_boxes\": {},", pattern_stats.corner_rd_boxes);
-        println!("     \"corner_ru_boxes\": {},", pattern_stats.corner_ru_boxes);
-        println!("     \"anchor_left\": {},", pattern_stats.anchor_left);
-        println!("     \"anchor_down\": {},", pattern_stats.anchor_down);
-        println!("     \"anchor_up\": {},", pattern_stats.anchor_up);
-        println!("     \"anchor_right\": {},", pattern_stats.anchor_right);
-        println!("     \"right_dorito\": {},", pattern_stats.right_dorito);
-        println!("     \"left_dorito\": {},", pattern_stats.left_dorito);
-        println!("     \"inv_right_dorito\": {},", pattern_stats.inv_right_dorito);
-        println!("     \"inv_left_dorito\": {}", pattern_stats.inv_left_dorito);
+        // Pattern counts
+        println!("  \"pattern_counts\": {{");
+        // Candles
+        println!("     \"candle_left\": {},", c(&detected_non_anchors, PatternVariant::CandleLeft));
+        println!("     \"candle_right\": {},", c(&detected_non_anchors, PatternVariant::CandleRight));
+        //TOTAL CANDLES HERE
+        //CANDLES % HERE
+
+        //MONO INFO HERE
+        //STAIRS, DOUBLE STAIRS INV STAIRS
+        //TOTAL MONO
+        //MONO % HERE
+
+        // Boxes
+        println!("     \"box_lr\": {},", c(&detected_non_anchors, PatternVariant::BoxLR));
+        println!("     \"box_ud\": {},", c(&detected_non_anchors, PatternVariant::BoxUD));
+        println!("     \"box_corner_ld\": {},", c(&detected_non_anchors, PatternVariant::BoxCornerLD));
+        println!("     \"box_corner_lu\": {},", c(&detected_non_anchors, PatternVariant::BoxCornerLU));
+        println!("     \"box_corner_rd\": {},", c(&detected_non_anchors, PatternVariant::BoxCornerRD));
+        println!("     \"box_corner_ru\": {},", c(&detected_non_anchors, PatternVariant::BoxCornerRU));
+        //TOTAL BOXES HERE
+
+        // Doritos
+        println!("     \"dorito_right\": {},", c(&detected_non_anchors, PatternVariant::DoritoRight));
+        println!("     \"dorito_left\": {},", c(&detected_non_anchors, PatternVariant::DoritoLeft));
+        println!("     \"dorito_inv_right\": {},", c(&detected_non_anchors, PatternVariant::DoritoInvRight));
+        println!("     \"dorito_inv_left\": {},", c(&detected_non_anchors, PatternVariant::DoritoInvLeft));
+        //TOTAL DORITOS HERE
+
+        // Spirals
+        println!("     \"left_spiral\": {},", c(&detected_non_anchors, PatternVariant::SpiralLeft));
+        println!("     \"right_spiral\": {},", c(&detected_non_anchors, PatternVariant::SpiralRight));
+        //TOTAL SPIRALS HERE
+
+        // Copters
+        println!("     \"left_copter\": {},", c(&detected_non_anchors, PatternVariant::CopterLeft));
+        println!("     \"right_copter\": {},", c(&detected_non_anchors, PatternVariant::CopterRight));
+        //TOTAL COPTERS HERE
+
+        // Luchi
+        println!("     \"left_luchi\": {},", c(&detected_non_anchors, PatternVariant::LuchiLeft));
+        println!("     \"right_luchi\": {},", c(&detected_non_anchors, PatternVariant::LuchiRight));
+        //TOTAL LUCHI HERE
+
+        // Hip-Breakers
+        println!("     \"left_hip_breaker\": {},", c(&detected_non_anchors, PatternVariant::HipBreakerLeft));
+        println!("     \"right_hip_breaker\": {},", c(&detected_non_anchors, PatternVariant::HipBreakerRight));
+        //TOTAL HIPBREAKERS HERE
+
+        // Sweeps
+        println!("     \"left_sweep\": {},", c(&detected_non_anchors, PatternVariant::SweepLeft));
+        println!("     \"right_sweep\": {},", c(&detected_non_anchors, PatternVariant::SweepRight));
+        println!("     \"left_inv_sweep\": {},", c(&detected_non_anchors, PatternVariant::SweepInvLeft));
+        println!("     \"right_inv_sweep\": {},", c(&detected_non_anchors, PatternVariant::SweepInvRight));
+        //TOTAL SWEEPS HERE
+
+        // Anchors
+        println!("     \"anchor_left\": {},", anchor_left);
+        println!("     \"anchor_down\": {},", anchor_down);
+        println!("     \"anchor_up\": {},", anchor_up);
+        println!("     \"anchor_right\": {}", anchor_right);
+        //TOTAL ANCHORS HERE
         println!("  }},");
 
-        // Execution time
+        // Elapsed
         println!("  \"elapsed\": \"{:?}\"", elapsed);
         println!("}}");
     } else {
+        // ---------------- TEXT OUTPUT ----------------
         println!("Title: {}", title_str);
         println!("Title translate: {}", titletranslit_str);
         println!("Subtitle: {}", subtitle_str);
@@ -1387,36 +1198,56 @@ fn main() -> io::Result<()> {
         println!("Max NPS: {:.2}", max_nps);
         println!("Median NPS: {:.2}", median_nps);
 
-        println!("--- Pattern Stats ---");
-        println!("left_foot_candles: {}", pattern_stats.left_foot_candles);
-        println!("right_foot_candles: {}", pattern_stats.right_foot_candles);
-        println!("total_candles: {}", pattern_stats.total_candles);
-        println!("candles_percent: {:.2}", pattern_stats.candles_percent);
-        println!("ld_ru_mono: {}", pattern_stats.ld_ru_mono);
-        println!("lu_rd_mono: {}", pattern_stats.lu_rd_mono);
-        println!("mono_percent: {:.2}", pattern_stats.mono_percent);
-        println!("lr_boxes: {}", pattern_stats.lr_boxes);
-        println!("ud_boxes: {}", pattern_stats.ud_boxes);
-        println!("corner_ld_boxes: {}", pattern_stats.corner_ld_boxes);
-        println!("corner_lu_boxes: {}", pattern_stats.corner_lu_boxes);
-        println!("corner_rd_boxes: {}", pattern_stats.corner_rd_boxes);
-        println!("corner_ru_boxes: {}", pattern_stats.corner_ru_boxes);
-        println!("anchor_left: {}", pattern_stats.anchor_left);
-        println!("anchor_down: {}", pattern_stats.anchor_down);
-        println!("anchor_up: {}", pattern_stats.anchor_up);
-        println!("anchor_right: {}", pattern_stats.anchor_right);
-        println!("right_dorito: {}", pattern_stats.right_dorito);
-        println!("left_dorito: {}", pattern_stats.left_dorito);
-        println!("inv_right_dorito: {}", pattern_stats.inv_right_dorito);
-        println!("inv_left_dorito: {}", pattern_stats.inv_left_dorito);
+        // For convenience, define a little helper:
+        fn c(d: &HashMap<PatternVariant, u32>, v: PatternVariant) -> u32 {
+            *d.get(&v).unwrap_or(&0)
+        }
+
+        // Now print all single-pass patterns we defined:
+        println!("--- Pattern Counts (non-anchors) ---");
+        println!("CandleLeft: {}",      c(&detected_non_anchors, PatternVariant::CandleLeft));
+        println!("CandleRight: {}",     c(&detected_non_anchors, PatternVariant::CandleRight));
+        println!("BoxLR: {}",           c(&detected_non_anchors, PatternVariant::BoxLR));
+        println!("BoxUD: {}",           c(&detected_non_anchors, PatternVariant::BoxUD));
+        println!("BoxCornerLD: {}",     c(&detected_non_anchors, PatternVariant::BoxCornerLD));
+        println!("BoxCornerLU: {}",     c(&detected_non_anchors, PatternVariant::BoxCornerLU));
+        println!("BoxCornerRD: {}",     c(&detected_non_anchors, PatternVariant::BoxCornerRD));
+        println!("BoxCornerRU: {}",     c(&detected_non_anchors, PatternVariant::BoxCornerRU));
+        println!("DoritoRight: {}",     c(&detected_non_anchors, PatternVariant::DoritoRight));
+        println!("DoritoLeft: {}",      c(&detected_non_anchors, PatternVariant::DoritoLeft));
+        println!("DoritoInvRight: {}",  c(&detected_non_anchors, PatternVariant::DoritoInvRight));
+        println!("DoritoInvLeft: {}",   c(&detected_non_anchors, PatternVariant::DoritoInvLeft));
+        println!("LeftSpiral: {}",      c(&detected_non_anchors, PatternVariant::SpiralLeft));
+        println!("RightSpiral: {}",     c(&detected_non_anchors, PatternVariant::SpiralRight));
+        println!("LeftCopter: {}",      c(&detected_non_anchors, PatternVariant::CopterLeft));
+        println!("RightCopter: {}",     c(&detected_non_anchors, PatternVariant::CopterRight));
+        println!("LeftLuchi: {}",       c(&detected_non_anchors, PatternVariant::LuchiLeft));
+        println!("RightLuchi: {}",      c(&detected_non_anchors, PatternVariant::LuchiRight));
+        println!("LeftHipBreaker: {}",  c(&detected_non_anchors, PatternVariant::HipBreakerLeft));
+        println!("RightHipBreaker: {}", c(&detected_non_anchors, PatternVariant::HipBreakerRight));
+        println!("LeftSweep: {}",       c(&detected_non_anchors, PatternVariant::SweepLeft));
+        println!("RightSweep: {}",      c(&detected_non_anchors, PatternVariant::SweepRight));
+        println!("LeftInvSweep: {}",    c(&detected_non_anchors, PatternVariant::SweepInvLeft));
+        println!("RightInvSweep: {}",   c(&detected_non_anchors, PatternVariant::SweepInvRight));
+
+        // Anchors
+        println!("--- Anchors ---");
+        println!("AnchorLeft: {}",  anchor_left);
+        println!("AnchorDown: {}",  anchor_down);
+        println!("AnchorUp: {}",    anchor_up);
+        println!("AnchorRight: {}", anchor_right);
+
         println!("---");
         println!("Elapsed time: {:?}", elapsed);
+    }
+
+    if generate_png {
+        generate_density_graph_png(&measure_nps_vec, max_nps, short_hash)?;
     }
 
     Ok(())
 }
 
-/// Minimal “escape” function for JSON strings (handle quotes, backslashes, etc.).
 fn escape_json(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for c in input.chars() {
