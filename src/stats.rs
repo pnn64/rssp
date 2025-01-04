@@ -11,6 +11,7 @@ pub struct ArrowStats {
     pub mines: u32,
     pub holds: u32,
     pub rolls: u32,
+    pub holding: i32,
 }
 
 #[derive(Default)]
@@ -63,51 +64,82 @@ pub fn minimize_measure(measure: &mut Vec<[u8; 4]>) {
 }
 
 #[inline]
-fn count_line(line: &[u8; 4], stats: &mut ArrowStats) -> bool {
-    let mut pressed = 0u32;
+fn count_line(line: &[u8; 4], stats: &mut ArrowStats) -> bool
+{
+    for &ch in line {
+        if ch == b'M' {
+            stats.mines += 1;
+        }
+    }
+
+    let notes_on_line = line.iter()
+        .filter(|&&c| matches!(c, b'1' | b'2' | b'4' ))
+        .count();
+
+    if notes_on_line == 0 {
+        for &ch in line {
+            // Still need to handle release of holds (b'3') if present:
+            if ch == b'3' && stats.holding > 0 {
+                stats.holding -= 1;
+            }
+        }
+        return false;
+    }
+
+    stats.total_steps += 1;
+
+    if notes_on_line >= 2 {
+        stats.jumps += 1;
+    }
+
+    if notes_on_line >= 3 {
+        stats.hands += 1;
+    }
+
+    if stats.holding == 1 && notes_on_line >= 2 {
+        stats.hands += 1;
+    }
+    if stats.holding == 2 && notes_on_line >= 1 {
+        stats.hands += 1;
+    }
+    if stats.holding == 3 && notes_on_line >= 1 {
+        stats.hands += 1;
+    }
+
     for &ch in line {
         match ch {
-            b'1' => pressed += 1,
+            b'1' => {
+                stats.total_arrows += 1;
+            }
             b'2' => {
-                stats.holds += 1;
-                pressed += 1;
+                stats.total_arrows += 1;
+                stats.holds += 1;  // Starting a freeze
             }
             b'4' => {
-                stats.rolls += 1;
-                pressed += 1;
+                stats.total_arrows += 1;
+                stats.rolls += 1;  // Starting a roll
             }
-            b'M' => {
-                stats.mines += 1;
+            b'3' => {
+                if stats.holding > 0 {
+                    stats.holding -= 1;
+                }
             }
             _ => {}
         }
     }
 
-    // Column-based counting
-    if line[0] == b'1' || line[0] == b'2' || line[0] == b'4' {
-        stats.left += 1;
-    }
-    if line[1] == b'1' || line[1] == b'2' || line[1] == b'4' {
-        stats.down += 1;
-    }
-    if line[2] == b'1' || line[2] == b'2' || line[2] == b'4' {
-        stats.up += 1;
-    }
-    if line[3] == b'1' || line[3] == b'2' || line[3] == b'4' {
-        stats.right += 1;
+    if matches!(line[0], b'1'|b'2'|b'4') { stats.left  += 1; }
+    if matches!(line[1], b'1'|b'2'|b'4') { stats.down  += 1; }
+    if matches!(line[2], b'1'|b'2'|b'4') { stats.up  += 1; }
+    if matches!(line[3], b'1'|b'2'|b'4') { stats.right += 1; }
+
+    for &ch in line {
+        if ch == b'2' || ch == b'4' {
+            stats.holding += 1;
+        }
     }
 
-    if pressed > 0 {
-        stats.total_steps += 1;
-    }
-    if pressed == 2 {
-        stats.jumps += 1;
-    } else if pressed >= 3 {
-        stats.hands += 1;
-    }
-    stats.total_arrows += pressed;
-
-    pressed > 0
+    true
 }
 
 /// Minimizes chart + counts arrows, returning (final chart bytes, arrow stats, measure densities).
