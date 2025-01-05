@@ -4,7 +4,6 @@ use std::io::{self, Read};
 use std::time::Instant;
 
 use sha1::{Digest, Sha1};
-use hex;
 
 use rssp::parse::{*};
 use rssp::stats::{*};
@@ -49,8 +48,8 @@ fn main() -> io::Result<()> {
         title_str = strip_title_tags(&title_str);
     }
 
-    let subtitle_str = std::str::from_utf8(subtitle_opt.unwrap_or(b"<invalid-subtitle>"))
-        .unwrap_or("<invalid-subtitle>");
+    let subtitle_str = std::str::from_utf8(subtitle_opt.unwrap_or(b""))
+        .unwrap_or("");
     let artist_str = std::str::from_utf8(artist_opt.unwrap_or(b"<invalid-artist>"))
         .unwrap_or("<invalid-artist>");
     let bpms_raw = std::str::from_utf8(bpms_opt.unwrap_or(b"<invalid-bpms>"))
@@ -94,7 +93,13 @@ fn main() -> io::Result<()> {
     hasher.update(&minimized_chart);
     hasher.update(normalized_bpms.as_bytes());
     let hash_result = hasher.finalize();
-    let hash_hex = hex::encode(hash_result);
+
+    let mut hash_hex = String::with_capacity(hash_result.len() * 2);
+    for byte in hash_result {
+        // Each byte => 2 hex characters
+        use std::fmt::Write;
+        write!(&mut hash_hex, "{:02x}", byte).expect("Unable to write");
+    }
     let short_hash = &hash_hex[..16];
 
     let bpm_map = parse_bpm_map(&normalized_bpms);
