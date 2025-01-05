@@ -64,21 +64,16 @@ pub fn minimize_measure(measure: &mut Vec<[u8; 4]>) {
 }
 
 #[inline]
-fn count_line(line: &[u8; 4], stats: &mut ArrowStats) -> bool
-{
-    for &ch in line {
-        if ch == b'M' {
-            stats.mines += 1;
-        }
-    }
+fn count_line(line: &[u8; 4], stats: &mut ArrowStats) -> bool {
+    stats.mines += line.iter().filter(|&&c| c == b'M').count() as u32;
 
-    let notes_on_line = line.iter()
-        .filter(|&&c| matches!(c, b'1' | b'2' | b'4' ))
-        .count();
+    let notes_on_line = line
+        .iter()
+        .filter(|&&c| matches!(c, b'1' | b'2' | b'4'))
+        .count() as u32;
 
     if notes_on_line == 0 {
         for &ch in line {
-            // Still need to handle release of holds (b'3') if present:
             if ch == b'3' && stats.holding > 0 {
                 stats.holding -= 1;
             }
@@ -91,33 +86,27 @@ fn count_line(line: &[u8; 4], stats: &mut ArrowStats) -> bool
     if notes_on_line >= 2 {
         stats.jumps += 1;
     }
-
     if notes_on_line >= 3 {
         stats.hands += 1;
     }
 
-    if stats.holding == 1 && notes_on_line >= 2 {
-        stats.hands += 1;
-    }
-    if stats.holding == 2 && notes_on_line >= 1 {
-        stats.hands += 1;
-    }
-    if stats.holding == 3 && notes_on_line >= 1 {
+    let holding_val = stats.holding;
+    if (holding_val == 1 && notes_on_line >= 2) || (holding_val >= 2 && notes_on_line >= 1) {
         stats.hands += 1;
     }
 
-    for &ch in line {
+    for (i, &ch) in line.iter().enumerate() {
         match ch {
             b'1' => {
                 stats.total_arrows += 1;
             }
             b'2' => {
                 stats.total_arrows += 1;
-                stats.holds += 1;  // Starting a freeze
+                stats.holds += 1;
             }
             b'4' => {
                 stats.total_arrows += 1;
-                stats.rolls += 1;  // Starting a roll
+                stats.rolls += 1;
             }
             b'3' => {
                 if stats.holding > 0 {
@@ -126,18 +115,22 @@ fn count_line(line: &[u8; 4], stats: &mut ArrowStats) -> bool
             }
             _ => {}
         }
-    }
 
-    if matches!(line[0], b'1'|b'2'|b'4') { stats.left  += 1; }
-    if matches!(line[1], b'1'|b'2'|b'4') { stats.down  += 1; }
-    if matches!(line[2], b'1'|b'2'|b'4') { stats.up  += 1; }
-    if matches!(line[3], b'1'|b'2'|b'4') { stats.right += 1; }
-
-    for &ch in line {
-        if ch == b'2' || ch == b'4' {
-            stats.holding += 1;
+        if matches!(ch, b'1' | b'2' | b'4') {
+            match i {
+                0 => stats.left += 1,
+                1 => stats.down += 1,
+                2 => stats.up += 1,
+                3 => stats.right += 1,
+                _ => {}
+            }
         }
     }
+
+    stats.holding += line
+        .iter()
+        .filter(|&&ch| matches!(ch, b'2' | b'4'))
+        .count() as i32;
 
     true
 }
