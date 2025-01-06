@@ -281,7 +281,7 @@ pub fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<
                     }
                     b'3' => {
                         // End hold in this column
-                        if let Some(start_idx) = col_stacks[col].pop() {
+                        if let Some(_start_idx) = col_stacks[col].pop() {
                             // That was a valid hold from start_idx..line_idx
                         } else {
                             // We saw a '3' but there's no open hold => oh well, do nothing
