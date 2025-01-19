@@ -211,8 +211,10 @@ fn print_json(data: &SimfileSummary) {
     println!("  \"artist_translit\": \"{}\",", esc(&data.artisttranslit_str));
     println!("  \"bpms\": \"{}\",", esc(&data.normalized_bpms));
     println!("  \"step_type\": \"{}\",", esc(&data.step_type_str));
+    println!("  \"step_artist\": \"{}\",", esc(&data.step_artist_str));
     println!("  \"difficulty\": \"{}\",", esc(&data.difficulty_str));
     println!("  \"rating\": \"{}\",", esc(&data.rating_str));
+    println!("  \"tech_notation\": \"{}\",", esc(&data.tech_notation_str));
     println!("  \"hash_short\": \"{}\",", data.short_hash);
 
     println!("  \"arrow_stats\": {{");
@@ -276,7 +278,7 @@ fn print_json(data: &SimfileSummary) {
 }
 
 fn print_csv(data: &SimfileSummary) {   
-    println!("title,subtitle,artist,normalized_bpms,step_type,difficulty,rating,hash_short,\
+    println!("title,subtitle,artist,normalized_bpms,step_type,step_artist,difficulty,rating,tech_notation,hash_short,\
         min_bpm,max_bpm,total_length,max_nps,median_nps,anchor_left,anchor_down,\
         anchor_up,anchor_right,{},total_arrows,jumps,total_breaks",
         ALL_PATTERNS.iter().map(|p| pattern_variant_name(*p)).collect::<Vec<_>>().join(",")
@@ -293,8 +295,10 @@ fn print_csv(data: &SimfileSummary) {
     cols.push(format!("\"{}\"", esc_csv(&data.artist_str)));
     cols.push(format!("\"{}\"", esc_csv(&data.normalized_bpms)));
     cols.push(format!("\"{}\"", esc_csv(&data.step_type_str)));
+    cols.push(format!("\"{}\"", esc_csv(&data.step_artist_str)));
     cols.push(format!("\"{}\"", esc_csv(&data.difficulty_str)));
     cols.push(format!("\"{}\"", esc_csv(&data.rating_str)));
+    cols.push(format!("\"{}\"", esc_csv(&data.tech_notation_str)));
     cols.push(format!("\"{}\"", data.short_hash));
     cols.push(format!("{:.2}", data.min_bpm));
     cols.push(format!("{:.2}", data.max_bpm));
