@@ -16,9 +16,9 @@ pub fn strip_title_tags(title: &str) -> String {
             }
         } else {
             // Also strip leading numeric prefixes like "8. - "
-            let mut chars = s.char_indices();
+            let chars = s.char_indices();
             let mut pos = 0;
-            while let Some((i, c)) = chars.next() {
+            for (i, c) in chars {
                 if c.is_ascii_digit() || c == '.' {
                     pos = i + c.len_utf8();
                 } else {
@@ -69,11 +69,7 @@ pub fn extract_sections(
         }
 
         #[inline]
-        fn parse_tag<'a>(
-            data: &'a [u8],
-            idx: &mut usize,
-            tag_len: usize
-        ) -> Option<&'a [u8]> {
+        fn parse_tag<'a>(data: &'a [u8], idx: &mut usize, tag_len: usize) -> Option<&'a [u8]> {
             let start_idx = *idx + tag_len;
             if start_idx > data.len() {
                 return None;
@@ -119,10 +115,19 @@ pub fn extract_sections(
         i += 1;
     }
 
-    Ok((title, subtitle, artist, titletranslit, subtitletranslit, artisttranslit, bpms, notes))
+    Ok((
+        title,
+        subtitle,
+        artist,
+        titletranslit,
+        subtitletranslit,
+        artisttranslit,
+        bpms,
+        notes,
+    ))
 }
 
-pub fn split_notes_fields<'a>(notes_block: &'a [u8]) -> (Vec<&'a [u8]>, &'a [u8]) {
+pub fn split_notes_fields(notes_block: &[u8]) -> (Vec<&[u8]>, &[u8]) {
     let mut fields = Vec::with_capacity(5);
     let mut colon_count = 0;
     let mut start = 0;

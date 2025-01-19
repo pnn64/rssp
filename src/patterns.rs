@@ -31,59 +31,57 @@ pub enum PatternVariant {
 
 
 pub static ALL_PATTERNS_NON_ANCHORS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::new(|| {
-    let mut patterns = Vec::new();
-
+    vec![
     // Candles
-    patterns.push((PatternVariant::CandleLeft,  string_to_pattern_bits("ULD")));
-    patterns.push((PatternVariant::CandleLeft,  string_to_pattern_bits("DLU")));
-    patterns.push((PatternVariant::CandleRight, string_to_pattern_bits("URD")));
-    patterns.push((PatternVariant::CandleRight, string_to_pattern_bits("DRU")));
+    (PatternVariant::CandleLeft,  string_to_pattern_bits("ULD")),
+    (PatternVariant::CandleLeft,  string_to_pattern_bits("DLU")),
+    (PatternVariant::CandleRight, string_to_pattern_bits("URD")),
+    (PatternVariant::CandleRight, string_to_pattern_bits("DRU")),
 
     // Boxes
-    patterns.push((PatternVariant::BoxLR,       string_to_pattern_bits("LRLR")));
-    patterns.push((PatternVariant::BoxLR,       string_to_pattern_bits("RLRL")));
-    patterns.push((PatternVariant::BoxUD,       string_to_pattern_bits("UDUD")));
-    patterns.push((PatternVariant::BoxUD,       string_to_pattern_bits("DUDU")));
-    patterns.push((PatternVariant::BoxCornerLD, string_to_pattern_bits("LDLD")));
-    patterns.push((PatternVariant::BoxCornerLD, string_to_pattern_bits("DLDL")));
-    patterns.push((PatternVariant::BoxCornerLU, string_to_pattern_bits("LULU")));
-    patterns.push((PatternVariant::BoxCornerLU, string_to_pattern_bits("ULUL")));
-    patterns.push((PatternVariant::BoxCornerRD, string_to_pattern_bits("RDRD")));
-    patterns.push((PatternVariant::BoxCornerRD, string_to_pattern_bits("DRDR")));
-    patterns.push((PatternVariant::BoxCornerRU, string_to_pattern_bits("RURU")));
-    patterns.push((PatternVariant::BoxCornerRU, string_to_pattern_bits("URUR")));
+    (PatternVariant::BoxLR,       string_to_pattern_bits("LRLR")),
+    (PatternVariant::BoxLR,       string_to_pattern_bits("RLRL")),
+    (PatternVariant::BoxUD,       string_to_pattern_bits("UDUD")),
+    (PatternVariant::BoxUD,       string_to_pattern_bits("DUDU")),
+    (PatternVariant::BoxCornerLD, string_to_pattern_bits("LDLD")),
+    (PatternVariant::BoxCornerLD, string_to_pattern_bits("DLDL")),
+    (PatternVariant::BoxCornerLU, string_to_pattern_bits("LULU")),
+    (PatternVariant::BoxCornerLU, string_to_pattern_bits("ULUL")),
+    (PatternVariant::BoxCornerRD, string_to_pattern_bits("RDRD")),
+    (PatternVariant::BoxCornerRD, string_to_pattern_bits("DRDR")),
+    (PatternVariant::BoxCornerRU, string_to_pattern_bits("RURU")),
+    (PatternVariant::BoxCornerRU, string_to_pattern_bits("URUR")),
 
     // Doritos
-    patterns.push((PatternVariant::DoritoLeft,     string_to_pattern_bits("LDUDL")));
-    patterns.push((PatternVariant::DoritoRight,    string_to_pattern_bits("RUDUR")));
-    patterns.push((PatternVariant::DoritoInvLeft,  string_to_pattern_bits("LUDUL")));
-    patterns.push((PatternVariant::DoritoInvRight, string_to_pattern_bits("RDUDR")));
+    (PatternVariant::DoritoLeft,     string_to_pattern_bits("LDUDL")),
+    (PatternVariant::DoritoRight,    string_to_pattern_bits("RUDUR")),
+    (PatternVariant::DoritoInvLeft,  string_to_pattern_bits("LUDUL")),
+    (PatternVariant::DoritoInvRight, string_to_pattern_bits("RDUDR")),
 
     // Spirals
-    patterns.push((PatternVariant::SpiralLeft,  string_to_pattern_bits("LDURDR")));
-    patterns.push((PatternVariant::SpiralRight, string_to_pattern_bits("RUDLUL")));
+    (PatternVariant::SpiralLeft,  string_to_pattern_bits("LDURDR")),
+    (PatternVariant::SpiralRight, string_to_pattern_bits("RUDLUL")),
 
     // Copters
-    patterns.push((PatternVariant::CopterLeft,  string_to_pattern_bits("LDURDULDURDU")));
-    patterns.push((PatternVariant::CopterLeft,  string_to_pattern_bits("DULDURDULDUR")));
-    patterns.push((PatternVariant::CopterRight, string_to_pattern_bits("RUDLUDRUDLUD")));
-    patterns.push((PatternVariant::CopterRight, string_to_pattern_bits("UDRUDLUDRUDL")));
+    (PatternVariant::CopterLeft,  string_to_pattern_bits("LDURDULDURDU")),
+    (PatternVariant::CopterLeft,  string_to_pattern_bits("DULDURDULDUR")),
+    (PatternVariant::CopterRight, string_to_pattern_bits("RUDLUDRUDLUD")),
+    (PatternVariant::CopterRight, string_to_pattern_bits("UDRUDLUDRUDL")),
 
     // Luchi
-    patterns.push((PatternVariant::LuchiLeft,  string_to_pattern_bits("LDLRURDRLULD")));
-    patterns.push((PatternVariant::LuchiRight, string_to_pattern_bits("RURLDLULRDRU")));
+    (PatternVariant::LuchiLeft,  string_to_pattern_bits("LDLRURDRLULD")),
+    (PatternVariant::LuchiRight, string_to_pattern_bits("RURLDLULRDRU")),
 
     // Hip-Breakers
-    patterns.push((PatternVariant::HipBreakerLeft,  string_to_pattern_bits("LDUDLUDULDUDL")));
-    patterns.push((PatternVariant::HipBreakerRight, string_to_pattern_bits("RUDURDUDRUDUR")));
+    (PatternVariant::HipBreakerLeft,  string_to_pattern_bits("LDUDLUDULDUDL")),
+    (PatternVariant::HipBreakerRight, string_to_pattern_bits("RUDURDUDRUDUR")),
 
     // Sweeps
-    patterns.push((PatternVariant::SweepLeft,     string_to_pattern_bits("LDURUDL")));
-    patterns.push((PatternVariant::SweepRight,    string_to_pattern_bits("RUDLDUR")));
-    patterns.push((PatternVariant::SweepInvLeft,  string_to_pattern_bits("LUDRDUL")));
-    patterns.push((PatternVariant::SweepInvRight, string_to_pattern_bits("RDULUDR")));
-
-    patterns
+    (PatternVariant::SweepLeft,     string_to_pattern_bits("LDURUDL")),
+    (PatternVariant::SweepRight,    string_to_pattern_bits("RUDLDUR")),
+    (PatternVariant::SweepInvLeft,  string_to_pattern_bits("LUDRDUL")),
+    (PatternVariant::SweepInvRight, string_to_pattern_bits("RDULUDR")),
+    ]
 });
 
 fn string_to_pattern_bits(p: &str) -> Vec<u8> {
@@ -110,13 +108,11 @@ pub fn detect_all_patterns_non_anchors(bitmasks: &[u8]) -> HashMap<PatternVarian
         let mut matched_any = false;
         for (variant, pat_bits) in defs.iter() {
             let plen = pat_bits.len();
-            if i + plen <= bitmasks.len() {
-                if bitmasks[i..i + plen] == pat_bits[..] {
-                    *results.entry(*variant).or_insert(0) += 1;
-                    i += plen; 
-                    matched_any = true;
-                    break;
-                }
+            if i + plen <= bitmasks.len() && bitmasks[i..i + plen] == pat_bits[..] {
+                *results.entry(*variant).or_insert(0) += 1;
+                i += plen;
+                matched_any = true;
+                break;
             }
         }
         if !matched_any {

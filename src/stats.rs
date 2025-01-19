@@ -260,7 +260,7 @@ pub fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<
     }
 
     // remove trailing ",\n"
-    if output.ends_with(&[b',', b'\n']) {
+    if output.ends_with(b",\n") {
         output.truncate(output.len() - 2);
     }
 
@@ -293,8 +293,8 @@ pub fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<
         }
         // Anything left in col_stacks => phantom hold(s)
         // Mark them in phantom_positions
-        for col in 0..4 {
-            while let Some(start_idx) = col_stacks[col].pop() {
+        for (col, stack) in col_stacks.iter_mut().enumerate() {
+            while let Some(start_idx) = stack.pop() {
                 // That start_idx, col => phantom
                 phantom_positions.insert((start_idx, col));
             }
@@ -305,11 +305,10 @@ pub fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<
         for (i, line) in all_lines_buffer.iter().enumerate() {
             let mut new_line = *line;
             // For each col that is phantom, set '2'/'4' => '0'
-            for col in 0..4 {
+            for (col, byte) in new_line.iter_mut().enumerate() {
                 if phantom_positions.contains(&(i, col)) {
-                    // only if the original was 2 or 4
-                    if matches!(new_line[col], b'2' | b'4') {
-                        new_line[col] = b'0';
+                    if matches!(*byte, b'2' | b'4') {
+                        *byte = b'0';
                     }
                 }
             }
