@@ -11,6 +11,7 @@ pub static KNOWN_TECH_LIST: &[&str] = &[
     "bXf", "bXf+", "bXf-",
     "bxF", "bxF+", "bxF-",
     "DS", "DS+", "DS-",
+    "DR", "DR+", "DR-",
     "DT", "DT+", "DT-",
     "FL", "FL+", "FL-",
     "FS", "FS+", "FS-",
