@@ -1,6 +1,3 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TechNotation(pub String);
-
 pub static KNOWN_TECH_LIST: &[&str] = &[
     "BR", "BR+", "BR-",
     "BT", "BT+", "BT-",
@@ -37,41 +34,55 @@ pub static KNOWN_TECH_LIST: &[&str] = &[
     "XO", "XO+", "XO-",
 ];
 
-/// Attempts to parse `chunk` into a list of known tech notations with *no leftover*.
-/// Returns `Some(Vec<String>)` if the entire chunk can be fully matched;
-/// otherwise returns `None`.
-fn parse_chunk_as_tech(chunk: &str, known_list: &[&str]) -> Option<Vec<String>> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TechNotation(pub String);
+
+fn is_measure_data(s: &str) -> bool {
+    // Example rule: must contain slash/dash/star, no letters
+    // so plain numeric chunk remains a name
+    if s.chars().any(|c| c.is_ascii_alphabetic() || c == '_') {
+        return false;
+    }
+    // Must have at least one slash/dash/star to be measure data
+    // so "4199" remains a step artist name.
+    let has_measure_symbol = s.chars().any(|c| c == '/' || c == '-' || c == '*');
+    if !has_measure_symbol {
+        return false;
+    }
+    // Now ensure every character is digit or slash/dash/star
+    s.chars().all(|c| c.is_ascii_digit() || c == '/' || c == '-' || c == '*')
+}
+
+/// Attempts to parse a chunk as a full sequence of known tech notations with no leftover.
+/// If successful, returns Some(vector_of_notations), otherwise None.
+fn parse_chunk_as_tech(chunk: &str) -> Option<Vec<String>> {
     let mut remainder = chunk;
     let mut results = Vec::new();
 
     while !remainder.is_empty() {
-        // Find all known tech patterns that match *the start* of `remainder`.
-        let prefix_matches: Vec<&str> = known_list
+        // All known patterns that match the *start* of remainder
+        let prefix_matches: Vec<&str> = KNOWN_TECH_LIST
             .iter()
             .copied()
             .filter(|pat| remainder.starts_with(*pat))
             .collect();
 
         if prefix_matches.is_empty() {
-            // We can't match the front => fail
             return None;
         }
 
-        // If multiple matches are possible, pick the *longest* one
-        // to ensure e.g. "FS+" is used instead of "FS" if both exist.
+        // If multiple matches, pick the longest (e.g. "FS+" vs "FS")
         let best = prefix_matches
             .iter()
             .max_by_key(|p| p.len())
-            .unwrap(); // safe since prefix_matches is non-empty
+            .unwrap();
 
-        // Add this notation to the results
         results.push((*best).to_string());
 
-        // Remove that prefix from remainder
+        // Remove that prefix
         remainder = &remainder[best.len()..];
     }
 
-    // If we consumed the entire chunk exactly, success:
     Some(results)
 }
 
@@ -79,16 +90,26 @@ pub fn parse_step_artist_and_tech(input: &str) -> (String, Vec<TechNotation>) {
     let mut step_artist = String::new();
     let mut tech_notations = Vec::new();
 
-    // Split into chunks by whitespace
-    for chunk in input.split_whitespace() {
-        // Attempt to parse the entire chunk as a sequence of known tech notations
-        if let Some(parsed_list) = parse_chunk_as_tech(chunk, KNOWN_TECH_LIST) {
-            // The entire chunk was recognized as one or more tech notations
-            for p in parsed_list {
-                tech_notations.push(TechNotation(p));
+    // For each whitespace chunk
+    for mut chunk in input.split_whitespace() {
+        // Optionally strip trailing colon or semicolon if present
+        if let Some(stripped) = chunk.strip_suffix(':') {
+            chunk = stripped;
+        }
+
+        // Check measure data
+        if is_measure_data(chunk) {
+            // It's purely measure info => skip
+            continue;
+        }
+
+        // Attempt to parse the entire chunk as tech notations
+        if let Some(parsed_list) = parse_chunk_as_tech(chunk) {
+            for pat in parsed_list {
+                tech_notations.push(TechNotation(pat));
             }
         } else {
-            // Could not parse it fully => treat as step artist text
+            // Fallback => step artist text
             if step_artist.is_empty() {
                 step_artist.push_str(chunk);
             } else {
