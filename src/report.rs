@@ -14,8 +14,11 @@ pub struct SimfileSummary {
 
     pub normalized_bpms:       String,
     pub step_type_str:         String,
+    pub step_artist_str:       String,
     pub difficulty_str:        String,
     pub rating_str:            String,
+
+    pub tech_notation_str:     String,
 
     pub stats:                 ArrowStats,
     pub stream_counts:         StreamCounts,
@@ -130,6 +133,8 @@ fn print_text(data: &SimfileSummary) {
     println!("Steptype: {}", data.step_type_str);
     println!("Difficulty: {}", data.difficulty_str);
     println!("Rating: {}", data.rating_str);
+    println!("Step artist: {}", data.step_artist_str);
+    println!("Tech notation: {}", data.tech_notation_str);
     println!("Hash (first 16 hex chars): {}", data.short_hash);
 
     println!("--- Arrow Stats ---");

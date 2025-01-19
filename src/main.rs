@@ -9,6 +9,7 @@ use rssp::patterns::*;
 use rssp::bpm::*;
 use rssp::hashing::*;
 use rssp::report::*;
+use rssp::tech::{parse_step_artist_and_tech};
 
 fn main() -> io::Result<()> {
     let start_time = Instant::now();
@@ -109,6 +110,16 @@ fn summarize_simfile(
     }
 
     let step_type_str  = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_owned();
+
+    let field1_str     = std::str::from_utf8(fields[1]).unwrap_or("").trim().to_owned();
+    let (step_artist_str, tech_notations) = parse_step_artist_and_tech(&field1_str);
+
+    let tech_notation_str = tech_notations
+        .iter()
+        .map(|tn| tn.0.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+
     let difficulty_str = std::str::from_utf8(fields[2]).unwrap_or("").trim().to_owned();
     let rating_str     = std::str::from_utf8(fields[3]).unwrap_or("").trim().to_owned();
 
@@ -174,9 +185,12 @@ fn summarize_simfile(
         artisttranslit_str,
 
         normalized_bpms,
+        step_artist_str,
         step_type_str,
         difficulty_str,
         rating_str,
+
+        tech_notation_str,
 
         stats,
         stream_counts,

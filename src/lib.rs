@@ -5,3 +5,4 @@ pub mod bpm;
 pub mod graph;
 pub mod hashing;
 pub mod report;
+pub mod tech;
