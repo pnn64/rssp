@@ -1,21 +1,36 @@
-// src/tech.rs
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TechNotation(pub String);
 
 pub static KNOWN_TECH_LIST: &[&str] = &[
     "BR", "BR+", "BR-",
+    "BT", "BT+", "BT-",
     "BU", "BU+", "BU-",
+    "BXF", "BXF+", "BXF-",
+    "bXF", "bXF+", "bXF-",
+    "BxF", "BxF+", "BxF-",
+    "bXf", "bXf+", "bXf-",
+    "bxF", "bxF+", "bxF-",
     "DS", "DS+", "DS-",
+    "DT", "DT+", "DT-",
+    "FL", "FL+", "FL-",
     "FS", "FS+", "FS-",
     "GH", "GH+", "GH-",
     "HS", "HS+", "HS-",
     "JA", "JA+", "JA-",
+    "JUMPS", "JUMPS+", "JUMPS-",
     "KS", "KS+", "KS-",
+    "KT", "KT+", "KT-",
     "MA", "MA+", "MA-",
     "MD", "MD+", "MD-",
     "RH", "RH+", "RH-",
+    "SC", "SC+", "SC-",
+    "SDS", "SDS+", "SDS-",
+    "SJ", "SJ+", "SJ-",
+    "SK", "SK+", "SK-",
     "SS", "SS+", "SS-",
+    "SKT", "SKT+", "SKT-",
     "STR", "STR+", "STR-",
+    "TR", "TR+", "TR-",
     "XMOD", "XMOD+", "XMOD-",
     "XO", "XO+", "XO-",
 ];
