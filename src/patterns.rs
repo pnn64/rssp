@@ -27,6 +27,10 @@ pub enum PatternVariant {
     SweepRight,
     SweepInvLeft,
     SweepInvRight,
+    TriangleRUR,
+    TriangleLUL,
+    TriangleLDL,
+    TriangleRDR,
 }
 
 
@@ -81,6 +85,12 @@ pub static ALL_PATTERNS_NON_ANCHORS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = 
     (PatternVariant::SweepRight,    string_to_pattern_bits("RUDLDUR")),
     (PatternVariant::SweepInvLeft,  string_to_pattern_bits("LUDRDUL")),
     (PatternVariant::SweepInvRight, string_to_pattern_bits("RDULUDR")),
+
+    // Triangles
+    (PatternVariant::TriangleRUR, string_to_pattern_bits("RUR")),
+    (PatternVariant::TriangleLUL, string_to_pattern_bits("LUL")),
+    (PatternVariant::TriangleLDL, string_to_pattern_bits("LDL")),
+    (PatternVariant::TriangleRDR, string_to_pattern_bits("RDR")),
     ]
 });
 

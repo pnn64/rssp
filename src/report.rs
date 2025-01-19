@@ -87,6 +87,10 @@ static ALL_PATTERNS: &[PatternVariant] = &[
     PatternVariant::SweepRight,
     PatternVariant::SweepInvLeft,
     PatternVariant::SweepInvRight,
+    PatternVariant::TriangleRUR,
+    PatternVariant::TriangleLUL,
+    PatternVariant::TriangleLDL,
+    PatternVariant::TriangleRDR,
 ];
 
 fn count(map: &HashMap<PatternVariant, u32>, v: PatternVariant) -> u32 {
@@ -119,6 +123,10 @@ fn pattern_variant_name(pv: PatternVariant) -> &'static str {
         PatternVariant::SweepRight      => "right_sweep",
         PatternVariant::SweepInvLeft    => "left_inv_sweep",
         PatternVariant::SweepInvRight   => "right_inv_sweep",
+        PatternVariant::TriangleRUR     => "triangle_rur",
+        PatternVariant::TriangleLUL     => "triangle_lul",
+        PatternVariant::TriangleLDL     => "triangle_ldl",
+        PatternVariant::TriangleRDR     => "triangle_rdr",
     }
 }
 
