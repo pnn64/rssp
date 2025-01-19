@@ -1,6 +1,6 @@
+use png;
 use std::fs::File;
 use std::io;
-use png;
 
 pub fn generate_density_graph_png(
     measure_nps_vec: &[f64],
@@ -15,6 +15,7 @@ pub fn generate_density_graph_png(
     let top_color = [130, 0, 161];
 
     let mut img_buffer = vec![0u8; (IMAGE_WIDTH * GRAPH_HEIGHT * 3) as usize];
+
     for y in 0..GRAPH_HEIGHT {
         for x in 0..IMAGE_WIDTH {
             let idx = ((y * IMAGE_WIDTH + x) * 3) as usize;
@@ -29,29 +30,35 @@ pub fn generate_density_graph_png(
 
         for (i, &nps) in measure_nps_vec.iter().enumerate() {
             let x_start = (i as f64 * measure_width).round() as u32;
-            let x_end = ((i as f64 + 1.0) * measure_width).round() as u32;
+            let x_end = (((i + 1) as f64) * measure_width).round() as u32;
             let x_end = x_end.min(IMAGE_WIDTH);
 
             let height_fraction = (nps / max_nps).min(1.0);
             let bar_height = (height_fraction * GRAPH_HEIGHT as f64).round() as u32;
+
+            if bar_height == 0 || x_start >= x_end {
+                continue;
+            }
+
             let y_top = GRAPH_HEIGHT.saturating_sub(bar_height);
 
-            for x in x_start..x_end {
-                for y in y_top..GRAPH_HEIGHT {
-                    let dist_from_bottom = (GRAPH_HEIGHT - 1 - y) as f64;
-                    let frac = dist_from_bottom / (GRAPH_HEIGHT as f64 - 1.0);
+            for y in y_top..GRAPH_HEIGHT {
+                let dist_from_bottom = (GRAPH_HEIGHT - 1 - y) as f64;
+                let frac = dist_from_bottom / (GRAPH_HEIGHT as f64 - 1.0);
 
-                    let r = ((bottom_color[0] as f64)
-                        + ((top_color[0] as f64 - bottom_color[0] as f64) * frac))
-                        .round() as u8;
-                    let g = ((bottom_color[1] as f64)
-                        + ((top_color[1] as f64 - bottom_color[1] as f64) * frac))
-                        .round() as u8;
-                    let b = ((bottom_color[2] as f64)
-                        + ((top_color[2] as f64 - bottom_color[2] as f64) * frac))
-                        .round() as u8;
+                let r = ((bottom_color[0] as f64)
+                    + (top_color[0] as f64 - bottom_color[0] as f64) * frac)
+                    .round() as u8;
+                let g = ((bottom_color[1] as f64)
+                    + (top_color[1] as f64 - bottom_color[1] as f64) * frac)
+                    .round() as u8;
+                let b = ((bottom_color[2] as f64)
+                    + (top_color[2] as f64 - bottom_color[2] as f64) * frac)
+                    .round() as u8;
 
-                    let idx = ((y * IMAGE_WIDTH + x) * 3) as usize;
+                let row_start = (y * IMAGE_WIDTH) as usize * 3;
+                for x in x_start..x_end {
+                    let idx = row_start + (x as usize * 3);
                     img_buffer[idx] = r;
                     img_buffer[idx + 1] = g;
                     img_buffer[idx + 2] = b;
