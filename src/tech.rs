@@ -32,6 +32,7 @@ pub static KNOWN_TECH_LIST: &[&str] = &[
     "SKT", "SKT+", "SKT-",
     "STR", "STR+", "STR-",
     "TR", "TR+", "TR-",
+    "WA", "WA+", "WA-",
     "XMOD", "XMOD+", "XMOD-",
     "XO", "XO+", "XO-",
 ];
