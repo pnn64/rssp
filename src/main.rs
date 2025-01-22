@@ -71,7 +71,7 @@ fn summarize_simfile(
 ) -> Result<SimfileSummary, String> {
     let (title_opt, subtitle_opt, artist_opt,
          titletranslit_opt, subtitletranslit_opt, artisttranslit_opt,
-         bpms_opt, notes_opt)
+         offset_opt, bpms_opt, notes_opt)
        = extract_sections(simfile_data)
          .map_err(|e| format!("Error: could not extract sections: {}", e))?;
 
@@ -98,6 +98,12 @@ fn summarize_simfile(
     let artisttranslit_str = std::str::from_utf8(artisttranslit_opt.unwrap_or(b""))
         .unwrap_or("")
         .to_owned();
+
+    let offset = offset_opt
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|f| (f * 1000.0).trunc() / 1000.0) // Truncate to 3 decimals
+        .unwrap_or(0.000);
 
     let bpms_raw = std::str::from_utf8(bpms_opt.unwrap_or(b"<invalid-bpms>"))
         .unwrap_or("<invalid-bpms>");
@@ -184,6 +190,7 @@ fn summarize_simfile(
         subtitletranslit_str,
         artisttranslit_str,
 
+        offset,
         normalized_bpms,
         step_artist_str,
         step_type_str,

@@ -47,6 +47,7 @@ pub fn extract_sections(
     Option<&[u8]>,
     Option<&[u8]>,
     Option<&[u8]>,
+    Option<&[u8]>,
 )> {
     let mut title = None;
     let mut subtitle = None;
@@ -54,6 +55,7 @@ pub fn extract_sections(
     let mut titletranslit = None;
     let mut subtitletranslit = None;
     let mut artisttranslit = None;
+    let mut offset = None;
     let mut bpms = None;
     let mut notes = None;
 
@@ -102,6 +104,9 @@ pub fn extract_sections(
         } else if slice.starts_with(b"#ARTISTTRANSLIT:") && artisttranslit.is_none() {
             artisttranslit = parse_tag(data, &mut i, b"#ARTISTTRANSLIT:".len());
             continue;
+        } else if slice.starts_with(b"#OFFSET:") && offset.is_none() {
+            offset = parse_tag(data, &mut i, b"#OFFSET:".len());
+            continue;
         } else if slice.starts_with(b"#BPMS:") && bpms.is_none() {
             bpms = parse_tag(data, &mut i, b"#BPMS:".len());
             continue;
@@ -122,6 +127,7 @@ pub fn extract_sections(
         titletranslit,
         subtitletranslit,
         artisttranslit,
+        offset,
         bpms,
         notes,
     ))

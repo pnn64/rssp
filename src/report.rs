@@ -12,6 +12,7 @@ pub struct SimfileSummary {
     pub subtitletranslit_str:  String,
     pub artisttranslit_str:    String,
 
+    pub offset:                f64,
     pub normalized_bpms:       String,
     pub step_type_str:         String,
     pub step_artist_str:       String,
@@ -137,6 +138,7 @@ fn print_text(data: &SimfileSummary) {
     println!("Subtitle translate: {}", data.subtitletranslit_str);
     println!("Artist: {}", data.artist_str);
     println!("Artist translate: {}", data.artisttranslit_str);
+    println!("Offset: {:.3}", data.offset);
     println!("Normalized BPMs: {}", data.normalized_bpms);
     println!("Steptype: {}", data.step_type_str);
     println!("Difficulty: {}", data.difficulty_str);
@@ -217,6 +219,7 @@ fn print_json(data: &SimfileSummary) {
     println!("  \"subtitle_translit\": \"{}\",", esc(&data.subtitletranslit_str));
     println!("  \"artist\": \"{}\",", esc(&data.artist_str));
     println!("  \"artist_translit\": \"{}\",", esc(&data.artisttranslit_str));
+    println!("  \"offset\": {:.3},", data.offset);
     println!("  \"bpms\": \"{}\",", esc(&data.normalized_bpms));
     println!("  \"step_type\": \"{}\",", esc(&data.step_type_str));
     println!("  \"step_artist\": \"{}\",", esc(&data.step_artist_str));
