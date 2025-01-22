@@ -70,34 +70,50 @@ fn count_line(
     holds_started: &mut u32,
     ends_seen: &mut u32,
 ) -> bool {
-    // Count mines
-    stats.mines += line.iter().filter(|&&c| c == b'M').count() as u32;
+    let mut note_mask = 0u8;
+    let mut hold_start_mask = 0u8;
+    let mut end_mask = 0u8;
+    let mut mine_count = 0u32;
 
-    // Count how many new presses on this line
-    let notes_on_line = line
-        .iter()
-        .filter(|&&c| matches!(c, b'1' | b'2' | b'4'))
-        .count() as u32;
+    for (i, &ch) in line.iter().enumerate() {
+        match ch {
+            b'1' | b'2' | b'4' => {
+                note_mask |= 1 << i;
+                if ch == b'2' || ch == b'4' {
+                    hold_start_mask |= 1 << i;
+                }
+                match i {
+                    0 => stats.left += 1,
+                    1 => stats.down += 1,
+                    2 => stats.up += 1,
+                    3 => stats.right += 1,
+                    _ => {}
+                }
+                stats.total_arrows += 1;
+                if ch == b'2' {
+                    stats.holds += 1;
+                } else if ch == b'4' {
+                    stats.rolls += 1;
+                }
+            }
+            b'3' => end_mask |= 1 << i,
+            b'M' => mine_count += 1,
+            _ => {}
+        }
+    }
 
-    // Also track how many 2/4 we see for possible holds
-    *holds_started += line.iter().filter(|&&c| matches!(c, b'2' | b'4')).count() as u32;
-
-    // How many '3' ends we see
-    *ends_seen += line.iter().filter(|&&c| c == b'3').count() as u32;
+    stats.mines += mine_count;
+    let notes_on_line = note_mask.count_ones() as u32;
+    *holds_started += hold_start_mask.count_ones() as u32;
+    *ends_seen += end_mask.count_ones() as u32;
 
     if notes_on_line == 0 {
-        // If no new arrow, we might end some holds
-        for &ch in line {
-            if ch == b'3' && stats.holding > 0 {
-                stats.holding -= 1;
-            }
-        }
+        let ends = end_mask.count_ones() as i32;
+        stats.holding = (stats.holding - ends).max(0);
         return false;
     }
 
-    // At least one arrow => this line is a step
     stats.total_steps += 1;
-
     if notes_on_line >= 2 {
         stats.jumps += 1;
     }
@@ -105,49 +121,13 @@ fn count_line(
         stats.hands += 1;
     }
 
-    // If we were already holding something, that might form an extra hand
     let holding_val = stats.holding;
     if (holding_val == 1 && notes_on_line >= 2) || (holding_val >= 2 && notes_on_line >= 1) {
         stats.hands += 1;
     }
 
-    // Process each column
-    for (i, &ch) in line.iter().enumerate() {
-        match ch {
-            b'1' => {
-                stats.total_arrows += 1;
-            }
-            b'2' => {
-                stats.total_arrows += 1;
-                stats.holds += 1;
-            }
-            b'4' => {
-                stats.total_arrows += 1;
-                stats.rolls += 1;
-            }
-            b'3' => {
-                if stats.holding > 0 {
-                    stats.holding -= 1;
-                }
-            }
-            _ => {}
-        }
-
-        // directions
-        if matches!(ch, b'1' | b'2' | b'4') {
-            match i {
-                0 => stats.left += 1,
-                1 => stats.down += 1,
-                2 => stats.up += 1,
-                3 => stats.right += 1,
-                _ => {}
-            }
-        }
-    }
-
-    // Increase our holding if we see '2'/'4'
-    stats.holding += line.iter().filter(|&&ch| matches!(ch, b'2' | b'4')).count() as i32;
-
+    let new_holds = hold_start_mask.count_ones() as i32;
+    stats.holding = (stats.holding + new_holds - end_mask.count_ones() as i32).max(0);
     true
 }
 
