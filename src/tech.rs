@@ -91,12 +91,7 @@ pub fn parse_step_artist_and_tech(input: &str) -> (String, Vec<TechNotation>) {
     let mut tech_notations = Vec::new();
 
     // For each whitespace chunk
-    for mut chunk in input.split_whitespace() {
-        // Optionally strip trailing colon or semicolon if present
-        if let Some(stripped) = chunk.strip_suffix(':') {
-            chunk = stripped;
-        }
-
+    for chunk in input.split_whitespace() {
         // Check measure data
         if is_measure_data(chunk) {
             // It's purely measure info => skip
