@@ -48,7 +48,7 @@ fn is_all_zero(line: &[u8; 4]) -> bool {
 #[inline]
 pub fn minimize_measure(measure: &mut Vec<[u8; 4]>) {
     while measure.len() >= 2 && measure.len() % 2 == 0 {
-        if (1..measure.len()).step_by(2).any(|i| !is_all_zero(&measure[i])) {
+        if measure.iter().skip(1).step_by(2).any(|line| !is_all_zero(line)) {
             break;
         }
         let half_len = measure.len() / 2;
@@ -58,7 +58,6 @@ pub fn minimize_measure(measure: &mut Vec<[u8; 4]>) {
         measure.truncate(half_len);
     }
 
-    // If everything is zero, keep only 1 line
     if !measure.is_empty() && measure.iter().all(is_all_zero) {
         measure.truncate(1);
     }
