@@ -41,7 +41,7 @@ pub enum BreakdownMode {
 
 #[inline]
 fn is_all_zero(line: &[u8; 4]) -> bool {
-    line.iter().all(|&b| b == b'0')
+    u32::from_ne_bytes(*line) == 0x30303030
 }
 
 /// Minimizes measure lines if every other line is all-zero.
