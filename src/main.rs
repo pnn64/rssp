@@ -179,7 +179,7 @@ fn summarize_simfile(
         }
         res
     };
-    let detected_non_anchors = detect_all_patterns_non_anchors(&bitmasks);
+    let detected_patterns = detect_all_patterns(&bitmasks);
     let (anchor_left, anchor_down, anchor_up, anchor_right) = count_anchors(&bitmasks);
 
     Ok(SimfileSummary {
@@ -212,7 +212,7 @@ fn summarize_simfile(
         max_nps,
         median_nps,
 
-        detected_non_anchors,
+        detected_patterns,
         anchor_left,
         anchor_down,
         anchor_up,
