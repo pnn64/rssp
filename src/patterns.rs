@@ -35,6 +35,10 @@ pub enum PatternVariant {
     LuchiLeftUD,
     LuchiRightUD,
     LuchiRightDU,
+    SideswitchLeft,
+    SideswitchRight,
+    SideswitchGallopLeft,
+    SideswitchGallopRight,
     SpiralLeft,
     SpiralRight,
     SpiralInvLeft,
@@ -174,6 +178,12 @@ pub static ALL_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::ne
     (PatternVariant::SweepCandleRight,    string_to_pattern_bits("RUDLULDUR")),
     (PatternVariant::SweepCandleInvLeft,  string_to_pattern_bits("LUDRURDUL")),
     (PatternVariant::SweepCandleInvRight, string_to_pattern_bits("RDULDLUDR")),
+
+    // Sideswitches (SS)
+    (PatternVariant::SideswitchLeft,        string_to_pattern_bits("LURRD")),
+    (PatternVariant::SideswitchRight,       string_to_pattern_bits("RDLLU")),
+    (PatternVariant::SideswitchGallopLeft,  string_to_pattern_bits("LURNRD")),
+    (PatternVariant::SideswitchGallopRight, string_to_pattern_bits("RDLNLU")),
     ]
 });
 
@@ -185,6 +195,7 @@ fn string_to_pattern_bits(p: &str) -> Vec<u8> {
             'D' => 0b0010,
             'U' => 0b0100,
             'R' => 0b1000,
+            'N' => 0b0000,
             _ => 0b0000,
         };
         result.push(mask);
