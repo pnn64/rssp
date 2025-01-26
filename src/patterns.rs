@@ -67,7 +67,7 @@ pub enum PatternVariant {
     TurboCandleInvRight,
 }
 
-pub static ALL_PATTERNS_NON_ANCHORS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::new(|| {
+pub static ALL_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::new(|| {
     vec![
     //Staircases
     (PatternVariant::StaircaseLeft,     string_to_pattern_bits("RUDL")),
@@ -192,24 +192,18 @@ fn string_to_pattern_bits(p: &str) -> Vec<u8> {
     result
 }
 
-pub fn detect_all_patterns_non_anchors(bitmasks: &[u8]) -> HashMap<PatternVariant, u32> {
+pub fn detect_all_patterns(bitmasks: &[u8]) -> HashMap<PatternVariant, u32> {
     let mut results: HashMap<PatternVariant, u32> = HashMap::new();
-    let defs: &[(PatternVariant, Vec<u8>)] = ALL_PATTERNS_NON_ANCHORS.as_ref();
+    let defs: &[(PatternVariant, Vec<u8>)] = ALL_PATTERNS.as_ref();
 
-    let mut i = 0;
-    while i < bitmasks.len() {
-        let mut matched_any = false;
-        for (variant, pat_bits) in defs.iter() {
+    for i in 0..bitmasks.len() {
+        for (variant, pat_bits) in defs {
             let plen = pat_bits.len();
-            if i + plen <= bitmasks.len() && bitmasks[i..i + plen] == pat_bits[..] {
-                *results.entry(*variant).or_insert(0) += 1;
-                i += plen;
-                matched_any = true;
-                break;
+            if i + plen <= bitmasks.len() {
+                if bitmasks[i..i + plen] == pat_bits[..] {
+                    *results.entry(*variant).or_insert(0) += 1;
+                }
             }
-        }
-        if !matched_any {
-            i += 1;
         }
     }
 
