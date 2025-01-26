@@ -34,7 +34,7 @@ pub struct SimfileSummary {
     pub max_nps:               f64,
     pub median_nps:            f64,
 
-    pub detected_non_anchors:  HashMap<PatternVariant, u32>,
+    pub detected_patterns:  HashMap<PatternVariant, u32>,
 
     pub anchor_left:           u32,
     pub anchor_down:           u32,
@@ -250,7 +250,7 @@ fn print_text(data: &SimfileSummary) {
     println!("--- Pattern Counts (non-anchors) ---");
     for &pv in ALL_PATTERNS {
         let key = pattern_variant_name(pv);
-        let val = count(&data.detected_non_anchors, pv);
+        let val = count(&data.detected_patterns, pv);
         println!("{}: {}", key, val);
     }
 
@@ -336,7 +336,7 @@ fn print_json(data: &SimfileSummary) {
     println!("  \"pattern_counts\": {{");
     for (i, &pv) in ALL_PATTERNS.iter().enumerate() {
         let key = pattern_variant_name(pv);
-        let val = count(&data.detected_non_anchors, pv);
+        let val = count(&data.detected_patterns, pv);
         if i + 1 < ALL_PATTERNS.len() {
             println!("     \"{}\": {},", key, val);
         } else {
@@ -391,7 +391,7 @@ fn print_csv(data: &SimfileSummary) {
     cols.push(format!("{}", data.anchor_right));
 
     for &pv in ALL_PATTERNS {
-        let val = count(&data.detected_non_anchors, pv);
+        let val = count(&data.detected_patterns, pv);
         cols.push(format!("{}", val));
     }
 
