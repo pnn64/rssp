@@ -25,55 +25,32 @@ fn main() -> io::Result<()> {
     let generate_csv  = args.iter().any(|a| a == "--csv");
     let strip_tags    = args.iter().any(|a| a == "--strip-tags");
 
+    let extension = match simfile_path.rsplit_once('.') {
+        Some((_, ext)) => ext, 
+        None => "", // no extension
+    };
+
     let mut file = File::open(simfile_path)?;
     let mut simfile_data = Vec::new();
     file.read_to_end(&mut simfile_data)?;
 
-    let mut summary = match summarize_simfile(&simfile_data, strip_tags) {
-        Ok(s) => s,
-        Err(msg) => {
-            eprintln!("{}", msg);
+    let (
+        title_opt, 
+        subtitle_opt, 
+        artist_opt,
+        titletranslit_opt, 
+        subtitletranslit_opt, 
+        artisttranslit_opt,
+        offset_opt, 
+        bpms_opt, 
+        notes_opt
+    ) = match extract_sections(&simfile_data, extension) {
+        Ok(tup) => tup,
+        Err(e) => {
+            eprintln!("Error extracting sections: {}", e);
             std::process::exit(1);
         }
     };
-
-    let mode = if generate_csv {
-        OutputMode::CSV
-    } else if generate_json {
-        OutputMode::JSON
-    } else {
-        OutputMode::Text
-    };
-
-    let elapsed = start_time.elapsed();
-    summary.elapsed = elapsed;
-
-    print_report(&summary, mode);
-
-    if generate_png {
-        let bpm_map = parse_bpm_map(&summary.normalized_bpms);
-        let measure_nps_vec = compute_measure_nps_vec(&summary.measure_densities, &bpm_map);
-        if !measure_nps_vec.is_empty() && summary.max_nps > 0.0 {
-            rssp::graph::generate_density_graph_png(
-                &measure_nps_vec,
-                summary.max_nps,
-                &summary.short_hash
-            )?;
-        }
-    }
-
-    Ok(())
-}
-
-fn summarize_simfile(
-    simfile_data: &[u8],
-    strip_tags: bool,
-) -> Result<SimfileSummary, String> {
-    let (title_opt, subtitle_opt, artist_opt,
-         titletranslit_opt, subtitletranslit_opt, artisttranslit_opt,
-         offset_opt, bpms_opt, notes_opt)
-       = extract_sections(simfile_data)
-         .map_err(|e| format!("Error: could not extract sections: {}", e))?;
 
     let mut title_str = std::str::from_utf8(title_opt.unwrap_or(b"<invalid-title>"))
         .unwrap_or("<invalid-title>")
@@ -109,10 +86,18 @@ fn summarize_simfile(
         .unwrap_or("<invalid-bpms>");
     let normalized_bpms = normalize_float_digits(bpms_raw);
 
-    let notes_data = notes_opt.ok_or_else(|| String::from("Missing #NOTES section"))?;
-    let (fields, chart_data) = split_notes_fields(notes_data);
+    let notes_data = match notes_opt {
+        Some(v) => v, 
+        None => {
+            eprintln!("Missing #NOTES section");
+            std::process::exit(1);
+        }
+    };
+    let (fields, chart_data) = split_notes_fields(&notes_data);
+
     if fields.len() < 5 {
-        return Err("#NOTES section incomplete".to_string());
+        eprintln!("#NOTES section incomplete");
+        std::process::exit(1);
     }
 
     let step_type_str  = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_owned();
@@ -171,7 +156,6 @@ fn summarize_simfile(
                 if matches!(line[3], b'1' | b'2' | b'4') {
                     mask |= 1 << 3;
                 }
-                // Keep lines if they have data or are not purely a comma line
                 if mask != 0 || line.iter().any(|&b| !(b == b',' || b == b' ')) {
                     res.push(mask);
                 }
@@ -179,10 +163,11 @@ fn summarize_simfile(
         }
         res
     };
+
     let detected_patterns = detect_all_patterns(&bitmasks);
     let (anchor_left, anchor_down, anchor_up, anchor_right) = count_anchors(&bitmasks);
 
-    Ok(SimfileSummary {
+    let summary = SimfileSummary {
         title_str,
         subtitle_str,
         artist_str,
@@ -222,5 +207,33 @@ fn summarize_simfile(
 
         elapsed: Duration::default(),
         measure_densities,
-    })
+    };
+
+    let mode = if generate_csv {
+        OutputMode::CSV
+    } else if generate_json {
+        OutputMode::JSON
+    } else {
+        OutputMode::Text
+    };
+
+    let elapsed = start_time.elapsed();
+    let mut summary = summary;
+    summary.elapsed = elapsed;
+
+    print_report(&summary, mode);
+
+    if generate_png {
+        let bpm_map = parse_bpm_map(&summary.normalized_bpms);
+        let measure_nps_vec = compute_measure_nps_vec(&summary.measure_densities, &bpm_map);
+        if !measure_nps_vec.is_empty() && summary.max_nps > 0.0 {
+            rssp::graph::generate_density_graph_png(
+                &measure_nps_vec,
+                summary.max_nps,
+                &summary.short_hash
+            )?;
+        }
+    }
+
+    Ok(())
 }
