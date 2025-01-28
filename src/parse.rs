@@ -36,82 +36,63 @@ pub fn strip_title_tags(title: &str) -> String {
     s.to_string()
 }
 
+#[inline]
+fn parse_tag<'a>(data: &'a [u8], idx: &mut usize, tag_len: usize) -> Option<&'a [u8]> {
+    let start_idx = *idx + tag_len;
+    if start_idx >= data.len() {
+        return None;
+    }
+    // We read until the next semicolon.
+    if let Some(end_off) = data[start_idx..].iter().position(|&b| b == b';') {
+        let result = &data[start_idx..start_idx + end_off];
+        // Move `i` past that semicolon
+        *idx = start_idx + end_off + 1;
+        Some(result)
+    } else {
+        None
+    }
+}
+
 pub fn extract_sections<'a>(
     data: &'a [u8],
     file_extension: &str,
 ) -> io::Result<(
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<Vec<u8>>,
+    Option<&'a [u8]>,  // title
+    Option<&'a [u8]>,  // subtitle
+    Option<&'a [u8]>,  // artist
+    Option<&'a [u8]>,  // titletranslit
+    Option<&'a [u8]>,  // subtitletranslit
+    Option<&'a [u8]>,  // artisttranslit
+    Option<&'a [u8]>,  // offset
+    Option<&'a [u8]>,  // bpms
+    Option<Vec<u8>>,   // the final "notes data" block
 )> {
-    match file_extension.to_lowercase().as_str() {
-        "ssc" => parse_ssc_sections(data),
-        "sm"  => parse_sm_sections(data),
-        _ => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Unsupported file extension. Please provide a '.ssc' or '.sm' file.",
-            ))
-        }
-    }
-}
-
-fn parse_sm_sections<'a>(
-    data: &'a [u8],
-) -> io::Result<(
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<Vec<u8>>,
-)> {
-    let mut title = None;
-    let mut subtitle = None;
-    let mut artist = None;
-    let mut titletranslit = None;
+    let mut title            = None;
+    let mut subtitle         = None;
+    let mut artist           = None;
+    let mut titletranslit    = None;
     let mut subtitletranslit = None;
-    let mut artisttranslit = None;
-    let mut offset = None;
-    let mut bpms = None;
+    let mut artisttranslit   = None;
+    let mut offset           = None;
+    let mut bpms             = None;
 
-    let mut notes_data: Option<Vec<u8>> = None;
+    let mut notes_data       = None; // for .sm or for the final combined block in .ssc
+
+    let is_ssc = matches!(file_extension.to_lowercase().as_str(), "ssc");
+    let is_sm  = matches!(file_extension.to_lowercase().as_str(), "sm");
+
+    if !is_sm && !is_ssc {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Unsupported file extension (must be .sm or .ssc)",
+        ));
+    }
 
     let mut i = 0;
     while i < data.len() {
-        if title.is_some()
-            && subtitle.is_some()
-            && artist.is_some()
-            && bpms.is_some()
-            && notes_data.is_some()
-        {
-            break;
-        }
-
         let slice = &data[i..];
-        fn parse_tag<'b>(data: &'b [u8], idx: &mut usize, tag_len: usize) -> Option<&'b [u8]> {
-            let start_idx = *idx + tag_len;
-            if start_idx > data.len() {
-                return None;
-            }
-            if let Some(end_off) = data[start_idx..].iter().position(|&b| b == b';') {
-                let result = &data[start_idx..start_idx + end_off];
-                *idx = start_idx + end_off + 1; // move past the semicolon
-                Some(result)
-            } else {
-                None
-            }
-        }
 
+        // --- Parse global tags ---
         if slice.starts_with(b"#TITLE:") && title.is_none() {
             title = parse_tag(data, &mut i, b"#TITLE:".len());
             continue;
@@ -136,15 +117,47 @@ fn parse_sm_sections<'a>(
         } else if slice.starts_with(b"#BPMS:") && bpms.is_none() {
             bpms = parse_tag(data, &mut i, b"#BPMS:".len());
             continue;
-        } else if slice.starts_with(b"#NOTES:") && notes_data.is_none() {
+        }
+
+        // --- If it's an .sm file, we look for `#NOTES:` directly ---
+        if is_sm && slice.starts_with(b"#NOTES:") && notes_data.is_none() {
             let start_idx = i + b"#NOTES:".len();
             if start_idx < data.len() {
+                // Just store the remainder in a Vec<u8>
                 notes_data = Some(data[start_idx..].to_vec());
             }
+            break; // done scanning
+        }
+
+        // --- If it's an .ssc file, we look for `#NOTEDATA:` blocks ---
+        if is_ssc && slice.starts_with(b"#NOTEDATA:") && notes_data.is_none() {
+            i += b"#NOTEDATA:".len(); // move past "#NOTEDATA:"
+            
+            let step_type    = parse_subtag(data, &mut i, b"#STEPSTYPE:");
+            let description  = parse_subtag(data, &mut i, b"#DESCRIPTION:");
+            let difficulty   = parse_subtag(data, &mut i, b"#DIFFICULTY:");
+            let meter        = parse_subtag(data, &mut i, b"#METER:");
+            let radar_values = parse_subtag(data, &mut i, b"#RADARVALUES:");
+            let notes_raw    = parse_subtag(data, &mut i, b"#NOTES:"); 
+
+            let mut combined = Vec::new();
+            combined.extend_from_slice(step_type);
+            combined.push(b':');
+            combined.extend_from_slice(description);
+            combined.push(b':');
+            combined.extend_from_slice(difficulty);
+            combined.push(b':');
+            combined.extend_from_slice(meter);
+            combined.push(b':');
+            combined.extend_from_slice(radar_values);
+            combined.push(b':');
+            combined.extend_from_slice(notes_raw);
+
+            notes_data = Some(combined);
             break;
         }
 
-        i += 1;
+        i += 1; // advance and continue searching
     }
 
     Ok((
@@ -160,88 +173,28 @@ fn parse_sm_sections<'a>(
     ))
 }
 
-fn parse_ssc_sections<'a>(
-    data: &'a [u8],
-) -> io::Result<(
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<Vec<u8>>,
-)> {
-    if !data.windows(b"#NOTEDATA:".len()).any(|w| w == b"#NOTEDATA:") {
-        return Err(io::Error::new(io::ErrorKind::Other, "No #NOTEDATA: found in .ssc"));
-    }
+fn parse_subtag<'a>(data: &'a [u8], idx: &mut usize, tag: &[u8]) -> &'a [u8] {
+    let upper_bound = data.len().saturating_sub(tag.len());
+    let mut search_pos = *idx;
 
-    fn find_ci(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-        let needle_lower = needle.to_ascii_lowercase();
-        haystack
-            .windows(needle.len())
-            .position(|window| window.to_ascii_lowercase() == needle_lower)
-    }
-
-    fn parse_tag_value<'b>(haystack: &'b [u8], tag: &[u8]) -> Option<&'b [u8]> {
-        if let Some(pos) = find_ci(haystack, tag) {
-            let start = pos + tag.len();
-            if start < haystack.len() {
-                if let Some(end) = haystack[start..].iter().position(|&b| b == b';') {
-                    return Some(&haystack[start..start + end]);
+    while search_pos < upper_bound {
+        let slice = &data[search_pos..];
+        if slice.starts_with(tag) {
+            let val_start = search_pos + tag.len();
+            if val_start < data.len() {
+                if let Some(end_off) = data[val_start..].iter().position(|&b| b == b';') {
+                    let result = &data[val_start..val_start + end_off];
+                    *idx = val_start + end_off + 1;
+                    return result;
                 }
             }
+            *idx = data.len();
+            return &data[val_start..];
         }
-        None
+        search_pos += 1;
     }
 
-    let title            = parse_tag_value(data, b"#TITLE:");
-    let subtitle         = parse_tag_value(data, b"#SUBTITLE:");
-    let artist           = parse_tag_value(data, b"#ARTIST:");
-    let titletranslit    = parse_tag_value(data, b"#TITLETRANSLIT:");
-    let subtitletranslit = parse_tag_value(data, b"#SUBTITLETRANSLIT:");
-    let artisttranslit   = parse_tag_value(data, b"#ARTISTTRANSLIT:");
-    let offset           = parse_tag_value(data, b"#OFFSET:");
-    let bpms             = parse_tag_value(data, b"#BPMS:");
-
-    let nd_pos = find_ci(data, b"#NOTEDATA:").ok_or_else(|| {
-        io::Error::new(io::ErrorKind::Other, "Could not find #NOTEDATA: block")
-    })?;
-    let notedata_slice = &data[nd_pos..];
-
-    let step_type   = parse_tag_value(notedata_slice, b"#STEPSTYPE:").unwrap_or(b"");
-    let description = parse_tag_value(notedata_slice, b"#DESCRIPTION:").unwrap_or(b"");
-    let difficulty  = parse_tag_value(notedata_slice, b"#DIFFICULTY:").unwrap_or(b"");
-    let meter       = parse_tag_value(notedata_slice, b"#METER:").unwrap_or(b"");
-    let radarvals   = parse_tag_value(notedata_slice, b"#RADARVALUES:").unwrap_or(b"");
-    let notes       = parse_tag_value(notedata_slice, b"#NOTES:")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "No #NOTES: in #NOTEDATA block"))?;
-
-    let mut combined = Vec::new();
-    combined.extend_from_slice(step_type);
-    combined.push(b':');
-    combined.extend_from_slice(description);
-    combined.push(b':');
-    combined.extend_from_slice(difficulty);
-    combined.push(b':');
-    combined.extend_from_slice(meter);
-    combined.push(b':');
-    combined.extend_from_slice(radarvals);
-    combined.push(b':');
-    combined.extend_from_slice(notes);
-
-    Ok((
-        title,
-        subtitle,
-        artist,
-        titletranslit,
-        subtitletranslit,
-        artisttranslit,
-        offset,
-        bpms,
-        Some(combined),
-    ))
+    &[]
 }
 
 pub fn split_notes_fields(notes_block: &[u8]) -> (Vec<&[u8]>, &[u8]) {
