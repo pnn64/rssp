@@ -1,42 +1,27 @@
 use std::io;
 
-pub fn strip_title_tags(title: &str) -> String {
-    let mut s = title.trim_start();
-
+pub fn strip_title_tags(mut title: &str) -> String {
     loop {
-        let mut modified = false;
-
-        // Check for bracketed numerical tags
-        if let Some(start) = s.strip_prefix('[') {
-            if let Some(end) = start.find(']') {
-                let tag_content = &start[..end];
-                if tag_content.chars().all(|c| c.is_ascii_digit() || c == '.') {
-                    s = start[end + 1..].trim_start();
-                    modified = true;
-                }
+        let original = title;
+        // Remove bracketed numerical tags like `[123]`
+        if let Some(rest) = title.strip_prefix('[').and_then(|s| s.split_once(']')) {
+            if rest.0.chars().all(|c| c.is_ascii_digit() || c == '.') {
+                title = rest.1.trim_start();
+                continue;
             }
         }
-
-        // Check for numerical prefix with "- " suffix
-        if !modified {
-            let bytes = s.as_bytes();
-            let pos = bytes
-                .iter()
-                .take_while(|&&b| b.is_ascii_digit() || b == b'.')
-                .count();
-
-            if pos > 0 && bytes.get(pos..).map_or(false, |s| s.starts_with(b"- ")) {
-                s = &s[pos + 2..].trim_start();
-                modified = true;
+        // Remove numerical prefixes like `123- `
+        if let Some(pos) = title.find("- ") {
+            if title[..pos].chars().all(|c| c.is_ascii_digit() || c == '.') {
+                title = &title[pos + 2..].trim_start();
+                continue;
             }
         }
-
-        if !modified {
+        if title == original {
             break;
         }
     }
-
-    s.to_string()
+    title.to_string()
 }
 
 pub fn extract_sections<'a>(
@@ -53,55 +38,39 @@ pub fn extract_sections<'a>(
     Option<&'a [u8]>,
     Option<Vec<u8>>,
 )> {
-    let is_ssc = file_extension.eq_ignore_ascii_case("ssc");
-    let is_sm = file_extension.eq_ignore_ascii_case("sm");
-
-    if !is_sm && !is_ssc {
+    if !matches!(file_extension.to_lowercase().as_str(), "sm" | "ssc") {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "Unsupported file extension (must be .sm or .ssc)",
         ));
     }
 
-    let tag_list = [
-        (b"#TITLE:".as_slice(), 0),
-        (b"#SUBTITLE:".as_slice(), 1),
-        (b"#ARTIST:".as_slice(), 2),
-        (b"#TITLETRANSLIT:".as_slice(), 3),
-        (b"#SUBTITLETRANSLIT:".as_slice(), 4),
-        (b"#ARTISTTRANSLIT:".as_slice(), 5),
-        (b"#OFFSET:".as_slice(), 6),
-        (b"#BPMS:".as_slice(), 7),
+    let tags = [
+        b"#TITLE:".as_slice(),
+        b"#SUBTITLE:".as_slice(),
+        b"#ARTIST:".as_slice(),
+        b"#TITLETRANSLIT:".as_slice(),
+        b"#SUBTITLETRANSLIT:".as_slice(),
+        b"#ARTISTTRANSLIT:".as_slice(),
+        b"#OFFSET:".as_slice(),
+        b"#BPMS:".as_slice(),
     ];
 
-    let mut sections: [Option<&[u8]>; 8] = [None; 8];
+    let mut sections = [None; 8];
     let mut notes_data = None;
     let mut i = 0;
 
     while i < data.len() {
         if let Some(pos) = data[i..].iter().position(|&b| b == b'#') {
             i += pos;
-            
-            // Check tags
-            for (tag, idx) in &tag_list {
-                if data.len() - i >= tag.len() && &data[i..i+tag.len()] == *tag {
-                    if let Some(content) = parse_tag(data, &mut i, tag.len()) {
-                        sections[*idx] = Some(content);
-                    }
-                    break;
-                }
-            }
-
-            // Handle notes section
-            if notes_data.is_none() {
-                if is_sm && data[i..].starts_with(b"#NOTES:") {
-                    let start = i + b"#NOTES:".len();
-                    notes_data = Some(data[start..].to_vec());
-                    break;
-                } else if is_ssc && data[i..].starts_with(b"#NOTEDATA:") {
-                    notes_data = Some(process_ssc_notedata(data, &mut i));
-                    break;
-                }
+            if let Some((idx, tag)) = tags.iter().enumerate().find(|(_, &tag)| data[i..].starts_with(tag)) {
+                sections[idx] = parse_tag(&data[i..], tag.len());
+            } else if data[i..].starts_with(b"#NOTES:") {
+                notes_data = Some(data[i + b"#NOTES:".len()..].to_vec());
+                break;
+            } else if data[i..].starts_with(b"#NOTEDATA:") {
+                notes_data = Some(process_ssc_notedata(&data[i..]));
+                break;
             }
         }
         i += 1;
@@ -114,8 +83,7 @@ pub fn extract_sections<'a>(
     ))
 }
 
-fn process_ssc_notedata(data: &[u8], idx: &mut usize) -> Vec<u8> {
-    *idx += b"#NOTEDATA:".len();
+fn process_ssc_notedata(data: &[u8]) -> Vec<u8> {
     let tags = [
         b"#STEPSTYPE:".as_slice(),
         b"#DESCRIPTION:".as_slice(),
@@ -125,37 +93,26 @@ fn process_ssc_notedata(data: &[u8], idx: &mut usize) -> Vec<u8> {
         b"#NOTES:".as_slice(),
     ];
 
-    let parts: Vec<_> = tags.iter().map(|tag| {
-        let mut pos = *idx;
-        let val = parse_subtag(data, &mut pos, tag);
-        *idx = pos;
-        val
-    }).collect();
-
-    parts.join(&b':')
+    tags.iter()
+        .filter_map(|&tag| parse_subtag(data, tag))
+        .collect::<Vec<_>>()
+        .join(&b':')
 }
 
-fn parse_tag<'a>(data: &'a [u8], idx: &mut usize, tag_len: usize) -> Option<&'a [u8]> {
-    let start = *idx + tag_len;
-    data.get(start..).and_then(|d| {
-        d.iter().position(|&b| b == b';').map(|end| {
-            *idx = start + end + 1;
-            &data[start..start+end]
-        })
-    })
+fn parse_tag(data: &[u8], tag_len: usize) -> Option<&[u8]> {
+    data.get(tag_len..)
+        .and_then(|d| d.iter().position(|&b| b == b';').map(|end| &d[..end]))
 }
 
-fn parse_subtag<'a>(data: &'a [u8], idx: &mut usize, tag: &[u8]) -> &'a [u8] {
-    data[*idx..].windows(tag.len()).position(|w| w == tag)
-        .and_then(|pos| {
-            *idx += pos + tag.len();
-            parse_tag(data, idx, 0)
-        })
-        .unwrap_or_default()
+fn parse_subtag(data: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
+    data.windows(tag.len())
+        .position(|w| w == tag)
+        .and_then(|pos| parse_tag(&data[pos + tag.len()..], 0))
+        .map(|content| content.to_vec())
 }
 
 pub fn split_notes_fields(notes_block: &[u8]) -> (Vec<&[u8]>, &[u8]) {
     let mut parts = notes_block.splitn(6, |&b| b == b':');
-    let fields: Vec<_> = (0..5).filter_map(|_| parts.next()).collect();
-    (fields, parts.next().unwrap_or_default())
+    let fields: Vec<_> = parts.by_ref().take(5).collect();
+    (fields, parts.next().unwrap_or(&[]))
 }
