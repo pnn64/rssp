@@ -10,7 +10,7 @@ pub fn generate_density_graph_png(
     const IMAGE_WIDTH: u32 = 1000;
     const GRAPH_HEIGHT: u32 = 400;
 
-    let bg_color = [3, 17, 44];
+    let bg_color = [30, 40, 47];
     let bottom_color = [0, 184, 204];
     let top_color = [130, 0, 161];
 
