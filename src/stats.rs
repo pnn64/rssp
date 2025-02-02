@@ -358,127 +358,125 @@ pub enum Token {
 }
 
 pub fn generate_breakdown(measure_densities: &[usize], mode: BreakdownMode) -> String {
+    // Convert densities into categories.
     let cats: Vec<RunDensity> = measure_densities
         .iter()
         .map(|&d| categorize_measure_density(d))
         .collect();
 
-    let first_run = cats.iter().position(|&c| c != RunDensity::Break);
-    let last_run  = cats.iter().rposition(|&c| c != RunDensity::Break);
-    if first_run.is_none() || last_run.is_none() {
+    // Trim leading/trailing Breaks.
+    let start = cats.iter().position(|&c| c != RunDensity::Break);
+    let end = cats.iter().rposition(|&c| c != RunDensity::Break);
+    if start.is_none() || end.is_none() {
         return String::new();
     }
+    let cats = &cats[start.unwrap()..=end.unwrap()];
 
-    let mut tokens = Vec::new();
-    {
-        let mut i = first_run.unwrap();
-        let end = last_run.unwrap();
-        while i <= end {
-            let cat = cats[i];
-            let mut length = 1;
-            let mut j = i + 1;
-            while j <= end && cats[j] == cat {
-                length += 1;
-                j += 1;
-            }
-            if cat == RunDensity::Break {
-                tokens.push(Token::Break(length));
-            } else {
-                tokens.push(Token::Run(cat, length));
-            }
-            i = j;
-        }
+    // Group consecutive identical categories into tokens.
+    #[derive(Debug)]
+    enum Token {
+        Run(RunDensity, usize),
+        Break(usize),
     }
+    let tokens: Vec<Token> = {
+        let mut tokens = Vec::new();
+        let mut iter = cats.iter().cloned().peekable();
+        while let Some(cat) = iter.next() {
+            let mut count = 1;
+            while let Some(&next) = iter.peek() {
+                if next == cat {
+                    count += 1;
+                    iter.next();
+                } else {
+                    break;
+                }
+            }
+            tokens.push(match cat {
+                RunDensity::Break => Token::Break(count),
+                other => Token::Run(other, count),
+            });
+        }
+        tokens
+    };
 
-    let mut output = Vec::new();
-    let mut idx = 0;
-
+    // Determine the break threshold.
     let threshold = match mode {
         BreakdownMode::Partial => 1,
         BreakdownMode::Simplified => 4,
         BreakdownMode::Detailed => 0,
     };
 
-    while idx < tokens.len() {
-        match tokens[idx] {
-            Token::Run(curr_cat, mut curr_len) => {
-                let mut star = false;
-
-                if mode != BreakdownMode::Detailed {
-                    'merge_loop: loop {
-                        if idx + 1 >= tokens.len() {
+    // Merge tokens—when a Run is separated from a subsequent Run of the same type
+    // by a short Break (<= threshold), merge them.
+    #[derive(Debug)]
+    enum MToken {
+        Run(RunDensity, usize, bool), // (category, total length, star flag)
+        Break(usize),
+    }
+    let merged: Vec<MToken> = {
+        let mut merged = Vec::new();
+        let mut iter = tokens.into_iter().peekable();
+        while let Some(tok) = iter.next() {
+            match tok {
+                Token::Run(cat, len) => {
+                    let mut total = len;
+                    let mut star = false;
+                    // While a short Break is found...
+                    while let Some(Token::Break(bk)) = iter.peek() {
+                        if *bk > threshold {
                             break;
                         }
-                        let Token::Break(bk_len) = tokens[idx + 1] else {
-                            break;
-                        };
-                        if bk_len > threshold {
-                            break;
-                        }
-                        if idx + 2 >= tokens.len() {
-                            break;
-                        }
-
-                        if let Token::Run(next_cat, next_len) = tokens[idx + 2] {
-                            if next_cat == curr_cat {
-                                curr_len += bk_len + next_len;
+                        // Consume the Break.
+                        let Token::Break(bk) = iter.next().unwrap() else { unreachable!() };
+                        // If followed by a Run...
+                        if let Some(Token::Run(next_cat, next_len)) = iter.peek() {
+                            if *next_cat == cat {
+                                total += bk + *next_len;
                                 star = true;
-                                tokens.remove(idx + 1);
-                                tokens.remove(idx + 1);
-                                continue 'merge_loop;
+                                iter.next(); // consume the next Run
+                                continue;
                             } else {
-                                if bk_len == 1 {
-                                    break 'merge_loop;
-                                }
-                                if mode == BreakdownMode::Simplified && bk_len <= 4 {
-                                    curr_len += bk_len;
+                                // In Simplified mode, if the break length is >1 and ≤4, merge it.
+                                if bk != 1 && mode == BreakdownMode::Simplified && bk <= 4 {
+                                    total += bk;
                                     star = true;
-                                    tokens.remove(idx + 1);
                                 }
-                                break 'merge_loop;
+                                break;
                             }
                         } else {
-                            break 'merge_loop;
+                            break;
                         }
                     }
+                    merged.push(MToken::Run(cat, total, star));
                 }
-
-                let s = format_run_symbol(curr_cat, curr_len, star);
-                output.push(s);
-                idx += 1;
-            }
-            Token::Break(bk_len) => {
-                match mode {
-                    BreakdownMode::Detailed => {
-                        if bk_len > 1 {
-                            output.push(format!("({})", bk_len));
-                        }
-                    }
-                    BreakdownMode::Partial => {
-                        if bk_len == 1 {
-                            // skip
-                        } else if bk_len <= 4 {
-                            output.push("-".to_string());
-                        } else if bk_len <= 32 {
-                            output.push("/".to_string());
-                        } else {
-                            output.push("|".to_string());
-                        }
-                    }
-                    BreakdownMode::Simplified => {
-                        if bk_len <= 4 {
-                            // skip
-                        } else if bk_len <= 32 {
-                            output.push("/".to_string());
-                        } else {
-                            output.push("|".to_string());
-                        }
-                    }
-                }
-                idx += 1;
+                Token::Break(bk) => merged.push(MToken::Break(bk)),
             }
         }
-    }
+        merged
+    };
+
+    // Map merged tokens into output strings.
+    let output: Vec<String> = merged
+        .into_iter()
+        .filter_map(|mt| match mt {
+            MToken::Run(cat, len, star) => Some(format_run_symbol(cat, len, star)),
+            MToken::Break(bk) => match mode {
+                BreakdownMode::Detailed if bk > 1 => Some(format!("({})", bk)),
+                BreakdownMode::Partial => match bk {
+                    1 => None,
+                    2..=4 => Some("-".to_owned()),
+                    5..=32 => Some("/".to_owned()),
+                    _ => Some("|".to_owned()),
+                },
+                BreakdownMode::Simplified => match bk {
+                    1..=4 => None,
+                    5..=32 => Some("/".to_owned()),
+                    _ => Some("|".to_owned()),
+                },
+                _ => None,
+            },
+        })
+        .collect();
 
     output.join(" ")
 }
