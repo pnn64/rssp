@@ -290,30 +290,21 @@ enum Arrow {
     D, // Can be either foot
 }
 
-/// Converts a bitmask to an Arrow.
-fn map_bitmask_to_arrow(mask: u8) -> Option<Arrow> {
+const fn map_bitmask_to_arrow(mask: u8) -> Option<Arrow> {
     match mask {
         0b0001 => Some(Arrow::L),
         0b0010 => Some(Arrow::D),
         0b0100 => Some(Arrow::U),
         0b1000 => Some(Arrow::R),
-        _ => None, // No arrows or multiple arrows => not a single-arrow step
+        _ => None,
     }
 }
 
-/// Determines the transition direction between two arrows.
-fn transition_direction(a: Arrow, b: Arrow) -> Option<Direction> {
-    use Arrow::*;
-    use Direction::*;
-    match (a, b) {
-        (L, U) | (D, R) | (R, D) | (U, L) => Some(Left),
-        (L, D) | (U, R) | (R, U) | (D, L) => Some(Right),
-        _ => None, // Neutral or invalid transition
-    }
-}
-
-/// Finalizes a segment and updates the counts for left and right directions.
-fn finalize_segment(state: &mut FacingState, final_left: &mut u32, final_right: &mut u32) {
+fn finalize_segment(
+    state: &mut FacingState,
+    final_left: &mut u32,
+    final_right: &mut u32,
+) {
     match *state {
         FacingState::Left { count } if count >= MONO_THRESHOLD => *final_left += count as u32,
         FacingState::Right { count } if count >= MONO_THRESHOLD => *final_right += count as u32,
@@ -322,107 +313,103 @@ fn finalize_segment(state: &mut FacingState, final_left: &mut u32, final_right: 
     *state = FacingState::Waiting { count: 0 };
 }
 
-/// Back-propagates foot assignments for pending arrows.
-fn back_propagate_feet(foot_usage: &mut [Option<Foot>], idx: usize, pending_count: usize) {
-    for i in (idx.saturating_sub(pending_count)..idx).rev() {
-        let prev_foot = foot_usage[i + 1].unwrap();
-        foot_usage[i] = Some(match prev_foot {
-            Foot::LeftFoot => Foot::RightFoot,
-            Foot::RightFoot => Foot::LeftFoot,
-        });
+fn determine_direction(prev: Arrow, curr: Arrow) -> Option<Direction> {
+    use Arrow::*;
+    use Direction::*;
+    match (prev, curr) {
+        (L, U) | (D, R) | (R, D) | (U, L) => Some(Left),
+        (L, D) | (U, R) | (R, U) | (D, L) => Some(Right),
+        _ => None,
     }
 }
 
-/// Assigns a foot to the current arrow based on the previous foot.
-fn assign_foot(
-    arrows: &[Arrow],
-    foot_usage: &mut [Option<Foot>],
-    i: usize,
-) -> bool {
-    let prev_foot = foot_usage[i - 1].unwrap();
-    let next_foot = match prev_foot {
-        Foot::LeftFoot => Foot::RightFoot,
-        Foot::RightFoot => Foot::LeftFoot,
-    };
-    match (arrows[i], next_foot) {
-        (Arrow::L, Foot::RightFoot) | (Arrow::R, Foot::LeftFoot) => true, // Conflict
-        _ => {
-            foot_usage[i] = Some(next_foot);
-            false
-        }
-    }
-}
-
-/// Counts facing steps in a slice of single-arrow steps.
 fn count_facing_steps_in_arrows(arrows: &[Arrow]) -> (u32, u32) {
     if arrows.is_empty() {
         return (0, 0);
     }
 
-    let mut final_left = 0u32;
-    let mut final_right = 0u32;
+    let mut final_left = 0_u32;
+    let mut final_right = 0_u32;
     let mut state = FacingState::Waiting { count: 1 };
     let mut foot_usage = vec![None; arrows.len()];
     let mut pending_count = 0;
 
-    // Initialize the first arrow's foot usage.
     foot_usage[0] = match arrows[0] {
         Arrow::L => Some(Foot::LeftFoot),
         Arrow::R => Some(Foot::RightFoot),
         _ => None,
     };
 
+    #[inline(always)]
+    fn opposite_foot(f: Foot) -> Foot {
+        match f {
+            Foot::LeftFoot => Foot::RightFoot,
+            Foot::RightFoot => Foot::LeftFoot,
+        }
+    }
+
     for i in 1..arrows.len() {
-        let prev = arrows[i - 1];
-        let curr = arrows[i];
-        let trans = transition_direction(prev, curr);
+        let prev_arrow = arrows[i - 1];
+        let curr_arrow = arrows[i];
+        let direction = determine_direction(prev_arrow, curr_arrow);
 
         // Handle foot assignment logic.
-        if foot_usage[i - 1].is_none() {
-            if matches!(curr, Arrow::L | Arrow::R) {
-                foot_usage[i] = match curr {
-                    Arrow::L => Some(Foot::LeftFoot),
-                    Arrow::R => Some(Foot::RightFoot),
-                    _ => unreachable!(),
-                };
-                back_propagate_feet(&mut foot_usage, i, pending_count);
-                pending_count = 0;
-            } else {
-                foot_usage[i] = None;
-                pending_count += 1;
-            }
-        } else {
-            if matches!(curr, Arrow::L | Arrow::R) {
-                let needed_foot = match curr {
-                    Arrow::L => Foot::LeftFoot,
-                    Arrow::R => Foot::RightFoot,
-                    _ => unreachable!(),
-                };
-                let alt_foot = match foot_usage[i - 1].unwrap() {
-                    Foot::LeftFoot => Foot::RightFoot,
-                    Foot::RightFoot => Foot::LeftFoot,
-                };
-                if needed_foot != alt_foot {
-                    finalize_segment(&mut state, &mut final_left, &mut final_right);
-                    foot_usage[i] = Some(needed_foot);
+        match foot_usage[i - 1] {
+            None => {
+                if matches!(curr_arrow, Arrow::L | Arrow::R) {
+                    // Assign forced foot and back-propagate.
+                    foot_usage[i] = Some(match curr_arrow {
+                        Arrow::L => Foot::LeftFoot,
+                        Arrow::R => Foot::RightFoot,
+                        _ => unreachable!(),
+                    });
+                    for j in (i.saturating_sub(pending_count)..i).rev() {
+                        foot_usage[j] = Some(opposite_foot(foot_usage[j + 1].unwrap()));
+                    }
+                    pending_count = 0;
                 } else {
-                    foot_usage[i] = Some(alt_foot);
+                    foot_usage[i] = None;
+                    pending_count += 1;
                 }
-            } else if assign_foot(arrows, &mut foot_usage, i) {
-                finalize_segment(&mut state, &mut final_left, &mut final_right);
-                foot_usage[i] = None;
-                pending_count = 1;
+            }
+            Some(previous_foot) => {
+                if matches!(curr_arrow, Arrow::L | Arrow::R) {
+                    let forced_foot = match curr_arrow {
+                        Arrow::L => Foot::LeftFoot,
+                        Arrow::R => Foot::RightFoot,
+                        _ => unreachable!(),
+                    };
+                    let alt_foot = opposite_foot(previous_foot);
+                    if forced_foot != alt_foot {
+                        finalize_segment(&mut state, &mut final_left, &mut final_right);
+                        foot_usage[i] = Some(forced_foot);
+                    } else {
+                        foot_usage[i] = Some(alt_foot);
+                    }
+                } else {
+                    let next_foot = opposite_foot(previous_foot);
+                    let conflict = matches!(
+                        (curr_arrow, next_foot),
+                        (Arrow::L, Foot::RightFoot) | (Arrow::R, Foot::LeftFoot)
+                    );
+                    if conflict {
+                        finalize_segment(&mut state, &mut final_left, &mut final_right);
+                        foot_usage[i] = None;
+                        pending_count = 1;
+                    } else {
+                        foot_usage[i] = Some(next_foot);
+                    }
+                }
             }
         }
 
-        // Update the facing state based on the transition direction.
         state = match state {
-            FacingState::Waiting { count } => match trans {
+            FacingState::Waiting { count } => match direction {
                 Some(Direction::Left) => FacingState::Left { count: count + 1 },
                 Some(Direction::Right) => FacingState::Right { count: count + 1 },
                 None => FacingState::Waiting { count: count + 1 },
             },
-            FacingState::Left { count } => match trans {
+            FacingState::Left { count } => match direction {
                 Some(Direction::Left) | None => FacingState::Left { count: count + 1 },
                 Some(Direction::Right) => {
                     if count >= MONO_THRESHOLD {
@@ -431,7 +418,7 @@ fn count_facing_steps_in_arrows(arrows: &[Arrow]) -> (u32, u32) {
                     FacingState::Right { count: 1 }
                 }
             },
-            FacingState::Right { count } => match trans {
+            FacingState::Right { count } => match direction {
                 Some(Direction::Right) | None => FacingState::Right { count: count + 1 },
                 Some(Direction::Left) => {
                     if count >= MONO_THRESHOLD {
@@ -443,16 +430,13 @@ fn count_facing_steps_in_arrows(arrows: &[Arrow]) -> (u32, u32) {
         };
     }
 
-    // Finalize any remaining segment.
     finalize_segment(&mut state, &mut final_left, &mut final_right);
-
     (final_left, final_right)
 }
 
-/// Counts facing steps in a sequence of bitmasks.
 pub fn count_facing_steps(bitmasks: &[u8]) -> (u32, u32) {
-    let mut final_left = 0u32;
-    let mut final_right = 0u32;
+    let mut final_left = 0_u32;
+    let mut final_right = 0_u32;
     let mut current_arrows = Vec::new();
 
     for &mask in bitmasks {
@@ -466,9 +450,9 @@ pub fn count_facing_steps(bitmasks: &[u8]) -> (u32, u32) {
         }
     }
 
+    // Process any remaining arrows.
     let (l, r) = count_facing_steps_in_arrows(&current_arrows);
     final_left += l;
     final_right += r;
-
     (final_left, final_right)
 }
