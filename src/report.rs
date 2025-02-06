@@ -40,6 +40,12 @@ pub struct SimfileSummary {
     pub anchor_down:           u32,
     pub anchor_up:             u32,
     pub anchor_right:          u32,
+    pub facing_left:            u32,
+    pub facing_right:           u32,
+    pub mono_total:             u32,
+    pub mono_percent:           f64,
+    pub candle_total:           u32,
+    pub candle_percent:         f64,
 
     pub short_hash:            String,
 
@@ -255,6 +261,16 @@ fn print_text(data: &SimfileSummary) {
     println!("Max NPS: {:.2}", data.max_nps);
     println!("Median NPS: {:.2}", data.median_nps);
 
+    println!("--- Mono Patterns ---");
+    println!("Left-facing steps: {}", data.facing_left);
+    println!("Right-facing steps: {}", data.facing_right);
+    println!("Mono total: {}", data.mono_total);
+    println!("Mono percentage: {:.2}%", data.mono_percent);
+
+    println!("--- Candle Patterns ---");
+    println!("Candle total: {}", data.candle_total);
+    println!("Candle percentage: {:.2}%", data.candle_percent);
+
     println!("--- Pattern Counts (non-anchors) ---");
     for &pv in ALL_PATTERNS {
         let key = pattern_variant_name(pv);
@@ -339,6 +355,18 @@ fn print_json(data: &SimfileSummary) {
     println!("     \"chart_length_s\": {},", data.total_length);
     println!("     \"max_nps\": {:.4},", data.max_nps);
     println!("     \"median_nps\": {:.4}", data.median_nps);
+    println!("  }},");
+
+    println!("  \"mono_counts\": {{");
+    println!("     \"left-facing\": {},", data.facing_left);
+    println!("     \"right-facing\": {},", data.facing_right);
+    println!("     \"mono_total\": {},", data.mono_total);
+    println!("     \"mono_percent\": {:.2},", data.mono_percent);
+    println!("  }},");
+
+    println!("  \"candle_counts\": {{");
+    println!("     \"candle_total\": {},", data.candle_total);
+    println!("     \"candle_percent\": {:.2}", data.candle_percent);
     println!("  }},");
 
     println!("  \"pattern_counts\": {{");

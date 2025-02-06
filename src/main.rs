@@ -167,6 +167,28 @@ fn main() -> io::Result<()> {
     let detected_patterns = detect_all_patterns(&bitmasks);
     let (anchor_left, anchor_down, anchor_up, anchor_right) = count_anchors(&bitmasks);
 
+    let (facing_left, facing_right, mono_total, mono_percent, candle_total, candle_percent) =
+    if stats.total_steps > 1 {
+        // Compute mono stats.
+        let (f_left, f_right) = count_facing_steps(&bitmasks);
+        let mono_total = f_left + f_right;
+        let mono_percent = (mono_total as f64 / stats.total_steps as f64) * 100.0;
+        // Compute candle stats.
+        let candle_left = *detected_patterns.get(&PatternVariant::CandleLeft).unwrap_or(&0);
+        let candle_right = *detected_patterns.get(&PatternVariant::CandleRight).unwrap_or(&0);
+        let candle_total = candle_left + candle_right;
+        // Use (num_steps - 1) / 2 as maximum possible candles.
+        let max_candles = (stats.total_steps - 1) / 2;
+        let candle_percent = if max_candles > 0 {
+            (candle_total as f64 / max_candles as f64) * 100.0
+        } else {
+            0.0
+        };
+        (f_left, f_right, mono_total, mono_percent, candle_total, candle_percent)
+    } else {
+        (0, 0, 0, 0.0, 0, 0.0)
+    };
+
     let summary = SimfileSummary {
         title_str,
         subtitle_str,
@@ -202,6 +224,13 @@ fn main() -> io::Result<()> {
         anchor_down,
         anchor_up,
         anchor_right,
+        facing_left,
+        facing_right,
+        mono_total,
+        mono_percent,
+
+        candle_total,
+        candle_percent,
 
         short_hash,
 
