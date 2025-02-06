@@ -2,17 +2,25 @@ use png;
 use std::fs::File;
 use std::io;
 
+pub enum ColorScheme {
+    Default,
+    Alternative,
+}
+
 pub fn generate_density_graph_png(
     measure_nps_vec: &[f64],
     max_nps: f64,
     short_hash: &str,
+    color_scheme: ColorScheme,
 ) -> io::Result<()> {
     const IMAGE_WIDTH: u32 = 1000;
     const GRAPH_HEIGHT: u32 = 400;
 
     let bg_color = [30, 40, 47];
-    let bottom_color = [0, 184, 204];
-    let top_color = [130, 0, 161];
+    let (bottom_color, top_color) = match color_scheme {
+        ColorScheme::Default => ([0, 184, 204], [130, 0, 161]),
+        ColorScheme::Alternative => ([247, 243, 51], [236, 122, 25]),
+    };
 
     let mut img_buffer = vec![0u8; (IMAGE_WIDTH * GRAPH_HEIGHT * 3) as usize];
 
@@ -67,7 +75,10 @@ pub fn generate_density_graph_png(
         }
     }
 
-    let filename = format!("{}.png", short_hash);
+    let filename = match color_scheme {
+        ColorScheme::Default => format!("{}.png", short_hash),
+        ColorScheme::Alternative => format!("{}-alt.png", short_hash),
+    };
     let file = File::create(filename)?;
 
     let mut encoder = png::Encoder::new(file, IMAGE_WIDTH, GRAPH_HEIGHT);

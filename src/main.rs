@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::time::{Duration, Instant};
 
+use rssp::graph::*;
 use rssp::parse::*;
 use rssp::stats::*;
 use rssp::patterns::*;
@@ -21,6 +22,7 @@ fn main() -> io::Result<()> {
 
     let simfile_path  = &args[1];
     let generate_png  = args.iter().any(|a| a == "--png");
+    let generate_png_alt = args.iter().any(|a| a == "--png-alt");
     let generate_json = args.iter().any(|a| a == "--json");
     let generate_csv  = args.iter().any(|a| a == "--csv");
     let strip_tags    = args.iter().any(|a| a == "--strip-tags");
@@ -252,15 +254,26 @@ fn main() -> io::Result<()> {
 
     print_report(&summary, mode);
 
-    if generate_png {
+    if generate_png || generate_png_alt {
         let bpm_map = parse_bpm_map(&summary.normalized_bpms);
         let measure_nps_vec = compute_measure_nps_vec(&summary.measure_densities, &bpm_map);
         if !measure_nps_vec.is_empty() && summary.max_nps > 0.0 {
-            rssp::graph::generate_density_graph_png(
-                &measure_nps_vec,
-                summary.max_nps,
-                &summary.short_hash
-            )?;
+            if generate_png {
+                generate_density_graph_png(
+                    &measure_nps_vec,
+                    summary.max_nps,
+                    &summary.short_hash,
+                    rssp::graph::ColorScheme::Default,
+                )?;
+            }
+            if generate_png_alt {
+                generate_density_graph_png(
+                    &measure_nps_vec,
+                    summary.max_nps,
+                    &summary.short_hash,
+                    rssp::graph::ColorScheme::Alternative,
+                )?;
+            }
         }
     }
 
