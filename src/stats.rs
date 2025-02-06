@@ -321,6 +321,14 @@ pub fn categorize_measure_density(d: usize) -> RunDensity {
     }
 }
 
+pub fn compute_overall_density(total_length: i32, total_steps: u32) -> f64 {
+    if total_length > 0 {
+        total_steps as f64 / total_length as f64
+    } else {
+        0.0
+    }
+}
+
 pub fn compute_stream_counts(measure_densities: &[usize]) -> StreamCounts {
     let mut sc = StreamCounts::default();
 

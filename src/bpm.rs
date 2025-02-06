@@ -130,3 +130,19 @@ pub fn get_nps_stats(measure_nps_vec: &[f64]) -> (f64, f64) {
     let median_nps = median(measure_nps_vec);
     (max_nps, median_nps)
 }
+
+pub fn compute_bpm_stats(bpm_values: &[f64]) -> (f64, f64) {
+    if bpm_values.is_empty() {
+        return (0.0, 0.0);
+    }
+    let mut sorted = bpm_values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mid = sorted.len() / 2;
+    let median = if sorted.len() % 2 == 0 {
+        (sorted[mid - 1] + sorted[mid]) / 2.0
+    } else {
+        sorted[mid]
+    };
+    let average = sorted.iter().sum::<f64>() / sorted.len() as f64;
+    (median, average)
+}

@@ -33,6 +33,10 @@ pub struct SimfileSummary {
     pub total_length:          i32,
     pub max_nps:               f64,
     pub median_nps:            f64,
+    pub median_bpm:            f64,
+    pub average_bpm:           f64,
+    pub overall_density:       f64,
+    pub effective_density:     f64,
 
     pub detected_patterns:  HashMap<PatternVariant, u32>,
 
@@ -56,17 +60,25 @@ pub struct SimfileSummary {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputMode {
-    Text,
+    Full,
+    Pretty,
     JSON,
     CSV,
 }
 
 pub fn print_report(data: &SimfileSummary, mode: OutputMode) {
     match mode {
-        OutputMode::Text => print_text(data),
+        OutputMode::Full => print_full(data),
+        OutputMode::Pretty => print_pretty(data),
         OutputMode::JSON => print_json(data),
         OutputMode::CSV  => print_csv(data),
     }
+}
+
+fn format_duration(seconds: i32) -> String {
+    let minutes = seconds / 60;
+    let seconds = seconds % 60;
+    format!("{}m {:02}s", minutes, seconds)
 }
 
 static ALL_PATTERNS: &[PatternVariant] = &[
@@ -213,7 +225,74 @@ fn count(map: &HashMap<PatternVariant, u32>, v: PatternVariant) -> u32 {
     *map.get(&v).unwrap_or(&0)
 }
 
-fn print_text(data: &SimfileSummary) {
+fn print_pretty(data: &SimfileSummary) {
+    println!("Song Details");
+    println!("------------");
+    println!("Title: {}{} by {}", 
+        data.title_str, 
+        if data.subtitle_str.is_empty() { 
+            String::new() 
+        } else { 
+            format!(" {}", data.subtitle_str) 
+        }, 
+        data.artist_str
+    );
+    println!("Length: {}", format_duration(data.total_length));
+    println!("{} {} : {}", data.difficulty_str, data.rating_str, data.step_artist_str);
+
+    if (data.min_bpm - data.max_bpm).abs() < f64::EPSILON {
+        println!("\nBPM: {:.0}", data.min_bpm);
+    } else {
+        println!("BPM: {:.0}-{:.0}", data.min_bpm, data.max_bpm);
+        println!("Median BPM: {:.0}", data.median_bpm);
+        println!("Average BPM: {:.0}", data.average_bpm);
+    }
+
+    if (data.median_nps - data.max_nps).abs() < f64::EPSILON {
+        println!("NPS: {:.2} Median/Peak", data.median_nps);
+    } else {
+        println!("NPS: {:.2} Median, {:.2} Peak", data.median_nps, data.max_nps);
+    }
+
+    let total_stream = data.total_streams;
+    let total_break = data.stream_counts.total_breaks;
+    let stream_percent = if total_stream + total_break > 0 {
+        (total_stream as f64 / (total_stream + total_break) as f64) * 100.0
+    } else { 0.0 };
+
+    println!("Total Stream: {} ({:.2}%)", total_stream, stream_percent);
+    println!("Total Break: {} ({:.2}%)", total_break, 100.0 - stream_percent);
+    
+    println!("\nChart Info");
+    println!("----------");
+    println!("Steps: {} ({} arrows)", data.stats.total_steps, data.stats.total_arrows);
+    println!("Jumps: {}", data.stats.jumps);
+    println!("Holds: {}", data.stats.holds);
+    println!("Mines: {}", data.stats.mines);
+    println!("Hands: {}", data.stats.hands);
+    println!("Rolls: {}", data.stats.rolls);
+
+    println!("\nPattern Analysis");
+    println!("----------------");
+    println!("Candle total: {} ({} left, {} right)", data.candle_total, data.candle_total, data.candle_total);
+    println!("Candle%: {:.2}%", data.candle_percent);
+    println!("Mono: {} ({} left-facing, {} right-facing)", data.mono_total, data.facing_left, data.facing_right);
+    println!("Mono%: {:.2}%", data.mono_percent);
+    println!("Boxes: {} ({} LRLR, {} UDUD, {} corner)", data.stats.rolls, data.stats.rolls, data.stats.rolls, data.stats.rolls);
+    let anchor_total = data.anchor_left + data.anchor_down + data.anchor_up + data.anchor_right;
+    println!("Anchors: {} ({} left, {} down, {} up, {} right)", anchor_total, data.anchor_left, data.anchor_down, data.anchor_up, data.anchor_right);
+    
+    println!("\nDetailed Breakdown");
+    println!("{}", data.detailed);
+    println!("Partially Simplified");
+    println!("{}", data.partial);
+    println!("Simplified Breakdown");
+    println!("{}", data.simple);
+
+    println!("\nElapsed time: {:?}", data.elapsed);
+}
+
+fn print_full(data: &SimfileSummary) {
     println!("Title: {}", data.title_str);
     println!("Title translate: {}", data.titletranslit_str);
     println!("Subtitle: {}", data.subtitle_str);

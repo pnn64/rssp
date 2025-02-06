@@ -21,6 +21,7 @@ fn main() -> io::Result<()> {
     }
 
     let simfile_path  = &args[1];
+    let generate_full = args.iter().any(|a| a == "--full");
     let generate_png  = args.iter().any(|a| a == "--png");
     let generate_png_alt = args.iter().any(|a| a == "--png-alt");
     let generate_json = args.iter().any(|a| a == "--json");
@@ -135,9 +136,15 @@ fn main() -> io::Result<()> {
     let min_bpm = min_bpm_i32 as f64;
     let max_bpm = max_bpm_i32 as f64;
 
+    let bpm_values: Vec<f64> = bpm_map.iter().map(|&(_, bpm)| bpm).collect();
+    let (median_bpm, average_bpm) = compute_bpm_stats(&bpm_values);
+
+
     let measure_nps_vec = compute_measure_nps_vec(&measure_densities, &bpm_map);
     let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
+    let effective_density = median_nps; // Example placeholder
     let total_length = compute_total_chart_length(&measure_densities, &bpm_map);
+    let overall_density = compute_overall_density(total_length, stats.total_steps);
 
     let short_hash = compute_chart_hash(&minimized_chart, &normalized_bpms);
 
@@ -217,6 +224,8 @@ fn main() -> io::Result<()> {
 
         min_bpm,
         max_bpm,
+        average_bpm,
+        median_bpm,
         total_length,
         max_nps,
         median_nps,
@@ -230,6 +239,8 @@ fn main() -> io::Result<()> {
         facing_right,
         mono_total,
         mono_percent,
+        overall_density,
+        effective_density,
 
         candle_total,
         candle_percent,
@@ -244,8 +255,10 @@ fn main() -> io::Result<()> {
         OutputMode::CSV
     } else if generate_json {
         OutputMode::JSON
+    } else if generate_full {
+        OutputMode::Full
     } else {
-        OutputMode::Text
+        OutputMode::Pretty
     };
 
     let elapsed = start_time.elapsed();
