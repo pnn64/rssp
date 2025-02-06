@@ -35,9 +35,7 @@ pub struct SimfileSummary {
     pub median_nps:            f64,
     pub median_bpm:            f64,
     pub average_bpm:           f64,
-    pub overall_density:       f64,
-    pub effective_density:     f64,
-
+    
     pub detected_patterns:  HashMap<PatternVariant, u32>,
 
     pub anchor_left:           u32,

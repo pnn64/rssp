@@ -142,9 +142,7 @@ fn main() -> io::Result<()> {
 
     let measure_nps_vec = compute_measure_nps_vec(&measure_densities, &bpm_map);
     let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
-    let effective_density = median_nps; // Example placeholder
     let total_length = compute_total_chart_length(&measure_densities, &bpm_map);
-    let overall_density = compute_overall_density(total_length, stats.total_steps);
 
     let short_hash = compute_chart_hash(&minimized_chart, &normalized_bpms);
 
@@ -239,8 +237,6 @@ fn main() -> io::Result<()> {
         facing_right,
         mono_total,
         mono_percent,
-        overall_density,
-        effective_density,
 
         candle_total,
         candle_percent,
