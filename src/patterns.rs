@@ -37,8 +37,6 @@ pub enum PatternVariant {
     LuchiRightDU,
     SideswitchLeft,
     SideswitchRight,
-    SideswitchGallopLeft,
-    SideswitchGallopRight,
     SpiralLeft,
     SpiralRight,
     SpiralInvLeft,
@@ -71,19 +69,37 @@ pub enum PatternVariant {
     TurboCandleInvRight,
 }
 
-pub static ALL_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::new(|| {
+pub static DEFAULT_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::new(|| {
+    vec![
+    // Candles
+    (PatternVariant::CandleLeft,  string_to_pattern_bits("ULD")),
+    (PatternVariant::CandleLeft,  string_to_pattern_bits("DLU")),
+    (PatternVariant::CandleRight, string_to_pattern_bits("URD")),
+    (PatternVariant::CandleRight, string_to_pattern_bits("DRU")),
+
+    // Boxes
+    (PatternVariant::BoxLR,       string_to_pattern_bits("LRLR")),
+    (PatternVariant::BoxLR,       string_to_pattern_bits("RLRL")),
+    (PatternVariant::BoxUD,       string_to_pattern_bits("UDUD")),
+    (PatternVariant::BoxUD,       string_to_pattern_bits("DUDU")),
+    (PatternVariant::BoxCornerLD, string_to_pattern_bits("LDLD")),
+    (PatternVariant::BoxCornerLD, string_to_pattern_bits("DLDL")),
+    (PatternVariant::BoxCornerLU, string_to_pattern_bits("LULU")),
+    (PatternVariant::BoxCornerLU, string_to_pattern_bits("ULUL")),
+    (PatternVariant::BoxCornerRD, string_to_pattern_bits("RDRD")),
+    (PatternVariant::BoxCornerRD, string_to_pattern_bits("DRDR")),
+    (PatternVariant::BoxCornerRU, string_to_pattern_bits("RURU")),
+    (PatternVariant::BoxCornerRU, string_to_pattern_bits("URUR")),
+    ]
+});
+
+pub static EXTRA_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::new(|| {
     vec![
     //Staircases
     (PatternVariant::StaircaseLeft,     string_to_pattern_bits("RUDL")),
     (PatternVariant::StaircaseRight,    string_to_pattern_bits("LDUR")),
     (PatternVariant::StaircaseInvLeft,  string_to_pattern_bits("RDUL")),
     (PatternVariant::StaircaseInvRight, string_to_pattern_bits("LUDR")),
-
-    // Candles
-    (PatternVariant::CandleLeft,  string_to_pattern_bits("ULD")),
-    (PatternVariant::CandleLeft,  string_to_pattern_bits("DLU")),
-    (PatternVariant::CandleRight, string_to_pattern_bits("URD")),
-    (PatternVariant::CandleRight, string_to_pattern_bits("DRU")),
 
     // Triangles
     (PatternVariant::TriangleRUR, string_to_pattern_bits("RUR")),
@@ -102,20 +118,6 @@ pub static ALL_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::ne
     (PatternVariant::SweepRight,    string_to_pattern_bits("RUDLDUR")),
     (PatternVariant::SweepInvLeft,  string_to_pattern_bits("LUDRDUL")),
     (PatternVariant::SweepInvRight, string_to_pattern_bits("RDULUDR")),
-
-    // Boxes
-    (PatternVariant::BoxLR,       string_to_pattern_bits("LRLR")),
-    (PatternVariant::BoxLR,       string_to_pattern_bits("RLRL")),
-    (PatternVariant::BoxUD,       string_to_pattern_bits("UDUD")),
-    (PatternVariant::BoxUD,       string_to_pattern_bits("DUDU")),
-    (PatternVariant::BoxCornerLD, string_to_pattern_bits("LDLD")),
-    (PatternVariant::BoxCornerLD, string_to_pattern_bits("DLDL")),
-    (PatternVariant::BoxCornerLU, string_to_pattern_bits("LULU")),
-    (PatternVariant::BoxCornerLU, string_to_pattern_bits("ULUL")),
-    (PatternVariant::BoxCornerRD, string_to_pattern_bits("RDRD")),
-    (PatternVariant::BoxCornerRD, string_to_pattern_bits("DRDR")),
-    (PatternVariant::BoxCornerRU, string_to_pattern_bits("RURU")),
-    (PatternVariant::BoxCornerRU, string_to_pattern_bits("URUR")),
 
     // Towers
     (PatternVariant::TowerLR,       string_to_pattern_bits("LRLRL")),
@@ -182,10 +184,9 @@ pub static ALL_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::ne
     // Sideswitches (SS)
     (PatternVariant::SideswitchLeft,        string_to_pattern_bits("LURRD")),
     (PatternVariant::SideswitchRight,       string_to_pattern_bits("RDLLU")),
-    (PatternVariant::SideswitchGallopLeft,  string_to_pattern_bits("LURNRD")),
-    (PatternVariant::SideswitchGallopRight, string_to_pattern_bits("RDLNLU")),
     ]
 });
+
 
 fn string_to_pattern_bits(p: &str) -> Vec<u8> {
     let mut result = Vec::with_capacity(p.len());
@@ -203,21 +204,19 @@ fn string_to_pattern_bits(p: &str) -> Vec<u8> {
     result
 }
 
-pub fn detect_all_patterns(bitmasks: &[u8]) -> HashMap<PatternVariant, u32> {
-    let mut results: HashMap<PatternVariant, u32> = HashMap::new();
-    let defs: &[(PatternVariant, Vec<u8>)] = ALL_PATTERNS.as_ref();
-
+pub fn detect_patterns(
+    bitmasks: &[u8],
+    patterns: &[(PatternVariant, Vec<u8>)],
+) -> HashMap<PatternVariant, u32> {
+    let mut results = HashMap::new();
     for i in 0..bitmasks.len() {
-        for (variant, pat_bits) in defs {
+        for (variant, pat_bits) in patterns {
             let plen = pat_bits.len();
-            if i + plen <= bitmasks.len() {
-                if bitmasks[i..i + plen] == pat_bits[..] {
-                    *results.entry(*variant).or_insert(0) += 1;
-                }
+            if i + plen <= bitmasks.len() && bitmasks[i..i + plen] == pat_bits[..] {
+                *results.entry(*variant).or_insert(0) += 1;
             }
         }
     }
-
     results
 }
 

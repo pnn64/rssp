@@ -139,7 +139,6 @@ fn main() -> io::Result<()> {
     let bpm_values: Vec<f64> = bpm_map.iter().map(|&(_, bpm)| bpm).collect();
     let (median_bpm, average_bpm) = compute_bpm_stats(&bpm_values);
 
-
     let measure_nps_vec = compute_measure_nps_vec(&measure_densities, &bpm_map);
     let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
     let total_length = compute_total_chart_length(&measure_densities, &bpm_map);
@@ -171,7 +170,17 @@ fn main() -> io::Result<()> {
         res
     };
 
-    let detected_patterns = detect_all_patterns(&bitmasks);
+    let default_patterns: &Vec<(PatternVariant, Vec<u8>)> = &*DEFAULT_PATTERNS;
+    let extra_patterns: &Vec<(PatternVariant, Vec<u8>)> = &*EXTRA_PATTERNS;
+
+    let pattern_list: Vec<(PatternVariant, Vec<u8>)> = if generate_full {
+        default_patterns.iter().chain(extra_patterns.iter()).cloned().collect()
+    } else {
+        default_patterns.clone()
+    };
+
+    let detected_patterns = detect_patterns(&bitmasks, &pattern_list);
+    
     let (anchor_left, anchor_down, anchor_up, anchor_right) = count_anchors(&bitmasks);
 
     let (facing_left, facing_right, mono_total, mono_percent, candle_total, candle_percent) =

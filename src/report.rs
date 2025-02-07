@@ -114,8 +114,6 @@ static ALL_PATTERNS: &[PatternVariant] = &[
     PatternVariant::LuchiRightDU,
     PatternVariant::SideswitchLeft,
     PatternVariant::SideswitchRight,
-    PatternVariant::SideswitchGallopLeft,
-    PatternVariant::SideswitchGallopRight,
     PatternVariant::SpiralLeft,
     PatternVariant::SpiralRight,
     PatternVariant::SpiralInvLeft,
@@ -184,8 +182,6 @@ fn pattern_variant_name(pv: PatternVariant) -> &'static str {
         PatternVariant::LuchiRightDU => "luchi_right_du",
         PatternVariant::SideswitchLeft => "ss_left",
         PatternVariant::SideswitchRight => "ss_right",
-        PatternVariant::SideswitchGallopLeft => "ss_gallop_left",
-        PatternVariant::SideswitchGallopRight => "ss_gallop_right",
         PatternVariant::SpiralLeft => "spiral_left",
         PatternVariant::SpiralRight => "spiral_right",
         PatternVariant::SpiralInvLeft => "spiral_inv_left",
@@ -272,13 +268,37 @@ fn print_pretty(data: &SimfileSummary) {
 
     println!("\nPattern Analysis");
     println!("----------------");
-    println!("Candle total: {} ({} left, {} right)", data.candle_total, data.candle_total, data.candle_total);
+    let candle_left = data.detected_patterns.get(&PatternVariant::CandleLeft).unwrap_or(&0);
+    let candle_right = data.detected_patterns.get(&PatternVariant::CandleRight).unwrap_or(&0);
+    println!("Candles: {} ({} left, {} right)", 
+        candle_left + candle_right, 
+        candle_left, 
+        candle_right
+    );
     println!("Candle%: {:.2}%", data.candle_percent);
     println!("Mono: {} ({} left-facing, {} right-facing)", data.mono_total, data.facing_left, data.facing_right);
     println!("Mono%: {:.2}%", data.mono_percent);
-    println!("Boxes: {} ({} LRLR, {} UDUD, {} corner)", data.stats.rolls, data.stats.rolls, data.stats.rolls, data.stats.rolls);
+    let box_lr = data.detected_patterns.get(&PatternVariant::BoxLR).unwrap_or(&0);
+    let box_ud = data.detected_patterns.get(&PatternVariant::BoxUD).unwrap_or(&0);
+    let box_corners = 
+        data.detected_patterns.get(&PatternVariant::BoxCornerLD).unwrap_or(&0) +
+        data.detected_patterns.get(&PatternVariant::BoxCornerLU).unwrap_or(&0) +
+        data.detected_patterns.get(&PatternVariant::BoxCornerRD).unwrap_or(&0) +
+        data.detected_patterns.get(&PatternVariant::BoxCornerRU).unwrap_or(&0);
+    println!("Boxes: {} (LRLR {}, UDUD {}, Corners {})", 
+        box_lr + box_ud + box_corners, 
+        box_lr, 
+        box_ud, 
+        box_corners
+    );
     let anchor_total = data.anchor_left + data.anchor_down + data.anchor_up + data.anchor_right;
-    println!("Anchors: {} ({} left, {} down, {} up, {} right)", anchor_total, data.anchor_left, data.anchor_down, data.anchor_up, data.anchor_right);
+    println!("Anchors: {} (L {}, D {}, U {}, R {})", 
+        anchor_total, 
+        data.anchor_left, 
+        data.anchor_down, 
+        data.anchor_up, 
+        data.anchor_right
+    );
     
     println!("\nDetailed Breakdown");
     println!("{}", data.detailed);
