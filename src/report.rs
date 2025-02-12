@@ -285,14 +285,14 @@ fn print_pretty(data: &SimfileSummary) {
         data.detected_patterns.get(&PatternVariant::BoxCornerLU).unwrap_or(&0) +
         data.detected_patterns.get(&PatternVariant::BoxCornerRD).unwrap_or(&0) +
         data.detected_patterns.get(&PatternVariant::BoxCornerRU).unwrap_or(&0);
-    println!("Boxes: {} (LRLR {}, UDUD {}, Corners {})", 
+    println!("Boxes: {} ({} LRLR, {} UDUD, {} corner)", 
         box_lr + box_ud + box_corners, 
         box_lr, 
         box_ud, 
         box_corners
     );
     let anchor_total = data.anchor_left + data.anchor_down + data.anchor_up + data.anchor_right;
-    println!("Anchors: {} (L {}, D {}, U {}, R {})", 
+    println!("Anchors: {} ({} left, {} down, {} up, {} right)", 
         anchor_total, 
         data.anchor_left, 
         data.anchor_down, 
