@@ -89,10 +89,13 @@ fn parse_chunk_as_tech(chunk: &str) -> Option<Vec<String>> {
 pub fn parse_step_artist_and_tech(input: &str) -> (String, Vec<TechNotation>) {
     let mut step_artist = String::new();
     let mut tech_notations = Vec::new();
+    let mut chunks = input.split_whitespace().peekable();
 
-    // For each whitespace chunk
-    for chunk in input.split_whitespace() {
-        // Check measure data
+    while let Some(chunk) = chunks.next() {
+        // Check if the chunk is purely numeric
+        let is_numeric = chunk.chars().all(|c| c.is_ascii_digit());
+
+        // Check if the chunk is measure data
         if is_measure_data(chunk) {
             // It's purely measure info => skip
             continue;
@@ -108,11 +111,22 @@ pub fn parse_step_artist_and_tech(input: &str) -> (String, Vec<TechNotation>) {
             if step_artist.is_empty() {
                 step_artist.push_str(chunk);
             } else {
-                step_artist.push(' ');
-                step_artist.push_str(chunk);
+                // Check if the current chunk is numeric and follows a valid step artist name
+                if is_numeric && !step_artist.is_empty() {
+                    // Peek at the next chunk to decide if this numeric value is part of the step artist name
+                    if chunks.peek().map_or(false, |next| next.chars().all(|c| c.is_ascii_digit())) {
+                        // If the next chunk is also numeric, treat this as part of the step artist name
+                        step_artist.push(' ');
+                        step_artist.push_str(chunk);
+                    }
+                    // Otherwise, skip this numeric value as it's likely a measure number
+                } else {
+                    step_artist.push(' ');
+                    step_artist.push_str(chunk);
+                }
             }
         }
     }
 
-    (step_artist, tech_notations)
+    (step_artist.trim().to_string(), tech_notations)
 }
