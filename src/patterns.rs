@@ -96,10 +96,10 @@ pub static DEFAULT_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock
 pub static EXTRA_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::new(|| {
     vec![
     //Staircases
-    (PatternVariant::StaircaseLeft,     string_to_pattern_bits("RUDL")),
-    (PatternVariant::StaircaseRight,    string_to_pattern_bits("LDUR")),
-    (PatternVariant::StaircaseInvLeft,  string_to_pattern_bits("RDUL")),
-    (PatternVariant::StaircaseInvRight, string_to_pattern_bits("LUDR")),
+    (PatternVariant::StaircaseLeft,     string_to_pattern_bits("LDUR")),
+    (PatternVariant::StaircaseRight,    string_to_pattern_bits("RUDL")),
+    (PatternVariant::StaircaseInvLeft,  string_to_pattern_bits("LUDR")),
+    (PatternVariant::StaircaseInvRight, string_to_pattern_bits("RDUL")),
 
     // Triangles
     (PatternVariant::TriangleRUR, string_to_pattern_bits("RUR")),
