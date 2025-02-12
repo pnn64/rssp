@@ -458,7 +458,7 @@ fn print_json(data: &SimfileSummary) {
     println!("     \"left-facing\": {},", data.facing_left);
     println!("     \"right-facing\": {},", data.facing_right);
     println!("     \"mono_total\": {},", data.mono_total);
-    println!("     \"mono_percent\": {:.2},", data.mono_percent);
+    println!("     \"mono_percent\": {:.2}", data.mono_percent);
     println!("  }},");
 
     println!("  \"candle_counts\": {{");
