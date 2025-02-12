@@ -16,7 +16,7 @@ fn main() -> io::Result<()> {
     let start_time = Instant::now();
     let args: Vec<String> = args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: {} <simfile_path> [--png] [--json] [--csv] [--strip-tags]", args[0]);
+        eprintln!("Usage: {} <simfile_path> [--png] [--json] [--csv] [--strip-tags] [--mono-threshold <value>]", args[0]);
         std::process::exit(1);
     }
 
@@ -27,6 +27,22 @@ fn main() -> io::Result<()> {
     let generate_json = args.iter().any(|a| a == "--json");
     let generate_csv  = args.iter().any(|a| a == "--csv");
     let strip_tags    = args.iter().any(|a| a == "--strip-tags");
+
+    let mut mono_threshold = 6;
+
+    if let Some(pos) = args.iter().position(|arg| arg == "--mono-threshold") {
+        if pos + 1 < args.len() {
+            if let Ok(value) = args[pos + 1].parse::<usize>() {
+                mono_threshold = value;
+            } else {
+                eprintln!("Error: Invalid value for --mono-threshold. Must be a positive integer.");
+                std::process::exit(1);
+            }
+        } else {
+            eprintln!("Error: Missing value for --mono-threshold.");
+            std::process::exit(1);
+        }
+    }
 
     let extension = match simfile_path.rsplit_once('.') {
         Some((_, ext)) => ext, 
@@ -186,7 +202,7 @@ fn main() -> io::Result<()> {
     let (facing_left, facing_right, mono_total, mono_percent, candle_total, candle_percent) =
     if stats.total_steps > 1 {
         // Compute mono stats.
-        let (f_left, f_right) = count_facing_steps(&bitmasks);
+        let (f_left, f_right) = count_facing_steps(&bitmasks, mono_threshold);
         let mono_total = f_left + f_right;
         let mono_percent = (mono_total as f64 / stats.total_steps as f64) * 100.0;
         // Compute candle stats.

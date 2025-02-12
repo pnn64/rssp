@@ -260,8 +260,6 @@ pub fn count_anchors(bitmasks: &[u8]) -> (u32, u32, u32, u32) {
     (anchor_left, anchor_down, anchor_up, anchor_right)
 }
 
-const MONO_THRESHOLD: usize = 6;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Direction {
     Left,
@@ -303,10 +301,11 @@ fn finalize_segment(
     state: &mut FacingState,
     final_left: &mut u32,
     final_right: &mut u32,
+    mono_threshold: usize,
 ) {
     match *state {
-        FacingState::Left { count } if count >= MONO_THRESHOLD => *final_left += count as u32,
-        FacingState::Right { count } if count >= MONO_THRESHOLD => *final_right += count as u32,
+        FacingState::Left { count } if count >= mono_threshold => *final_left += count as u32,
+        FacingState::Right { count } if count >= mono_threshold => *final_right += count as u32,
         _ => {}
     }
     *state = FacingState::Waiting { count: 0 };
@@ -322,7 +321,7 @@ fn determine_direction(prev: Arrow, curr: Arrow) -> Option<Direction> {
     }
 }
 
-fn count_facing_steps_in_arrows(arrows: &[Arrow]) -> (u32, u32) {
+fn count_facing_steps_in_arrows(arrows: &[Arrow], mono_threshold: usize) -> (u32, u32) {
     if arrows.is_empty() {
         return (0, 0);
     }
@@ -380,7 +379,7 @@ fn count_facing_steps_in_arrows(arrows: &[Arrow]) -> (u32, u32) {
                     };
                     let alt_foot = opposite_foot(previous_foot);
                     if forced_foot != alt_foot {
-                        finalize_segment(&mut state, &mut final_left, &mut final_right);
+                        finalize_segment(&mut state, &mut final_left, &mut final_right, mono_threshold);
                         foot_usage[i] = Some(forced_foot);
                     } else {
                         foot_usage[i] = Some(alt_foot);
@@ -392,7 +391,7 @@ fn count_facing_steps_in_arrows(arrows: &[Arrow]) -> (u32, u32) {
                         (Arrow::L, Foot::RightFoot) | (Arrow::R, Foot::LeftFoot)
                     );
                     if conflict {
-                        finalize_segment(&mut state, &mut final_left, &mut final_right);
+                        finalize_segment(&mut state, &mut final_left, &mut final_right, mono_threshold);
                         foot_usage[i] = None;
                         pending_count = 1;
                     } else {
@@ -411,7 +410,7 @@ fn count_facing_steps_in_arrows(arrows: &[Arrow]) -> (u32, u32) {
             FacingState::Left { count } => match direction {
                 Some(Direction::Left) | None => FacingState::Left { count: count + 1 },
                 Some(Direction::Right) => {
-                    if count >= MONO_THRESHOLD {
+                    if count >= mono_threshold {
                         final_left += count as u32;
                     }
                     FacingState::Right { count: 1 }
@@ -420,7 +419,7 @@ fn count_facing_steps_in_arrows(arrows: &[Arrow]) -> (u32, u32) {
             FacingState::Right { count } => match direction {
                 Some(Direction::Right) | None => FacingState::Right { count: count + 1 },
                 Some(Direction::Left) => {
-                    if count >= MONO_THRESHOLD {
+                    if count >= mono_threshold {
                         final_right += count as u32;
                     }
                     FacingState::Left { count: 1 }
@@ -429,11 +428,11 @@ fn count_facing_steps_in_arrows(arrows: &[Arrow]) -> (u32, u32) {
         };
     }
 
-    finalize_segment(&mut state, &mut final_left, &mut final_right);
+    finalize_segment(&mut state, &mut final_left, &mut final_right, mono_threshold);
     (final_left, final_right)
 }
 
-pub fn count_facing_steps(bitmasks: &[u8]) -> (u32, u32) {
+pub fn count_facing_steps(bitmasks: &[u8], mono_threshold: usize) -> (u32, u32) {
     let mut final_left = 0_u32;
     let mut final_right = 0_u32;
     let mut current_arrows = Vec::new();
@@ -442,7 +441,7 @@ pub fn count_facing_steps(bitmasks: &[u8]) -> (u32, u32) {
         if let Some(arrow) = map_bitmask_to_arrow(mask) {
             current_arrows.push(arrow);
         } else {
-            let (l, r) = count_facing_steps_in_arrows(&current_arrows);
+            let (l, r) = count_facing_steps_in_arrows(&current_arrows, mono_threshold);
             final_left += l;
             final_right += r;
             current_arrows.clear();
@@ -450,7 +449,7 @@ pub fn count_facing_steps(bitmasks: &[u8]) -> (u32, u32) {
     }
 
     // Process any remaining arrows.
-    let (l, r) = count_facing_steps_in_arrows(&current_arrows);
+    let (l, r) = count_facing_steps_in_arrows(&current_arrows, mono_threshold);
     final_left += l;
     final_right += r;
     (final_left, final_right)
