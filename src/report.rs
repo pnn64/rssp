@@ -300,12 +300,14 @@ fn print_pretty(data: &SimfileSummary) {
         data.anchor_right
     );
     
-    println!("\nDetailed Breakdown");
-    println!("{}", data.detailed);
-    println!("Partially Simplified");
-    println!("{}", data.partial);
-    println!("Simplified Breakdown");
-    println!("{}", data.simple);
+    if !data.detailed.is_empty() {
+        println!("\nDetailed Breakdown");
+        println!("{}", data.detailed);
+        println!("Partially Simplified");
+        println!("{}", data.partial);
+        println!("Simplified Breakdown");
+        println!("{}", data.simple);
+    }
 
     println!("\nElapsed time: {:?}", data.elapsed);
 }
