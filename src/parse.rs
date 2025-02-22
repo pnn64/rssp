@@ -36,7 +36,7 @@ pub fn extract_sections<'a>(
     Option<&'a [u8]>,
     Option<&'a [u8]>,
     Option<&'a [u8]>,
-    Option<Vec<u8>>,
+    Vec<Vec<u8>>,
 )> {
     if !matches!(file_extension.to_lowercase().as_str(), "sm" | "ssc") {
         return Err(io::Error::new(
@@ -57,7 +57,7 @@ pub fn extract_sections<'a>(
     ];
 
     let mut sections = [None; 8];
-    let mut notes_data = None;
+    let mut notes_list = Vec::new();
     let mut i = 0;
 
     while i < data.len() {
@@ -65,21 +65,32 @@ pub fn extract_sections<'a>(
             i += pos;
             if let Some((idx, tag)) = tags.iter().enumerate().find(|(_, &tag)| data[i..].starts_with(tag)) {
                 sections[idx] = parse_tag(&data[i..], tag.len());
+                i += 1; // Move past this tag
             } else if data[i..].starts_with(b"#NOTES:") {
-                notes_data = Some(data[i + b"#NOTES:".len()..].to_vec());
-                break;
+                let notes_start = i + b"#NOTES:".len();
+                let notes_end = data[notes_start..].iter().position(|&b| b == b';').map(|e| notes_start + e).unwrap_or(data.len());
+                let notes_data = data[notes_start..notes_end].to_vec();
+                notes_list.push(notes_data);
+                i = notes_end + 1; // Skip past the semicolon
             } else if data[i..].starts_with(b"#NOTEDATA:") {
-                notes_data = Some(process_ssc_notedata(&data[i..]));
-                break;
+                let notedata_start = i + b"#NOTEDATA:".len();
+                let notedata_end = data[notedata_start..].iter().position(|&b| b == b';').map(|e| notedata_start + e).unwrap_or(data.len());
+                let notedata_slice = &data[i..notedata_end];
+                let notes_data = process_ssc_notedata(notedata_slice);
+                notes_list.push(notes_data);
+                i = notedata_end + 1; // Skip past the semicolon
+            } else {
+                i += 1;
             }
+        } else {
+            break;
         }
-        i += 1;
     }
 
     Ok((
         sections[0], sections[1], sections[2], sections[3],
         sections[4], sections[5], sections[6], sections[7],
-        notes_data,
+        notes_list,
     ))
 }
 

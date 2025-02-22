@@ -52,6 +52,7 @@ pub struct SimfileSummary {
     pub short_hash:            String,
 
     pub elapsed:               Duration,
+    pub total_elapsed:         Duration,
 
     pub measure_densities:     Vec<usize>,
 }
@@ -300,14 +301,14 @@ fn print_pretty(data: &SimfileSummary) {
         data.anchor_right
     );
     
-    println!("\nDetailed Breakdown");
-    println!("{}", data.detailed);
-    println!("Partially Simplified");
-    println!("{}", data.partial);
-    println!("Simplified Breakdown");
-    println!("{}", data.simple);
-
-    println!("\nElapsed time: {:?}", data.elapsed);
+    if !data.detailed.is_empty() {
+        println!("\nDetailed Breakdown");
+        println!("{}", data.detailed);
+        println!("Partially Simplified");
+        println!("{}", data.partial);
+        println!("Simplified Breakdown");
+        println!("{}", data.simple);
+    }
 }
 
 fn print_full(data: &SimfileSummary) {
