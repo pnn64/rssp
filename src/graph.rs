@@ -19,8 +19,8 @@ pub fn generate_density_graph_png(
 
     let bg_color = [30, 40, 47];
     let (bottom_color, top_color) = match color_scheme {
-        ColorScheme::Default => ([0, 184, 204], [130, 0, 161]),
-        ColorScheme::Alternative => ([247, 243, 51], [236, 122, 25]),
+        ColorScheme::Default => ([0, 184, 204], [130, 0, 161]),       // Cyan to Purple
+        ColorScheme::Alternative => ([247, 243, 51], [236, 122, 25]), // Yellow to Orange
     };
 
     let color_gradient: Vec<[u8; 3]> = (0..GRAPH_HEIGHT)
@@ -37,26 +37,41 @@ pub fn generate_density_graph_png(
     img_buffer.chunks_exact_mut(3).for_each(|pixel| pixel.copy_from_slice(&bg_color));
 
     if !measure_nps_vec.is_empty() && max_nps > 0.0 {
-        let measure_width = IMAGE_WIDTH as f64 / measure_nps_vec.len() as f64;
-        for (i, &nps) in measure_nps_vec.iter().enumerate() {
-            let x_start = (i as f64 * measure_width).round() as u32;
-            let x_end = (((i + 1) as f64 * measure_width).round() as u32).min(IMAGE_WIDTH);
-            if x_start >= x_end {
+        let num_measures = measure_nps_vec.len();
+        let measure_width = IMAGE_WIDTH as f64 / num_measures as f64;
+
+        let h_vec: Vec<f64> = measure_nps_vec
+            .iter()
+            .map(|&nps| (nps / max_nps).min(1.0) * GRAPH_HEIGHT as f64)
+            .collect();
+
+        for x in 0..IMAGE_WIDTH {
+            let x_f = x as f64;
+            let i = (x_f / measure_width).floor() as usize;
+            if i >= num_measures {
                 continue;
             }
 
-            let height_fraction = (nps / max_nps).min(1.0);
-            let bar_height = (height_fraction * GRAPH_HEIGHT as f64).round() as u32;
+            let frac = (x_f - (i as f64 * measure_width)) / measure_width;
+
+            let h_start = h_vec[i];
+            let h_end = if i < num_measures - 1 {
+                h_vec[i + 1]
+            } else {
+                h_start
+            };
+            let h_x = h_start + frac * (h_end - h_start);
+            let bar_height = h_x.round() as u32;
+
             if bar_height == 0 {
                 continue;
             }
 
-            let y_top = GRAPH_HEIGHT - bar_height;
+            let y_top = GRAPH_HEIGHT.saturating_sub(bar_height);
             for y in y_top..GRAPH_HEIGHT {
                 let color = color_gradient[y as usize];
-                let row_start = (y * IMAGE_WIDTH + x_start) as usize * 3;
-                let row_end = (y * IMAGE_WIDTH + x_end) as usize * 3;
-                img_buffer[row_start..row_end].chunks_exact_mut(3).for_each(|pixel| pixel.copy_from_slice(&color));
+                let idx = (y * IMAGE_WIDTH + x) as usize * 3;
+                img_buffer[idx..idx + 3].copy_from_slice(&color);
             }
         }
     }
