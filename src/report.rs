@@ -59,7 +59,8 @@ pub struct SimfileSummary {
     pub average_bpm:          f64,
     pub total_length:         i32,
 
-    pub charts: Vec<ChartSummary>,
+    pub charts:               Vec<ChartSummary>,
+    pub total_elapsed:        Duration,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -338,6 +339,7 @@ fn print_full_all(simfile: &SimfileSummary) {
         print_full_chart(chart);
         println!();
     }
+    println!("Total Elapsed Time: {:?}", simfile.total_elapsed);
 }
 
 fn print_full_chart(chart: &ChartSummary) {
@@ -393,7 +395,7 @@ fn print_full_chart(chart: &ChartSummary) {
     println!("Partial: {}", chart.partial);
     println!("Simple: {}", chart.simple);
 
-    println!("--- Per-chart elapsed time: {:?}", chart.elapsed);
+    println!("--- Chart elapsed time: {:?}", chart.elapsed);
 }
 
 fn print_json_all(simfile: &SimfileSummary) {

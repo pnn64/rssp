@@ -269,6 +269,18 @@ fn main() -> io::Result<()> {
         0
     };
 
+    let mode = if generate_csv {
+        OutputMode::CSV
+    } else if generate_json {
+        OutputMode::JSON
+    } else if generate_full {
+        OutputMode::Full
+    } else {
+        OutputMode::Pretty
+    };
+
+    let total_elapsed = total_start_time.elapsed();
+
     let simfile = SimfileSummary {
         title_str,
         subtitle_str,
@@ -285,19 +297,8 @@ fn main() -> io::Result<()> {
         total_length,
 
         charts: chart_summaries,
+        total_elapsed,
     };
-
-    let mode = if generate_csv {
-        OutputMode::CSV
-    } else if generate_json {
-        OutputMode::JSON
-    } else if generate_full {
-        OutputMode::Full
-    } else {
-        OutputMode::Pretty
-    };
-
-    let total_elapsed = total_start_time.elapsed();
 
     print_reports(&simfile, mode);
 
@@ -318,8 +319,6 @@ fn main() -> io::Result<()> {
             )?;
         }
     }
-
-    eprintln!("Done in {:?}.", total_elapsed);
 
     Ok(())
 }
