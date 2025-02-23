@@ -21,6 +21,8 @@ fn main() -> io::Result<()> {
     }
 
     let simfile_path  = &args[1];
+
+
     let generate_full = args.iter().any(|a| a == "--full");
     let generate_png  = args.iter().any(|a| a == "--png");
     let generate_png_alt = args.iter().any(|a| a == "--png-alt");
@@ -29,7 +31,6 @@ fn main() -> io::Result<()> {
     let strip_tags    = args.iter().any(|a| a == "--strip-tags");
 
     let mut mono_threshold = 6;
-
     if let Some(pos) = args.iter().position(|arg| arg == "--mono-threshold") {
         if pos + 1 < args.len() {
             if let Ok(value) = args[pos + 1].parse::<usize>() {
@@ -54,15 +55,15 @@ fn main() -> io::Result<()> {
     file.read_to_end(&mut simfile_data)?;
 
     let (
-        title_opt, 
-        subtitle_opt, 
+        title_opt,
+        subtitle_opt,
         artist_opt,
-        titletranslit_opt, 
-        subtitletranslit_opt, 
+        titletranslit_opt,
+        subtitletranslit_opt,
         artisttranslit_opt,
-        offset_opt, 
-        bpms_opt, 
-        notes_list
+        offset_opt,
+        bpms_opt,
+        notes_list,
     ) = match extract_sections(&simfile_data, extension) {
         Ok(tup) => tup,
         Err(e) => {
@@ -114,11 +115,13 @@ fn main() -> io::Result<()> {
     let bpm_values: Vec<f64> = bpm_map.iter().map(|&(_, bpm)| bpm).collect();
     let (median_bpm, average_bpm) = compute_bpm_stats(&bpm_values);
 
+    let mut chart_summaries = Vec::new();
+
     // Process each chart
     for (chart_num, notes_data) in notes_list.into_iter().enumerate() {
         let chart_start_time = Instant::now();
-        let (fields, chart_data) = split_notes_fields(&notes_data);
 
+        let (fields, chart_data) = split_notes_fields(&notes_data);
         if fields.len() < 5 {
             eprintln!("Chart {}: #NOTES section incomplete", chart_num + 1);
             continue;
@@ -154,7 +157,6 @@ fn main() -> io::Result<()> {
 
         let measure_nps_vec = compute_measure_nps_vec(&measure_densities, &bpm_map);
         let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
-        let total_length = compute_total_chart_length(&measure_densities, &bpm_map);
 
         let short_hash = compute_chart_hash(&minimized_chart, &normalized_bpms);
 
@@ -193,30 +195,29 @@ fn main() -> io::Result<()> {
         };
 
         let detected_patterns = detect_patterns(&bitmasks, &pattern_list);
-    
         let (anchor_left, anchor_down, anchor_up, anchor_right) = count_anchors(&bitmasks);
 
+        // Mono/candle
         let (facing_left, facing_right, mono_total, mono_percent, candle_total, candle_percent) =
-        if stats.total_steps > 1 {
-            // Compute mono stats.
-            let (f_left, f_right) = count_facing_steps(&bitmasks, mono_threshold);
-            let mono_total = f_left + f_right;
-            let mono_percent = (mono_total as f64 / stats.total_steps as f64) * 100.0;
-            // Compute candle stats.
-            let candle_left = *detected_patterns.get(&PatternVariant::CandleLeft).unwrap_or(&0);
-            let candle_right = *detected_patterns.get(&PatternVariant::CandleRight).unwrap_or(&0);
-            let candle_total = candle_left + candle_right;
-            // Use (num_steps - 1) / 2 as maximum possible candles.
-            let max_candles = (stats.total_steps - 1) / 2;
-            let candle_percent = if max_candles > 0 {
-                (candle_total as f64 / max_candles as f64) * 100.0
+            if stats.total_steps > 1 {
+                let (f_left, f_right) = count_facing_steps(&bitmasks, mono_threshold);
+                let mono_total = f_left + f_right;
+                let mono_percent = (mono_total as f64 / stats.total_steps as f64) * 100.0;
+
+                let candle_left = *detected_patterns.get(&rssp::patterns::PatternVariant::CandleLeft).unwrap_or(&0);
+                let candle_right = *detected_patterns.get(&rssp::patterns::PatternVariant::CandleRight).unwrap_or(&0);
+                let candle_total = candle_left + candle_right;
+                let max_candles = (stats.total_steps - 1) / 2;
+                let candle_percent = if max_candles > 0 {
+                    (candle_total as f64 / max_candles as f64) * 100.0
+                } else {
+                    0.0
+                };
+
+                (f_left, f_right, mono_total, mono_percent, candle_total, candle_percent)
             } else {
-                0.0
+                (0, 0, 0, 0.0, 0, 0.0)
             };
-            (f_left, f_right, mono_total, mono_percent, candle_total, candle_percent)
-        } else {
-            (0, 0, 0, 0.0, 0, 0.0)
-        };
 
         let elapsed_chart = chart_start_time.elapsed();
 
@@ -248,7 +249,6 @@ fn main() -> io::Result<()> {
             max_bpm,
             median_bpm,
             average_bpm,
-            total_length,
             max_nps,
             median_nps,
 
@@ -261,7 +261,7 @@ fn main() -> io::Result<()> {
             facing_right,
             mono_total,
             mono_percent,
-    
+
             candle_total,
             candle_percent,
 
@@ -272,32 +272,68 @@ fn main() -> io::Result<()> {
             measure_densities,
         };
 
-        let mode = if generate_csv {
-            OutputMode::CSV
-        } else if generate_json {
-            OutputMode::JSON
-        } else if generate_full {
-            OutputMode::Full
-        } else {
-            OutputMode::Pretty
-        };
+        // Store it
+        chart_summaries.push(summary);
+    }
 
-        let total_elapsed = total_start_time.elapsed();
+    let total_length = if !chart_summaries.is_empty() {
+        let first_measures = &chart_summaries[0].measure_densities;
+        compute_total_chart_length(first_measures, &bpm_map)
+    } else {
+        0
+    };
 
-        let mut summary = summary;
-        summary.total_elapsed = total_elapsed;
+    let report = SimfileReport {
+        title_str,
+        subtitle_str,
+        artist_str,
+        titletranslit_str,
+        subtitletranslit_str,
+        artisttranslit_str,
+        offset,
+        normalized_bpms,
+        min_bpm,
+        max_bpm,
+        median_bpm,
+        average_bpm,
+        total_length,
 
-        print_report(&summary, mode);
+        charts: chart_summaries,
+    };
 
-        if generate_png || generate_png_alt {
+    let mode = if generate_csv {
+        OutputMode::CSV
+    } else if generate_json {
+        OutputMode::JSON
+    } else if generate_full {
+        OutputMode::Full
+    } else {
+        OutputMode::Pretty
+    };
+
+    let total_elapsed = total_start_time.elapsed();
+
+    print_reports(&report, mode);
+
+    if generate_png || generate_png_alt {
+        let color_scheme = if generate_png_alt { ColorScheme::Alternative } else { ColorScheme::Default };
+
+        for chart_summary in &report.charts {
+            // measure_nps_vec can be derived from chart_summary.measure_densities + the same BPM map
+            // but we already have it in the chart’s code. If we want to store it in SimfileSummary,
+            // we can do that. For demonstration, we’ll recompute:
+            let measure_nps_vec = compute_measure_nps_vec(&chart_summary.measure_densities, &bpm_map);
+
             generate_density_graph_png(
                 &measure_nps_vec,
-                summary.max_nps,
-                &summary.short_hash,
-                if generate_png_alt { ColorScheme::Alternative } else { ColorScheme::Default },
+                chart_summary.max_nps,
+                &chart_summary.short_hash,
+                &color_scheme,
             )?;
         }
     }
+
+    eprintln!("Done in {:?}.", total_elapsed);
 
     Ok(())
 }

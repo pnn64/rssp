@@ -2,6 +2,7 @@ use png;
 use std::fs::File;
 use std::io;
 
+#[derive(Debug, Clone, Copy)]
 pub enum ColorScheme {
     Default,
     Alternative,
@@ -11,7 +12,7 @@ pub fn generate_density_graph_png(
     measure_nps_vec: &[f64],
     max_nps: f64,
     short_hash: &str,
-    color_scheme: ColorScheme,
+    color_scheme: &ColorScheme,
 ) -> io::Result<()> {
     const IMAGE_WIDTH: u32 = 1000;
     const GRAPH_HEIGHT: u32 = 400;
