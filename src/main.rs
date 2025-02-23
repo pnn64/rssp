@@ -53,6 +53,16 @@ fn main() -> io::Result<()> {
     let mut simfile_data = Vec::new();
     file.read_to_end(&mut simfile_data)?;
 
+    let mode = if generate_csv {
+        OutputMode::CSV
+    } else if generate_json {
+        OutputMode::JSON
+    } else if generate_full {
+        OutputMode::Full
+    } else {
+        OutputMode::Pretty
+    };
+
     let (
         title_opt,
         subtitle_opt,
@@ -187,10 +197,11 @@ fn main() -> io::Result<()> {
         let default_patterns: &Vec<(PatternVariant, Vec<u8>)> = &*DEFAULT_PATTERNS;
         let extra_patterns: &Vec<(PatternVariant, Vec<u8>)> = &*EXTRA_PATTERNS;
 
-        let pattern_list: Vec<(PatternVariant, Vec<u8>)> = if generate_full {
-            default_patterns.iter().chain(extra_patterns.iter()).cloned().collect()
+        let pattern_list: Vec<(PatternVariant, Vec<u8>)> = 
+        if mode == OutputMode::Pretty {
+             default_patterns.clone()
         } else {
-            default_patterns.clone()
+             default_patterns.iter().chain(extra_patterns.iter()).cloned().collect()
         };
 
         let detected_patterns = detect_patterns(&bitmasks, &pattern_list);
@@ -267,16 +278,6 @@ fn main() -> io::Result<()> {
         compute_total_chart_length(first_measures, &bpm_map)
     } else {
         0
-    };
-
-    let mode = if generate_csv {
-        OutputMode::CSV
-    } else if generate_json {
-        OutputMode::JSON
-    } else if generate_full {
-        OutputMode::Full
-    } else {
-        OutputMode::Pretty
     };
 
     let total_elapsed = total_start_time.elapsed();

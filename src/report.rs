@@ -390,7 +390,13 @@ fn print_full_chart(chart: &ChartSummary) {
     println!("AnchorUp: {}", chart.anchor_up);
     println!("AnchorRight: {}", chart.anchor_right);
 
-    println!("--- Pattern breakdowns ---");
+    println!("--- Detected Patterns ---");
+    for &pv in ALL_PATTERNS.iter() {
+        let count = chart.detected_patterns.get(&pv).unwrap_or(&0);
+        println!("{}: {}", pattern_variant_name(pv), count);
+    }
+
+    println!("--- Breakdowns ---");
     println!("Detailed: {}", chart.detailed);
     println!("Partial: {}", chart.partial);
     println!("Simple: {}", chart.simple);
