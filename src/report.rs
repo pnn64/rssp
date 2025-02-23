@@ -227,8 +227,7 @@ fn count(map: &HashMap<PatternVariant, u32>, v: PatternVariant) -> u32 {
 }
 
 fn print_pretty_all(simfile: &SimfileSummary) {
-    println!("Song Details");
-    println!("------------");
+    println!("--- Song Details ---");
     println!("Title: {}{} by {}",
         simfile.title_str,
         if simfile.subtitle_str.is_empty() {
@@ -255,7 +254,7 @@ fn print_pretty_all(simfile: &SimfileSummary) {
 
 fn print_pretty_chart(chart: &ChartSummary) {
     let header = format!("{} {} : {}", chart.difficulty_str, chart.rating_str, chart.step_artist_str);
-    println!("{}", header);
+    println!("\n{}", header);
     println!("{}", "-".repeat(header.len()));
 
     if (chart.median_nps - chart.max_nps).abs() < f64::EPSILON {
@@ -272,8 +271,7 @@ fn print_pretty_chart(chart: &ChartSummary) {
     println!("Total Stream: {} ({:.2}%)", total_stream, stream_percent);
     println!("Total Break: {} ({:.2}%)", total_break, 100.0 - stream_percent);
 
-    println!("\nChart Info");
-    println!("----------");
+    println!("\n--- Chart Info ---");
     println!("Steps: {} ({} arrows)", chart.stats.total_steps, chart.stats.total_arrows);
     println!("Jumps: {}", chart.stats.jumps);
     println!("Holds: {}", chart.stats.holds);
@@ -281,8 +279,7 @@ fn print_pretty_chart(chart: &ChartSummary) {
     println!("Hands: {}", chart.stats.hands);
     println!("Rolls: {}", chart.stats.rolls);
 
-    println!("\nPattern Analysis");
-    println!("----------------");
+    println!("\n--- Pattern Analysis ---");
     let candle_left = chart.detected_patterns.get(&PatternVariant::CandleLeft).unwrap_or(&0);
     let candle_right = chart.detected_patterns.get(&PatternVariant::CandleRight).unwrap_or(&0);
     println!("Candles: {} ({} left, {} right)",
@@ -306,15 +303,13 @@ fn print_pretty_chart(chart: &ChartSummary) {
         anchor_total, chart.anchor_left, chart.anchor_down, chart.anchor_up, chart.anchor_right);
 
     if !chart.detailed.is_empty() {
-        println!("\nDetailed Breakdown");
+        println!("\n--- Detailed Breakdown ---");
         println!("{}", chart.detailed);
-        println!("Partially Simplified");
+        println!("--- Partially Simplified ---");
         println!("{}", chart.partial);
-        println!("Simplified Breakdown");
+        println!("--- Simplified Breakdown ---");
         println!("{}", chart.simple);
     }
-
-    println!(); // extra line
 }
 
 fn print_full_all(simfile: &SimfileSummary) {
