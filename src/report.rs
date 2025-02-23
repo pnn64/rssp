@@ -4,59 +4,45 @@ use std::time::Duration;
 use crate::patterns::PatternVariant;
 use crate::stats::{ArrowStats, StreamCounts};
 
-pub struct SimfileSummary {
-    pub title_str:             String,
-    pub subtitle_str:          String,
-    pub artist_str:            String,
-    pub titletranslit_str:     String,
-    pub subtitletranslit_str:  String,
-    pub artisttranslit_str:    String,
+pub struct ChartSummary {
+    pub step_type_str:     String,
+    pub step_artist_str:   String,
+    pub difficulty_str:    String,
+    pub rating_str:        String,
+    pub tech_notation_str: String,
 
-    pub offset:                f64,
-    pub normalized_bpms:       String,
-    pub step_type_str:         String,
-    pub step_artist_str:       String,
-    pub difficulty_str:        String,
-    pub rating_str:            String,
+    pub stats:             ArrowStats,
+    pub stream_counts:     StreamCounts,
+    pub total_streams:     u32,
 
-    pub tech_notation_str:     String,
+    pub detailed:          String,
+    pub partial:           String,
+    pub simple:            String,
 
-    pub stats:                 ArrowStats,
-    pub stream_counts:         StreamCounts,
-    pub total_streams:         u32,
-    pub detailed:              String,
-    pub partial:               String,
-    pub simple:                String,
+    pub max_nps:           f64,
+    pub median_nps:        f64,
 
-    pub min_bpm:               f64,
-    pub max_bpm:               f64,
-    pub max_nps:               f64,
-    pub median_nps:            f64,
-    pub median_bpm:            f64,
-    pub average_bpm:           f64,
-    
-    pub detected_patterns:  HashMap<PatternVariant, u32>,
+    pub detected_patterns: HashMap<PatternVariant, u32>,
 
-    pub anchor_left:           u32,
-    pub anchor_down:           u32,
-    pub anchor_up:             u32,
-    pub anchor_right:          u32,
-    pub facing_left:            u32,
-    pub facing_right:           u32,
-    pub mono_total:             u32,
-    pub mono_percent:           f64,
-    pub candle_total:           u32,
-    pub candle_percent:         f64,
+    pub anchor_left:       u32,
+    pub anchor_down:       u32,
+    pub anchor_up:         u32,
+    pub anchor_right:      u32,
+    pub facing_left:       u32,
+    pub facing_right:      u32,
+    pub mono_total:        u32,
+    pub mono_percent:      f64,
+    pub candle_total:      u32,
+    pub candle_percent:    f64,
 
-    pub short_hash:            String,
+    pub short_hash:        String,
 
-    pub elapsed:               Duration,
-    pub total_elapsed:         Duration,
+    pub elapsed:           Duration,
 
-    pub measure_densities:     Vec<usize>,
+    pub measure_densities: Vec<usize>,
 }
 
-pub struct SimfileReport {
+pub struct SimfileSummary {
     pub title_str:            String,
     pub subtitle_str:         String,
     pub artist_str:           String,
@@ -73,7 +59,7 @@ pub struct SimfileReport {
     pub average_bpm:          f64,
     pub total_length:         i32,
 
-    pub charts: Vec<SimfileSummary>,
+    pub charts: Vec<ChartSummary>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,12 +70,12 @@ pub enum OutputMode {
     CSV,
 }
 
-pub fn print_reports(report: &SimfileReport, mode: OutputMode) {
+pub fn print_reports(simfile: &SimfileSummary, mode: OutputMode) {
     match mode {
-        OutputMode::Full   => print_full_all(report),
-        OutputMode::Pretty => print_pretty_all(report),
-        OutputMode::JSON   => print_json_all(report),
-        OutputMode::CSV    => print_csv_all(report),
+        OutputMode::Full   => print_full_all(simfile),
+        OutputMode::Pretty => print_pretty_all(simfile),
+        OutputMode::JSON   => print_json_all(simfile),
+        OutputMode::CSV    => print_csv_all(simfile),
     }
 }
 
@@ -239,47 +225,46 @@ fn count(map: &HashMap<PatternVariant, u32>, v: PatternVariant) -> u32 {
     *map.get(&v).unwrap_or(&0)
 }
 
-fn print_pretty_all(report: &SimfileReport) {
+fn print_pretty_all(simfile: &SimfileSummary) {
     println!("Song Details");
     println!("------------");
     println!("Title: {}{} by {}",
-        report.title_str,
-        if report.subtitle_str.is_empty() {
+        simfile.title_str,
+        if simfile.subtitle_str.is_empty() {
             String::new()
         } else {
-            format!(" {}", report.subtitle_str)
+            format!(" {}", simfile.subtitle_str)
         },
-        report.artist_str
+        simfile.artist_str
     );
-    println!("Length: {}", format_duration(report.total_length));
-    if (report.min_bpm - report.max_bpm).abs() < f64::EPSILON {
-        println!("BPM: {:.0}", report.min_bpm);
+    println!("Length: {}", format_duration(simfile.total_length));
+    if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
+        println!("BPM: {:.0}", simfile.min_bpm);
     } else {
-        println!("BPM: {:.0}-{:.0}", report.min_bpm, report.max_bpm);
-        println!("Median BPM: {:.0}", report.median_bpm);
-        println!("Average BPM: {:.0}", report.average_bpm);
+        println!("BPM: {:.0}-{:.0}", simfile.min_bpm, simfile.max_bpm);
+        println!("Median BPM: {:.0}", simfile.median_bpm);
+        println!("Average BPM: {:.0}", simfile.average_bpm);
     }
     println!();
 
-    // Now each chart
-    for chart in &report.charts {
+    for chart in &simfile.charts {
         print_pretty_chart(chart);
     }
 }
 
-fn print_pretty_chart(data: &SimfileSummary) {
-    let header = format!("{} {} : {}", data.difficulty_str, data.rating_str, data.step_artist_str);
+fn print_pretty_chart(chart: &ChartSummary) {
+    let header = format!("{} {} : {}", chart.difficulty_str, chart.rating_str, chart.step_artist_str);
     println!("{}", header);
     println!("{}", "-".repeat(header.len()));
 
-    if (data.median_nps - data.max_nps).abs() < f64::EPSILON {
-        println!("NPS: {:.2} Median/Peak", data.median_nps);
+    if (chart.median_nps - chart.max_nps).abs() < f64::EPSILON {
+        println!("NPS: {:.2} Median/Peak", chart.median_nps);
     } else {
-        println!("NPS: {:.2} Median, {:.2} Peak", data.median_nps, data.max_nps);
+        println!("NPS: {:.2} Median, {:.2} Peak", chart.median_nps, chart.max_nps);
     }
 
-    let total_stream = data.total_streams;
-    let total_break = data.stream_counts.total_breaks;
+    let total_stream = chart.total_streams;
+    let total_break = chart.stream_counts.total_breaks;
     let stream_percent = if total_stream + total_break > 0 {
         (total_stream as f64 / (total_stream + total_break) as f64) * 100.0
     } else { 0.0 };
@@ -288,133 +273,130 @@ fn print_pretty_chart(data: &SimfileSummary) {
 
     println!("\nChart Info");
     println!("----------");
-    println!("Steps: {} ({} arrows)", data.stats.total_steps, data.stats.total_arrows);
-    println!("Jumps: {}", data.stats.jumps);
-    println!("Holds: {}", data.stats.holds);
-    println!("Mines: {}", data.stats.mines);
-    println!("Hands: {}", data.stats.hands);
-    println!("Rolls: {}", data.stats.rolls);
+    println!("Steps: {} ({} arrows)", chart.stats.total_steps, chart.stats.total_arrows);
+    println!("Jumps: {}", chart.stats.jumps);
+    println!("Holds: {}", chart.stats.holds);
+    println!("Mines: {}", chart.stats.mines);
+    println!("Hands: {}", chart.stats.hands);
+    println!("Rolls: {}", chart.stats.rolls);
 
     println!("\nPattern Analysis");
     println!("----------------");
-    let candle_left = data.detected_patterns.get(&PatternVariant::CandleLeft).unwrap_or(&0);
-    let candle_right = data.detected_patterns.get(&PatternVariant::CandleRight).unwrap_or(&0);
+    let candle_left = chart.detected_patterns.get(&PatternVariant::CandleLeft).unwrap_or(&0);
+    let candle_right = chart.detected_patterns.get(&PatternVariant::CandleRight).unwrap_or(&0);
     println!("Candles: {} ({} left, {} right)",
         candle_left + candle_right, candle_left, candle_right);
-    println!("Candle%: {:.2}%", data.candle_percent);
-    println!("Mono: {} ({} left-facing, {} right-facing)", data.mono_total, data.facing_left, data.facing_right);
-    println!("Mono%: {:.2}%", data.mono_percent);
+    println!("Candle%: {:.2}%", chart.candle_percent);
+    println!("Mono: {} ({} left-facing, {} right-facing)", chart.mono_total, chart.facing_left, chart.facing_right);
+    println!("Mono%: {:.2}%", chart.mono_percent);
 
-    // Example: boxes
-    let box_lr = data.detected_patterns.get(&PatternVariant::BoxLR).unwrap_or(&0);
-    let box_ud = data.detected_patterns.get(&PatternVariant::BoxUD).unwrap_or(&0);
+    let box_lr = chart.detected_patterns.get(&PatternVariant::BoxLR).unwrap_or(&0);
+    let box_ud = chart.detected_patterns.get(&PatternVariant::BoxUD).unwrap_or(&0);
     let box_corners =
-        data.detected_patterns.get(&PatternVariant::BoxCornerLD).unwrap_or(&0) +
-        data.detected_patterns.get(&PatternVariant::BoxCornerLU).unwrap_or(&0) +
-        data.detected_patterns.get(&PatternVariant::BoxCornerRD).unwrap_or(&0) +
-        data.detected_patterns.get(&PatternVariant::BoxCornerRU).unwrap_or(&0);
+        chart.detected_patterns.get(&PatternVariant::BoxCornerLD).unwrap_or(&0) +
+        chart.detected_patterns.get(&PatternVariant::BoxCornerLU).unwrap_or(&0) +
+        chart.detected_patterns.get(&PatternVariant::BoxCornerRD).unwrap_or(&0) +
+        chart.detected_patterns.get(&PatternVariant::BoxCornerRU).unwrap_or(&0);
     println!("Boxes: {} ({} LRLR, {} UDUD, {} corner)",
         box_lr + box_ud + box_corners, box_lr, box_ud, box_corners);
 
-    let anchor_total = data.anchor_left + data.anchor_down + data.anchor_up + data.anchor_right;
+    let anchor_total = chart.anchor_left + chart.anchor_down + chart.anchor_up + chart.anchor_right;
     println!("Anchors: {} ({} left, {} down, {} up, {} right)",
-        anchor_total, data.anchor_left, data.anchor_down, data.anchor_up, data.anchor_right);
+        anchor_total, chart.anchor_left, chart.anchor_down, chart.anchor_up, chart.anchor_right);
 
-    if !data.detailed.is_empty() {
+    if !chart.detailed.is_empty() {
         println!("\nDetailed Breakdown");
-        println!("{}", data.detailed);
+        println!("{}", chart.detailed);
         println!("Partially Simplified");
-        println!("{}", data.partial);
+        println!("{}", chart.partial);
         println!("Simplified Breakdown");
-        println!("{}", data.simple);
+        println!("{}", chart.simple);
     }
 
     println!(); // extra line
 }
 
-fn print_full_all(report: &SimfileReport) {
-    // Print top-level simfile data
-    println!("Title: {}", report.title_str);
-    println!("Title translate: {}", report.titletranslit_str);
-    println!("Subtitle: {}", report.subtitle_str);
-    println!("Subtitle translate: {}", report.subtitletranslit_str);
-    println!("Artist: {}", report.artist_str);
-    println!("Artist translate: {}", report.artisttranslit_str);
-    println!("Offset: {:.3}", report.offset);
-    println!("Normalized BPMs: {}", report.normalized_bpms);
+fn print_full_all(simfile: &SimfileSummary) {
+    println!("Title: {}", simfile.title_str);
+    println!("Title translate: {}", simfile.titletranslit_str);
+    println!("Subtitle: {}", simfile.subtitle_str);
+    println!("Subtitle translate: {}", simfile.subtitletranslit_str);
+    println!("Artist: {}", simfile.artist_str);
+    println!("Artist translate: {}", simfile.artisttranslit_str);
+    println!("Offset: {:.3}", simfile.offset);
+    println!("Normalized BPMs: {}", simfile.normalized_bpms);
 
-    println!("Min BPM: {:.2}", report.min_bpm);
-    println!("Max BPM: {:.2}", report.max_bpm);
-    println!("Median BPM: {:.2}", report.median_bpm);
-    println!("Average BPM: {:.2}", report.average_bpm);
-    println!("Chart length (seconds): {}", report.total_length);
+    println!("Min BPM: {:.2}", simfile.min_bpm);
+    println!("Max BPM: {:.2}", simfile.max_bpm);
+    println!("Median BPM: {:.2}", simfile.median_bpm);
+    println!("Average BPM: {:.2}", simfile.average_bpm);
+    println!("Chart length (seconds): {}", simfile.total_length);
 
     println!("---\n");
 
-    // Then each chart
-    for chart in &report.charts {
+    for chart in &simfile.charts {
         print_full_chart(chart);
         println!();
     }
 }
 
-fn print_full_chart(data: &SimfileSummary) {
+fn print_full_chart(chart: &ChartSummary) {
     println!("--- Chart Info ---");
-    println!("Step type: {}", data.step_type_str);
-    println!("Difficulty: {}", data.difficulty_str);
-    println!("Rating: {}", data.rating_str);
-    println!("Step artist: {}", data.step_artist_str);
-    println!("Tech notation: {}", data.tech_notation_str);
-    println!("Hash (short): {}", data.short_hash);
+    println!("Step type: {}", chart.step_type_str);
+    println!("Difficulty: {}", chart.difficulty_str);
+    println!("Rating: {}", chart.rating_str);
+    println!("Step artist: {}", chart.step_artist_str);
+    println!("Tech notation: {}", chart.tech_notation_str);
+    println!("Hash (short): {}", chart.short_hash);
 
     println!("--- Arrow Stats ---");
-    println!("Left: {}", data.stats.left);
-    println!("Down: {}", data.stats.down);
-    println!("Up: {}", data.stats.up);
-    println!("Right: {}", data.stats.right);
-    println!("Total arrows: {}", data.stats.total_arrows);
-    println!("Total steps: {}", data.stats.total_steps);
-    println!("Jumps: {}", data.stats.jumps);
-    println!("Hands: {}", data.stats.hands);
-    println!("Holds: {}", data.stats.holds);
-    println!("Rolls: {}", data.stats.rolls);
-    println!("Mines: {}", data.stats.mines);
+    println!("Left: {}", chart.stats.left);
+    println!("Down: {}", chart.stats.down);
+    println!("Up: {}", chart.stats.up);
+    println!("Right: {}", chart.stats.right);
+    println!("Total arrows: {}", chart.stats.total_arrows);
+    println!("Total steps: {}", chart.stats.total_steps);
+    println!("Jumps: {}", chart.stats.jumps);
+    println!("Hands: {}", chart.stats.hands);
+    println!("Holds: {}", chart.stats.holds);
+    println!("Rolls: {}", chart.stats.rolls);
+    println!("Mines: {}", chart.stats.mines);
 
     println!("--- Stream Counts ---");
-    println!("16th streams: {}", data.stream_counts.run16_streams);
-    println!("20th streams: {}", data.stream_counts.run20_streams);
-    println!("24th streams: {}", data.stream_counts.run24_streams);
-    println!("32nd streams: {}", data.stream_counts.run32_streams);
-    println!("Total streams: {}", data.total_streams);
-    println!("Total breaks: {}", data.stream_counts.total_breaks);
+    println!("16th streams: {}", chart.stream_counts.run16_streams);
+    println!("20th streams: {}", chart.stream_counts.run20_streams);
+    println!("24th streams: {}", chart.stream_counts.run24_streams);
+    println!("32nd streams: {}", chart.stream_counts.run32_streams);
+    println!("Total streams: {}", chart.total_streams);
+    println!("Total breaks: {}", chart.stream_counts.total_breaks);
 
     println!("--- Additional Stats ---");
-    println!("Max NPS: {:.2}", data.max_nps);
-    println!("Median NPS: {:.2}", data.median_nps);
+    println!("Max NPS: {:.2}", chart.max_nps);
+    println!("Median NPS: {:.2}", chart.median_nps);
 
     println!("--- Mono/Candle ---");
-    println!("Facing left: {}", data.facing_left);
-    println!("Facing right: {}", data.facing_right);
-    println!("Mono total: {}", data.mono_total);
-    println!("Mono percentage: {:.2}%", data.mono_percent);
-    println!("Candle total: {}", data.candle_total);
-    println!("Candle percentage: {:.2}%", data.candle_percent);
+    println!("Facing left: {}", chart.facing_left);
+    println!("Facing right: {}", chart.facing_right);
+    println!("Mono total: {}", chart.mono_total);
+    println!("Mono percentage: {:.2}%", chart.mono_percent);
+    println!("Candle total: {}", chart.candle_total);
+    println!("Candle percentage: {:.2}%", chart.candle_percent);
 
     println!("--- Anchors ---");
-    println!("AnchorLeft: {}", data.anchor_left);
-    println!("AnchorDown: {}", data.anchor_down);
-    println!("AnchorUp: {}", data.anchor_up);
-    println!("AnchorRight: {}", data.anchor_right);
+    println!("AnchorLeft: {}", chart.anchor_left);
+    println!("AnchorDown: {}", chart.anchor_down);
+    println!("AnchorUp: {}", chart.anchor_up);
+    println!("AnchorRight: {}", chart.anchor_right);
 
     println!("--- Pattern breakdowns ---");
-    println!("Detailed: {}", data.detailed);
-    println!("Partial: {}", data.partial);
-    println!("Simple: {}", data.simple);
+    println!("Detailed: {}", chart.detailed);
+    println!("Partial: {}", chart.partial);
+    println!("Simple: {}", chart.simple);
 
-    println!("--- Per-chart elapsed time: {:?}", data.elapsed);
+    println!("--- Per-chart elapsed time: {:?}", chart.elapsed);
 }
 
-fn print_json_all(report: &SimfileReport) {
+fn print_json_all(simfile: &SimfileSummary) {
     fn esc(s: &str) -> String {
         let mut out = String::with_capacity(s.len());
         for c in s.chars() {
@@ -431,31 +413,30 @@ fn print_json_all(report: &SimfileReport) {
     }
 
     println!("{{");
-    println!("  \"title\": \"{}\",", esc(&report.title_str));
-    println!("  \"subtitle\": \"{}\",", esc(&report.subtitle_str));
-    println!("  \"artist\": \"{}\",", esc(&report.artist_str));
-    println!("  \"title_translit\": \"{}\",", esc(&report.titletranslit_str));
-    println!("  \"subtitle_translit\": \"{}\",", esc(&report.subtitletranslit_str));
-    println!("  \"artist_translit\": \"{}\",", esc(&report.artisttranslit_str));
-    println!("  \"offset\": {:.3},", report.offset);
-    println!("  \"normalized_bpms\": \"{}\",", esc(&report.normalized_bpms));
-    println!("  \"min_bpm\": {:.2},", report.min_bpm);
-    println!("  \"max_bpm\": {:.2},", report.max_bpm);
-    println!("  \"median_bpm\": {:.2},", report.median_bpm);
-    println!("  \"average_bpm\": {:.2},", report.average_bpm);
-    println!("  \"total_length_s\": {},", report.total_length);
+    println!("  \"title\": \"{}\",", esc(&simfile.title_str));
+    println!("  \"subtitle\": \"{}\",", esc(&simfile.subtitle_str));
+    println!("  \"artist\": \"{}\",", esc(&simfile.artist_str));
+    println!("  \"title_translit\": \"{}\",", esc(&simfile.titletranslit_str));
+    println!("  \"subtitle_translit\": \"{}\",", esc(&simfile.subtitletranslit_str));
+    println!("  \"artist_translit\": \"{}\",", esc(&simfile.artisttranslit_str));
+    println!("  \"offset\": {:.3},", simfile.offset);
+    println!("  \"normalized_bpms\": \"{}\",", esc(&simfile.normalized_bpms));
+    println!("  \"min_bpm\": {:.2},", simfile.min_bpm);
+    println!("  \"max_bpm\": {:.2},", simfile.max_bpm);
+    println!("  \"median_bpm\": {:.2},", simfile.median_bpm);
+    println!("  \"average_bpm\": {:.2},", simfile.average_bpm);
+    println!("  \"total_length_s\": {},", simfile.total_length);
 
-    // charts array
     println!("  \"charts\": [");
-    for (i, chart) in report.charts.iter().enumerate() {
-        print_json_chart(chart, i + 1 == report.charts.len());
+    for (i, chart) in simfile.charts.iter().enumerate() {
+        print_json_chart(chart, i + 1 == simfile.charts.len());
     }
     println!("  ]");
 
     println!("}}");
 }
 
-fn print_json_chart(data: &SimfileSummary, is_last: bool) {
+fn print_json_chart(chart: &ChartSummary, is_last: bool) {
     fn esc(s: &str) -> String {
         let mut out = String::with_capacity(s.len());
         for c in s.chars() {
@@ -472,54 +453,47 @@ fn print_json_chart(data: &SimfileSummary, is_last: bool) {
     }
 
     println!("    {{");
-    println!("      \"step_type\": \"{}\",", esc(&data.step_type_str));
-    println!("      \"difficulty\": \"{}\",", esc(&data.difficulty_str));
-    println!("      \"rating\": \"{}\",", esc(&data.rating_str));
-    println!("      \"step_artist\": \"{}\",", esc(&data.step_artist_str));
-    println!("      \"tech_notation\": \"{}\",", esc(&data.tech_notation_str));
-    println!("      \"hash_short\": \"{}\",", data.short_hash);
+    println!("      \"step_type\": \"{}\",", esc(&chart.step_type_str));
+    println!("      \"difficulty\": \"{}\",", esc(&chart.difficulty_str));
+    println!("      \"rating\": \"{}\",", esc(&chart.rating_str));
+    println!("      \"step_artist\": \"{}\",", esc(&chart.step_artist_str));
+    println!("      \"tech_notation\": \"{}\",", esc(&chart.tech_notation_str));
+    println!("      \"hash_short\": \"{}\",", chart.short_hash);
 
-    // Arrow stats
     println!("      \"arrow_stats\": {{");
-    println!("        \"left\": {},", data.stats.left);
-    println!("        \"down\": {},", data.stats.down);
-    println!("        \"up\": {},", data.stats.up);
-    println!("        \"right\": {},", data.stats.right);
-    println!("        \"total_arrows\": {},", data.stats.total_arrows);
-    println!("        \"total_steps\": {},", data.stats.total_steps);
-    println!("        \"jumps\": {},", data.stats.jumps);
-    println!("        \"hands\": {},", data.stats.hands);
-    println!("        \"holds\": {},", data.stats.holds);
-    println!("        \"rolls\": {},", data.stats.rolls);
-    println!("        \"mines\": {}", data.stats.mines);
+    println!("        \"left\": {},", chart.stats.left);
+    println!("        \"down\": {},", chart.stats.down);
+    println!("        \"up\": {},", chart.stats.up);
+    println!("        \"right\": {},", chart.stats.right);
+    println!("        \"total_arrows\": {},", chart.stats.total_arrows);
+    println!("        \"total_steps\": {},", chart.stats.total_steps);
+    println!("        \"jumps\": {},", chart.stats.jumps);
+    println!("        \"hands\": {},", chart.stats.hands);
+    println!("        \"holds\": {},", chart.stats.holds);
+    println!("        \"rolls\": {},", chart.stats.rolls);
+    println!("        \"mines\": {}", chart.stats.mines);
     println!("      }},");
 
-    // Stream counts
     println!("      \"stream_counts\": {{");
-    println!("        \"run16_streams\": {},", data.stream_counts.run16_streams);
-    println!("        \"run20_streams\": {},", data.stream_counts.run20_streams);
-    println!("        \"run24_streams\": {},", data.stream_counts.run24_streams);
-    println!("        \"run32_streams\": {},", data.stream_counts.run32_streams);
-    println!("        \"total_streams\": {},", data.total_streams);
-    println!("        \"total_breaks\": {}", data.stream_counts.total_breaks);
+    println!("        \"run16_streams\": {},", chart.stream_counts.run16_streams);
+    println!("        \"run20_streams\": {},", chart.stream_counts.run20_streams);
+    println!("        \"run24_streams\": {},", chart.stream_counts.run24_streams);
+    println!("        \"run32_streams\": {},", chart.stream_counts.run32_streams);
+    println!("        \"total_streams\": {},", chart.total_streams);
+    println!("        \"total_breaks\": {}", chart.stream_counts.total_breaks);
     println!("      }},");
 
-    println!("      \"max_nps\": {:.2},", data.max_nps);
-    println!("      \"median_nps\": {:.2},", data.median_nps);
-    println!("      \"mono_total\": {},", data.mono_total);
-    println!("      \"mono_percent\": {:.2},", data.mono_percent);
-    println!("      \"candle_total\": {},", data.candle_total);
-    println!("      \"candle_percent\": {:.2},", data.candle_percent);
+    println!("      \"max_nps\": {:.2},", chart.max_nps);
+    println!("      \"median_nps\": {:.2},", chart.median_nps);
+    println!("      \"mono_total\": {},", chart.mono_total);
+    println!("      \"mono_percent\": {:.2},", chart.mono_percent);
+    println!("      \"candle_total\": {},", chart.candle_total);
+    println!("      \"candle_percent\": {:.2},", chart.candle_percent);
 
-    // pattern_counts
     println!("      \"pattern_counts\": {{");
-    // You can iterate all patterns if needed, or just a subset.
-    // For example, if you have a static list of pattern variants:
-    //   for (pattern, count) in data.detected_patterns { ... }
-    // But we can reuse your approach:
     for (i, &pv) in ALL_PATTERNS.iter().enumerate() {
         let key = pattern_variant_name(pv);
-        let val = count(&data.detected_patterns, pv);
+        let val = count(&chart.detected_patterns, pv);
         if i + 1 < ALL_PATTERNS.len() {
             println!("        \"{}\": {},", key, val);
         } else {
@@ -528,41 +502,33 @@ fn print_json_chart(data: &SimfileSummary, is_last: bool) {
     }
     println!("      }},");
 
-    // breakdown info
     println!("      \"breakdown\": {{");
-    println!("        \"detailed\": \"{}\",", esc(&data.detailed));
-    println!("        \"partial\": \"{}\",", esc(&data.partial));
-    println!("        \"simple\": \"{}\"", esc(&data.simple));
+    println!("        \"detailed\": \"{}\",", esc(&chart.detailed));
+    println!("        \"partial\": \"{}\",", esc(&chart.partial));
+    println!("        \"simple\": \"{}\"", esc(&chart.simple));
     println!("      }}");
 
     println!("    }}{}", if is_last { "" } else { "," });
 }
 
-fn print_csv_all(report: &SimfileReport) {
-    // Print a single header, then one row per chart
-    // We'll combine some simfile-level columns + chart-level columns
-
-    // Build a list of pattern names for the header
+fn print_csv_all(simfile: &SimfileSummary) {
     let pattern_names: Vec<_> = ALL_PATTERNS.iter()
         .map(|&pv| pattern_variant_name(pv))
         .collect();
 
-    // Header
     println!(
         "title,subtitle,artist,min_bpm,max_bpm,difficulty,rating,step_artist,tech_notation,chart_length_s,\
 total_arrows,total_streams,mono_percent,candle_percent,{}",
         pattern_names.join(",")
     );
 
-    // Rows
-    for chart in &report.charts {
-        print_csv_row(report, chart, &pattern_names);
+    for chart in &simfile.charts {
+        print_csv_row(simfile, chart, &pattern_names);
     }
 }
 
-fn print_csv_row(report: &SimfileReport, chart: &SimfileSummary, pattern_names: &[&str]) {
+fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary, pattern_names: &[&str]) {
     fn esc_csv(s: &str) -> String {
-        // Just replace quotes with doubled quotes for a naive approach
         if s.contains('"') || s.contains(',') {
             format!("\"{}\"", s.replace('"', "\"\""))
         } else {
@@ -570,16 +536,14 @@ fn print_csv_row(report: &SimfileReport, chart: &SimfileSummary, pattern_names: 
         }
     }
 
-    // Some columns from the simfile-level...
     print!("{},{},{},{:.2},{:.2},",
-        esc_csv(&report.title_str),
-        esc_csv(&report.subtitle_str),
-        esc_csv(&report.artist_str),
-        report.min_bpm,
-        report.max_bpm
+        esc_csv(&simfile.title_str),
+        esc_csv(&simfile.subtitle_str),
+        esc_csv(&simfile.artist_str),
+        simfile.min_bpm,
+        simfile.max_bpm
     );
 
-    // Some columns from chart-level
     print!("{},{},{},{},",
         esc_csv(&chart.difficulty_str),
         esc_csv(&chart.rating_str),
@@ -587,7 +551,6 @@ fn print_csv_row(report: &SimfileReport, chart: &SimfileSummary, pattern_names: 
         esc_csv(&chart.tech_notation_str),
     );
 
-    // A few more chart columns
     print!("{},{},{:.2},{:.2}",
         chart.stats.total_arrows,
         chart.total_streams,
@@ -595,7 +558,6 @@ fn print_csv_row(report: &SimfileReport, chart: &SimfileSummary, pattern_names: 
         chart.candle_percent
     );
 
-    // Then patterns
     for pname in pattern_names {
         let pat_variant = ALL_PATTERNS.iter()
             .find(|&&x| pattern_variant_name(x) == *pname)

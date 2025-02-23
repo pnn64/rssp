@@ -1,7 +1,7 @@
 use std::env::args;
 use std::fs::File;
 use std::io::{self, Read};
-use std::time::{Duration, Instant};
+use std::time::{Instant};
 
 use rssp::graph::*;
 use rssp::parse::*;
@@ -21,7 +21,6 @@ fn main() -> io::Result<()> {
     }
 
     let simfile_path  = &args[1];
-
 
     let generate_full = args.iter().any(|a| a == "--full");
     let generate_png  = args.iter().any(|a| a == "--png");
@@ -221,38 +220,26 @@ fn main() -> io::Result<()> {
 
         let elapsed_chart = chart_start_time.elapsed();
 
-        let summary = SimfileSummary {
-            title_str: title_str.clone(),
-            subtitle_str: subtitle_str.clone(),
-            artist_str: artist_str.clone(),
-            titletranslit_str: titletranslit_str.clone(),
-            subtitletranslit_str: subtitletranslit_str.clone(),
-            artisttranslit_str: artisttranslit_str.clone(),
-
-            offset,
-            normalized_bpms: normalized_bpms.clone(),
+        let summary = ChartSummary {
             step_type_str,
             step_artist_str,
             difficulty_str,
             rating_str,
-
             tech_notation_str,
 
             stats,
             stream_counts,
             total_streams,
+
             detailed,
             partial,
             simple,
 
-            min_bpm,
-            max_bpm,
-            median_bpm,
-            average_bpm,
             max_nps,
             median_nps,
 
             detected_patterns,
+
             anchor_left,
             anchor_down,
             anchor_up,
@@ -261,14 +248,13 @@ fn main() -> io::Result<()> {
             facing_right,
             mono_total,
             mono_percent,
-
             candle_total,
             candle_percent,
 
             short_hash,
 
             elapsed: elapsed_chart,
-            total_elapsed: Duration::default(),
+
             measure_densities,
         };
 
@@ -283,7 +269,7 @@ fn main() -> io::Result<()> {
         0
     };
 
-    let report = SimfileReport {
+    let simfile = SimfileSummary {
         title_str,
         subtitle_str,
         artist_str,
@@ -313,14 +299,14 @@ fn main() -> io::Result<()> {
 
     let total_elapsed = total_start_time.elapsed();
 
-    print_reports(&report, mode);
+    print_reports(&simfile, mode);
 
     if generate_png || generate_png_alt {
         let color_scheme = if generate_png_alt { ColorScheme::Alternative } else { ColorScheme::Default };
 
-        for chart_summary in &report.charts {
+        for chart_summary in &simfile.charts {
             // measure_nps_vec can be derived from chart_summary.measure_densities + the same BPM map
-            // but we already have it in the chart’s code. If we want to store it in SimfileSummary,
+            // but we already have it in the chart’s code. If we want to store it in ChartSummary,
             // we can do that. For demonstration, we’ll recompute:
             let measure_nps_vec = compute_measure_nps_vec(&chart_summary.measure_densities, &bpm_map);
 
