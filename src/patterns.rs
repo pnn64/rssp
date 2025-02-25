@@ -220,6 +220,7 @@ pub fn detect_patterns(
     results
 }
 
+#[inline]
 fn count_anchors_for_bit(bitmasks: &[u8], bit_mask: u8) -> u32 {
     bitmasks.iter()
         .zip(&bitmasks[2..])
