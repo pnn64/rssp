@@ -220,43 +220,21 @@ pub fn detect_patterns(
     results
 }
 
+fn count_anchors_for_bit(bitmasks: &[u8], bit_mask: u8) -> u32 {
+    bitmasks.iter()
+        .zip(&bitmasks[2..])
+        .zip(&bitmasks[4..])
+        .filter(|((a, b), c)| {
+            (*a & bit_mask) != 0 && (*b & bit_mask) != 0 && (*c & bit_mask) != 0
+        })
+        .count() as u32
+}
+
 pub fn count_anchors(bitmasks: &[u8]) -> (u32, u32, u32, u32) {
-    let mut anchor_left = 0;
-    let mut anchor_down = 0;
-    let mut anchor_up = 0;
-    let mut anchor_right = 0;
-
-    let n = bitmasks.len();
-    let mut i = 0;
-    while i + 4 < n {
-        // anchor if it's pressed at times i, i+2, and i+4
-        if (bitmasks[i] & 0b0001) != 0
-            && (bitmasks[i + 2] & 0b0001) != 0
-            && (bitmasks[i + 4] & 0b0001) != 0
-        {
-            anchor_left += 1;
-        }
-        if (bitmasks[i] & 0b0010) != 0
-            && (bitmasks[i + 2] & 0b0010) != 0
-            && (bitmasks[i + 4] & 0b0010) != 0
-        {
-            anchor_down += 1;
-        }
-        if (bitmasks[i] & 0b0100) != 0
-            && (bitmasks[i + 2] & 0b0100) != 0
-            && (bitmasks[i + 4] & 0b0100) != 0
-        {
-            anchor_up += 1;
-        }
-        if (bitmasks[i] & 0b1000) != 0
-            && (bitmasks[i + 2] & 0b1000) != 0
-            && (bitmasks[i + 4] & 0b1000) != 0
-        {
-            anchor_right += 1;
-        }
-        i += 1;
-    }
-
+    let anchor_left = count_anchors_for_bit(bitmasks, 0b0001);
+    let anchor_down = count_anchors_for_bit(bitmasks, 0b0010);
+    let anchor_up = count_anchors_for_bit(bitmasks, 0b0100);
+    let anchor_right = count_anchors_for_bit(bitmasks, 0b1000);
     (anchor_left, anchor_down, anchor_up, anchor_right)
 }
 
