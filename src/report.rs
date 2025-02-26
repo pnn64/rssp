@@ -173,10 +173,10 @@ fn print_pretty_chart(chart: &ChartSummary) {
     println!("\n--- Chart Info ---");
     println!("Steps: {} ({} arrows)", chart.stats.total_steps, chart.stats.total_arrows);
     println!("Jumps: {}", chart.stats.jumps);
-    println!("Holds: {}", chart.stats.holds);
-    println!("Mines: {}", chart.stats.mines);
     println!("Hands: {}", chart.stats.hands);
+    println!("Holds: {}", chart.stats.holds);
     println!("Rolls: {}", chart.stats.rolls);
+    println!("Mines: {}", chart.stats.mines);
 
     println!("\n--- Pattern Analysis ---");
     let candle_left = chart.detected_patterns.get(&PatternVariant::CandleLeft).unwrap_or(&0);
@@ -212,12 +212,22 @@ fn print_pretty_chart(chart: &ChartSummary) {
 }
 
 fn print_full_all(simfile: &SimfileSummary) {
+    println!("--- Song Details ---");
     println!("Title: {}", simfile.title_str);
-    println!("Subtitle: {}", simfile.subtitle_str);
+    if !simfile.subtitle_str.is_empty() {
+        println!("Subtitle: {}", simfile.subtitle_str);
+    }
     println!("Artist: {}", simfile.artist_str);
-    println!("Title trans: {}", simfile.titletranslit_str);
-    println!("Subtitle trans: {}", simfile.subtitletranslit_str);
-    println!("Artist trans: {}", simfile.artisttranslit_str);
+    if !simfile.titletranslit_str.is_empty() {
+        println!("Title trans: {}", simfile.titletranslit_str);
+    }
+    if !simfile.subtitletranslit_str.is_empty() {
+        println!("Subtitle trans: {}", simfile.subtitletranslit_str);
+    }
+    if !simfile.artisttranslit_str.is_empty() {
+        println!("Artist trans: {}", simfile.artisttranslit_str);
+    }
+    
     println!("Length: {}", format_duration(simfile.total_length));
     if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
         println!("BPM: {:.0}", simfile.min_bpm);
@@ -225,102 +235,88 @@ fn print_full_all(simfile: &SimfileSummary) {
         println!("BPM: {:.0}-{:.0}", simfile.min_bpm, simfile.max_bpm);
     }
     // TODO: BPM Tier
-    println!("min_bpm: {:.2}", simfile.min_bpm);
-    println!("max_bpm: {:.2}", simfile.max_bpm);
-    println!("average_bpm: {:.2}", simfile.average_bpm);
-    println!("median bpm: {:.2}", simfile.median_bpm);
-    println!("BPM-data: {}", simfile.normalized_bpms);
-    println!("offset: {:.3}", simfile.offset);
+    println!("Average BPM: {:.2}", simfile.average_bpm);
+    println!("Median BPM: {:.2}", simfile.median_bpm);
+    println!("BPM Data: {}", simfile.normalized_bpms);
+    println!("Offset: {:.3}", simfile.offset);
     // TODO: file_md5_hash
-    println!("---\n");
 
     for chart in &simfile.charts {
         print_full_chart(chart);
-        println!();
     }
-    println!("Total Elapsed Time: {:?}", simfile.total_elapsed);
+    println!("\nElapsed Time: {:?}", simfile.total_elapsed);
 }
 
 fn print_full_chart(chart: &ChartSummary) {
-    println!("step_type: {}", chart.step_type_str);
-    println!("difficulty: {}", chart.difficulty_str);
-    println!("rating: {}", chart.rating_str);
-    println!("step_artist: {}", chart.step_artist_str);
-    println!("tech_notation: {}", chart.tech_notation_str);
-    // TODO: sha1_hash
+    let header = format!("{} {} : {}", chart.difficulty_str, chart.rating_str, chart.step_artist_str);
+    println!("\n{}", header);
+    println!("{}", "-".repeat(header.len()));
+
+    println!("Step Type: {}", chart.step_type_str);
+    if !chart.tech_notation_str.is_empty() {
+        println!("Tech Notations: {}", chart.tech_notation_str);
+    }
+    println!("SHA1 Hash: {}\n", chart.short_hash);
     // TODO: bpm_neutral_hash
 
-    println!("total_arrows: {}", chart.stats.total_arrows);
-    println!("left_arrows: {}", chart.stats.left);
-    println!("down_arrows: {}", chart.stats.down);
-    println!("up_arrows: {}", chart.stats.up);
-    println!("right_arrows: {}", chart.stats.right);
-
-    println!("total_steps: {}", chart.stats.total_steps);
-    println!("jumps: {}", chart.stats.jumps);
-    println!("hands: {}", chart.stats.hands);
-    println!("holds: {}", chart.stats.holds);
-    println!("rolls: {}", chart.stats.rolls);
-    println!("mines: {}", chart.stats.mines);
-
-    let total_streams = chart.total_streams;
-    let total_breaks = chart.stream_counts.total_breaks;
-    let stream_percent = if total_streams + total_breaks > 0 {
-        (total_streams as f64 / (total_streams + total_breaks) as f64) * 100.0
+    if (chart.median_nps - chart.max_nps).abs() < f64::EPSILON {
+        println!("NPS: {:.2} Median/Peak", chart.median_nps);
+    } else {
+        println!("NPS: {:.2} Median, {:.2} Peak", chart.median_nps, chart.max_nps);
+    }
+    let total_stream = chart.total_streams;
+    let total_break = chart.stream_counts.total_breaks;
+    let stream_percent = if total_stream + total_break > 0 {
+        (total_stream as f64 / (total_stream + total_break) as f64) * 100.0
     } else { 0.0 };
-    println!("total_streams: {}", total_streams);
-    println!("16th_streams: {}", chart.stream_counts.run16_streams);
-    println!("24th_streams: {}", chart.stream_counts.run24_streams);
-    println!("32nd_streams: {}", chart.stream_counts.run32_streams);
-    println!("total_breaks: {}", total_breaks);
-    println!("stream_percent: {:.2}", stream_percent);
+    println!("Total Stream: {} ({:.2}%)", total_stream, stream_percent);
+    println!("    16th_streams: {}", chart.stream_counts.run16_streams);
+    println!("    24th_streams: {}", chart.stream_counts.run24_streams);
+    println!("    32nd_streams: {}", chart.stream_counts.run32_streams);
     // TODO: adj_stream_percent
+    println!("Total Break: {} ({:.2}%)", total_break, 100.0 - stream_percent);
 
-    println!("max_nps: {:.2}", chart.max_nps);
-    println!("median_nps: {:.2}", chart.median_nps);
-    println!("mono total: {}", chart.mono_total);
+    println!("\n--- Chart Info ---");
+    println!("Steps: {} ({} arrows) [{} left, {} down, {} up, {} right]", chart.stats.total_steps, chart.stats.total_arrows,chart.stats.left, chart.stats.down, chart.stats.up, chart.stats.right);
+    println!("Jumps: {}", chart.stats.jumps);
+    println!("Hands: {}", chart.stats.hands);
+    println!("Holds: {}", chart.stats.holds);
+    println!("Rolls: {}", chart.stats.rolls);
+    println!("Mines: {}", chart.stats.mines);
 
-    let left_foot_candles = count(&chart.detected_patterns, PatternVariant::CandleLeft);
-    let right_foot_candles = count(&chart.detected_patterns, PatternVariant::CandleRight);
-    let total_candles = left_foot_candles + right_foot_candles;
-    println!("total_candles: {}", total_candles);
-    println!("left_foot_candles: {}", left_foot_candles);
-    println!("right_foot_candles: {}", right_foot_candles);
-    println!("candles_percent: {:.2}", chart.candle_percent);
+    println!("\n--- Pattern Analysis ---");
+    let candle_left = chart.detected_patterns.get(&PatternVariant::CandleLeft).unwrap_or(&0);
+    let candle_right = chart.detected_patterns.get(&PatternVariant::CandleRight).unwrap_or(&0);
+    println!("Candles: {} ({} left, {} right)",
+        candle_left + candle_right, candle_left, candle_right);
+    println!("Candle%: {:.2}%", chart.candle_percent);
+    println!("Mono: {} ({} left-facing, {} right-facing)", chart.mono_total, chart.facing_left, chart.facing_right);
+    println!("Mono%: {:.2}%", chart.mono_percent);
 
-    println!("total_mono: {}", chart.mono_total);
-    println!("left_face_mono: {}", chart.facing_left);
-    println!("right_face_mono: {}", chart.facing_right);
-    println!("mono_percent: {:.2}", chart.mono_percent);
+    let box_lr = chart.detected_patterns.get(&PatternVariant::BoxLR).unwrap_or(&0);
+    let box_ud = chart.detected_patterns.get(&PatternVariant::BoxUD).unwrap_or(&0);
+    let box_ld = chart.detected_patterns.get(&PatternVariant::BoxCornerLD).unwrap_or(&0);
+    let box_lu = chart.detected_patterns.get(&PatternVariant::BoxCornerLU).unwrap_or(&0);
+    let box_rd = chart.detected_patterns.get(&PatternVariant::BoxCornerRD).unwrap_or(&0);
+    let box_ru = chart.detected_patterns.get(&PatternVariant::BoxCornerRU).unwrap_or(&0);
+    let box_corners = box_lr + box_ud + box_ld + box_lu + box_rd + box_ru;
+    println!("Boxes: {} ({} LRLR, {} UDUD, {} LDLD, {} LULU, {} RDRD, {} RURU)",
+        box_lr + box_ud + box_corners, box_lr, box_ud, box_ld, box_lu, box_rd, box_ru);
 
-    let lr_boxes = count(&chart.detected_patterns, PatternVariant::BoxLR);
-    let ud_boxes = count(&chart.detected_patterns, PatternVariant::BoxUD);
-    let ld_boxes = count(&chart.detected_patterns, PatternVariant::BoxCornerLD);
-    let lu_boxes = count(&chart.detected_patterns, PatternVariant::BoxCornerLU);
-    let rd_boxes = count(&chart.detected_patterns, PatternVariant::BoxCornerRD);
-    let ru_boxes = count(&chart.detected_patterns, PatternVariant::BoxCornerRU);
-    let corner_boxes = ld_boxes + lu_boxes + rd_boxes + ru_boxes;
-    let total_boxes = lr_boxes + ud_boxes + corner_boxes;
-    println!("total_boxes: {}", total_boxes);
-    println!("lr_boxes: {}", lr_boxes);
-    println!("ud_boxes: {}", ud_boxes);
-    println!("corner_boxes: {}", corner_boxes);
-    println!("ld_boxes: {}", ld_boxes);
-    println!("lu_boxes: {}", lu_boxes);
-    println!("rd_boxes: {}", rd_boxes);
-    println!("ru_boxes: {}", ru_boxes);
+    let anchor_total = chart.anchor_left + chart.anchor_down + chart.anchor_up + chart.anchor_right;
+    println!("Anchors: {} ({} left, {} down, {} up, {} right)",
+        anchor_total, chart.anchor_left, chart.anchor_down, chart.anchor_up, chart.anchor_right);
 
-    let total_anchors = chart.anchor_left + chart.anchor_down + chart.anchor_up + chart.anchor_right;
-    println!("total_anchors: {}", total_anchors);
-    println!("left_anchors: {}", chart.anchor_left);
-    println!("down_anchors: {}", chart.anchor_down);
-    println!("up_anchors: {}", chart.anchor_up);
-    println!("right_anchors: {}", chart.anchor_right);
+    if !chart.detailed.is_empty() {
+        println!("\n--- Detailed Breakdown ---");
+        println!("{}", chart.detailed);
+        println!("--- Partially Simplified ---");
+        println!("{}", chart.partial);
+        println!("--- Simplified Breakdown ---");
+        println!("{}", chart.simple);
+    }
 
-    println!("detailed_breakdown: {}", chart.detailed);
-    println!("partial_breakdown: {}", chart.partial);
-    println!("simple_breakdown: {}", chart.simple);
-
+    println!("\n--- Other Patterns ---");
     let lr_towers = count(&chart.detected_patterns, PatternVariant::TowerLR);
     let ud_towers = count(&chart.detected_patterns, PatternVariant::TowerUD);
     let ld_towers = count(&chart.detected_patterns, PatternVariant::TowerCornerLD);
@@ -329,140 +325,111 @@ fn print_full_chart(chart: &ChartSummary) {
     let ru_towers = count(&chart.detected_patterns, PatternVariant::TowerCornerRU);
     let corner_towers = ld_towers + lu_towers + rd_towers + ru_towers;
     let total_towers = lr_towers + ud_towers + corner_towers;
-    println!("total_towers: {}", total_towers);
-    println!("lr_towers: {}", lr_towers);
-    println!("ud_towers: {}", ud_towers);
-    println!("corner_towers: {}", corner_towers);
-    println!("ld_towers: {}", ld_towers);
-    println!("lu_towers: {}", lu_towers);
-    println!("rd_towers: {}", rd_towers);
-    println!("ru_towers: {}", ru_towers);
+    println!("Total Towers: {} ({} LR, {} UD, {} LD, {} LU, {} RD, {} RU)", total_towers, lr_towers, ud_towers, ld_towers, lu_towers, rd_towers, ru_towers);
 
+    // Triangles
     let ldl_triangles = count(&chart.detected_patterns, PatternVariant::TriangleLDL);
     let lul_triangles = count(&chart.detected_patterns, PatternVariant::TriangleLUL);
     let rdr_triangles = count(&chart.detected_patterns, PatternVariant::TriangleRDR);
     let rur_triangles = count(&chart.detected_patterns, PatternVariant::TriangleRUR);
     let total_triangles = ldl_triangles + lul_triangles + rdr_triangles + rur_triangles;
-    println!("total_triangles: {}", total_triangles);
-    println!("ldl_triangles: {}", ldl_triangles);
-    println!("lul_triangles: {}", lul_triangles);
-    println!("rdr_triangles: {}", rdr_triangles);
-    println!("rur_triangles: {}", rur_triangles);
+    println!("Total Triangles: {} ({} LDL, {} LUL, {} RDR, {} RUR)",
+        total_triangles, ldl_triangles, lul_triangles, rdr_triangles, rur_triangles);
 
+    // Staircases
     let left_staircases = count(&chart.detected_patterns, PatternVariant::StaircaseLeft);
     let right_staircases = count(&chart.detected_patterns, PatternVariant::StaircaseRight);
     let left_inv_staircases = count(&chart.detected_patterns, PatternVariant::StaircaseInvLeft);
     let right_inv_staircases = count(&chart.detected_patterns, PatternVariant::StaircaseInvRight);
     let total_staircases = left_staircases + right_staircases + left_inv_staircases + right_inv_staircases;
-    println!("total staircases: {}", total_staircases);
-    println!("left_staircases: {}", left_staircases);
-    println!("right_staircases: {}", right_staircases);
-    println!("left_inv_staircases: {}", left_inv_staircases);
-    println!("right_inv_staircases: {}", right_inv_staircases);
+    println!("Staircases: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
+        total_staircases, left_staircases, right_staircases, left_inv_staircases, right_inv_staircases);
 
-    println!("left_alt_staircases: {}", count(&chart.detected_patterns, PatternVariant::AltStaircasesLeft));
-    println!("right_alt_staircases: {}", count(&chart.detected_patterns, PatternVariant::AltStaircasesRight));
-    println!("left_inv_alt_staircases: {}", count(&chart.detected_patterns, PatternVariant::AltStaircasesInvLeft));
-    println!("right_inv_alt_staircases: {}", count(&chart.detected_patterns, PatternVariant::AltStaircasesInvRight));
-    println!("left_double_staircases: {}", count(&chart.detected_patterns, PatternVariant::DStaircaseLeft));
-    println!("right_double_staircases: {}", count(&chart.detected_patterns, PatternVariant::DStaircaseRight));
-    println!("left_inv_double_staircases: {}", count(&chart.detected_patterns, PatternVariant::DStaircaseInvLeft));
-    println!("right_inv_double_staircases: {}", count(&chart.detected_patterns, PatternVariant::DStaircaseInvRight));
+    // Alternate Staircases
+    println!("Alt Staircases: ({} Left, {} Right, {} Left Inv, {} Right Inv)",
+        count(&chart.detected_patterns, PatternVariant::AltStaircasesLeft),
+        count(&chart.detected_patterns, PatternVariant::AltStaircasesRight),
+        count(&chart.detected_patterns, PatternVariant::AltStaircasesInvLeft),
+        count(&chart.detected_patterns, PatternVariant::AltStaircasesInvRight));
 
+    // Double Staircases
+    println!("Double Staircases: ({} Left, {} Right, {} Left Inv, {} Right Inv)",
+        count(&chart.detected_patterns, PatternVariant::DStaircaseLeft),
+        count(&chart.detected_patterns, PatternVariant::DStaircaseRight),
+        count(&chart.detected_patterns, PatternVariant::DStaircaseInvLeft),
+        count(&chart.detected_patterns, PatternVariant::DStaircaseInvRight));
+
+    // Sweeps
     let left_sweeps = count(&chart.detected_patterns, PatternVariant::SweepLeft);
     let right_sweeps = count(&chart.detected_patterns, PatternVariant::SweepRight);
     let left_inv_sweeps = count(&chart.detected_patterns, PatternVariant::SweepInvLeft);
     let right_inv_sweeps = count(&chart.detected_patterns, PatternVariant::SweepInvRight);
     let total_sweeps = left_sweeps + right_sweeps + left_inv_sweeps + right_inv_sweeps;
-    println!("total_sweeps: {}", total_sweeps);
-    println!("left_sweeps: {}", left_sweeps);
-    println!("right_sweeps: {}", right_sweeps);
-    println!("left_inv_sweeps: {}", left_inv_sweeps);
-    println!("right_inv_sweeps: {}", right_inv_sweeps);
+    println!("Sweeps: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
+        total_sweeps, left_sweeps, right_sweeps, left_inv_sweeps, right_inv_sweeps);
 
+    // Candle Sweeps
     let left_candle_sweeps = count(&chart.detected_patterns, PatternVariant::SweepCandleLeft);
     let right_candle_sweeps = count(&chart.detected_patterns, PatternVariant::SweepCandleRight);
     let left_inv_candle_sweeps = count(&chart.detected_patterns, PatternVariant::SweepCandleInvLeft);
     let right_inv_candle_sweeps = count(&chart.detected_patterns, PatternVariant::SweepCandleInvRight);
     let total_candle_sweeps = left_candle_sweeps + right_candle_sweeps + left_inv_candle_sweeps + right_inv_candle_sweeps;
-    println!("total_candle_sweeps: {}", total_candle_sweeps);
-    println!("left_candle_sweeps: {}", left_candle_sweeps);
-    println!("right_candle_sweeps: {}", right_candle_sweeps);
-    println!("left_inv_candle_sweeps: {}", left_inv_candle_sweeps);
-    println!("right_inv_candle_sweeps: {}", right_inv_candle_sweeps);
+    println!("Candle Sweeps: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
+        total_candle_sweeps, left_candle_sweeps, right_candle_sweeps, left_inv_candle_sweeps, right_inv_candle_sweeps);
 
+    // Copters
     let left_copters = count(&chart.detected_patterns, PatternVariant::CopterLeft);
     let right_copters = count(&chart.detected_patterns, PatternVariant::CopterRight);
     let left_inv_copters = count(&chart.detected_patterns, PatternVariant::CopterInvLeft);
     let right_inv_copters = count(&chart.detected_patterns, PatternVariant::CopterInvRight);
     let total_copters = left_copters + right_copters + left_inv_copters + right_inv_copters;
-    println!("total copters: {}", total_copters);
-    println!("left_copters: {}", left_copters);
-    println!("right_copters: {}", right_copters);
-    println!("left_inv_copters: {}", left_inv_copters);
-    println!("right_inv_copters: {}", right_inv_copters);
+    println!("Copters: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
+        total_copters, left_copters, right_copters, left_inv_copters, right_inv_copters);
 
+    // Spirals
     let left_spirals = count(&chart.detected_patterns, PatternVariant::SpiralLeft);
     let right_spirals = count(&chart.detected_patterns, PatternVariant::SpiralRight);
     let left_inv_spirals = count(&chart.detected_patterns, PatternVariant::SpiralInvLeft);
     let right_inv_spirals = count(&chart.detected_patterns, PatternVariant::SpiralInvRight);
     let total_spirals = left_spirals + right_spirals + left_inv_spirals + right_inv_spirals;
-    println!("total_spirals: {}", total_spirals);
-    println!("left_spirals: {}", left_spirals);
-    println!("right_spirals: {}", right_spirals);
-    println!("left_inv_spirals: {}", left_inv_spirals);
-    println!("right_inv_spirals: {}", right_inv_spirals);
+    println!("Spirals: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
+        total_spirals, left_spirals, right_spirals, left_inv_spirals, right_inv_spirals);
 
+    // Turbo Candles
     let left_turbo_candles = count(&chart.detected_patterns, PatternVariant::TurboCandleLeft);
     let right_turbo_candles = count(&chart.detected_patterns, PatternVariant::TurboCandleRight);
     let left_inv_turbo_candles = count(&chart.detected_patterns, PatternVariant::TurboCandleInvLeft);
     let right_inv_turbo_candles = count(&chart.detected_patterns, PatternVariant::TurboCandleInvRight);
     let total_turbo_candles = left_turbo_candles + right_turbo_candles + left_inv_turbo_candles + right_inv_turbo_candles;
-    println!("total_turbo_candles: {}", total_turbo_candles);
-    println!("left_turbo_candles: {}", left_turbo_candles);
-    println!("right_turbo_candles: {}", right_turbo_candles);
-    println!("left_inv_turbo_candles: {}", left_inv_turbo_candles);
-    println!("right_inv_turbo_candles: {}", right_inv_turbo_candles);
+    println!("Turbo Candles: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
+        total_turbo_candles, left_turbo_candles, right_turbo_candles, left_inv_turbo_candles, right_inv_turbo_candles);
 
+    // Hip Breakers
     let left_hip_breakers = count(&chart.detected_patterns, PatternVariant::HipBreakerLeft);
     let right_hip_breakers = count(&chart.detected_patterns, PatternVariant::HipBreakerRight);
     let left_inv_hip_breakers = count(&chart.detected_patterns, PatternVariant::HipBreakerInvLeft);
     let right_inv_hip_breakers = count(&chart.detected_patterns, PatternVariant::HipBreakerInvRight);
     let total_hip_breakers = left_hip_breakers + right_hip_breakers + left_inv_hip_breakers + right_inv_hip_breakers;
-    println!("total_hip_breakers: {}", total_hip_breakers);
-    println!("left_hip_breakers: {}", left_hip_breakers);
-    println!("right_hip_breakers: {}", right_hip_breakers);
-    println!("left_inv_hip_breakers: {}", left_inv_hip_breakers);
-    println!("right_inv_hip_breakers: {}", right_inv_hip_breakers);
+    println!("Hip Breakers: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
+        total_hip_breakers, left_hip_breakers, right_hip_breakers, left_inv_hip_breakers, right_inv_hip_breakers);
 
+    // Doritos
     let left_doritos = count(&chart.detected_patterns, PatternVariant::DoritoLeft);
     let right_doritos = count(&chart.detected_patterns, PatternVariant::DoritoRight);
     let left_inv_doritos = count(&chart.detected_patterns, PatternVariant::DoritoInvLeft);
     let right_inv_doritos = count(&chart.detected_patterns, PatternVariant::DoritoInvRight);
     let total_doritos = left_doritos + right_doritos + left_inv_doritos + right_inv_doritos;
-    println!("total_doritos: {}", total_doritos);
-    println!("left_doritos: {}", left_doritos);
-    println!("right_doritos: {}", right_doritos);
-    println!("left_inv_doritos: {}", left_inv_doritos);
-    println!("right_inv_doritos: {}", right_inv_doritos);
+    println!("Doritos: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
+        total_doritos, left_doritos, right_doritos, left_inv_doritos, right_inv_doritos);
 
+    // Luchis
     let left_du_luchis = count(&chart.detected_patterns, PatternVariant::LuchiLeftDU);
     let left_ud_luchis = count(&chart.detected_patterns, PatternVariant::LuchiLeftUD);
     let right_du_luchis = count(&chart.detected_patterns, PatternVariant::LuchiRightDU);
     let right_ud_luchis = count(&chart.detected_patterns, PatternVariant::LuchiRightUD);
     let total_luchis = left_du_luchis + left_ud_luchis + right_du_luchis + right_ud_luchis;
-    println!("total_luchis: {}", total_luchis);
-    println!("left_du_luchis: {}", left_du_luchis);
-    println!("left_ud_luchis: {}", left_ud_luchis);
-    println!("right_du_luchis: {}", right_du_luchis);
-    println!("right_ud_luchis: {}", right_ud_luchis);
-
-    let left_sideswitches = count(&chart.detected_patterns, PatternVariant::SideswitchLeft);
-    let right_sideswitches = count(&chart.detected_patterns, PatternVariant::SideswitchRight);
-    let total_sideswitches = left_sideswitches + right_sideswitches;
-    println!("total_sideswitches: {}", total_sideswitches);
-    println!("left_sideswitches: {}", left_sideswitches);
-    println!("right_sideswitches: {}", right_sideswitches);
+    println!("Luchis: {} ({} Left DU, {} Left UD, {} Right DU, {} Right UD)",
+        total_luchis, left_du_luchis, left_ud_luchis, right_du_luchis, right_ud_luchis);
 }
 
 // Subgroup field printing functions
@@ -830,8 +797,7 @@ total_spirals,left_spirals,right_spirals,left_inv_spirals,right_inv_spirals,\
 total_turbo_candles,left_turbo_candles,right_turbo_candles,left_inv_turbo_candles,right_inv_turbo_candles,\
 total_hip_breakers,left_hip_breakers,right_hip_breakers,left_inv_hip_breakers,right_inv_hip_breakers,\
 total_doritos,left_doritos,right_doritos,left_inv_doritos,right_inv_doritos,\
-total_luchis,left_du_luchis,left_ud_luchis,right_du_luchis,right_ud_luchis,\
-total_sideswitches,left_sideswitches,right_sideswitches"
+total_luchis,left_du_luchis,left_ud_luchis,right_du_luchis,right_ud_luchis"
     );
 
     for chart in &simfile.charts {
@@ -1135,11 +1101,6 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
         right_du_luchis,
         right_ud_luchis,
     );
-
-    let left_sideswitches = count(&chart.detected_patterns, PatternVariant::SideswitchLeft);
-    let right_sideswitches = count(&chart.detected_patterns, PatternVariant::SideswitchRight);
-    let total_sideswitches = left_sideswitches + right_sideswitches;
-    print!("{},{},{}", total_sideswitches, left_sideswitches, right_sideswitches);
 
     println!();
 }
