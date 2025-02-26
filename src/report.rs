@@ -326,7 +326,7 @@ fn print_full_all(simfile: &SimfileSummary) {
     println!("Max BPM: {:.2}", simfile.max_bpm);
     println!("Median BPM: {:.2}", simfile.median_bpm);
     println!("Average BPM: {:.2}", simfile.average_bpm);
-    println!("Chart length (seconds): {}", simfile.total_length);
+    println!("Length (seconds): {}", simfile.total_length);
 
     println!("---\n");
 
@@ -428,7 +428,7 @@ fn print_json_all(simfile: &SimfileSummary) {
     println!("  \"max_bpm\": {:.2},", simfile.max_bpm);
     println!("  \"median_bpm\": {:.2},", simfile.median_bpm);
     println!("  \"average_bpm\": {:.2},", simfile.average_bpm);
-    println!("  \"total_length_s\": {},", simfile.total_length);
+    println!("  \"length\": {},", simfile.total_length);
 
     println!("  \"charts\": [");
     for (i, chart) in simfile.charts.iter().enumerate() {
@@ -520,7 +520,7 @@ fn print_csv_all(simfile: &SimfileSummary) {
         .collect();
 
     println!(
-        "title,subtitle,artist,min_bpm,max_bpm,difficulty,rating,step_artist,tech_notation,chart_length_s,\
+        "title,subtitle,artist,min_bpm,max_bpm,difficulty,rating,step_artist,tech_notation,length,\
 total_arrows,total_streams,mono_percent,candle_percent,{}",
         pattern_names.join(",")
     );
