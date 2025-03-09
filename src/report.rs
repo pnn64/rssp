@@ -687,16 +687,6 @@ fn print_pattern_counts_fields(chart: &ChartSummary, indent: usize) {
     print_kv_int("left_ud_luchis", left_ud_luchis, indent + 2);
     print_kv_int("right_du_luchis", right_du_luchis, indent + 2);
     print_kv_int_last("right_ud_luchis", right_ud_luchis, indent + 2);
-    print_indented("},", indent);
-
-    // Sideswitches (last pattern type, no trailing comma)
-    print_indented("\"sideswitches\": {", indent);
-    let left_sideswitches = count(&chart.detected_patterns, PatternVariant::SideswitchLeft);
-    let right_sideswitches = count(&chart.detected_patterns, PatternVariant::SideswitchRight);
-    let total_sideswitches = left_sideswitches + right_sideswitches;
-    print_kv_int("total_sideswitches", total_sideswitches, indent + 2);
-    print_kv_int("left_sideswitches", left_sideswitches, indent + 2);
-    print_kv_int_last("right_sideswitches", right_sideswitches, indent + 2);
     print_indented("}", indent);
 }
 
@@ -725,44 +715,45 @@ fn print_json_chart(chart: &ChartSummary, is_last: bool) {
     print_nps_fields(chart, 8);
     print_indented("},", 6);
 
+    print_indented("\"breakdown\": {", 6);
+    print_breakdown_fields(chart, 8);
+    print_indented("},", 6);
+
     print_indented("\"mono_candle_stats\": {", 6);
     print_mono_candle_stats_fields(chart, 8);
     print_indented("},", 6);
 
     print_indented("\"pattern_counts\": {", 6);
     print_pattern_counts_fields(chart, 8);
-    print_indented("},", 6);
+    print_indented("}", 6);
 
-    print_indented("\"breakdown\": {", 6);
-    print_breakdown_fields(chart, 8);
-    print_indented("}", 6); // Last subgroup, no comma
-
-    print_indented("}", 4); // End of chart object
-    if !is_last {
-        print_indented(",", 4);
+    if is_last {
+        print_indented("}", 4);
+    } else {
+        println!("{}{},", " ".repeat(4), "}");
     }
 }
 
 // Function to print the entire simfile report in JSON format
 pub fn print_json_all(simfile: &SimfileSummary) {
     println!("{{");
-    print_kv_str("Title", &simfile.title_str, 2);
-    print_kv_str("Subtitle", &simfile.subtitle_str, 2);
-    print_kv_str("Artist", &simfile.artist_str, 2);
-    print_kv_str("Title trans", &simfile.titletranslit_str, 2);
-    print_kv_str("Subtitle trans", &simfile.subtitletranslit_str, 2);
-    print_kv_str("Artist trans", &simfile.artisttranslit_str, 2);
-    print_indented(&format!("\"Length\": \"{}\",", format_duration(simfile.total_length)), 2);
+    print_kv_str("title", &simfile.title_str, 2);
+    print_kv_str("subtitle", &simfile.subtitle_str, 2);
+    print_kv_str("artist", &simfile.artist_str, 2);
+    print_kv_str("title_trans", &simfile.titletranslit_str, 2);
+    print_kv_str("subtitle_trans", &simfile.subtitletranslit_str, 2);
+    print_kv_str("artist_trans", &simfile.artisttranslit_str, 2);
+    print_indented(&format!("\"length\": \"{}\",", format_duration(simfile.total_length)), 2);
     if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
-        print_indented(&format!("\"BPM\": {},", simfile.min_bpm), 2);
+        print_indented(&format!("\"bpm\": {},", simfile.min_bpm), 2);
     } else {
-        print_indented(&format!("\"BPM\": \"{:.0}-{:.0}\",", simfile.min_bpm, simfile.max_bpm), 2);
+        print_indented(&format!("\"bpm\": \"{:.0}-{:.0}\",", simfile.min_bpm, simfile.max_bpm), 2);
     }
     print_kv_float("min_bpm", simfile.min_bpm, 2);
     print_kv_float("max_bpm", simfile.max_bpm, 2);
     print_kv_float("average_bpm", simfile.average_bpm, 2);
     print_kv_float("median_bpm", simfile.median_bpm, 2);
-    print_kv_str("BPM-data", &simfile.normalized_bpms, 2);
+    print_kv_str("bpm_data", &simfile.normalized_bpms, 2);
     print_kv_float("offset", simfile.offset, 2);
     print_indented("\"charts\": [", 2);
     for (i, chart) in simfile.charts.iter().enumerate() {

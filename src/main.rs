@@ -81,7 +81,6 @@ fn main() -> io::Result<()> {
         }
     };
 
-    // Process file metadata once
     let mut title_str = std::str::from_utf8(title_opt.unwrap_or(b"<invalid-title>"))
         .unwrap_or("<invalid-title>")
         .to_owned();
@@ -126,7 +125,6 @@ fn main() -> io::Result<()> {
 
     let mut chart_summaries = Vec::new();
 
-    // Process each chart
     for (chart_num, notes_data) in notes_list.into_iter().enumerate() {
         let chart_start_time = Instant::now();
 
@@ -269,7 +267,6 @@ fn main() -> io::Result<()> {
             measure_densities,
         };
 
-        // Store it
         chart_summaries.push(summary);
     }
 
@@ -307,9 +304,6 @@ fn main() -> io::Result<()> {
         let color_scheme = if generate_png_alt { ColorScheme::Alternative } else { ColorScheme::Default };
 
         for chart_summary in &simfile.charts {
-            // measure_nps_vec can be derived from chart_summary.measure_densities + the same BPM map
-            // but we already have it in the chart’s code. If we want to store it in ChartSummary,
-            // we can do that. For demonstration, we’ll recompute:
             let measure_nps_vec = compute_measure_nps_vec(&chart_summary.measure_densities, &bpm_map);
 
             generate_density_graph_png(

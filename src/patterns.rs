@@ -35,8 +35,6 @@ pub enum PatternVariant {
     LuchiLeftUD,
     LuchiRightUD,
     LuchiRightDU,
-    SideswitchLeft,
-    SideswitchRight,
     SpiralLeft,
     SpiralRight,
     SpiralInvLeft,
@@ -180,10 +178,6 @@ pub static EXTRA_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::
     (PatternVariant::SweepCandleRight,    string_to_pattern_bits("RUDLULDUR")),
     (PatternVariant::SweepCandleInvLeft,  string_to_pattern_bits("LUDRURDUL")),
     (PatternVariant::SweepCandleInvRight, string_to_pattern_bits("RDULDLUDR")),
-
-    // Sideswitches (SS)
-    (PatternVariant::SideswitchLeft,        string_to_pattern_bits("LURRD")),
-    (PatternVariant::SideswitchRight,       string_to_pattern_bits("RDLLU")),
     ]
 });
 
