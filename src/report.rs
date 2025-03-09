@@ -468,8 +468,24 @@ fn print_chart_info_fields(chart: &ChartSummary, indent: usize) {
     print_kv_str("difficulty", &chart.difficulty_str, indent);
     print_kv_float("tier_bpm", chart.tier_bpm, indent);
     print_kv_str("rating", &chart.rating_str, indent);
-    let step_artists: Vec<&str> = chart.step_artist_str.split_whitespace().collect();
-    print_kv_array("step_artists", &step_artists, indent);
+    let mut step_artists: Vec<String> = Vec::new();
+    let chunks: Vec<&str> = chart.step_artist_str.split_whitespace().collect();
+    
+    let mut i = 0;
+    while i < chunks.len() {
+        if i + 1 < chunks.len() && chunks[i].ends_with('.') && chunks[i].len() <= 2 {
+            // Combine initial with the next chunk
+            step_artists.push(format!("{} {}", chunks[i], chunks[i + 1]));
+            i += 2; // Skip the next chunk since it’s part of this name
+        } else {
+            // Treat as a separate stepartist
+            step_artists.push(chunks[i].to_string());
+            i += 1;
+        }
+    }
+    
+    let step_artists_refs: Vec<&str> = step_artists.iter().map(|s| s.as_str()).collect();
+    print_kv_array("step_artists", &step_artists_refs, indent);
     print_kv_str("tech_notation", &chart.tech_notation_str, indent);
     print_kv_str("sha1", &chart.short_hash, indent);
     print_kv_str_last("bpm_neutral_sha1", &chart.bpm_neutral_hash, indent);
