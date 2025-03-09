@@ -166,7 +166,7 @@ fn main() -> io::Result<()> {
         let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
 
         let bpm_neutral_hash = if mode != OutputMode::Pretty {
-            compute_chart_hash(&minimized_chart, "0.000=1.000")
+            compute_chart_hash(&minimized_chart, "0.000=0.000")
         } else {
             String::new()
         };        
