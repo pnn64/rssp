@@ -153,6 +153,7 @@ fn main() -> io::Result<()> {
             minimized_chart.truncate(pos + 1);
         }
         let stream_counts = compute_stream_counts(&measure_densities);
+        let total_measures = measure_densities.len();
         let total_streams = stream_counts.run16_streams
             + stream_counts.run20_streams
             + stream_counts.run24_streams
@@ -248,6 +249,7 @@ fn main() -> io::Result<()> {
             stats,
             stream_counts,
             total_streams,
+            total_measures,
 
             detailed,
             partial,

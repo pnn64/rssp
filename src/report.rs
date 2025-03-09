@@ -14,6 +14,7 @@ pub struct ChartSummary {
     pub tier_bpm:          f64,
     pub stats:             ArrowStats,
     pub stream_counts:     StreamCounts,
+    pub total_measures:    usize,
     pub total_streams:     u32,
     pub detailed:          String,
     pub partial:           String,
@@ -179,11 +180,18 @@ fn print_pretty_chart(chart: &ChartSummary) {
 
     let total_stream = chart.total_streams;
     let total_break = chart.stream_counts.total_breaks;
-    let stream_percent = if total_stream + total_break > 0 {
+    let total_measures = chart.total_measures;
+
+    let adjusted_stream_percent = if total_stream + total_break > 0 {
         (total_stream as f64 / (total_stream + total_break) as f64) * 100.0
     } else { 0.0 };
-    println!("Total Stream: {} ({:.2}%)", total_stream, stream_percent);
-    println!("Total Break: {} ({:.2}%)", total_break, 100.0 - stream_percent);
+
+    let stream_percent = if total_measures > 0 {
+        (total_stream as f64 / total_measures as f64) * 100.0
+    } else { 0.0 };
+
+    println!("Total Stream: {} ({:.2}%/{:.2}% Adj.)", total_stream, stream_percent, adjusted_stream_percent);
+    println!("Total Break: {} ({:.2}%)", total_break, 100.0 - adjusted_stream_percent);
 
     println!("\n--- Chart Info ---");
     println!("Steps: {} ({} arrows)", chart.stats.total_steps, chart.stats.total_arrows);
@@ -282,16 +290,21 @@ fn print_full_chart(chart: &ChartSummary) {
     }
     let total_stream = chart.total_streams;
     let total_break = chart.stream_counts.total_breaks;
-    let stream_percent = if total_stream + total_break > 0 {
+    let total_measures = chart.total_measures;
+
+    let adjusted_stream_percent = if total_stream + total_break > 0 {
         (total_stream as f64 / (total_stream + total_break) as f64) * 100.0
     } else { 0.0 };
-    println!("Total Stream: {} ({:.2}%)", total_stream, stream_percent);
+
+    let stream_percent = if total_measures > 0 {
+        (total_stream as f64 / total_measures as f64) * 100.0
+    } else { 0.0 };
+    println!("Total Stream: {} ({:.2}%/{:.2}% Adj.)", total_stream, stream_percent, adjusted_stream_percent);
     println!("    16th_streams: {}", chart.stream_counts.run16_streams);
     println!("    20th_streams: {}", chart.stream_counts.run20_streams);
     println!("    24th_streams: {}", chart.stream_counts.run24_streams);
     println!("    32nd_streams: {}", chart.stream_counts.run32_streams);
-    // TODO: adj_stream_percent
-    println!("Total Break: {} ({:.2}%)", total_break, 100.0 - stream_percent);
+    println!("Total Break: {} ({:.2}%)", total_break, 100.0 - adjusted_stream_percent);
 
     println!("\n--- Chart Info ---");
     println!("Steps: {} ({} arrows) [{} left, {} down, {} up, {} right]", chart.stats.total_steps, chart.stats.total_arrows,chart.stats.left, chart.stats.down, chart.stats.up, chart.stats.right);
@@ -477,20 +490,26 @@ fn print_arrow_stats_fields(chart: &ChartSummary, indent: usize) {
 }
 
 fn print_stream_info_fields(chart: &ChartSummary, indent: usize) {
-    let total_streams = chart.total_streams;
-    let total_breaks = chart.stream_counts.total_breaks;
-    let stream_percent = if total_streams + total_breaks > 0 {
-        (total_streams as f64 / (total_streams + total_breaks) as f64) * 100.0
-    } else {
-        0.0
-    };
-    print_kv_int("total_streams", total_streams, indent);
+    let total_stream = chart.total_streams;
+    let total_break = chart.stream_counts.total_breaks;
+    let total_measures = chart.total_measures;
+
+    let adj_stream_percent = if total_stream + total_break > 0 {
+        (total_stream as f64 / (total_stream + total_break) as f64) * 100.0
+    } else { 0.0 };
+
+    let stream_percent = if total_measures > 0 {
+        (total_stream as f64 / total_measures as f64) * 100.0
+    } else { 0.0 };
+    print_kv_int("total_streams", total_stream, indent);
     print_kv_int("16th_streams", chart.stream_counts.run16_streams, indent);
     print_kv_int("20th_streams", chart.stream_counts.run20_streams, indent);
     print_kv_int("24th_streams", chart.stream_counts.run24_streams, indent);
     print_kv_int("32nd_streams", chart.stream_counts.run32_streams, indent);
-    print_kv_int("total_breaks", total_breaks, indent);
-    print_kv_float_last("stream_percent", stream_percent, indent);
+    print_kv_int("total_breaks", total_break, indent);
+    print_kv_float("stream_percent", stream_percent, indent);
+    print_kv_float("adj_stream_percent", adj_stream_percent, indent);
+    print_kv_float_last("break_percent", 100.0 - adj_stream_percent, indent);
 }
 
 fn print_nps_fields(chart: &ChartSummary, indent: usize) {
