@@ -5,11 +5,13 @@ use crate::patterns::PatternVariant;
 use crate::stats::{ArrowStats, StreamCounts};
 
 pub struct ChartSummary {
+    
     pub step_type_str:     String,
     pub step_artist_str:   String,
     pub difficulty_str:    String,
     pub rating_str:        String,
     pub tech_notation_str: String,
+    pub tier_bpm:          f64,
     pub stats:             ArrowStats,
     pub stream_counts:     StreamCounts,
     pub total_streams:     u32,
@@ -120,6 +122,18 @@ fn print_kv_float(key: &str, value: f64, indent: usize) {
 
 fn print_kv_float_last(key: &str, value: f64, indent: usize) {
     print_indented(&format!("\"{}\": {:.2}", key, value), indent);
+}
+
+fn print_kv_array(key: &str, values: &[&str], indent: usize) {
+    let mut line = format!("\"{}\": [", key);
+    for (i, val) in values.iter().enumerate() {
+        if i > 0 {
+            line.push_str(", ");
+        }
+        line.push_str(&format!("\"{}\"", esc(val)));
+    }
+    line.push_str("],");
+    print_indented(&line, indent);
 }
 
 // Helper function to count pattern occurrences
@@ -254,6 +268,7 @@ fn print_full_chart(chart: &ChartSummary) {
     println!("{}", "-".repeat(header.len()));
 
     println!("Step Type: {}", chart.step_type_str);
+    println!("Tier BPM: {}", chart.tier_bpm);
     if !chart.tech_notation_str.is_empty() {
         println!("Tech Notations: {}", chart.tech_notation_str);
     }
@@ -272,6 +287,7 @@ fn print_full_chart(chart: &ChartSummary) {
     } else { 0.0 };
     println!("Total Stream: {} ({:.2}%)", total_stream, stream_percent);
     println!("    16th_streams: {}", chart.stream_counts.run16_streams);
+    println!("    20th_streams: {}", chart.stream_counts.run20_streams);
     println!("    24th_streams: {}", chart.stream_counts.run24_streams);
     println!("    32nd_streams: {}", chart.stream_counts.run32_streams);
     // TODO: adj_stream_percent
@@ -437,8 +453,10 @@ fn print_full_chart(chart: &ChartSummary) {
 fn print_chart_info_fields(chart: &ChartSummary, indent: usize) {
     print_kv_str("step_type", &chart.step_type_str, indent);
     print_kv_str("difficulty", &chart.difficulty_str, indent);
+    print_kv_float("tier_bpm", chart.tier_bpm, indent);
     print_kv_str("rating", &chart.rating_str, indent);
-    print_kv_str("step_artist", &chart.step_artist_str, indent);
+    let step_artists: Vec<&str> = chart.step_artist_str.split_whitespace().collect();
+    print_kv_array("step_artists", &step_artists, indent);
     print_kv_str("tech_notation", &chart.tech_notation_str, indent);
     print_kv_str("sha1", &chart.short_hash, indent);
     print_kv_str_last("bpm_neutral_sha1", &chart.bpm_neutral_hash, indent);
@@ -468,6 +486,7 @@ fn print_stream_info_fields(chart: &ChartSummary, indent: usize) {
     };
     print_kv_int("total_streams", total_streams, indent);
     print_kv_int("16th_streams", chart.stream_counts.run16_streams, indent);
+    print_kv_int("20th_streams", chart.stream_counts.run20_streams, indent);
     print_kv_int("24th_streams", chart.stream_counts.run24_streams, indent);
     print_kv_int("32nd_streams", chart.stream_counts.run32_streams, indent);
     print_kv_int("total_breaks", total_breaks, indent);
@@ -772,7 +791,7 @@ fn print_csv_all(simfile: &SimfileSummary) {
 step_type,difficulty,rating,step_artist,tech_notation,sha1_hash,bpm_neutral_hash,\
 total_arrows,left_arrows,down_arrows,up_arrows,right_arrows,\
 total_steps,jumps,hands,holds,rolls,mines,\
-total_streams,16th_streams,24th_streams,32nd_streams,total_breaks,stream_percent,adj_stream_percent,\
+total_streams,16th_streams,20th_streams,24th_streams,32nd_streams,total_breaks,stream_percent,adj_stream_percent,\
 max_nps,median_nps,mono total,\
 total_candles,left_foot_candles,right_foot_candles,candles_percent,\
 total_mono,left_face_mono,right_face_mono,mono_percent,\
@@ -866,9 +885,10 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
     let stream_percent = if total_streams + total_breaks > 0 {
         (total_streams as f64 / (total_streams + total_breaks) as f64) * 100.0
     } else { 0.0 };
-    print!("{},{},{},{},{},{},",
+    print!("{},{},{},{},{},{},{},",
         total_streams,
         chart.stream_counts.run16_streams,
+        chart.stream_counts.run20_streams,
         chart.stream_counts.run24_streams,
         chart.stream_counts.run32_streams,
         total_breaks,

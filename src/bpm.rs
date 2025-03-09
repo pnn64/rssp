@@ -146,3 +146,58 @@ pub fn compute_bpm_stats(bpm_values: &[f64]) -> (f64, f64) {
     let average = sorted.iter().sum::<f64>() / sorted.len() as f64;
     (median, average)
 }
+
+pub fn compute_tier_bpm(measure_densities: &[usize], bpm_map: &[(f64, f64)], beats_per_measure: f64) -> f64 {
+    use crate::stats::categorize_measure_density;
+    use crate::stats::RunDensity;
+
+    // Calculate the maximum BPM from bpm_map
+    let max_bpm = bpm_map.iter().map(|&(_, bpm)| bpm).fold(f64::NEG_INFINITY, f64::max);
+
+    let cats: Vec<RunDensity> = measure_densities.iter().map(|&d| categorize_measure_density(d)).collect();
+    let mut max_e: f64 = 0.0;
+
+    let mut i = 0;
+    while i < cats.len() {
+        let cat = cats[i];
+        if cat == RunDensity::Break {
+            i += 1;
+            continue;
+        }
+
+        let mut j = i;
+        while j < cats.len() && cats[j] == cat {
+            j += 1;
+        }
+        let seq_len = j - i;
+
+        if seq_len >= 4 {
+            for k in i..j {
+                let beat = k as f64 * beats_per_measure;
+                let bpm_k = get_bpm_at_beat(bpm_map, beat);
+                let d_k = measure_densities[k] as f64;
+                let e_k = (d_k * bpm_k) / 16.0;
+                max_e = max_e.max(e_k);
+            }
+        }
+        i = j;
+    }
+
+    // Return max_bpm if no qualifying sequences are found
+    if max_e > 0.0 {
+        max_e
+    } else {
+        max_bpm
+    }
+}
+
+pub fn get_bpm_at_beat(bpm_map: &[(f64, f64)], beat: f64) -> f64 {
+    let mut last_bpm = 0.0; // Default to 0 if no BPM is set before the beat
+    for &(b, bpm) in bpm_map {
+        if b > beat {
+            break;
+        }
+        last_bpm = bpm;
+    }
+    last_bpm
+}

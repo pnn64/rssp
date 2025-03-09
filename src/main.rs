@@ -171,6 +171,8 @@ fn main() -> io::Result<()> {
             String::new()
         };
 
+        let tier_bpm = compute_tier_bpm(&measure_densities, &bpm_map, 4.0);
+
         let short_hash = compute_chart_hash(&minimized_chart, &normalized_bpms);
 
         let bitmasks = {
@@ -241,6 +243,7 @@ fn main() -> io::Result<()> {
             difficulty_str,
             rating_str,
             tech_notation_str,
+            tier_bpm,
 
             stats,
             stream_counts,

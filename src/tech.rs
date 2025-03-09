@@ -45,12 +45,12 @@ fn is_measure_data(s: &str) -> bool {
     }
     // Must have at least one slash/dash/star to be measure data
     // so "4199" remains a step artist name.
-    let has_measure_symbol = s.chars().any(|c| c == '/' || c == '-' || c == '*');
+    let has_measure_symbol = s.chars().any(|c| c == '/' || c == '-' || c == '*' || c == '|');
     if !has_measure_symbol {
         return false;
     }
     // Now ensure every character is digit or slash/dash/star
-    s.chars().all(|c| c.is_ascii_digit() || c == '/' || c == '-' || c == '*')
+    s.chars().all(|c| c.is_ascii_digit() || c == '/' || c == '-' || c == '*' || c == '|')
 }
 
 /// Attempts to parse a chunk as a full sequence of known tech notations with no leftover.
