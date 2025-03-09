@@ -30,6 +30,7 @@ pub struct ChartSummary {
     pub candle_total:      u32,
     pub candle_percent:    f64,
     pub short_hash:        String,
+    pub bpm_neutral_hash:  String,
     pub elapsed:           Duration,
     pub measure_densities: Vec<usize>,
 }
@@ -257,7 +258,7 @@ fn print_full_chart(chart: &ChartSummary) {
         println!("Tech Notations: {}", chart.tech_notation_str);
     }
     println!("SHA1 Hash: {}\n", chart.short_hash);
-    // TODO: bpm_neutral_hash
+    println!("BPM Neutral SHA1 Hash: {}\n", chart.bpm_neutral_hash);
 
     if (chart.median_nps - chart.max_nps).abs() < f64::EPSILON {
         println!("NPS: {:.2} Median/Peak", chart.median_nps);
@@ -438,7 +439,9 @@ fn print_chart_info_fields(chart: &ChartSummary, indent: usize) {
     print_kv_str("difficulty", &chart.difficulty_str, indent);
     print_kv_str("rating", &chart.rating_str, indent);
     print_kv_str("step_artist", &chart.step_artist_str, indent);
-    print_kv_str_last("tech_notation", &chart.tech_notation_str, indent);
+    print_kv_str("tech_notation", &chart.tech_notation_str, indent);
+    print_kv_str("sha1", &chart.short_hash, indent);
+    print_kv_str_last("bpm_neutral_sha1", &chart.bpm_neutral_hash, indent);
 }
 
 fn print_arrow_stats_fields(chart: &ChartSummary, indent: usize) {
@@ -743,7 +746,7 @@ pub fn print_json_all(simfile: &SimfileSummary) {
     print_kv_str("title_trans", &simfile.titletranslit_str, 2);
     print_kv_str("subtitle_trans", &simfile.subtitletranslit_str, 2);
     print_kv_str("artist_trans", &simfile.artisttranslit_str, 2);
-    print_indented(&format!("\"length\": \"{}\",", format_duration(simfile.total_length)), 2);
+    print_indented(&format!("\"length\": \"{}\",", simfile.total_length), 2);
     if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
         print_indented(&format!("\"bpm\": {},", simfile.min_bpm), 2);
     } else {
@@ -819,7 +822,7 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
     } else {
         print!("{}-{},", simfile.min_bpm, simfile.max_bpm);
     }
-    // TODO: BPM Tier
+    // TODO: Tier BPM
     print!("{},{},{},{},{},{},",
         simfile.min_bpm,
         simfile.max_bpm,
@@ -831,17 +834,15 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
     // TODO: file_md5_hash
     print!(",");
 
-    print!("{},{},{},{},{},",
+    print!("{},{},{},{},{},{},{},",
         esc_csv(&chart.step_type_str),
         esc_csv(&chart.difficulty_str),
         esc_csv(&chart.rating_str),
         esc_csv(&chart.step_artist_str),
         esc_csv(&chart.tech_notation_str),
+        esc_csv(&chart.short_hash),
+        esc_csv(&chart.bpm_neutral_hash),
     );
-    // TODO: sha1_hash
-    print!(",");
-    // TODO: bpm_neutral_hash
-    print!(",");
 
     print!("{},{},{},{},{},",
         chart.stats.total_arrows,

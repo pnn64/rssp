@@ -165,6 +165,12 @@ fn main() -> io::Result<()> {
         let measure_nps_vec = compute_measure_nps_vec(&measure_densities, &bpm_map);
         let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
 
+        let bpm_neutral_hash = if mode != OutputMode::Pretty {
+            compute_chart_hash(&minimized_chart, "0.000=1.000")
+        } else {
+            String::new()
+        };        
+
         let short_hash = compute_chart_hash(&minimized_chart, &normalized_bpms);
 
         let bitmasks = {
@@ -261,6 +267,7 @@ fn main() -> io::Result<()> {
             candle_percent,
 
             short_hash,
+            bpm_neutral_hash,
 
             elapsed: elapsed_chart,
 
