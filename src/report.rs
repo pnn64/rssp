@@ -122,18 +122,6 @@ fn print_kv_float_last(key: &str, value: f64, indent: usize) {
     print_indented(&format!("\"{}\": {:.2}", key, value), indent);
 }
 
-fn print_kv_array(key: &str, values: &[&str], indent: usize) {
-    let mut line = format!("\"{}\": [", key);
-    for (i, val) in values.iter().enumerate() {
-        if i > 0 {
-            line.push_str(", ");
-        }
-        line.push_str(&format!("\"{}\"", esc(val)));
-    }
-    line.push_str("],");
-    print_indented(&line, indent);
-}
-
 // Helper function to count pattern occurrences
 fn count(map: &HashMap<PatternVariant, u32>, variant: PatternVariant) -> u32 {
     *map.get(&variant).unwrap_or(&0)
@@ -450,8 +438,7 @@ fn print_chart_info_fields(chart: &ChartSummary, indent: usize) {
     print_kv_str("step_type", &chart.step_type_str, indent);
     print_kv_str("difficulty", &chart.difficulty_str, indent);
     print_kv_str("rating", &chart.rating_str, indent);
-    let step_artists: Vec<&str> = chart.step_artist_str.split_whitespace().collect();
-    print_kv_array("step_artists", &step_artists, indent);
+    print_kv_str("step_artist", &chart.step_artist_str, indent);
     print_kv_str("tech_notation", &chart.tech_notation_str, indent);
     print_kv_str("sha1", &chart.short_hash, indent);
     print_kv_str_last("bpm_neutral_sha1", &chart.bpm_neutral_hash, indent);
