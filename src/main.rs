@@ -169,7 +169,7 @@ fn main() -> io::Result<()> {
             compute_chart_hash(&minimized_chart, "0.000=0.000")
         } else {
             String::new()
-        };        
+        };
 
         let short_hash = compute_chart_hash(&minimized_chart, &normalized_bpms);
 

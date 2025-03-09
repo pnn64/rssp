@@ -257,7 +257,7 @@ fn print_full_chart(chart: &ChartSummary) {
     if !chart.tech_notation_str.is_empty() {
         println!("Tech Notations: {}", chart.tech_notation_str);
     }
-    println!("SHA1 Hash: {}\n", chart.short_hash);
+    println!("SHA1 Hash: {}", chart.short_hash);
     println!("BPM Neutral SHA1 Hash: {}\n", chart.bpm_neutral_hash);
 
     if (chart.median_nps - chart.max_nps).abs() < f64::EPSILON {
@@ -757,7 +757,7 @@ pub fn print_json_all(simfile: &SimfileSummary) {
     print_kv_float("average_bpm", simfile.average_bpm, 2);
     print_kv_float("median_bpm", simfile.median_bpm, 2);
     print_kv_str("bpm_data", &simfile.normalized_bpms, 2);
-    print_kv_float("offset", simfile.offset, 2);
+    print_indented(&format!("\"offset\": {:.3},", simfile.offset), 2);
     print_indented("\"charts\": [", 2);
     for (i, chart) in simfile.charts.iter().enumerate() {
         print_json_chart(chart, i + 1 == simfile.charts.len());
