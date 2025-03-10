@@ -134,19 +134,27 @@ fn main() -> io::Result<()> {
             continue;
         }
 
-        let step_type_str  = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_owned();
+        let (step_type_str, description, credit, difficulty_str, rating_str);
 
-        let field1_str     = std::str::from_utf8(fields[1]).unwrap_or("").trim().to_owned();
-        let (step_artist_str, tech_notations) = parse_step_artist_and_tech(&field1_str);
+        step_type_str = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_owned();
+        description   = std::str::from_utf8(fields[1]).unwrap_or("").trim().to_owned();
+        difficulty_str= std::str::from_utf8(fields[2]).unwrap_or("").trim().to_owned();
+        rating_str    = std::str::from_utf8(fields[3]).unwrap_or("").trim().to_owned();
 
-        let tech_notation_str = tech_notations
+        if extension.eq_ignore_ascii_case("ssc") {
+            credit        = std::str::from_utf8(fields[4]).unwrap_or("").trim().to_owned();
+        } else {
+            credit        = String::new();
+        }
+
+        let combined = format!("{} {}", credit, description).replace(',', " ");
+        let (step_artist_str, parsed_tech) = parse_step_artist_and_tech(&combined);
+
+        let tech_notation_str = parsed_tech
             .iter()
             .map(|tn| tn.0.as_str())
             .collect::<Vec<_>>()
             .join(" ");
-
-        let difficulty_str = std::str::from_utf8(fields[2]).unwrap_or("").trim().to_owned();
-        let rating_str     = std::str::from_utf8(fields[3]).unwrap_or("").trim().to_owned();
 
         let (mut minimized_chart, stats, measure_densities) = minimize_chart_and_count(chart_data);
         if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {

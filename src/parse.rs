@@ -120,19 +120,14 @@ pub fn extract_sections<'a>(
 }
 
 fn process_ssc_notedata(data: &[u8]) -> Vec<u8> {
-    let tags = [
-        b"#STEPSTYPE:".as_slice(),
-        b"#DESCRIPTION:".as_slice(),
-        b"#DIFFICULTY:".as_slice(),
-        b"#METER:".as_slice(),
-        b"#RADARVALUES:".as_slice(),
-        b"#NOTES:".as_slice(),
-    ];
+    let step_type   = parse_subtag(data, b"#STEPSTYPE:").unwrap_or_default();
+    let description = parse_subtag(data, b"#DESCRIPTION:").unwrap_or_default();
+    let credit      = parse_subtag(data, b"#CREDIT:").unwrap_or_default();
+    let difficulty  = parse_subtag(data, b"#DIFFICULTY:").unwrap_or_default();
+    let meter       = parse_subtag(data, b"#METER:").unwrap_or_default();
+    let notes       = parse_subtag(data, b"#NOTES:").unwrap_or_default();
 
-    tags.iter()
-        .filter_map(|&tag| parse_subtag(data, tag))
-        .collect::<Vec<_>>()
-        .join(&b':')
+    [ step_type, description, difficulty, meter, credit, notes ].join(&b':')
 }
 
 fn parse_tag(data: &[u8], tag_len: usize) -> Option<&[u8]> {
