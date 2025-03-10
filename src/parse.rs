@@ -36,7 +36,7 @@ pub fn extract_sections<'a>(
     Option<&'a [u8]>,
     Option<&'a [u8]>,
     Option<&'a [u8]>,
-    Vec<Vec<u8>>,
+    Vec<Vec<u8>>,  // Changed to Vec for multiple charts
 )> {
     if !matches!(file_extension.to_lowercase().as_str(), "sm" | "ssc") {
         return Err(io::Error::new(
@@ -66,20 +66,45 @@ pub fn extract_sections<'a>(
             if let Some((idx, tag)) = tags.iter().enumerate().find(|(_, &tag)| data[i..].starts_with(tag)) {
                 sections[idx] = parse_tag(&data[i..], tag.len());
                 i += 1; // Move past this tag
-            } else if data[i..].starts_with(b"#NOTES:") {
-                let notes_start = i + b"#NOTES:".len();
-                let notes_end = data[notes_start..].iter().position(|&b| b == b';').map(|e| notes_start + e).unwrap_or(data.len());
-                let notes_data = data[notes_start..notes_end].to_vec();
-                notes_list.push(notes_data);
-                i = notes_end + 1; // Skip past the semicolon
-            } else if data[i..].starts_with(b"#NOTEDATA:") {
-                let notedata_start = i + b"#NOTEDATA:".len();
-                let notedata_end = data[notedata_start..].iter().position(|&b| b == b';').map(|e| notedata_start + e).unwrap_or(data.len());
-                let notedata_slice = &data[i..notedata_end];
+            }
+            // Handle SSC's #NOTEDATA
+            else if data[i..].starts_with(b"#NOTEDATA:") {
+                let notedata_start = i;
+                let mut notedata_end = notedata_start;
+                
+                // Scan forward to find next top-level tag
+                while notedata_end < data.len() {
+                    // Check for any top-level tag
+                    if tags.iter().any(|&tag| data[notedata_end..].starts_with(tag)) {
+                        break;
+                    }
+                    // Check for next #NOTEDATA
+                    if notedata_end > notedata_start 
+                        && data[notedata_end..].starts_with(b"#NOTEDATA:")
+                    {
+                        break;
+                    }
+                    notedata_end += 1;
+                }
+                
+                let notedata_slice = &data[notedata_start..notedata_end];
                 let notes_data = process_ssc_notedata(notedata_slice);
                 notes_list.push(notes_data);
-                i = notedata_end + 1; // Skip past the semicolon
-            } else {
+                i = notedata_end; // Move to next section
+            }
+            // Handle SM's #NOTES
+            else if data[i..].starts_with(b"#NOTES:") {
+                let notes_start = i + b"#NOTES:".len();
+                let notes_end = data[notes_start..]
+                    .iter()
+                    .position(|&b| b == b';')
+                    .map(|e| notes_start + e)
+                    .unwrap_or(data.len());
+                let notes_data = data[notes_start..notes_end].to_vec();
+                notes_list.push(notes_data);
+                i = notes_end + 1; // Skip past semicolon
+            }
+            else {
                 i += 1;
             }
         } else {
