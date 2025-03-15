@@ -3,12 +3,12 @@ use std::io;
 pub fn strip_title_tags(mut title: &str) -> String {
     loop {
         let original = title;
-        // Remove bracketed numerical tags like `[123]`
+        // Trim leading spaces at the start of each iteration
+        title = title.trim_start();
+        // Remove any leading bracketed tags like `[...]` regardless of content
         if let Some(rest) = title.strip_prefix('[').and_then(|s| s.split_once(']')) {
-            if rest.0.chars().all(|c| c.is_ascii_digit() || c == '.') {
-                title = rest.1.trim_start();
-                continue;
-            }
+            title = rest.1.trim_start();
+            continue;
         }
         // Remove numerical prefixes like `123- `
         if let Some(pos) = title.find("- ") {
@@ -17,6 +17,7 @@ pub fn strip_title_tags(mut title: &str) -> String {
                 continue;
             }
         }
+        // Exit if no changes were made
         if title == original {
             break;
         }
