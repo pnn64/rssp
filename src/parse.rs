@@ -3,13 +3,16 @@ use std::io;
 pub fn strip_title_tags(mut title: &str) -> String {
     loop {
         let original = title;
+
         // Trim leading spaces at the start of each iteration
         title = title.trim_start();
+
         // Remove any leading bracketed tags like `[...]` regardless of content
         if let Some(rest) = title.strip_prefix('[').and_then(|s| s.split_once(']')) {
             title = rest.1.trim_start();
             continue;
         }
+
         // Remove numerical prefixes like `123- `
         if let Some(pos) = title.find("- ") {
             if title[..pos].chars().all(|c| c.is_ascii_digit() || c == '.') {
@@ -17,6 +20,7 @@ pub fn strip_title_tags(mut title: &str) -> String {
                 continue;
             }
         }
+
         // Exit if no changes were made
         if title == original {
             break;
@@ -37,7 +41,7 @@ pub fn extract_sections<'a>(
     Option<&'a [u8]>,
     Option<&'a [u8]>,
     Option<&'a [u8]>,
-    Vec<Vec<u8>>,  // Changed to Vec for multiple charts
+    Vec<Vec<u8>>,
 )> {
     if !matches!(file_extension.to_lowercase().as_str(), "sm" | "ssc") {
         return Err(io::Error::new(
@@ -66,20 +70,12 @@ pub fn extract_sections<'a>(
             i += pos;
             if let Some((idx, tag)) = tags.iter().enumerate().find(|(_, &tag)| data[i..].starts_with(tag)) {
                 sections[idx] = parse_tag(&data[i..], tag.len());
-                i += 1; // Move past this tag
-            }
-            // Handle SSC's #NOTEDATA
-            else if data[i..].starts_with(b"#NOTEDATA:") {
+                i += 1;
+            } else if data[i..].starts_with(b"#NOTEDATA:") {
                 let notedata_start = i;
                 let mut notedata_end = notedata_start;
                 
-                // Scan forward to find next top-level tag
                 while notedata_end < data.len() {
-                    // Check for any top-level tag
-                    if tags.iter().any(|&tag| data[notedata_end..].starts_with(tag)) {
-                        break;
-                    }
-                    // Check for next #NOTEDATA
                     if notedata_end > notedata_start 
                         && data[notedata_end..].starts_with(b"#NOTEDATA:")
                     {
@@ -91,10 +87,8 @@ pub fn extract_sections<'a>(
                 let notedata_slice = &data[notedata_start..notedata_end];
                 let notes_data = process_ssc_notedata(notedata_slice);
                 notes_list.push(notes_data);
-                i = notedata_end; // Move to next section
-            }
-            // Handle SM's #NOTES
-            else if data[i..].starts_with(b"#NOTES:") {
+                i = notedata_end;
+            } else if data[i..].starts_with(b"#NOTES:") {
                 let notes_start = i + b"#NOTES:".len();
                 let notes_end = data[notes_start..]
                     .iter()
@@ -103,9 +97,8 @@ pub fn extract_sections<'a>(
                     .unwrap_or(data.len());
                 let notes_data = data[notes_start..notes_end].to_vec();
                 notes_list.push(notes_data);
-                i = notes_end + 1; // Skip past semicolon
-            }
-            else {
+                i = notes_end + 1;
+            } else {
                 i += 1;
             }
         } else {
