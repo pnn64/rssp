@@ -4,7 +4,7 @@ A command-line tool written in Rust for parsing, analyzing, and reporting statis
 
 ## Inspiration
 
-This project is inspired by and builds upon ideas from [simfile-sidekick](https://gitlab.com/artimst/simfile-sidekick) by Steven Artim (artimst).
+This project is inspired by Breakdown Buddy and builds upon ideas from [simfile-sidekick](https://gitlab.com/artimst/simfile-sidekick) by Steven Artim (artimst).
 
 ## Motivation
 
@@ -13,6 +13,7 @@ Why create another simfile parser?
 * **Focus & Flexibility:** While previous tools might have focused on integrating with databases or Discord bots, `rssp` is primarily designed for direct command-line analysis of individual simfiles. However, its speed makes it trivial to script for processing thousands of files.
 * **Performance:** The previous Python-based tool could take many minutes to process large collections (10k+ files). This Rust implementation achieves significantly better performance, capable of parsing similar numbers of files in seconds.
 * **Enhanced Statistics & Features:** `rssp` aims to add features and refine statistics, including:
+    *   Generating a chart's SHA1 hash.
     *   Detection of a wider range of predefined step patterns.
     *   An improved algorithm for detecting monotonic (mono) stepping sequences.
     *   Parsing of common technical notations embedded in chart metadata.
@@ -44,7 +45,7 @@ Why create another simfile parser?
 *   **Technical Notation Parsing:** Extracts known technical notations (e.g., `STR+`, `BXF`, `FS-`) from the Credit/Description fields.
 *   **Hashing:** Generates SHA1 hashes for charts:
     *   Standard hash (based on minimized notes + effective BPMs)
-    *   BPM-Neutral hash (useful for comparing patterns regardless of speed)
+    *   BPM-Neutral hash (useful for comparing FB/FP charts regardless of speed)
 *   **Multiple Output Formats:**
     *   `Pretty`: Human-readable summary (Default).
     *   `Full`: Detailed text output including all patterns and stats.
