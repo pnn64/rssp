@@ -41,7 +41,7 @@ pub fn extract_sections<'a>(
     Option<&'a [u8]>,
     Option<&'a [u8]>,
     Option<&'a [u8]>,
-    Vec<Vec<u8>>,
+    Vec<(Vec<u8>, Option<Vec<u8>>)>,
 )> {
     if !matches!(file_extension.to_lowercase().as_str(), "sm" | "ssc") {
         return Err(io::Error::new(
@@ -85,8 +85,8 @@ pub fn extract_sections<'a>(
                 }
                 
                 let notedata_slice = &data[notedata_start..notedata_end];
-                let notes_data = process_ssc_notedata(notedata_slice);
-                notes_list.push(notes_data);
+                let (notes_data, chart_bpms) = process_ssc_notedata(notedata_slice);
+                notes_list.push((notes_data, chart_bpms));
                 i = notedata_end;
             } else if data[i..].starts_with(b"#NOTES:") {
                 let notes_start = i + b"#NOTES:".len();
@@ -96,7 +96,7 @@ pub fn extract_sections<'a>(
                     .map(|e| notes_start + e)
                     .unwrap_or(data.len());
                 let notes_data = data[notes_start..notes_end].to_vec();
-                notes_list.push(notes_data);
+                notes_list.push((notes_data, None)); // No chart-specific BPMs for .sm
                 i = notes_end + 1;
             } else {
                 i += 1;
@@ -113,15 +113,17 @@ pub fn extract_sections<'a>(
     ))
 }
 
-fn process_ssc_notedata(data: &[u8]) -> Vec<u8> {
+fn process_ssc_notedata(data: &[u8]) -> (Vec<u8>, Option<Vec<u8>>) {
     let step_type   = parse_subtag(data, b"#STEPSTYPE:").unwrap_or_default();
     let description = parse_subtag(data, b"#DESCRIPTION:").unwrap_or_default();
     let credit      = parse_subtag(data, b"#CREDIT:").unwrap_or_default();
     let difficulty  = parse_subtag(data, b"#DIFFICULTY:").unwrap_or_default();
     let meter       = parse_subtag(data, b"#METER:").unwrap_or_default();
     let notes       = parse_subtag(data, b"#NOTES:").unwrap_or_default();
+    let chart_bpms  = parse_subtag(data, b"#BPMS:");
 
-    [ step_type, description, difficulty, meter, credit, notes ].join(&b':')
+    let concatenated = [step_type, description, difficulty, meter, credit, notes].join(&b':');
+    (concatenated, chart_bpms)
 }
 
 fn parse_tag(data: &[u8], tag_len: usize) -> Option<&[u8]> {

@@ -36,6 +36,7 @@ pub struct ChartSummary {
     pub bpm_neutral_hash:  String,
     pub elapsed:           Duration,
     pub measure_densities: Vec<usize>,
+    pub measure_nps_vec:   Vec<f64>,
 }
 
 pub struct SimfileSummary {
