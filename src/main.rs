@@ -81,9 +81,10 @@ fn main() -> io::Result<()> {
         }
     };
 
-    let mut title_str = std::str::from_utf8(title_opt.unwrap_or(b"<invalid-title>"))
-        .unwrap_or("<invalid-title>")
-        .to_owned();
+    let mut title_str = title_opt
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .map(clean_tag)
+        .unwrap_or_else(|| "<invalid-title>".to_string());
     if strip_tags {
         title_str = strip_title_tags(&title_str);
     }

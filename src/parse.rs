@@ -29,6 +29,12 @@ pub fn strip_title_tags(mut title: &str) -> String {
     title.to_string()
 }
 
+pub fn clean_tag(tag: &str) -> String {
+    tag.chars()
+        .filter(|c| !c.is_control() && *c != '\u{200b}')
+        .collect()
+}
+
 pub fn extract_sections<'a>(
     data: &'a [u8],
     file_extension: &str,
@@ -129,6 +135,7 @@ fn process_ssc_notedata(data: &[u8]) -> (Vec<u8>, Option<Vec<u8>>) {
 fn parse_tag(data: &[u8], tag_len: usize) -> Option<&[u8]> {
     data.get(tag_len..)
         .and_then(|d| d.iter().position(|&b| b == b';').map(|end| &d[..end]))
+
 }
 
 fn parse_subtag(data: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
