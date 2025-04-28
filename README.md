@@ -117,11 +117,10 @@ rssp <path/to/simfile.sm_or_ssc> [options]
 * **PNG / PNG-Alt:** Generates density graph images visualizing NPS over the chart's duration. Useful for quickly identifying high-intensity sections. Filenames are based on the chart's unique SHA1 hash.
 
 ## TODO
-
-* Doubles (8-panel) parsing
-* Custom patterns flag --custom-pattern DULDUDLR
-* Proper parsing for Tech (adopt from new ITGMania version)
-* Add many tests for edge cases
+- [ ] Doubles (8-panel) parsing
+- [ ] Custom patterns flag --custom-pattern DULDUDLR
+- [ ] Proper parsing for Tech (adopt from new ITGMania version)
+- [ ] Add many tests for edge cases
 
 ## Contributing
 
