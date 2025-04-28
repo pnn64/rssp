@@ -121,6 +121,7 @@ rssp <path/to/simfile.sm_or_ssc> [options]
 * Doubles (8-panel) parsing
 * Custom patterns flag --custom-pattern DULDUDLR
 * Proper parsing for Tech (adopt from new ITGMania version)
+* Add many tests for edge cases
 
 ## Contributing
 
