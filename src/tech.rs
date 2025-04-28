@@ -21,6 +21,7 @@ pub static KNOWN_TECH_LIST: &[&str] = &[
     "HS", "HS+", "HS-",
     "ITL+",
     "JA", "JA+", "JA-",
+    "JU", "JU+", "JU-",
     "JUMPS", "JUMPS+", "JUMPS-",
     "KS", "KS+", "KS-",
     "KT", "KT+", "KT-",
