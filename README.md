@@ -187,13 +187,15 @@ Elapsed Time: 43.653715ms
 ```
 
 ## TODO
+- [ ] Count Fakes and Lifts
+- [ ] Properly parse I'm A Maid (: and ; mixup) from SHARPNELSTREAMZ v2
+- [x] Properly parse Ivaltek (indented NOTES) from SHARPNELSTREAMZ v2
+- [ ] Properly handle empty charts
 - [ ] Doubles (8-panel) parsing
 - [ ] Custom patterns flag --custom-pattern DULDUDLR
 - [ ] Proper parsing for Tech (adopt from new ITGMania version)
-- [ ] Add many tests for edge cases
-- [ ] Count Fakes and Lifts
-- [ ] Properly parse I'm A Maid and Ivaltek from SHARPNELSTREAMZ v2
+- [ ] Add many tests for edge case simfiles
 
 ## Contributing
 
-Contributions are welcome! Please feel free to open an issue to report bugs or suggest features.
+Contributions are welcome! Please feel free to open an issue to report bugs or suggest features, especially if you have a simfile that does not parse properly/accurately.
