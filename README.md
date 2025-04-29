@@ -191,6 +191,8 @@ Elapsed Time: 43.653715ms
 - [ ] Custom patterns flag --custom-pattern DULDUDLR
 - [ ] Proper parsing for Tech (adopt from new ITGMania version)
 - [ ] Add many tests for edge cases
+- [ ] Count Fakes and Lifts
+- [ ] Properly parse I'm A Maid and Ivaltek from SHARPNELSTREAMZ v2
 
 ## Contributing
 
