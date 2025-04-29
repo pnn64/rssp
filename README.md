@@ -188,7 +188,6 @@ Elapsed Time: 43.653715ms
 
 ## TODO
 - [ ] Count Fakes and Lifts
-- [ ] Properly parse I'm A Maid (semicolon in NOTES) from SHARPNELSTREAMZ v2
 - [x] Properly parse Ivaltek (indented NOTES) from SHARPNELSTREAMZ v2
 - [ ] Properly handle empty charts
 - [ ] Doubles (8-panel) parsing
