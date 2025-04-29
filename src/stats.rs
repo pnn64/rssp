@@ -179,7 +179,13 @@ pub fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<
         measure_densities.push(density);
     }
 
-    for line in notes_data.split(|&b| b == b'\n') {
+    for line_raw in notes_data.split(|&b| b == b'\n') {
+        let line = line_raw
+            .iter()
+            .skip_while(|&&c| c.is_ascii_whitespace())
+            .copied()
+            .collect::<Vec<u8>>();
+
         if line.is_empty() {
             continue;
         }
