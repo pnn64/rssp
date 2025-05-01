@@ -11,6 +11,8 @@ pub struct ArrowStats {
     pub mines: u32,
     pub holds: u32,
     pub rolls: u32,
+    pub lifts: u32,
+    pub fakes: u32,
     pub holding: i32,
 }
 
@@ -74,6 +76,8 @@ fn count_line(
     let mut hold_start_mask = 0u8;
     let mut end_mask = 0u8;
     let mut mine_count = 0u32;
+    let mut lift_count = 0u32;
+    let mut fake_count = 0u32;
 
     for (i, &ch) in line.iter().enumerate() {
         match ch {
@@ -98,11 +102,15 @@ fn count_line(
             }
             b'3' => end_mask |= 1 << i,
             b'M' => mine_count += 1,
+            b'L' => lift_count += 1,
+            b'F' => fake_count += 1,
             _ => {}
         }
     }
 
     stats.mines += mine_count;
+    stats.lifts += lift_count;
+    stats.fakes += fake_count;
     let notes_on_line = note_mask.count_ones() as u32;
     *holds_started += hold_start_mask.count_ones() as u32;
     *ends_seen += end_mask.count_ones() as u32;

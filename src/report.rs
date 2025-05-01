@@ -202,6 +202,14 @@ fn print_pretty_chart(chart: &ChartSummary) {
     println!("Rolls: {}", chart.stats.rolls);
     println!("Mines: {}", chart.stats.mines);
 
+    if chart.stats.lifts > 0 {
+        println!("Lifts: {}", chart.stats.lifts);
+    }
+
+    if chart.stats.fakes > 0 {
+        println!("Fakes: {}", chart.stats.fakes);
+    }
+
     println!("\n--- Pattern Analysis ---");
     let candle_left = chart.detected_patterns.get(&PatternVariant::CandleLeft).unwrap_or(&0);
     let candle_right = chart.detected_patterns.get(&PatternVariant::CandleRight).unwrap_or(&0);
@@ -314,6 +322,8 @@ fn print_full_chart(chart: &ChartSummary) {
     println!("Holds: {}", chart.stats.holds);
     println!("Rolls: {}", chart.stats.rolls);
     println!("Mines: {}", chart.stats.mines);
+    println!("Lifts: {}", chart.stats.lifts);
+    println!("Fakes: {}", chart.stats.fakes);
 
     println!("\n--- Pattern Analysis ---");
     let candle_left = chart.detected_patterns.get(&PatternVariant::CandleLeft).unwrap_or(&0);
@@ -503,7 +513,9 @@ fn print_arrow_stats_fields(chart: &ChartSummary, indent: usize) {
     print_kv_int("hands", chart.stats.hands, indent);
     print_kv_int("holds", chart.stats.holds, indent);
     print_kv_int("rolls", chart.stats.rolls, indent);
-    print_kv_int_last("mines", chart.stats.mines, indent);
+    print_kv_int("mines", chart.stats.mines, indent);
+    print_kv_int("lifts", chart.stats.lifts, indent);
+    print_kv_int_last("fakes", chart.stats.fakes, indent);
 }
 
 fn print_stream_info_fields(chart: &ChartSummary, indent: usize) {
@@ -826,7 +838,7 @@ fn print_csv_all(simfile: &SimfileSummary) {
         "Title,Subtitle,Artist,Title trans,Subtitle trans,Artist trans,Length,BPM,BPM Tier,min_bpm,max_bpm,average_bpm,median bpm,BPM-data,offset,file_md5_hash,\
 step_type,difficulty,rating,step_artist,tech_notation,sha1_hash,bpm_neutral_hash,\
 total_arrows,left_arrows,down_arrows,up_arrows,right_arrows,\
-total_steps,jumps,hands,holds,rolls,mines,\
+total_steps,jumps,hands,holds,rolls,mines,lifts,fakes,\
 total_streams,16th_streams,20th_streams,24th_streams,32nd_streams,total_breaks,stream_percent,adj_stream_percent,\
 max_nps,median_nps,mono total,\
 total_candles,left_foot_candles,right_foot_candles,candles_percent,\
@@ -907,13 +919,15 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
         chart.stats.right,
     );
 
-    print!("{},{},{},{},{},{},",
+    print!("{},{},{},{},{},{},{},{},",
         chart.stats.total_steps,
         chart.stats.jumps,
         chart.stats.hands,
         chart.stats.holds,
         chart.stats.rolls,
         chart.stats.mines,
+        chart.stats.lifts,
+        chart.stats.fakes,
     );
 
     let total_streams = chart.total_streams;
