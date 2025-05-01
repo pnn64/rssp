@@ -187,7 +187,7 @@ Elapsed Time: 43.653715ms
 ```
 
 ## TODO
-- [ ] Count Fakes and Lifts
+- [x] Count Fakes and Lifts
 - [x] Properly parse Ivaltek (indented NOTES) from SHARPNELSTREAMZ v2
 - [ ] Properly handle empty charts
 - [ ] Fix parsing of multiple simfile authors with '&' (for instance Maxx & Zaia)
