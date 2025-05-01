@@ -190,10 +190,14 @@ Elapsed Time: 43.653715ms
 - [ ] Count Fakes and Lifts
 - [x] Properly parse Ivaltek (indented NOTES) from SHARPNELSTREAMZ v2
 - [ ] Properly handle empty charts
+- [ ] Fix parsing of multiple simfile authors with '&' (for instance Maxx & Zaia)
+- [ ] Check that some special characters are parser correctly (CODE:Ø as opposed to CODE\:Ø)
+- [ ] Fix parsing for "No Tech" in artist name
 - [ ] Doubles (8-panel) parsing
 - [ ] Custom patterns flag --custom-pattern DULDUDLR
 - [ ] Proper parsing for Tech (adopt from new ITGMania version)
 - [ ] Add many tests for edge case simfiles
+- [ ] Add "matrix rating" (calculate estimated rating based on rating matrix sheet)
 
 ## Contributing
 
