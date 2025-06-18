@@ -83,28 +83,34 @@ fn main() -> io::Result<()> {
 
     let mut title_str = title_opt
         .and_then(|b| std::str::from_utf8(b).ok())
-        .map(clean_tag)
+        .map(unescape_tag)
+        .map(|s| clean_tag(&s))
         .unwrap_or_else(|| "<invalid-title>".to_string());
     if strip_tags {
         title_str = strip_title_tags(&title_str);
     }
 
-    let subtitle_str = std::str::from_utf8(subtitle_opt.unwrap_or(b""))
-        .unwrap_or("")
-        .to_owned();
-    let artist_str = std::str::from_utf8(artist_opt.unwrap_or(b""))
-        .unwrap_or("")
-        .to_owned();
+    let subtitle_str = subtitle_opt
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .map(unescape_tag)
+        .unwrap_or_else(|| "".to_owned());
+    let artist_str = artist_opt
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .map(unescape_tag)
+        .unwrap_or_else(|| "".to_owned());
 
-    let titletranslit_str = std::str::from_utf8(titletranslit_opt.unwrap_or(b""))
-        .unwrap_or("")
-        .to_owned();
-    let subtitletranslit_str = std::str::from_utf8(subtitletranslit_opt.unwrap_or(b""))
-        .unwrap_or("")
-        .to_owned();
-    let artisttranslit_str = std::str::from_utf8(artisttranslit_opt.unwrap_or(b""))
-        .unwrap_or("")
-        .to_owned();
+    let titletranslit_str = titletranslit_opt
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .map(unescape_tag)
+        .unwrap_or_else(|| "".to_owned());
+    let subtitletranslit_str = subtitletranslit_opt
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .map(unescape_tag)
+        .unwrap_or_else(|| "".to_owned());
+    let artisttranslit_str = artisttranslit_opt
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .map(unescape_tag)
+        .unwrap_or_else(|| "".to_owned());
 
     let offset = offset_opt
         .and_then(|b| std::str::from_utf8(b).ok())

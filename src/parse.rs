@@ -35,6 +35,29 @@ pub fn clean_tag(tag: &str) -> String {
         .collect()
 }
 
+pub fn unescape_tag(tag: &str) -> String {
+    let mut out = String::with_capacity(tag.len());
+    let mut chars = tag.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(next_c) = chars.next() {
+                match next_c {
+                    ':' | ';' | '#' | '\\' => out.push(next_c),
+                    other => {
+                        out.push('\\');
+                        out.push(other);
+                    }
+                }
+            } else {
+                out.push('\\');
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 pub fn extract_sections<'a>(
     data: &'a [u8],
     file_extension: &str,
