@@ -156,9 +156,24 @@ fn process_ssc_notedata(data: &[u8]) -> (Vec<u8>, Option<Vec<u8>>) {
 }
 
 fn parse_tag(data: &[u8], tag_len: usize) -> Option<&[u8]> {
-    data.get(tag_len..)
-        .and_then(|d| d.iter().position(|&b| b == b';').map(|end| &d[..end]))
-
+    let slice = data.get(tag_len..)?;
+    let mut i = 0;
+    while i < slice.len() {
+        if slice[i] == b';' {
+            // Count preceding backslashes to determine if this semicolon is escaped
+            let mut bs_count = 0;
+            let mut j = i;
+            while j > 0 && slice[j - 1] == b'\\' {
+                bs_count += 1;
+                j -= 1;
+            }
+            if bs_count % 2 == 0 {
+                return Some(&slice[..i]);
+            }
+        }
+        i += 1;
+    }
+    None
 }
 
 fn parse_subtag(data: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
@@ -169,7 +184,24 @@ fn parse_subtag(data: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
 }
 
 pub fn split_notes_fields(notes_block: &[u8]) -> (Vec<&[u8]>, &[u8]) {
-    let mut parts = notes_block.splitn(6, |&b| b == b':');
-    let fields: Vec<_> = parts.by_ref().take(5).collect();
-    (fields, parts.next().unwrap_or(&[]))
+    let mut fields = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < notes_block.len() && fields.len() < 5 {
+        if notes_block[i] == b':' {
+            let mut bs_count = 0;
+            let mut j = i;
+            while j > 0 && notes_block[j - 1] == b'\\' {
+                bs_count += 1;
+                j -= 1;
+            }
+            if bs_count % 2 == 0 {
+                fields.push(&notes_block[start..i]);
+                start = i + 1;
+            }
+        }
+        i += 1;
+    }
+    let rest = if start <= notes_block.len() { &notes_block[start..] } else { &[] };
+    (fields, rest)
 }
