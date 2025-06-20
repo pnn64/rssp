@@ -191,7 +191,7 @@ Elapsed Time: 43.653715ms
 - [x] Properly parse Ivaltek (indented NOTES) from SHARPNELSTREAMZ v2
 - [ ] Properly handle empty charts
 - [ ] Fix parsing of multiple simfile authors with '&' (for instance Maxx & Zaia)
-- [ ] Check that some special characters are parser correctly (CODE:Ø as opposed to CODE\:Ø)
+- [x] Check that some special characters are parser correctly (CODE:Ø as opposed to CODE\:Ø)
 - [ ] Fix parsing for "No Tech" in artist name
 - [ ] Doubles (8-panel) parsing
 - [ ] Custom patterns flag --custom-pattern DULDUDLR
