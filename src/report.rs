@@ -387,18 +387,22 @@ fn print_full_chart(chart: &ChartSummary) {
         total_staircases, left_staircases, right_staircases, left_inv_staircases, right_inv_staircases);
 
     // Alternate Staircases
-    println!("Alt Staircases: ({} Left, {} Right, {} Left Inv, {} Right Inv)",
-        count(&chart.detected_patterns, PatternVariant::AltStaircasesLeft),
-        count(&chart.detected_patterns, PatternVariant::AltStaircasesRight),
-        count(&chart.detected_patterns, PatternVariant::AltStaircasesInvLeft),
-        count(&chart.detected_patterns, PatternVariant::AltStaircasesInvRight));
+    let alt_left = count(&chart.detected_patterns, PatternVariant::AltStaircasesLeft);
+    let alt_right = count(&chart.detected_patterns, PatternVariant::AltStaircasesRight);
+    let alt_left_inv = count(&chart.detected_patterns, PatternVariant::AltStaircasesInvLeft);
+    let alt_right_inv = count(&chart.detected_patterns, PatternVariant::AltStaircasesInvRight);
+    let total_alt = alt_left + alt_right + alt_left_inv + alt_right_inv;
+    println!("Alt Staircases: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
+        total_alt, alt_left, alt_right, alt_left_inv, alt_right_inv);
 
     // Double Staircases
-    println!("Double Staircases: ({} Left, {} Right, {} Left Inv, {} Right Inv)",
-        count(&chart.detected_patterns, PatternVariant::DStaircaseLeft),
-        count(&chart.detected_patterns, PatternVariant::DStaircaseRight),
-        count(&chart.detected_patterns, PatternVariant::DStaircaseInvLeft),
-        count(&chart.detected_patterns, PatternVariant::DStaircaseInvRight));
+    let d_left = count(&chart.detected_patterns, PatternVariant::DStaircaseLeft);
+    let d_right = count(&chart.detected_patterns, PatternVariant::DStaircaseRight);
+    let d_left_inv = count(&chart.detected_patterns, PatternVariant::DStaircaseInvLeft);
+    let d_right_inv = count(&chart.detected_patterns, PatternVariant::DStaircaseInvRight);
+    let total_double = d_left + d_right + d_left_inv + d_right_inv;
+    println!("Double Staircases: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
+        total_double, d_left, d_right, d_left_inv, d_right_inv);
 
     // Sweeps
     let left_sweeps = count(&chart.detected_patterns, PatternVariant::SweepLeft);
@@ -637,14 +641,27 @@ fn print_pattern_counts_fields(chart: &ChartSummary, indent: usize) {
     print_kv_int("right_staircases", right_staircases, indent + 2);
     print_kv_int("left_inv_staircases", left_inv_staircases, indent + 2);
     print_kv_int("right_inv_staircases", right_inv_staircases, indent + 2);
-    print_kv_int("left_alt_staircases", count(&chart.detected_patterns, PatternVariant::AltStaircasesLeft), indent + 2);
-    print_kv_int("right_alt_staircases", count(&chart.detected_patterns, PatternVariant::AltStaircasesRight), indent + 2);
-    print_kv_int("left_inv_alt_staircases", count(&chart.detected_patterns, PatternVariant::AltStaircasesInvLeft), indent + 2);
-    print_kv_int("right_inv_alt_staircases", count(&chart.detected_patterns, PatternVariant::AltStaircasesInvRight), indent + 2);
-    print_kv_int("left_double_staircases", count(&chart.detected_patterns, PatternVariant::DStaircaseLeft), indent + 2);
-    print_kv_int("right_double_staircases", count(&chart.detected_patterns, PatternVariant::DStaircaseRight), indent + 2);
-    print_kv_int("left_inv_double_staircases", count(&chart.detected_patterns, PatternVariant::DStaircaseInvLeft), indent + 2);
-    print_kv_int_last("right_inv_double_staircases", count(&chart.detected_patterns, PatternVariant::DStaircaseInvRight), indent + 2);
+    let alt_left = count(&chart.detected_patterns, PatternVariant::AltStaircasesLeft);
+    let alt_right = count(&chart.detected_patterns, PatternVariant::AltStaircasesRight);
+    let alt_left_inv = count(&chart.detected_patterns, PatternVariant::AltStaircasesInvLeft);
+    let alt_right_inv = count(&chart.detected_patterns, PatternVariant::AltStaircasesInvRight);
+    let total_alt = alt_left + alt_right + alt_left_inv + alt_right_inv;
+    print_kv_int("total_alt_staircases", total_alt, indent + 2);
+    print_kv_int("left_alt_staircases", alt_left, indent + 2);
+    print_kv_int("right_alt_staircases", alt_right, indent + 2);
+    print_kv_int("left_inv_alt_staircases", alt_left_inv, indent + 2);
+    print_kv_int("right_inv_alt_staircases", alt_right_inv, indent + 2);
+
+    let d_left = count(&chart.detected_patterns, PatternVariant::DStaircaseLeft);
+    let d_right = count(&chart.detected_patterns, PatternVariant::DStaircaseRight);
+    let d_left_inv = count(&chart.detected_patterns, PatternVariant::DStaircaseInvLeft);
+    let d_right_inv = count(&chart.detected_patterns, PatternVariant::DStaircaseInvRight);
+    let total_double = d_left + d_right + d_left_inv + d_right_inv;
+    print_kv_int("total_double_staircases", total_double, indent + 2);
+    print_kv_int("left_double_staircases", d_left, indent + 2);
+    print_kv_int("right_double_staircases", d_right, indent + 2);
+    print_kv_int("left_inv_double_staircases", d_left_inv, indent + 2);
+    print_kv_int_last("right_inv_double_staircases", d_right_inv, indent + 2);
     print_indented("},", indent);
 
     // Sweeps
@@ -849,8 +866,8 @@ detailed_breakdown,partial_breakdown,simple_breakdown,\
 total_towers,lr_towers,ud_towers,corner_towers,ld_towers,lu_towers,rd_towers,ru_towers,\
 total_triangles,ldl_triangles,lul_triangles,rdr_triangles,rur_triangles,\
 total staircases,left_staircases,right_staircases,left_inv_staircases,right_inv_staircases,\
-left_alt_staircases,right_alt_staircases,left_inv_alt_staircases,right_inv_alt_staircases,\
-left_double_staircases,right_double_staircases,left_inv_double_staircases,right_inv_double_staircases,\
+total_alt_staircases,left_alt_staircases,right_alt_staircases,left_inv_alt_staircases,right_inv_alt_staircases,\
+total_double_staircases,left_double_staircases,right_double_staircases,left_inv_double_staircases,right_inv_double_staircases,\
 total_sweeps,left_sweeps,right_sweeps,left_inv_sweeps,right_inv_sweeps,\
 total_candle_sweeps,left_candle_sweeps,right_candle_sweeps,left_inv_candle_sweeps,right_inv_candle_sweeps,\
 total copters,left_copters,right_copters,left_inv_copters,right_inv_copters,\
@@ -1049,15 +1066,29 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
         right_inv_staircases,
     );
 
-    print!("{},{},{},{},{},{},{},{},",
-        count(&chart.detected_patterns, PatternVariant::AltStaircasesLeft),
-        count(&chart.detected_patterns, PatternVariant::AltStaircasesRight),
-        count(&chart.detected_patterns, PatternVariant::AltStaircasesInvLeft),
-        count(&chart.detected_patterns, PatternVariant::AltStaircasesInvRight),
-        count(&chart.detected_patterns, PatternVariant::DStaircaseLeft),
-        count(&chart.detected_patterns, PatternVariant::DStaircaseRight),
-        count(&chart.detected_patterns, PatternVariant::DStaircaseInvLeft),
-        count(&chart.detected_patterns, PatternVariant::DStaircaseInvRight),
+    let alt_left = count(&chart.detected_patterns, PatternVariant::AltStaircasesLeft);
+    let alt_right = count(&chart.detected_patterns, PatternVariant::AltStaircasesRight);
+    let alt_left_inv = count(&chart.detected_patterns, PatternVariant::AltStaircasesInvLeft);
+    let alt_right_inv = count(&chart.detected_patterns, PatternVariant::AltStaircasesInvRight);
+    let total_alt = alt_left + alt_right + alt_left_inv + alt_right_inv;
+
+    let d_left = count(&chart.detected_patterns, PatternVariant::DStaircaseLeft);
+    let d_right = count(&chart.detected_patterns, PatternVariant::DStaircaseRight);
+    let d_left_inv = count(&chart.detected_patterns, PatternVariant::DStaircaseInvLeft);
+    let d_right_inv = count(&chart.detected_patterns, PatternVariant::DStaircaseInvRight);
+    let total_double = d_left + d_right + d_left_inv + d_right_inv;
+
+    print!("{},{},{},{},{},{},{},{},{},{},",
+        total_alt,
+        alt_left,
+        alt_right,
+        alt_left_inv,
+        alt_right_inv,
+        total_double,
+        d_left,
+        d_right,
+        d_left_inv,
+        d_right_inv,
     );
 
     let left_sweeps = count(&chart.detected_patterns, PatternVariant::SweepLeft);
