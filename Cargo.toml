@@ -1,7 +1,7 @@
 [package]
 name = "rssp"
 version = "0.2.103"
-edition = "2021"
+edition = "2024"
 authors = ["Patrik Nilsson <perfecttaste@pm.me>"]
 description = "A high-performance simfile parser for StepMania."
 repository = "https://github.com/pnn64/rssp"

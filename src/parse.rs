@@ -99,7 +99,7 @@ pub fn extract_sections<'a>(
     while i < data.len() {
         if let Some(pos) = data[i..].iter().position(|&b| b == b'#') {
             i += pos;
-            if let Some((idx, tag)) = tags.iter().enumerate().find(|(_, &tag)| data[i..].starts_with(tag)) {
+            if let Some((idx, tag)) = tags.iter().enumerate().find(|&(_, &tag)| data[i..].starts_with(tag)) {
                 sections[idx] = parse_tag(&data[i..], tag.len());
                 i += 1;
             } else if is_ssc && data[i..].starts_with(b"#NOTEDATA:") {
