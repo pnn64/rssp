@@ -25,7 +25,7 @@ pub struct StreamCounts {
     pub total_breaks: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RunDensity {
     Run32,
     Run24,

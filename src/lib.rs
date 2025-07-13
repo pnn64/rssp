@@ -4,5 +4,6 @@ pub mod patterns;
 pub mod bpm;
 pub mod graph;
 pub mod hashing;
+pub mod matrix;
 pub mod report;
 pub mod tech;

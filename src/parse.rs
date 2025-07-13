@@ -94,30 +94,44 @@ pub fn extract_sections<'a>(
     let mut notes_list = Vec::new();
     let mut i = 0;
 
+    let is_ssc = file_extension.eq_ignore_ascii_case("ssc");
+
     while i < data.len() {
         if let Some(pos) = data[i..].iter().position(|&b| b == b'#') {
             i += pos;
-            if let Some((idx, tag)) = tags.iter().enumerate().find(|(_, &tag)| data[i..].starts_with(tag)) {
+            if let Some((idx, tag)) = tags.iter().enumerate().find(|&(_, &tag)| data[i..].starts_with(tag)) {
                 sections[idx] = parse_tag(&data[i..], tag.len());
                 i += 1;
-            } else if data[i..].starts_with(b"#NOTEDATA:") {
+            } else if is_ssc && data[i..].starts_with(b"#NOTEDATA:") {
+                // --- SSC-specific logic ---
                 let notedata_start = i;
-                let mut notedata_end = notedata_start;
+                let mut notedata_end = notedata_start + 1;
                 
+                // Find the end of the current #NOTEDATA block
                 while notedata_end < data.len() {
-                    if notedata_end > notedata_start 
-                        && data[notedata_end..].starts_with(b"#NOTEDATA:")
-                    {
+                    if data[notedata_end..].starts_with(b"#NOTEDATA:") {
                         break;
                     }
                     notedata_end += 1;
                 }
                 
                 let notedata_slice = &data[notedata_start..notedata_end];
-                let (notes_data, chart_bpms) = process_ssc_notedata(notedata_slice);
-                notes_list.push((notes_data, chart_bpms));
+                
+                // Parse subtags within the #NOTEDATA block
+                let step_type   = parse_subtag(notedata_slice, b"#STEPSTYPE:").unwrap_or_default();
+                let description = parse_subtag(notedata_slice, b"#DESCRIPTION:").unwrap_or_default();
+                let credit      = parse_subtag(notedata_slice, b"#CREDIT:").unwrap_or_default();
+                let difficulty  = parse_subtag(notedata_slice, b"#DIFFICULTY:").unwrap_or_default();
+                let meter       = parse_subtag(notedata_slice, b"#METER:").unwrap_or_default();
+                let notes       = parse_subtag(notedata_slice, b"#NOTES:").unwrap_or_default();
+                let chart_bpms  = parse_subtag(notedata_slice, b"#BPMS:");
+
+                let concatenated = [step_type, description, difficulty, meter, credit, notes].join(&b':');
+                notes_list.push((concatenated, chart_bpms));
+
                 i = notedata_end;
-            } else if data[i..].starts_with(b"#NOTES:") {
+            } else if !is_ssc && data[i..].starts_with(b"#NOTES:") {
+                // --- SM-specific logic ---
                 let notes_start = i + b"#NOTES:".len();
                 let notes_end = data[notes_start..]
                     .iter()
@@ -128,7 +142,7 @@ pub fn extract_sections<'a>(
                 notes_list.push((notes_data, None)); // No chart-specific BPMs for .sm
                 i = notes_end + 1;
             } else {
-                i += 1;
+                i += 1; // Skip unrecognized tag
             }
         } else {
             break;
@@ -142,23 +156,25 @@ pub fn extract_sections<'a>(
     ))
 }
 
-fn process_ssc_notedata(data: &[u8]) -> (Vec<u8>, Option<Vec<u8>>) {
-    let step_type   = parse_subtag(data, b"#STEPSTYPE:").unwrap_or_default();
-    let description = parse_subtag(data, b"#DESCRIPTION:").unwrap_or_default();
-    let credit      = parse_subtag(data, b"#CREDIT:").unwrap_or_default();
-    let difficulty  = parse_subtag(data, b"#DIFFICULTY:").unwrap_or_default();
-    let meter       = parse_subtag(data, b"#METER:").unwrap_or_default();
-    let notes       = parse_subtag(data, b"#NOTES:").unwrap_or_default();
-    let chart_bpms  = parse_subtag(data, b"#BPMS:");
-
-    let concatenated = [step_type, description, difficulty, meter, credit, notes].join(&b':');
-    (concatenated, chart_bpms)
-}
-
 fn parse_tag(data: &[u8], tag_len: usize) -> Option<&[u8]> {
-    data.get(tag_len..)
-        .and_then(|d| d.iter().position(|&b| b == b';').map(|end| &d[..end]))
-
+    let slice = data.get(tag_len..)?;
+    let mut i = 0;
+    while i < slice.len() {
+        if slice[i] == b';' {
+            // Count preceding backslashes to determine if this semicolon is escaped
+            let mut bs_count = 0;
+            let mut j = i;
+            while j > 0 && slice[j - 1] == b'\\' {
+                bs_count += 1;
+                j -= 1;
+            }
+            if bs_count % 2 == 0 {
+                return Some(&slice[..i]);
+            }
+        }
+        i += 1;
+    }
+    None
 }
 
 fn parse_subtag(data: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
@@ -169,7 +185,24 @@ fn parse_subtag(data: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
 }
 
 pub fn split_notes_fields(notes_block: &[u8]) -> (Vec<&[u8]>, &[u8]) {
-    let mut parts = notes_block.splitn(6, |&b| b == b':');
-    let fields: Vec<_> = parts.by_ref().take(5).collect();
-    (fields, parts.next().unwrap_or(&[]))
+    let mut fields = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < notes_block.len() && fields.len() < 5 {
+        if notes_block[i] == b':' {
+            let mut bs_count = 0;
+            let mut j = i;
+            while j > 0 && notes_block[j - 1] == b'\\' {
+                bs_count += 1;
+                j -= 1;
+            }
+            if bs_count % 2 == 0 {
+                fields.push(&notes_block[start..i]);
+                start = i + 1;
+            }
+        }
+        i += 1;
+    }
+    let rest = if start <= notes_block.len() { &notes_block[start..] } else { &[] };
+    (fields, rest)
 }

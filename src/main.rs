@@ -3,23 +3,52 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::time::Instant;
 
-use rssp::graph::*;
-use rssp::parse::*;
-use rssp::stats::*;
-use rssp::patterns::*;
 use rssp::bpm::*;
+use rssp::graph::*;
 use rssp::hashing::*;
+use rssp::matrix::{compute_matrix_rating, get_difficulty};
+use rssp::parse::*;
+use rssp::patterns::*;
 use rssp::report::*;
-use rssp::tech::{parse_step_artist_and_tech};
+use rssp::stats::*;
+use rssp::tech::parse_step_artist_and_tech;
 
 fn main() -> io::Result<()> {
     let total_start_time = Instant::now();
     let args: Vec<String> = args().collect();
+
+    // --- Matrix Calculation Mode ---
+    if args.iter().any(|a| a == "--matrix") {
+        let mut bpm_opt: Option<f64> = None;
+        let mut measures_opt: Option<f64> = None;
+
+        if let Some(pos) = args.iter().position(|arg| arg == "-b" || arg == "--bpm") {
+            bpm_opt = args.get(pos + 1).and_then(|s| s.parse().ok());
+        }
+        if let Some(pos) = args.iter().position(|arg| arg == "-m" || arg == "--measures") {
+            measures_opt = args.get(pos + 1).and_then(|s| s.parse().ok());
+        }
+
+        if let (Some(bpm), Some(measures)) = (bpm_opt, measures_opt) {
+            let rating = get_difficulty(bpm, measures);
+            println!(
+                "Matrix rating of {} measures @ {} BPM is {:.4}",
+                measures, bpm, rating
+            );
+            return Ok(());
+        } else {
+            eprintln!("Usage: {} --matrix --bpm <BPM> --measures <MEASURES>", args[0]);
+            eprintln!("   (Short flags -b and -m are also accepted)");
+            std::process::exit(1);
+        }
+    }
+
+    // --- Simfile Analysis Mode ---
     if args.len() < 2 {
-        eprintln!(
-            "Usage: {} <simfile_path> [--png] [--json] [--csv] [--strip-tags] [--mono-threshold <value>]",
-            args[0]
-        );
+        eprintln!("Usage: {} <simfile_path> [OPTIONS]", args[0]);
+        eprintln!("   or: {} --matrix -b <BPM> -m <MEASURES>", args[0]);
+        eprintln!("\nRun with a simfile path to analyze a file. Options for analysis:");
+        eprintln!("  --full, --png, --png-alt, --json, --csv, --strip-tags, --mono-threshold <value>");
         std::process::exit(1);
     }
 
@@ -34,8 +63,8 @@ fn main() -> io::Result<()> {
 
     let mut mono_threshold = 6;
     if let Some(pos) = args.iter().position(|arg| arg == "--mono-threshold") {
-        if pos + 1 < args.len() {
-            if let Ok(value) = args[pos + 1].parse::<usize>() {
+        if let Some(val_str) = args.get(pos + 1) {
+            if let Ok(value) = val_str.parse::<usize>() {
                 mono_threshold = value;
             } else {
                 eprintln!("Error: Invalid value for --mono-threshold. Must be a positive integer.");
@@ -196,6 +225,7 @@ fn main() -> io::Result<()> {
         };
 
         let tier_bpm = compute_tier_bpm(&measure_densities, &bpm_map, 4.0);
+        let matrix_rating = compute_matrix_rating(&measure_densities, &bpm_map);
 
         let short_hash = compute_chart_hash(&minimized_chart, &bpms_to_use);
 
@@ -266,6 +296,7 @@ fn main() -> io::Result<()> {
             rating_str,
             tech_notation_str,
             tier_bpm,
+            matrix_rating,
 
             stats,
             stream_counts,
