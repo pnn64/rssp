@@ -197,7 +197,7 @@ Elapsed Time: 43.653715ms
 - [ ] Custom patterns flag --custom-pattern DULDUDLR
 - [ ] Proper parsing for Tech (adopt from new ITGMania version)
 - [ ] Add many tests for edge case simfiles
-- [ ] Add "matrix rating" (calculate estimated rating based on rating matrix sheet)
+- [x] Add "matrix rating" (calculate estimated rating based on rating matrix sheet)
 
 ## Contributing
 
