@@ -95,23 +95,23 @@ rssp <path/to/simfile.sm_or_ssc> [options]
 
 *   Show the default pretty report for a `.sm` file:
     ```bash
-    ./target/release/rssp "My Songs/Cool Song/Cool Song.sm"
+    ./rssp "My Songs/Cool Song/Cool Song.sm"
     ```
 *   Generate a JSON report for an `.ssc` file:
     ```bash
-    ./target/release/rssp "/path/to/itg/packs/Hard Stuff/My Fav/My Fav.ssc" --json
+    ./rssp "/path/to/itg/packs/Hard Stuff/My Fav/My Fav.ssc" --json
     ```
 *   Generate the Full report and a density graph PNG:
     ```bash
-    ./target/release/rssp song.sm --full --png
+    ./rssp song.sm --full --png
     ```
 *   Generate a CSV report with a higher mono threshold and stripped title tags:
     ```bash
-    ./target/release/rssp song.ssc --csv --mono-threshold 8 --strip-tags
+    ./rssp song.ssc --csv --mono-threshold 8 --strip-tags
     ```
 *   Calculate a matrix rating without analyzing a file, use the `--matrix` flag with BPM and measure counts:
     ```bash
-    ./target/release/rssp --matrix --bpm <BPM> --measures <MEASURES>
+    ./rssp --matrix --bpm <BPM> --measures <MEASURES>
     ```
 
 ## Output Formats
@@ -124,9 +124,9 @@ rssp <path/to/simfile.sm_or_ssc> [options]
 
 ## Sample Output
 ```
-perfecttaste@LAPTOP ~ $ .rssp /mnt/c/Games/ITGmania/Songs/ECS13/TIMELESS_BEATZ/timelessbeatz.sm --full
+perfecttaste@LAPTOP ~ $ ./rssp timelessbeatz.sm --full
 --- Song Details ---
-Title: TIMELESS BEATZ
+Title: [18] [170] TIMELESS BEATZ
 Subtitle: ~Breakbeats To Chill To~
 Artist: Various Artists (mixed by Rems)
 Length: 59m 43s
@@ -139,6 +139,7 @@ Offset: 0.009
 Challenge 18 : CSktls Rems mang Janus5k Mango
 ---------------------------------------------
 Step Type: dance-single
+Matrix Rating: 18.6493
 Tier BPM: 170
 SHA1 Hash: da8bc528eb55ea86
 BPM Neutral SHA1 Hash: 9b60cf786177ffc5
@@ -158,6 +159,8 @@ Hands: 0
 Holds: 58
 Rolls: 11
 Mines: 0
+Lifts: 0
+Fakes: 0
 
 --- Pattern Analysis ---
 Candles: 2532 (1264 left, 1268 right)
@@ -178,8 +181,8 @@ Anchors: 605 (276 left, 19 down, 34 up, 276 right)
 Total Towers: 5 (1 LR, 0 UD, 2 LD, 1 LU, 1 RD, 0 RU)
 Total Triangles: 2893 (727 LDL, 716 LUL, 701 RDR, 749 RUR)
 Staircases: 5275 (1280 Left, 1341 Right, 1322 Left Inv, 1332 Right Inv)
-Alt Staircases: (301 Left, 283 Right, 299 Left Inv, 270 Right Inv)
-Double Staircases: (7 Left, 8 Right, 7 Left Inv, 8 Right Inv)
+Alt Staircases: 1153 (301 Left, 283 Right, 299 Left Inv, 270 Right Inv)
+Double Staircases: 30 (7 Left, 8 Right, 7 Left Inv, 8 Right Inv)
 Sweeps: 212 (46 Left, 51 Right, 49 Left Inv, 66 Right Inv)
 Candle Sweeps: 29 (9 Left, 4 Right, 6 Left Inv, 10 Right Inv)
 Copters: 61 (10 Left, 12 Right, 22 Left Inv, 17 Right Inv)
@@ -189,7 +192,7 @@ Hip Breakers: 13 (4 Left, 3 Right, 3 Left Inv, 3 Right Inv)
 Doritos: 896 (215 Left, 220 Right, 243 Left Inv, 218 Right Inv)
 Luchis: 187 (51 Left DU, 44 Left UD, 54 Right DU, 38 Right UD)
 
-Elapsed Time: 43.653715ms
+Elapsed Time: 18.667896ms
 ```
 
 ## TODO
