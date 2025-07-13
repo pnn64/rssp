@@ -34,6 +34,8 @@ Why create another simfile parser?
     *   Generates textual chart breakdowns in Detailed, Partial, and Simplified formats.
     *   Calculates Stream Percentage (raw and adjusted).
     *   Computes a "Tier BPM" based on sustained density and BPM.
+*   **Difficulty Rating:**
+    *   Calculates a Matrix Rating by aggregating stream sections and applying a difficulty matrix.
 *   **Pattern Detection:** Identifies various common and complex step patterns:
     *   Candles (Left/Right) & Candle Percentage
     *   Mono (Left-Facing/Right-Facing) & Mono Percentage (configurable threshold)
@@ -106,6 +108,10 @@ rssp <path/to/simfile.sm_or_ssc> [options]
 *   Generate a CSV report with a higher mono threshold and stripped title tags:
     ```bash
     ./target/release/rssp song.ssc --csv --mono-threshold 8 --strip-tags
+    ```
+*   Calculate a matrix rating without analyzing a file, use the `--matrix` flag with BPM and measure counts:
+    ```bash
+    ./target/release/rssp --matrix --bpm <BPM> --measures <MEASURES>
     ```
 
 ## Output Formats
