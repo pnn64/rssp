@@ -180,14 +180,7 @@ fn main() -> io::Result<()> {
             String::new()
         };
 
-        let combined = format!("{} {}", credit, description).replace(',', " ");
-        let (step_artist_str, parsed_tech) = parse_step_artist_and_tech(&combined);
-
-        let tech_notation_str = parsed_tech
-            .iter()
-            .map(|tn| tn.0.as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
+        let (step_artist_str, tech_notation_str) = parse_step_artist_and_tech(&credit, &description);
 
         let (mut minimized_chart, stats, measure_densities) = minimize_chart_and_count(chart_data);
         if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {

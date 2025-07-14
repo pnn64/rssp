@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::LazyLock;
 
 pub static KNOWN_TECH_LIST: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
@@ -77,11 +78,25 @@ fn split_artists(artist_str: &str) -> Vec<String> {
         .collect()
 }
 
-/// Parses input into step artists and tech notations, skipping measure data and "No Tech".
-pub fn parse_step_artist_and_tech(input: &str) -> (Vec<String>, Vec<TechNotation>) {
+/// Deduplicates a list of artists while preserving order.
+#[inline(always)]
+fn deduplicate_artists(artists: Vec<String>) -> Vec<String> {
+    let mut unique = Vec::new();
+    let mut seen = HashSet::new();
+    for artist in artists {
+        if seen.insert(artist.clone()) {
+            unique.push(artist);
+        }
+    }
+    unique
+}
+
+/// Parses credit and description into step artists and formatted tech notation string, skipping measure data and "No Tech".
+pub fn parse_step_artist_and_tech(credit: &str, description: &str) -> (Vec<String>, String) {
+    let combined = format!("{} {}", credit.trim(), description.trim()).replace(',', " ");
     let mut artist_builder = String::new();
     let mut tech_notations = Vec::new();
-    let mut chunks = input.split_whitespace().peekable();
+    let mut chunks = combined.split_whitespace().peekable();
 
     while let Some(chunk) = chunks.next() {
         if chunk == "No" && chunks.peek() == Some(&"Tech") {
@@ -94,7 +109,7 @@ pub fn parse_step_artist_and_tech(input: &str) -> (Vec<String>, Vec<TechNotation
         }
 
         if let Some(parsed_list) = parse_chunk_as_tech(chunk) {
-            tech_notations.extend(parsed_list.into_iter().map(TechNotation));
+            tech_notations.extend(parsed_list);
         } else {
             if !artist_builder.is_empty() {
                 artist_builder.push(' ');
@@ -103,6 +118,10 @@ pub fn parse_step_artist_and_tech(input: &str) -> (Vec<String>, Vec<TechNotation
         }
     }
 
-    let artists = split_artists(&artist_builder);
-    (artists, tech_notations)
+    let mut artists = split_artists(&artist_builder);
+    artists = deduplicate_artists(artists);
+
+    let tech_notation_str = tech_notations.join(" ");
+
+    (artists, tech_notation_str)
 }
