@@ -7,7 +7,7 @@ use crate::stats::{ArrowStats, StreamCounts};
 pub struct ChartSummary {
     
     pub step_type_str:     String,
-    pub step_artist_str:   String,
+    pub step_artist_str:   Vec<String>,
     pub difficulty_str:    String,
     pub rating_str:        String,
     pub matrix_rating:     f64,
@@ -170,7 +170,7 @@ fn print_pretty_all(simfile: &SimfileSummary) {
 }
 
 fn print_pretty_chart(chart: &ChartSummary) {
-    let header = format!("{} {} : {}", chart.difficulty_str, chart.rating_str, chart.step_artist_str);
+    let header = format!("{} {} : {}", chart.difficulty_str, chart.rating_str, chart.step_artist_str.join(", "));
     println!("\n{}", header);
     println!("{}", "-".repeat(header.len()));
 
@@ -281,7 +281,7 @@ fn print_full_all(simfile: &SimfileSummary) {
 }
 
 fn print_full_chart(chart: &ChartSummary) {
-    let header = format!("{} {} : {}", chart.difficulty_str, chart.rating_str, chart.step_artist_str);
+    let header = format!("{} {} : {}", chart.difficulty_str, chart.rating_str, chart.step_artist_str.join(", "));
     println!("\n{}", header);
     println!("{}", "-".repeat(header.len()));
 
@@ -479,34 +479,18 @@ fn print_full_chart(chart: &ChartSummary) {
         total_luchis, left_du_luchis, left_ud_luchis, right_du_luchis, right_ud_luchis);
 }
 
-// Subgroup field printing functions
 fn print_chart_info_fields(chart: &ChartSummary, indent: usize) {
     print_kv_str("step_type", &chart.step_type_str, indent);
     print_kv_str("difficulty", &chart.difficulty_str, indent);
     print_kv_float("tier_bpm", chart.tier_bpm, indent);
     print_kv_str("rating", &chart.rating_str, indent);
-    let mut step_artists: Vec<String> = Vec::new();
-    let chunks: Vec<&str> = chart.step_artist_str.split_whitespace().collect();
-    
-    let mut i = 0;
-    while i < chunks.len() {
-        if i + 1 < chunks.len() && chunks[i].ends_with('.') && chunks[i].len() <= 2 {
-            // Combine initial with the next chunk
-            step_artists.push(format!("{} {}", chunks[i], chunks[i + 1]));
-            i += 2; // Skip the next chunk since it’s part of this name
-        } else {
-            // Treat as a separate stepartist
-            step_artists.push(chunks[i].to_string());
-            i += 1;
-        }
-    }
-    
-    let step_artists_refs: Vec<&str> = step_artists.iter().map(|s| s.as_str()).collect();
+    let step_artists_refs: Vec<&str> = chart.step_artist_str.iter().map(|s| s.as_str()).collect();
     print_kv_array("step_artists", &step_artists_refs, indent);
     print_kv_str("tech_notation", &chart.tech_notation_str, indent);
     print_kv_str("sha1", &chart.short_hash, indent);
     print_kv_str_last("bpm_neutral_sha1", &chart.bpm_neutral_hash, indent);
 }
+
 
 fn print_arrow_stats_fields(chart: &ChartSummary, indent: usize) {
     print_kv_int("total_arrows", chart.stats.total_arrows, indent);
@@ -924,7 +908,7 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
         esc_csv(&chart.step_type_str),
         esc_csv(&chart.difficulty_str),
         esc_csv(&chart.rating_str),
-        esc_csv(&chart.step_artist_str),
+        esc_csv(&chart.step_artist_str.join(", ")),
         esc_csv(&chart.tech_notation_str),
         esc_csv(&chart.short_hash),
         esc_csv(&chart.bpm_neutral_hash),
