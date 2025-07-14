@@ -19,7 +19,7 @@ pub static KNOWN_TECH_LIST: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TechNotation(pub String);
 
-/// Checks if a chunk resembles measure data (contains symbols like / - * | ~ . but no letters).
+/// Checks if a chunk resembles measure data (contains symbols like / - * | ~ . ' but no letters).
 #[inline(always)]
 fn is_measure_data(chunk: &str) -> bool {
     if chunk.chars().any(|c| c.is_ascii_alphabetic() || c == '_') {
@@ -27,13 +27,13 @@ fn is_measure_data(chunk: &str) -> bool {
     }
     let has_measure_symbol = chunk
         .chars()
-        .any(|c| matches!(c, '/' | '-' | '*' | '|' | '~' | '.'));
+        .any(|c| matches!(c, '/' | '-' | '*' | '|' | '~' | '.' | '\''));
     if !has_measure_symbol {
         return false;
     }
     chunk
         .chars()
-        .all(|c| c.is_ascii_digit() || matches!(c, '/' | '-' | '*' | '|' | '~' | '.'))
+        .all(|c| c.is_ascii_digit() || matches!(c, '/' | '-' | '*' | '|' | '~' | '.' | '\''))
 }
 
 /// Parses a chunk into a sequence of known tech notations using greedy longest prefix matching.
