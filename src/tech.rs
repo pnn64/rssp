@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::LazyLock;
 
 pub static KNOWN_TECH_LIST: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
@@ -75,14 +74,27 @@ fn split_artists(artist_str: &str) -> Vec<String> {
         .collect()
 }
 
-/// Deduplicates a list of artists while preserving order.
+/// Deduplicates artists, preferring longer variants for prefix matches while preserving order.
 #[inline(always)]
-fn deduplicate_artists(artists: &[String]) -> Vec<String> {
-    let mut unique = Vec::new();
-    let mut seen = HashSet::new();
+fn deduplicate_artists(artists: Vec<String>) -> Vec<String> {
+    let mut unique: Vec<String> = Vec::new();
     for artist in artists {
-        if seen.insert(artist.as_str()) {
-            unique.push(artist.clone());
+        let mut replaced = false;
+        for i in 0..unique.len() {
+            if unique[i] == artist {
+                replaced = true;
+                break;
+            } else if artist.starts_with(&unique[i]) && artist.len() > unique[i].len() {
+                unique[i] = artist.clone();
+                replaced = true;
+                break;
+            } else if unique[i].starts_with(&artist) && unique[i].len() > artist.len() {
+                replaced = true;
+                break;
+            }
+        }
+        if !replaced {
+            unique.push(artist);
         }
     }
     unique
@@ -122,11 +134,12 @@ fn parse_single(input: &str) -> (Vec<String>, Vec<String>) {
 
 /// Parses credit and description into unique step artists and formatted tech notation string.
 pub fn parse_step_artist_and_tech(credit: &str, description: &str) -> (Vec<String>, String) {
-    let (mut artists1, tech1) = parse_single(credit);
+    let (artists1, tech1) = parse_single(credit);
     let (artists2, tech2) = parse_single(description);
 
-    artists1.extend(artists2);
-    let artists = deduplicate_artists(&artists1);
+    let mut artists = artists1;
+    artists.extend(artists2);
+    artists = deduplicate_artists(artists);
 
     let mut tech_notations = tech1;
     tech_notations.extend(tech2);
