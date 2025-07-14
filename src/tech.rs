@@ -18,9 +18,6 @@ pub static KNOWN_TECH_LIST: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     ]
 });
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TechNotation(pub String);
-
 /// Checks if a chunk resembles measure data (contains symbols like / - * | ~ . ' but no letters).
 #[inline(always)]
 fn is_measure_data(chunk: &str) -> bool {
@@ -80,23 +77,24 @@ fn split_artists(artist_str: &str) -> Vec<String> {
 
 /// Deduplicates a list of artists while preserving order.
 #[inline(always)]
-fn deduplicate_artists(artists: Vec<String>) -> Vec<String> {
+fn deduplicate_artists(artists: &[String]) -> Vec<String> {
     let mut unique = Vec::new();
     let mut seen = HashSet::new();
     for artist in artists {
-        if seen.insert(artist.clone()) {
-            unique.push(artist);
+        if seen.insert(artist.as_str()) {
+            unique.push(artist.clone());
         }
     }
     unique
 }
 
-/// Parses credit and description into step artists and formatted tech notation string, skipping measure data and "No Tech".
-pub fn parse_step_artist_and_tech(credit: &str, description: &str) -> (Vec<String>, String) {
-    let combined = format!("{} {}", credit.trim(), description.trim()).replace(',', " ");
+/// Parses a single input string into artists and tech notations, skipping measure data and "No Tech".
+#[inline(always)]
+fn parse_single(input: &str) -> (Vec<String>, Vec<String>) {
+    let cleaned = input.trim().replace(',', " ");
     let mut artist_builder = String::new();
     let mut tech_notations = Vec::new();
-    let mut chunks = combined.split_whitespace().peekable();
+    let mut chunks = cleaned.split_whitespace().peekable();
 
     while let Some(chunk) = chunks.next() {
         if chunk == "No" && chunks.peek() == Some(&"Tech") {
@@ -118,9 +116,20 @@ pub fn parse_step_artist_and_tech(credit: &str, description: &str) -> (Vec<Strin
         }
     }
 
-    let mut artists = split_artists(&artist_builder);
-    artists = deduplicate_artists(artists);
+    let artists = split_artists(&artist_builder);
+    (artists, tech_notations)
+}
 
+/// Parses credit and description into unique step artists and formatted tech notation string.
+pub fn parse_step_artist_and_tech(credit: &str, description: &str) -> (Vec<String>, String) {
+    let (mut artists1, tech1) = parse_single(credit);
+    let (artists2, tech2) = parse_single(description);
+
+    artists1.extend(artists2);
+    let artists = deduplicate_artists(&artists1);
+
+    let mut tech_notations = tech1;
+    tech_notations.extend(tech2);
     let tech_notation_str = tech_notations.join(" ");
 
     (artists, tech_notation_str)
