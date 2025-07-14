@@ -2,16 +2,17 @@ use std::sync::LazyLock;
 
 pub static KNOWN_TECH_LIST: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     vec![
-        "BR", "BR+", "BR-", "BT", "BT+", "BT-", "BU", "BU+", "BU-", "BXF", "BXF+", "BXF-", "bXF",
-        "bXF+", "bXF-", "BxF", "BxF+", "BxF-", "bXf", "bXf+", "bXf-", "bxF", "bxF+", "bxF-",
-        "B+XF", "BX-F+", "B+X-F", "B-X-F-", "DS", "DS+", "DS-", "DR", "DR+", "DR-", "DT", "DT+",
-        "DT-", "FL", "FL+", "FL-", "FS", "FS+", "FS-", "FX", "FX+", "FX-", "GH", "GH+", "GH-",
-        "HA", "HA+", "HA-", "HS", "HS+", "HS-", "ITL+", "JA", "JA+", "JA-", "JU", "JU+", "JU-",
-        "JUMPS", "JUMPS+", "JUMPS-", "KS", "KS+", "KS-", "KT", "KT+", "KT-", "LOL", "MA", "MA+",
-        "MA-", "MD", "MD+", "MD-", "RH", "RH+", "RH-", "RS", "RS+", "RS-", "SC", "SC+", "SC-",
-        "SDS", "SDS+", "SDS-", "SJ", "SJ+", "SJ-", "SK", "SK+", "SK-", "SS", "SS+", "SS-", "SKT",
-        "SKT+", "SKT-", "SPD", "SPD+", "SPD-", "STR", "STR+", "STR-", "TR", "TR+", "TR-", "WA",
-        "WA+", "WA-", "XMOD", "XMOD+", "XMOD-", "XO", "XO+", "XO-",
+        "32nds", "br", "BR", "BR+", "BR-", "BT", "BT+", "BT-", "BU", "BU+", "BU-", "BXF", "BXF+",
+        "BXF-", "bXF", "bXF+", "bXF-", "BxF", "BXf", "BxF+", "BxF-", "bXf", "bXf+", "bXf-", "bxF",
+        "bxF+", "bxF-", "B+XF", "BX-F", "BX-F+", "BX+F+", "B+X-F", "B-X-F-", "B-XF+", "DS", "DS++",
+        "DS+", "DS-", "dr", "DR", "DR+", "DR-", "DT", "DT+", "DT-", "FL", "FL+", "FL-", "fs", "FS",
+        "FS+", "FS-", "FX", "FX+", "FX-", "GH", "GH+", "GH-", "HA", "HA+", "HA-", "HS", "HS+",
+        "HS-", "ITL+", "JA", "JA+", "JA-", "JU", "JU+", "JU-", "JUMPS", "JUMPS+", "JUMPS-", "KS",
+        "KS+", "KS-", "KT", "KT+", "KT-", "LOL", "MA", "MA+", "MA-", "MD", "MD+", "MD-", "RH",
+        "RH+", "RH-", "Rolls-", "RS", "RS+", "RS-", "SC", "SC+", "SC-", "SDS", "SDS+", "SDS-",
+        "SJ", "SJ+", "SJ-", "SK", "SK+", "SK-", "SS", "SS+", "SS-", "SKT", "SKT+", "SKT-", "SPD",
+        "SPD+", "SPD-", "STR", "STR+", "STR-", "TR", "TR+", "TR-", "WA", "WA+", "WA-", "XMOD",
+        "XMOD+", "XMOD-", "XO", "XO+", "XO-",
     ]
 });
 
