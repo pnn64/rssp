@@ -201,7 +201,7 @@ Elapsed Time: 18.667896ms
 - [ ] Properly handle empty charts
 - [x] Fix parsing of multiple simfile authors with '&' (for instance Maxx & Zaia)
 - [x] Check that some special characters are parser correctly (CODE:Ø as opposed to CODE\:Ø)
-- [ ] Fix parsing for "No Tech" in artist name
+- [x] Fix parsing for "No Tech" in artist name
 - [ ] Doubles (8-panel) parsing
 - [ ] Custom patterns flag --custom-pattern DULDUDLR
 - [ ] Proper parsing for Tech (adopt from new ITGMania version)
