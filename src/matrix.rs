@@ -69,7 +69,11 @@ static DIFFICULTY_TABLE: LazyLock<DifficultyTable> = LazyLock::new(|| {
 /// Finds the lower bound measure and its difficulty.
 #[inline(always)]
 fn find_lower_bound(measures: f64, bpm_data: &BTreeMap<i32, i32>) -> (f64, f64) {
-    if let Some((&m, &d)) = bpm_data.iter().rev().find(|&(&m, _)| (m as f64) <= measures) {
+    if let Some((&m, &d)) = bpm_data
+        .iter()
+        .rev()
+        .find(|&(&m, _)| (m as f64) <= measures)
+    {
         (m as f64, d as f64)
     } else {
         (0.0, 0.0)
@@ -105,11 +109,17 @@ fn extrapolate_downward(measures: f64, min_measure_key: f64, min_difficulty: f64
 
 /// Computes logarithmic interpolation within a range.
 #[inline(always)]
-fn interpolate_log(measures: f64, range_start_m: f64, range_end_m: f64, base_difficulty: f64) -> f64 {
+fn interpolate_log(
+    measures: f64,
+    range_start_m: f64,
+    range_end_m: f64,
+    base_difficulty: f64,
+) -> f64 {
     if measures <= range_start_m {
         return base_difficulty;
     }
-    let log_progress = (measures.ln() - range_start_m.ln()) / (range_end_m.ln() - range_start_m.ln());
+    let log_progress =
+        (measures.ln() - range_start_m.ln()) / (range_end_m.ln() - range_start_m.ln());
     base_difficulty + log_progress
 }
 
@@ -175,11 +185,7 @@ fn find_bounding_bpms(bpm: f64, table: &DifficultyTable) -> (i32, i32) {
         .next_back()
         .map(|(&b, _)| b)
         .unwrap_or(0);
-    let bpm2 = table
-        .range(bpm_i..)
-        .next()
-        .map(|(&b, _)| b)
-        .unwrap_or(bpm1);
+    let bpm2 = table.range(bpm_i..).next().map(|(&b, _)| b).unwrap_or(bpm1);
     (bpm1, bpm2)
 }
 
@@ -187,13 +193,19 @@ fn find_bounding_bpms(bpm: f64, table: &DifficultyTable) -> (i32, i32) {
 pub fn get_difficulty(bpm: f64, measures: f64) -> f64 {
     let (bpm1, bpm2) = find_bounding_bpms(bpm, &DIFFICULTY_TABLE);
 
-    let diff_at_bpm1 = calculate_difficulty_for_bpm(measures, DIFFICULTY_TABLE.get(&bpm1).unwrap_or(&BTreeMap::new()));
+    let diff_at_bpm1 = calculate_difficulty_for_bpm(
+        measures,
+        DIFFICULTY_TABLE.get(&bpm1).unwrap_or(&BTreeMap::new()),
+    );
 
     if bpm1 == bpm2 {
         return diff_at_bpm1;
     }
 
-    let diff_at_bpm2 = calculate_difficulty_for_bpm(measures, DIFFICULTY_TABLE.get(&bpm2).unwrap_or(&BTreeMap::new()));
+    let diff_at_bpm2 = calculate_difficulty_for_bpm(
+        measures,
+        DIFFICULTY_TABLE.get(&bpm2).unwrap_or(&BTreeMap::new()),
+    );
 
     let bpm_range = (bpm2 - bpm1) as f64;
     if bpm_range == 0.0 {
