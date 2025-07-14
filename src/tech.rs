@@ -70,12 +70,18 @@ fn split_artists(artist_str: &str) -> Vec<String> {
         .collect()
 }
 
-/// Parses input into step artists and tech notations, skipping measure data.
+/// Parses input into step artists and tech notations, skipping measure data and "No Tech".
 pub fn parse_step_artist_and_tech(input: &str) -> (Vec<String>, Vec<TechNotation>) {
     let mut artist_builder = String::new();
     let mut tech_notations = Vec::new();
+    let mut chunks = input.split_whitespace().peekable();
 
-    for chunk in input.split_whitespace() {
+    while let Some(chunk) = chunks.next() {
+        if chunk == "No" && chunks.peek() == Some(&"Tech") {
+            let _ = chunks.next(); // Skip "Tech"
+            continue;
+        }
+
         if is_measure_data(chunk) {
             continue;
         }
