@@ -2,17 +2,18 @@ use std::sync::LazyLock;
 
 pub static KNOWN_TECH_LIST: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     vec![
-        "32nds", "br", "BR", "BR+", "BR-", "BT", "BT+", "BT-", "BU", "BU+", "BU-", "BXF", "BXF+",
-        "BXF-", "bXF", "bXF+", "bXF-", "BxF", "BXf", "BxF+", "BxF-", "bXf", "bXf+", "bXf-", "bxF",
-        "bxF+", "bxF-", "B+XF", "BX-F", "BX-F+", "BX+F+", "B+X-F", "B-X-F-", "B-XF+", "DS", "DS++",
-        "DS+", "DS-", "dr", "DR", "DR+", "DR-", "DT", "DT+", "DT-", "FL", "FL+", "FL-", "fs", "FS",
-        "FS+", "FS-", "FX", "FX+", "FX-", "GH", "GH+", "GH-", "HA", "HA+", "HA-", "HS", "HS+",
-        "HS-", "ITL+", "JA", "JA+", "JA-", "JU", "JU+", "JU-", "JUMPS", "JUMPS+", "JUMPS-", "KS",
-        "KS+", "KS-", "KT", "KT+", "KT-", "LOL", "MA", "MA+", "MA-", "MD", "MD+", "MD-", "RH",
-        "RH+", "RH-", "Rolls-", "RS", "RS+", "RS-", "SC", "SC+", "SC-", "SDS", "SDS+", "SDS-",
-        "SJ", "SJ+", "SJ-", "SK", "SK+", "SK-", "SS", "SS+", "SS-", "SKT", "SKT+", "SKT-", "SPD",
-        "SPD+", "SPD-", "STR", "STR+", "STR-", "TR", "TR+", "TR-", "WA", "WA+", "WA-", "XMOD",
-        "XMOD+", "XMOD-", "XO", "XO+", "XO-",
+        "24ths", "32nds", "br", "BR", "BR+", "BR-", "BT", "BT+", "BT-", "bu", "BU", "BU+", "BU-",
+        "BXF", "BXF+", "BXF-", "bXF", "bXF+", "bXF-", "BxF", "BXf", "BxF+", "BxF-", "bXf", "bXf+",
+        "bXf-", "bxF", "bxF+", "bxF-", "B+XF", "BX-F", "BX-F+", "BX+F+", "B+X-F", "B-X-F-",
+        "B-XF+", "ds", "DS", "DS++", "DS+", "DS-", "dr", "DR", "DR+", "DR-", "dt", "dt-", "DT",
+        "DT+", "DT-", "FL", "FL+", "FL-", "fs", "FS", "FS+", "FS-", "FX", "FX+", "FX-", "GH",
+        "GH+", "GH-", "HA", "HA+", "HA-", "HS", "HS+", "HS-", "ITL+", "ja", "ja-", "JA", "JA+",
+        "JA-", "ju", "ju-", "JU", "JU+", "JU-", "JUMPS", "JUMPS+", "JUMPS-", "KS", "KS+", "KS-",
+        "KT", "KT+", "KT-", "LOL", "ma", "ma-", "MA", "MA+", "MA-", "MD", "MD+", "MD-", "rh",
+        "rh-", "RH", "RH+", "RH-", "Rolls-", "RS", "RS+", "RS-", "SC", "SC+", "SC-", "SDS", "SDS+",
+        "SDS-", "SJ", "SJ+", "SJ-", "SK", "SK+", "SK-", "SS", "SS+", "SS-", "SKT", "SKT+", "SKT-",
+        "SPD", "SPD+", "SPD-", "STR", "STR+", "STR-", "TR", "TR+", "TR-", "WA", "WA+", "WA-",
+        "XMOD", "XMOD+", "XMOD-", "xo", "XO", "XO+", "XO-",
     ]
 });
 
@@ -61,10 +62,15 @@ fn parse_chunk_as_tech(chunk: &str) -> Option<Vec<String>> {
     Some(results)
 }
 
-/// Splits a combined artist string into individual artists, omitting separators like '&'.
+/// Splits a combined artist string into individual artists, omitting various separators.
 #[inline(always)]
 fn split_artists(artist_str: &str) -> Vec<String> {
-    artist_str
+    let mut normalized = artist_str.to_string();
+    normalized = normalized.replace(" vs. ", " & ");
+    normalized = normalized.replace(" and ", " & ");
+    normalized = normalized.replace(" x ", " & ");
+    normalized = normalized.replace(" + ", " & ");
+    normalized
         .split('&')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
