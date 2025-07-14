@@ -199,7 +199,7 @@ Elapsed Time: 18.667896ms
 - [x] Count Fakes and Lifts
 - [x] Properly parse Ivaltek (indented NOTES) from SHARPNELSTREAMZ v2
 - [ ] Properly handle empty charts
-- [ ] Fix parsing of multiple simfile authors with '&' (for instance Maxx & Zaia)
+- [x] Fix parsing of multiple simfile authors with '&' (for instance Maxx & Zaia)
 - [x] Check that some special characters are parser correctly (CODE:Ø as opposed to CODE\:Ø)
 - [ ] Fix parsing for "No Tech" in artist name
 - [ ] Doubles (8-panel) parsing
