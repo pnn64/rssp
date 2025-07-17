@@ -484,6 +484,7 @@ fn print_chart_info_fields(chart: &ChartSummary, indent: usize) {
     print_kv_str("difficulty", &chart.difficulty_str, indent);
     print_kv_float("tier_bpm", chart.tier_bpm, indent);
     print_kv_str("rating", &chart.rating_str, indent);
+    print_kv_float("matrix_rating", chart.matrix_rating, indent);
     let step_artists_refs: Vec<&str> = chart.step_artist_str.iter().map(|s| s.as_str()).collect();
     print_kv_array("step_artists", &step_artists_refs, indent);
     print_kv_str("tech_notation", &chart.tech_notation_str, indent);
@@ -533,8 +534,7 @@ fn print_stream_info_fields(chart: &ChartSummary, indent: usize) {
 
 fn print_nps_fields(chart: &ChartSummary, indent: usize) {
     print_kv_float("max_nps", chart.max_nps, indent);
-    print_kv_float("median_nps", chart.median_nps, indent);
-    print_kv_float_last("matrix_rating", chart.matrix_rating, indent);
+    print_kv_float_last("median_nps", chart.median_nps, indent);
 }
 
 fn print_mono_candle_stats_fields(chart: &ChartSummary, indent: usize) {
