@@ -60,7 +60,7 @@ Why create another simfile parser?
 1. **Install Rust:** If you don't have Rust installed, get it from [rustup.rs](https://rustup.rs/).
 2. **Clone the Repository:**
     ```bash
-    git clone https://github.com/your_username/rssp.git # TODO: Replace with your repo URL
+    git clone https://github.com/pnn64/rssp.git
     cd rssp
     ```
 3. **Build the Project:**
