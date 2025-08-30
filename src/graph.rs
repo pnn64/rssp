@@ -8,12 +8,18 @@ pub enum ColorScheme {
     Alternative,
 }
 
-pub fn generate_density_graph_png(
+#[derive(Debug, Clone)]
+pub struct GraphImageData {
+    pub width: u32,
+    pub height: u32,
+    pub data: Vec<u8>, // RGBA data
+}
+
+fn generate_graph_pixels(
     measure_nps_vec: &[f64],
     max_nps: f64,
-    short_hash: &str,
     color_scheme: &ColorScheme,
-) -> io::Result<()> {
+) -> (u32, u32, Vec<u8>) {
     const IMAGE_WIDTH: u32 = 1000;
     const GRAPH_HEIGHT: u32 = 400;
 
@@ -75,17 +81,46 @@ pub fn generate_density_graph_png(
             }
         }
     }
+    (IMAGE_WIDTH, GRAPH_HEIGHT, img_buffer)
+}
+
+pub fn generate_density_graph_png(
+    measure_nps_vec: &[f64],
+    max_nps: f64,
+    short_hash: &str,
+    color_scheme: &ColorScheme,
+) -> io::Result<()> {
+    let (image_width, graph_height, img_buffer_rgb) = generate_graph_pixels(measure_nps_vec, max_nps, color_scheme);
 
     let filename = match color_scheme {
         ColorScheme::Default => format!("{}.png", short_hash),
         ColorScheme::Alternative => format!("{}-alt.png", short_hash),
     };
     let file = File::create(filename)?;
-    let mut encoder = png::Encoder::new(file, IMAGE_WIDTH, GRAPH_HEIGHT);
+    let mut encoder = png::Encoder::new(file, image_width, graph_height);
     encoder.set_color(png::ColorType::Rgb);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder.write_header()?;
-    writer.write_image_data(&img_buffer)?;
+    writer.write_image_data(&img_buffer_rgb)?;
 
     Ok(())
+}
+
+pub fn generate_density_graph_rgba_data(
+    measure_nps_vec: &[f64],
+    max_nps: f64,
+    color_scheme: &ColorScheme,
+) -> Result<GraphImageData, String> {
+    let (width, height, rgb_data) = generate_graph_pixels(measure_nps_vec, max_nps, color_scheme);
+    let mut rgba_data = Vec::with_capacity((width * height * 4) as usize);
+
+    for rgb in rgb_data.chunks_exact(3) {
+        rgba_data.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+    }
+
+    Ok(GraphImageData {
+        width,
+        height,
+        data: rgba_data,
+    })
 }
