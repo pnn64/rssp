@@ -8,11 +8,11 @@ pub enum ColorScheme {
     Alternative,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GraphImageData {
     pub width: u32,
     pub height: u32,
-    pub data: Vec<u8>, // RGBA data
+    pub data: Vec<u8>,
 }
 
 fn generate_graph_pixels(
