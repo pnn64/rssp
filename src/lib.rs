@@ -165,6 +165,8 @@ pub fn analyze(
             } else {
                 (0, 0, 0, 0.0, 0, 0.0)
             };
+        
+        let density_graph = graph::generate_density_graph_rgba_data(&measure_nps_vec, max_nps, &graph::ColorScheme::Default).ok();
 
         let elapsed_chart = chart_start_time.elapsed();
 
@@ -177,6 +179,7 @@ pub fn analyze(
             candle_total, candle_percent, short_hash, bpm_neutral_hash,
             elapsed: elapsed_chart, measure_densities, measure_nps_vec,
             notes: bitmasks,
+            density_graph,
         };
 
         chart_summaries.push(summary);

@@ -3,9 +3,10 @@ use std::time::Duration;
 
 use crate::patterns::PatternVariant;
 use crate::stats::{ArrowStats, StreamCounts};
+use crate::graph::GraphImageData;
 
 // Make the struct and its fields public
-#[derive(Debug)] // Add Debug for easier use in the engine
+#[derive(Debug)]
 pub struct ChartSummary {
     pub step_type_str:     String,
     pub step_artist_str:   Vec<String>,
@@ -40,6 +41,7 @@ pub struct ChartSummary {
     pub measure_densities: Vec<usize>,
     pub measure_nps_vec:   Vec<f64>,
     pub notes:             Vec<u8>,
+    pub density_graph:     Option<GraphImageData>,
 }
 
 // Make the struct and its fields public
