@@ -1,4 +1,4 @@
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct ArrowStats {
     pub total_arrows: u32,
     pub left: u32,
@@ -16,7 +16,7 @@ pub struct ArrowStats {
     pub holding: i32,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct StreamCounts {
     pub run16_streams: u32,
     pub run20_streams: u32,

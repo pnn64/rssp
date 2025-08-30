@@ -4,8 +4,9 @@ use std::time::Duration;
 use crate::patterns::PatternVariant;
 use crate::stats::{ArrowStats, StreamCounts};
 
+// Make the struct and its fields public
+#[derive(Debug)] // Add Debug for easier use in the engine
 pub struct ChartSummary {
-    
     pub step_type_str:     String,
     pub step_artist_str:   Vec<String>,
     pub difficulty_str:    String,
@@ -38,8 +39,11 @@ pub struct ChartSummary {
     pub elapsed:           Duration,
     pub measure_densities: Vec<usize>,
     pub measure_nps_vec:   Vec<f64>,
+    pub notes:             Vec<u8>,
 }
 
+// Make the struct and its fields public
+#[derive(Debug)] // Add Debug for easier use in the engine
 pub struct SimfileSummary {
     pub title_str:            String,
     pub subtitle_str:         String,
@@ -81,7 +85,6 @@ fn format_duration(seconds: i32) -> String {
     format!("{}m {:02}s", minutes, seconds)
 }
 
-// Helper function to escape strings for JSON
 fn esc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -97,12 +100,10 @@ fn esc(s: &str) -> String {
     out
 }
 
-// Helper function to print an indented line
 fn print_indented(line: &str, indent: usize) {
     println!("{}{}", " ".repeat(indent), line);
 }
 
-// Helper functions to print key-value pairs with/without trailing commas
 fn print_kv_str(key: &str, value: &str, indent: usize) {
     print_indented(&format!("\"{}\": \"{}\",", key, esc(value)), indent);
 }
@@ -139,7 +140,6 @@ fn print_kv_array(key: &str, values: &[&str], indent: usize) {
     print_indented(&line, indent);
 }
 
-// Helper function to count pattern occurrences
 fn count(map: &HashMap<PatternVariant, u32>, variant: PatternVariant) -> u32 {
     *map.get(&variant).unwrap_or(&0)
 }
@@ -267,12 +267,10 @@ fn print_full_all(simfile: &SimfileSummary) {
     } else {
         println!("BPM: {:.0}-{:.0}", simfile.min_bpm, simfile.max_bpm);
     }
-    // TODO: BPM Tier
     println!("Average BPM: {:.2}", simfile.average_bpm);
     println!("Median BPM: {:.2}", simfile.median_bpm);
     println!("BPM Data: {}", simfile.normalized_bpms);
     println!("Offset: {:.3}", simfile.offset);
-    // TODO: file_md5_hash
 
     for chart in &simfile.charts {
         print_full_chart(chart);
@@ -770,7 +768,6 @@ fn print_breakdown_fields(chart: &ChartSummary, indent: usize) {
     print_kv_str_last("simple_breakdown", &chart.simple, indent);
 }
 
-// Main function to print a chart
 fn print_json_chart(chart: &ChartSummary, is_last: bool) {
     print_indented("{", 4); // Start of chart object
     print_indented("\"chart_info\": {", 6);
@@ -808,7 +805,6 @@ fn print_json_chart(chart: &ChartSummary, is_last: bool) {
     }
 }
 
-// Function to print the entire simfile report in JSON format
 pub fn print_json_all(simfile: &SimfileSummary) {
     println!("{{");
     print_kv_str("title", &simfile.title_str, 2);
@@ -892,7 +888,6 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
     } else {
         print!("{}-{},", simfile.min_bpm, simfile.max_bpm);
     }
-    // TODO: Tier BPM
     print!("{},{},{},{},{},{},",
         simfile.min_bpm,
         simfile.max_bpm,
@@ -901,7 +896,6 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
         esc_csv(&simfile.normalized_bpms),
         simfile.offset,
     );
-    // TODO: file_md5_hash
     print!(",");
 
     print!("{},{},{},{},{},{},{},",
@@ -947,7 +941,6 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
         total_breaks,
         stream_percent,
     );
-    // TODO: adj_stream_percent
     print!(",");
 
     print!("{},{},{},{},",
