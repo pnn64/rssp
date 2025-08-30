@@ -70,6 +70,9 @@ pub fn extract_sections<'a>(
     Option<&'a [u8]>,
     Option<&'a [u8]>,
     Option<&'a [u8]>,
+    Option<&'a [u8]>,
+    Option<&'a [u8]>,
+    Option<&'a [u8]>,
     Vec<(Vec<u8>, Option<Vec<u8>>)>,
 )> {
     if !matches!(file_extension.to_lowercase().as_str(), "sm" | "ssc") {
@@ -88,9 +91,12 @@ pub fn extract_sections<'a>(
         b"#ARTISTTRANSLIT:".as_slice(),
         b"#OFFSET:".as_slice(),
         b"#BPMS:".as_slice(),
+        b"#BANNER:".as_slice(),
+        b"#BACKGROUND:".as_slice(),
+        b"#MUSIC:".as_slice(),
     ];
 
-    let mut sections = [None; 8];
+    let mut sections = [None; 11];
     let mut notes_list = Vec::new();
     let mut i = 0;
 
@@ -152,6 +158,7 @@ pub fn extract_sections<'a>(
     Ok((
         sections[0], sections[1], sections[2], sections[3],
         sections[4], sections[5], sections[6], sections[7],
+        sections[8], sections[9], sections[10],
         notes_list,
     ))
 }

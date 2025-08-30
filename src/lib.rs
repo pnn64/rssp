@@ -44,6 +44,9 @@ pub fn analyze(
         artisttranslit_opt,
         offset_opt,
         bpms_opt,
+        banner_opt,
+        background_opt,
+        music_opt,
         notes_list,
     ) = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
 
@@ -61,6 +64,9 @@ pub fn analyze(
     let titletranslit_str = titletranslit_opt.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
     let subtitletranslit_str = subtitletranslit_opt.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
     let artisttranslit_str = artisttranslit_opt.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let banner_path_str = banner_opt.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let background_path_str = background_opt.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let music_path_str = music_opt.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
     let offset = offset_opt.and_then(|b| std::str::from_utf8(b).ok()).and_then(|s| s.parse::<f64>().ok()).map(|f| (f * 1000.0).trunc() / 1000.0).unwrap_or(0.0);
     let global_bpms_raw = std::str::from_utf8(bpms_opt.unwrap_or(b"<invalid-bpms>")).unwrap_or("<invalid-bpms>");
     let normalized_global_bpms = normalize_float_digits(global_bpms_raw);
@@ -188,6 +194,9 @@ pub fn analyze(
     Ok(SimfileSummary {
         title_str, subtitle_str, artist_str, titletranslit_str, subtitletranslit_str,
         artisttranslit_str, offset, normalized_bpms: normalized_global_bpms,
+        banner_path: banner_path_str,
+        background_path: background_path_str,
+        music_path: music_path_str,
         min_bpm: min_bpm_i32 as f64, max_bpm: max_bpm_i32 as f64,
         median_bpm, average_bpm, total_length, charts: chart_summaries, total_elapsed,
     })
