@@ -87,6 +87,14 @@ pub fn analyze(
         }
 
         let step_type_str = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_owned();
+
+        // Filter out non-gameplay chart types like those for cabinet lights.
+        // These often have no valid note data and should not be analyzed for patterns.
+        match step_type_str.as_str() {
+            "lights-cabinet" => continue,
+            _ => {} // Proceed with analysis for all other types
+        }
+
         let description = std::str::from_utf8(fields[1]).unwrap_or("").trim().to_owned();
         let difficulty_str = std::str::from_utf8(fields[2]).unwrap_or("").trim().to_owned();
         let rating_str = std::str::from_utf8(fields[3]).unwrap_or("").trim().to_owned();
