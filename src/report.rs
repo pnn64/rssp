@@ -42,6 +42,7 @@ pub struct ChartSummary {
     pub measure_nps_vec:   Vec<f64>,
     pub notes:             Vec<u8>,
     pub density_graph:     Option<GraphImageData>,
+    pub minimized_note_data: Vec<u8>,
 }
 
 // Make the struct and its fields public

@@ -186,8 +186,7 @@ pub fn analyze(
             facing_left, facing_right, mono_total, mono_percent,
             candle_total, candle_percent, short_hash, bpm_neutral_hash,
             elapsed: elapsed_chart, measure_densities, measure_nps_vec,
-            notes: bitmasks,
-            density_graph,
+            notes: bitmasks, density_graph, minimized_note_data: minimized_chart,
         };
 
         chart_summaries.push(summary);
