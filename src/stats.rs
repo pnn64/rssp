@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 #[derive(Debug, Default)]
 pub struct ArrowStats {
     pub total_arrows: u32,
@@ -139,6 +141,57 @@ fn count_line(
     true
 }
 
+/// Recalculates chart stats after identifying and ignoring phantom (unclosed) holds.
+fn recalculate_stats_without_phantom_holds(all_lines_buffer: &[[u8; 4]]) -> ArrowStats {
+    let mut col_stacks: [Vec<usize>; 4] = Default::default();
+    let mut phantom_positions = HashSet::new();
+
+    // Pass 1: Identify phantom holds by tracking hold starts ('2', '4') and ends ('3').
+    for (line_idx, line) in all_lines_buffer.iter().enumerate() {
+        for (col, &ch) in line.iter().enumerate() {
+            match ch {
+                b'2' | b'4' => col_stacks[col].push(line_idx),
+                b'3' => {
+                    let _ = col_stacks[col].pop();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Any remaining items in stacks are unclosed holds.
+    for (col, stack) in col_stacks.iter().enumerate() {
+        for &start_idx in stack {
+            phantom_positions.insert((start_idx, col));
+        }
+    }
+
+    // Pass 2: Build a "fixed" version of the lines, changing phantom hold starts to '0'.
+    let fixed_lines: Vec<[u8; 4]> = all_lines_buffer
+        .iter()
+        .enumerate()
+        .map(|(i, line)| {
+            let mut new_line = *line;
+            for (col, byte) in new_line.iter_mut().enumerate() {
+                if phantom_positions.contains(&(i, col)) && matches!(*byte, b'2' | b'4') {
+                    *byte = b'0';
+                }
+            }
+            new_line
+        })
+        .collect();
+
+    // Pass 3: Recalculate stats using the fixed lines.
+    let mut new_stats = ArrowStats::default();
+    let mut dummy_holds = 0;
+    let mut dummy_ends = 0;
+    for line in &fixed_lines {
+        count_line(line, &mut new_stats, &mut dummy_holds, &mut dummy_ends);
+    }
+
+    new_stats
+}
+
 pub fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<usize>) {
     let mut output = Vec::with_capacity(notes_data.len());
     let mut measure = Vec::with_capacity(64);
@@ -147,10 +200,9 @@ pub fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<
     let mut measure_densities = Vec::new();
     let mut saw_semicolon = false;
 
-    // We'll store all lines in case we need second pass
+    // Buffer all lines to allow for a second pass if phantom holds are detected.
     let mut all_lines_buffer = Vec::new();
 
-    // We'll track how many hold starts (2 or 4) vs how many ends (3)
     let mut total_holds_started = 0u32;
     let mut total_ends_seen = 0u32;
 
@@ -173,13 +225,10 @@ pub fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<
 
         let mut density = 0usize;
         for mline in measure.iter() {
-            // store line in buffer for possible second pass
             all_lines_buffer.push(*mline);
-
             if count_line(mline, stats, total_holds_started, total_ends_seen) {
                 density += 1;
             }
-
             output.extend_from_slice(mline);
             output.push(b'\n');
         }
@@ -194,7 +243,7 @@ pub fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<
             .copied()
             .collect::<Vec<u8>>();
 
-        if line.is_empty() {
+        if line.is_empty() || line.starts_with(b" ") || line.starts_with(b"/") {
             continue;
         }
         match line[0] {
@@ -223,12 +272,6 @@ pub fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<
                 saw_semicolon = true;
                 break;
             }
-            b' ' => {
-                // skip lines of only spaces
-            }
-            b'/' => {
-                // skip lines starting with comment
-            }
             _ => {
                 if line.len() < 4 {
                     continue;
@@ -252,73 +295,14 @@ pub fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<
         );
     }
 
-    // remove trailing ",\n"
     if output.ends_with(b",\n") {
         output.truncate(output.len() - 2);
     }
 
-    // Now check if broken => total_holds_started != total_ends_seen
+    // If the number of hold starts does not match the number of hold ends,
+    // it indicates broken or "phantom" holds in the chart data.
     if total_holds_started != total_ends_seen {
-        // We do a second pass ignoring phantom holds and phantom rolls
-
-        let mut col_stacks: [Vec<usize>; 4] = Default::default();
-        use std::collections::HashSet;
-        let mut phantom_positions = HashSet::new();
-
-        for (line_idx, line) in all_lines_buffer.iter().enumerate() {
-            for (col, &ch) in line.iter().enumerate() {
-                match ch {
-                    b'2' | b'4' => {
-                        // Start hold in this column
-                        col_stacks[col].push(line_idx);
-                    }
-                    b'3' => {
-                        // End hold in this column
-                        if let Some(_start_idx) = col_stacks[col].pop() {
-                            // That was a valid hold from start_idx..line_idx
-                        } else {
-                            // We saw a '3' but there's no open hold => oh well, do nothing
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        // Anything left in col_stacks => phantom hold(s)
-        // Mark them in phantom_positions
-        for (col, stack) in col_stacks.iter_mut().enumerate() {
-            while let Some(start_idx) = stack.pop() {
-                // That start_idx, col => phantom
-                phantom_positions.insert((start_idx, col));
-            }
-        }
-
-        // 2) Build a new lines array ignoring those phantom positions
-        let mut fixed_lines = Vec::with_capacity(all_lines_buffer.len());
-        for (i, line) in all_lines_buffer.iter().enumerate() {
-            let mut new_line = *line;
-            // For each col that is phantom, set '2'/'4' => '0'
-            for (col, byte) in new_line.iter_mut().enumerate() {
-                if phantom_positions.contains(&(i, col)) {
-                    if matches!(*byte, b'2' | b'4') {
-                        *byte = b'0';
-                    }
-                }
-            }
-            fixed_lines.push(new_line);
-        }
-
-        // 3) Re-run the single pass stats with the new lines
-        let mut new_stats = ArrowStats::default();
-
-        let mut dummy_holds = 0u32;
-        let mut dummy_ends = 0u32;
-
-        for line in &fixed_lines {
-            count_line(line, &mut new_stats, &mut dummy_holds, &mut dummy_ends);
-        }
-
-        stats = new_stats; // overwrite old stats with the new fixed stats
+        stats = recalculate_stats_without_phantom_holds(&all_lines_buffer);
     }
 
     (output, stats, measure_densities)
