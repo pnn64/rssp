@@ -112,11 +112,11 @@ pub fn generate_density_graph_rgba_data(
     color_scheme: &ColorScheme,
 ) -> Result<GraphImageData, String> {
     let (width, height, rgb_data) = generate_graph_pixels(measure_nps_vec, max_nps, color_scheme);
-    let mut rgba_data = Vec::with_capacity((width * height * 4) as usize);
 
-    for rgb in rgb_data.chunks_exact(3) {
-        rgba_data.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
-    }
+    let rgba_data = rgb_data
+        .chunks_exact(3)
+        .flat_map(|rgb| [rgb[0], rgb[1], rgb[2], 255])
+        .collect();
 
     Ok(GraphImageData {
         width,

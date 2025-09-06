@@ -28,6 +28,121 @@ pub struct AnalysisOptions {
     pub mono_threshold: usize,
 }
 
+/// Processes a single chart's data to produce a `ChartSummary`.
+fn build_chart_summary(
+    notes_data: Vec<u8>,
+    chart_bpms_opt: Option<Vec<u8>>,
+    normalized_global_bpms: &str,
+    extension: &str,
+    options: AnalysisOptions,
+) -> Option<ChartSummary> {
+    let chart_start_time = Instant::now();
+
+    let (fields, chart_data) = split_notes_fields(&notes_data);
+    if fields.len() < 5 {
+        return None;
+    }
+
+    let step_type_str = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_owned();
+    if step_type_str == "lights-cabinet" {
+        return None; // Filter out non-gameplay chart types
+    }
+
+    let description = std::str::from_utf8(fields[1]).unwrap_or("").trim().to_owned();
+    let difficulty_str = std::str::from_utf8(fields[2]).unwrap_or("").trim().to_owned();
+    let rating_str = std::str::from_utf8(fields[3]).unwrap_or("").trim().to_owned();
+    let credit = if extension.eq_ignore_ascii_case("ssc") {
+        std::str::from_utf8(fields[4]).unwrap_or("").trim().to_owned()
+    } else {
+        String::new()
+    };
+
+    let (step_artist_str, tech_notation_str) = parse_step_artist_and_tech(&credit, &description);
+    let (mut minimized_chart, stats, measure_densities) = minimize_chart_and_count(chart_data);
+    if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
+        minimized_chart.truncate(pos + 1);
+    }
+
+    let bpms_to_use = if let Some(chart_bpms) = chart_bpms_opt {
+        normalize_float_digits(std::str::from_utf8(&chart_bpms).unwrap_or(""))
+    } else {
+        normalized_global_bpms.to_string()
+    };
+    let bpm_map = parse_bpm_map(&bpms_to_use);
+
+    let stream_counts = compute_stream_counts(&measure_densities);
+    let total_measures = measure_densities.len();
+    let total_streams = stream_counts.run16_streams
+        + stream_counts.run20_streams
+        + stream_counts.run24_streams
+        + stream_counts.run32_streams;
+
+    let detailed = generate_breakdown(&measure_densities, BreakdownMode::Detailed);
+    let partial = generate_breakdown(&measure_densities, BreakdownMode::Partial);
+    let simple = generate_breakdown(&measure_densities, BreakdownMode::Simplified);
+
+    let measure_nps_vec = compute_measure_nps_vec(&measure_densities, &bpm_map);
+    let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
+    let bpm_neutral_hash = compute_chart_hash(&minimized_chart, "0.000=0.000");
+    let tier_bpm = compute_tier_bpm(&measure_densities, &bpm_map, 4.0);
+    let matrix_rating = compute_matrix_rating(&measure_densities, &bpm_map);
+    let short_hash = compute_chart_hash(&minimized_chart, &bpms_to_use);
+
+    let bitmasks: Vec<u8> = minimized_chart
+        .split(|&b| b == b'\n')
+        .filter_map(|line| {
+            if line.len() < 4 {
+                return None;
+            }
+            let mut mask = 0u8;
+            if matches!(line[0], b'1' | b'2' | b'4') { mask |= 1 << 0; }
+            if matches!(line[1], b'1' | b'2' | b'4') { mask |= 1 << 1; }
+            if matches!(line[2], b'1' | b'2' | b'4') { mask |= 1 << 2; }
+            if matches!(line[3], b'1' | b'2' | b'4') { mask |= 1 << 3; }
+            
+            // ** FIX IS HERE **
+            // Keep the line if it has notes OR if it contains any character that is not a space or comma.
+            if mask != 0 || line.iter().any(|&b| b != b' ' && b != b',') {
+                Some(mask)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let patterns_to_detect: Vec<_> = DEFAULT_PATTERNS.iter().chain(EXTRA_PATTERNS.iter()).cloned().collect();
+    let detected_patterns = detect_patterns(&bitmasks, &patterns_to_detect);
+    let (anchor_left, anchor_down, anchor_up, anchor_right) = count_anchors(&bitmasks);
+
+    let (facing_left, facing_right, mono_total, mono_percent, candle_total, candle_percent) = if stats.total_steps > 1 {
+        let (f_left, f_right) = count_facing_steps(&bitmasks, options.mono_threshold);
+        let mono_total = f_left + f_right;
+        let mono_percent = (mono_total as f64 / stats.total_steps as f64) * 100.0;
+        let candle_left = *detected_patterns.get(&PatternVariant::CandleLeft).unwrap_or(&0);
+        let candle_right = *detected_patterns.get(&PatternVariant::CandleRight).unwrap_or(&0);
+        let candle_total = candle_left + candle_right;
+        let max_candles = (stats.total_steps - 1) / 2;
+        let candle_percent = if max_candles > 0 { (candle_total as f64 / max_candles as f64) * 100.0 } else { 0.0 };
+        (f_left, f_right, mono_total, mono_percent, candle_total, candle_percent)
+    } else {
+        (0, 0, 0, 0.0, 0, 0.0)
+    };
+    
+    let density_graph = graph::generate_density_graph_rgba_data(&measure_nps_vec, max_nps, &graph::ColorScheme::Default).ok();
+    let elapsed_chart = chart_start_time.elapsed();
+
+    Some(ChartSummary {
+        step_type_str, step_artist_str, difficulty_str, rating_str, tech_notation_str,
+        tier_bpm, matrix_rating, stats, stream_counts, total_streams, total_measures,
+        detailed, partial, simple, max_nps, median_nps, detected_patterns,
+        anchor_left, anchor_down, anchor_up, anchor_right,
+        facing_left, facing_right, mono_total, mono_percent,
+        candle_total, candle_percent, short_hash, bpm_neutral_hash,
+        elapsed: elapsed_chart, measure_densities, measure_nps_vec,
+        notes: bitmasks, density_graph, minimized_note_data: minimized_chart,
+    })
+}
+
 pub fn analyze(
     simfile_data: &[u8],
     extension: &str,
@@ -76,125 +191,21 @@ pub fn analyze(
     let bpm_values: Vec<f64> = global_bpm_map.iter().map(|&(_, bpm)| bpm).collect();
     let (median_bpm, average_bpm) = compute_bpm_stats(&bpm_values);
 
-    let mut chart_summaries = Vec::new();
+    let chart_summaries: Vec<ChartSummary> = notes_list
+        .into_iter()
+        .filter_map(|(notes_data, chart_bpms_opt)| {
+            build_chart_summary(
+                notes_data,
+                chart_bpms_opt,
+                &normalized_global_bpms,
+                extension,
+                options,
+            )
+        })
+        .collect();
 
-    for (_chart_num, (notes_data, chart_bpms_opt)) in notes_list.into_iter().enumerate() {
-        let chart_start_time = Instant::now();
-
-        let (fields, chart_data) = split_notes_fields(&notes_data);
-        if fields.len() < 5 {
-            continue;
-        }
-
-        let step_type_str = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_owned();
-
-        // Filter out non-gameplay chart types like those for cabinet lights.
-        // These often have no valid note data and should not be analyzed for patterns.
-        match step_type_str.as_str() {
-            "lights-cabinet" => continue,
-            _ => {} // Proceed with analysis for all other types
-        }
-
-        let description = std::str::from_utf8(fields[1]).unwrap_or("").trim().to_owned();
-        let difficulty_str = std::str::from_utf8(fields[2]).unwrap_or("").trim().to_owned();
-        let rating_str = std::str::from_utf8(fields[3]).unwrap_or("").trim().to_owned();
-        let credit = if extension.eq_ignore_ascii_case("ssc") {
-            std::str::from_utf8(fields[4]).unwrap_or("").trim().to_owned()
-        } else {
-            String::new()
-        };
-
-        let (step_artist_str, tech_notation_str) = parse_step_artist_and_tech(&credit, &description);
-        let (mut minimized_chart, stats, measure_densities) = minimize_chart_and_count(chart_data);
-        if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
-            minimized_chart.truncate(pos + 1);
-        }
-
-        let bpms_to_use = if let Some(chart_bpms) = chart_bpms_opt {
-            normalize_float_digits(std::str::from_utf8(&chart_bpms).unwrap_or(""))
-        } else {
-            normalized_global_bpms.clone()
-        };
-        let bpm_map = parse_bpm_map(&bpms_to_use);
-
-        let stream_counts = compute_stream_counts(&measure_densities);
-        let total_measures = measure_densities.len();
-        let total_streams = stream_counts.run16_streams
-            + stream_counts.run20_streams
-            + stream_counts.run24_streams
-            + stream_counts.run32_streams;
-
-        let detailed = generate_breakdown(&measure_densities, BreakdownMode::Detailed);
-        let partial = generate_breakdown(&measure_densities, BreakdownMode::Partial);
-        let simple = generate_breakdown(&measure_densities, BreakdownMode::Simplified);
-
-        let measure_nps_vec = compute_measure_nps_vec(&measure_densities, &bpm_map);
-        let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
-        let bpm_neutral_hash = compute_chart_hash(&minimized_chart, "0.000=0.000");
-        let tier_bpm = compute_tier_bpm(&measure_densities, &bpm_map, 4.0);
-        let matrix_rating = compute_matrix_rating(&measure_densities, &bpm_map);
-        let short_hash = compute_chart_hash(&minimized_chart, &bpms_to_use);
-
-        let bitmasks = {
-            let mut res = Vec::new();
-            for line in minimized_chart.split(|&b| b == b'\n') {
-                if line.len() >= 4 {
-                    let mut mask = 0u8;
-                    if matches!(line[0], b'1' | b'2' | b'4') { mask |= 1 << 0; }
-                    if matches!(line[1], b'1' | b'2' | b'4') { mask |= 1 << 1; }
-                    if matches!(line[2], b'1' | b'2' | b'4') { mask |= 1 << 2; }
-                    if matches!(line[3], b'1' | b'2' | b'4') { mask |= 1 << 3; }
-                    if mask != 0 || line.iter().any(|&b| !(b == b',' || b == b' ')) {
-                        res.push(mask);
-                    }
-                }
-            }
-            res
-        };
-
-        let default_patterns: &Vec<(PatternVariant, Vec<u8>)> = &*DEFAULT_PATTERNS;
-        let extra_patterns: &Vec<(PatternVariant, Vec<u8>)> = &*EXTRA_PATTERNS;
-        let pattern_list: Vec<(PatternVariant, Vec<u8>)> = default_patterns.iter().chain(extra_patterns.iter()).cloned().collect();
-
-        let detected_patterns = detect_patterns(&bitmasks, &pattern_list);
-        let (anchor_left, anchor_down, anchor_up, anchor_right) = count_anchors(&bitmasks);
-
-        let (facing_left, facing_right, mono_total, mono_percent, candle_total, candle_percent) =
-            if stats.total_steps > 1 {
-                let (f_left, f_right) = count_facing_steps(&bitmasks, options.mono_threshold);
-                let mono_total = f_left + f_right;
-                let mono_percent = (mono_total as f64 / stats.total_steps as f64) * 100.0;
-                let candle_left = *detected_patterns.get(&PatternVariant::CandleLeft).unwrap_or(&0);
-                let candle_right = *detected_patterns.get(&PatternVariant::CandleRight).unwrap_or(&0);
-                let candle_total = candle_left + candle_right;
-                let max_candles = (stats.total_steps - 1) / 2;
-                let candle_percent = if max_candles > 0 { (candle_total as f64 / max_candles as f64) * 100.0 } else { 0.0 };
-                (f_left, f_right, mono_total, mono_percent, candle_total, candle_percent)
-            } else {
-                (0, 0, 0, 0.0, 0, 0.0)
-            };
-        
-        let density_graph = graph::generate_density_graph_rgba_data(&measure_nps_vec, max_nps, &graph::ColorScheme::Default).ok();
-
-        let elapsed_chart = chart_start_time.elapsed();
-
-        let summary = ChartSummary {
-            step_type_str, step_artist_str, difficulty_str, rating_str, tech_notation_str,
-            tier_bpm, matrix_rating, stats, stream_counts, total_streams, total_measures,
-            detailed, partial, simple, max_nps, median_nps, detected_patterns,
-            anchor_left, anchor_down, anchor_up, anchor_right,
-            facing_left, facing_right, mono_total, mono_percent,
-            candle_total, candle_percent, short_hash, bpm_neutral_hash,
-            elapsed: elapsed_chart, measure_densities, measure_nps_vec,
-            notes: bitmasks, density_graph, minimized_note_data: minimized_chart,
-        };
-
-        chart_summaries.push(summary);
-    }
-
-    let total_length = if !chart_summaries.is_empty() {
-        let first_measures = &chart_summaries[0].measure_densities;
-        compute_total_chart_length(first_measures, &global_bpm_map)
+    let total_length = if let Some(first_chart) = chart_summaries.first() {
+        compute_total_chart_length(&first_chart.measure_densities, &global_bpm_map)
     } else {
         0
     };
