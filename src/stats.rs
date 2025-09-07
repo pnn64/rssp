@@ -192,49 +192,45 @@ fn recalculate_stats_without_phantom_holds(all_lines_buffer: &[[u8; 4]]) -> Arro
     new_stats
 }
 
+/// Helper to process a completed measure: minimize, count stats, and update buffers.
+fn finalize_and_process_measure(
+    measure: &mut Vec<[u8; 4]>,
+    output: &mut Vec<u8>,
+    stats: &mut ArrowStats,
+    measure_densities: &mut Vec<usize>,
+    all_lines_buffer: &mut Vec<[u8; 4]>,
+    total_holds_started: &mut u32,
+    total_ends_seen: &mut u32,
+) {
+    if measure.is_empty() {
+        measure_densities.push(0);
+        return;
+    }
+    minimize_measure(measure);
+    output.reserve(measure.len() * 5);
+
+    let mut density = 0;
+    for mline in measure.iter() {
+        all_lines_buffer.push(*mline);
+        if count_line(mline, stats, total_holds_started, total_ends_seen) {
+            density += 1;
+        }
+        output.extend_from_slice(mline);
+        output.push(b'\n');
+    }
+    measure.clear();
+    measure_densities.push(density);
+}
+
 pub fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<usize>) {
     let mut output = Vec::with_capacity(notes_data.len());
     let mut measure = Vec::with_capacity(64);
-
     let mut stats = ArrowStats::default();
     let mut measure_densities = Vec::new();
-    let mut saw_semicolon = false;
-
-    // Buffer all lines to allow for a second pass if phantom holds are detected.
     let mut all_lines_buffer = Vec::new();
-
     let mut total_holds_started = 0u32;
     let mut total_ends_seen = 0u32;
-
-    #[inline]
-    fn finalize_measure(
-        measure: &mut Vec<[u8; 4]>,
-        output: &mut Vec<u8>,
-        stats: &mut ArrowStats,
-        measure_densities: &mut Vec<usize>,
-        all_lines_buffer: &mut Vec<[u8; 4]>,
-        total_holds_started: &mut u32,
-        total_ends_seen: &mut u32,
-    ) {
-        if measure.is_empty() {
-            measure_densities.push(0);
-            return;
-        }
-        minimize_measure(measure);
-        output.reserve(measure.len() * 5);
-
-        let mut density = 0usize;
-        for mline in measure.iter() {
-            all_lines_buffer.push(*mline);
-            if count_line(mline, stats, total_holds_started, total_ends_seen) {
-                density += 1;
-            }
-            output.extend_from_slice(mline);
-            output.push(b'\n');
-        }
-        measure.clear();
-        measure_densities.push(density);
-    }
+    let mut saw_semicolon = false;
 
     for line_raw in notes_data.split(|&b| b == b'\n') {
         let line = line_raw
@@ -246,61 +242,34 @@ pub fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<
         if line.is_empty() || line.starts_with(b" ") || line.starts_with(b"/") {
             continue;
         }
-        match line[0] {
-            b',' => {
-                finalize_measure(
-                    &mut measure,
-                    &mut output,
-                    &mut stats,
-                    &mut measure_densities,
-                    &mut all_lines_buffer,
-                    &mut total_holds_started,
-                    &mut total_ends_seen,
-                );
+
+        match line.get(0) {
+            Some(b',') => {
+                finalize_and_process_measure(&mut measure, &mut output, &mut stats, &mut measure_densities, &mut all_lines_buffer, &mut total_holds_started, &mut total_ends_seen);
                 output.extend_from_slice(b",\n");
             }
-            b';' => {
-                finalize_measure(
-                    &mut measure,
-                    &mut output,
-                    &mut stats,
-                    &mut measure_densities,
-                    &mut all_lines_buffer,
-                    &mut total_holds_started,
-                    &mut total_ends_seen,
-                );
+            Some(b';') => {
+                finalize_and_process_measure(&mut measure, &mut output, &mut stats, &mut measure_densities, &mut all_lines_buffer, &mut total_holds_started, &mut total_ends_seen);
                 saw_semicolon = true;
                 break;
             }
-            _ => {
-                if line.len() < 4 {
-                    continue;
-                }
+            Some(_) if line.len() >= 4 => {
                 let mut arr = [0u8; 4];
                 arr.copy_from_slice(&line[..4]);
                 measure.push(arr);
             }
+            _ => { /* Ignore short lines or other cases */ }
         }
     }
 
     if !saw_semicolon && !measure.is_empty() {
-        finalize_measure(
-            &mut measure,
-            &mut output,
-            &mut stats,
-            &mut measure_densities,
-            &mut all_lines_buffer,
-            &mut total_holds_started,
-            &mut total_ends_seen,
-        );
+        finalize_and_process_measure(&mut measure, &mut output, &mut stats, &mut measure_densities, &mut all_lines_buffer, &mut total_holds_started, &mut total_ends_seen);
     }
 
     if output.ends_with(b",\n") {
         output.truncate(output.len() - 2);
     }
 
-    // If the number of hold starts does not match the number of hold ends,
-    // it indicates broken or "phantom" holds in the chart data.
     if total_holds_started != total_ends_seen {
         stats = recalculate_stats_without_phantom_holds(&all_lines_buffer);
     }
