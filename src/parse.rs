@@ -58,23 +58,27 @@ pub fn unescape_tag(tag: &str) -> String {
     out
 }
 
+/// A struct to hold the raw data parsed from a simfile's header tags.
+#[derive(Default)]
+pub struct ParsedSimfileData<'a> {
+    pub title:            Option<&'a [u8]>,
+    pub subtitle:         Option<&'a [u8]>,
+    pub artist:           Option<&'a [u8]>,
+    pub title_translit:   Option<&'a [u8]>,
+    pub subtitle_translit:Option<&'a [u8]>,
+    pub artist_translit:  Option<&'a [u8]>,
+    pub offset:           Option<&'a [u8]>,
+    pub bpms:             Option<&'a [u8]>,
+    pub banner:           Option<&'a [u8]>,
+    pub background:       Option<&'a [u8]>,
+    pub music:            Option<&'a [u8]>,
+    pub notes_list:       Vec<(Vec<u8>, Option<Vec<u8>>)>,
+}
+
 pub fn extract_sections<'a>(
     data: &'a [u8],
     file_extension: &str,
-) -> io::Result<(
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Option<&'a [u8]>,
-    Vec<(Vec<u8>, Option<Vec<u8>>)>,
-)> {
+) -> io::Result<ParsedSimfileData<'a>> {
     if !matches!(file_extension.to_lowercase().as_str(), "sm" | "ssc") {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -82,48 +86,45 @@ pub fn extract_sections<'a>(
         ));
     }
 
-    let tags = [
-        b"#TITLE:".as_slice(),
-        b"#SUBTITLE:".as_slice(),
-        b"#ARTIST:".as_slice(),
-        b"#TITLETRANSLIT:".as_slice(),
-        b"#SUBTITLETRANSLIT:".as_slice(),
-        b"#ARTISTTRANSLIT:".as_slice(),
-        b"#OFFSET:".as_slice(),
-        b"#BPMS:".as_slice(),
-        b"#BANNER:".as_slice(),
-        b"#BACKGROUND:".as_slice(),
-        b"#MUSIC:".as_slice(),
-    ];
-
-    let mut sections = [None; 11];
-    let mut notes_list = Vec::new();
+    let mut result = ParsedSimfileData::default();
     let mut i = 0;
-
     let is_ssc = file_extension.eq_ignore_ascii_case("ssc");
 
     while i < data.len() {
         if let Some(pos) = data[i..].iter().position(|&b| b == b'#') {
             i += pos;
-            if let Some((idx, tag)) = tags.iter().enumerate().find(|&(_, &tag)| data[i..].starts_with(tag)) {
-                sections[idx] = parse_tag(&data[i..], tag.len());
-                i += 1;
-            } else if is_ssc && data[i..].starts_with(b"#NOTEDATA:") {
-                // --- SSC-specific logic ---
+            let current_slice = &data[i..];
+
+            if current_slice.starts_with(b"#TITLE:") {
+                result.title = parse_tag(current_slice, b"#TITLE:".len());
+            } else if current_slice.starts_with(b"#SUBTITLE:") {
+                result.subtitle = parse_tag(current_slice, b"#SUBTITLE:".len());
+            } else if current_slice.starts_with(b"#ARTIST:") {
+                result.artist = parse_tag(current_slice, b"#ARTIST:".len());
+            } else if current_slice.starts_with(b"#TITLETRANSLIT:") {
+                result.title_translit = parse_tag(current_slice, b"#TITLETRANSLIT:".len());
+            } else if current_slice.starts_with(b"#SUBTITLETRANSLIT:") {
+                result.subtitle_translit = parse_tag(current_slice, b"#SUBTITLETRANSLIT:".len());
+            } else if current_slice.starts_with(b"#ARTISTTRANSLIT:") {
+                result.artist_translit = parse_tag(current_slice, b"#ARTISTTRANSLIT:".len());
+            } else if current_slice.starts_with(b"#OFFSET:") {
+                result.offset = parse_tag(current_slice, b"#OFFSET:".len());
+            } else if current_slice.starts_with(b"#BPMS:") {
+                result.bpms = parse_tag(current_slice, b"#BPMS:".len());
+            } else if current_slice.starts_with(b"#BANNER:") {
+                result.banner = parse_tag(current_slice, b"#BANNER:".len());
+            } else if current_slice.starts_with(b"#BACKGROUND:") {
+                result.background = parse_tag(current_slice, b"#BACKGROUND:".len());
+            } else if current_slice.starts_with(b"#MUSIC:") {
+                result.music = parse_tag(current_slice, b"#MUSIC:".len());
+            } else if is_ssc && current_slice.starts_with(b"#NOTEDATA:") {
                 let notedata_start = i;
                 let mut notedata_end = notedata_start + 1;
-                
-                // Find the end of the current #NOTEDATA block
-                while notedata_end < data.len() {
-                    if data[notedata_end..].starts_with(b"#NOTEDATA:") {
-                        break;
-                    }
+                while notedata_end < data.len() && !data[notedata_end..].starts_with(b"#NOTEDATA:") {
                     notedata_end += 1;
                 }
                 
                 let notedata_slice = &data[notedata_start..notedata_end];
-                
-                // Parse subtags within the #NOTEDATA block
                 let step_type   = parse_subtag(notedata_slice, b"#STEPSTYPE:").unwrap_or_default();
                 let description = parse_subtag(notedata_slice, b"#DESCRIPTION:").unwrap_or_default();
                 let credit      = parse_subtag(notedata_slice, b"#CREDIT:").unwrap_or_default();
@@ -133,34 +134,24 @@ pub fn extract_sections<'a>(
                 let chart_bpms  = parse_subtag(notedata_slice, b"#BPMS:");
 
                 let concatenated = [step_type, description, difficulty, meter, credit, notes].join(&b':');
-                notes_list.push((concatenated, chart_bpms));
+                result.notes_list.push((concatenated, chart_bpms));
 
                 i = notedata_end;
-            } else if !is_ssc && data[i..].starts_with(b"#NOTES:") {
-                // --- SM-specific logic ---
+                continue; // Skip the i += 1 at the end
+            } else if !is_ssc && current_slice.starts_with(b"#NOTES:") {
                 let notes_start = i + b"#NOTES:".len();
-                let notes_end = data[notes_start..]
-                    .iter()
-                    .position(|&b| b == b';')
-                    .map(|e| notes_start + e)
-                    .unwrap_or(data.len());
-                let notes_data = data[notes_start..notes_end].to_vec();
-                notes_list.push((notes_data, None)); // No chart-specific BPMs for .sm
+                let notes_end = data[notes_start..].iter().position(|&b| b == b';').map(|e| notes_start + e).unwrap_or(data.len());
+                result.notes_list.push((data[notes_start..notes_end].to_vec(), None));
                 i = notes_end + 1;
-            } else {
-                i += 1; // Skip unrecognized tag
+                continue; // Skip the i += 1 at the end
             }
+            i += 1; // Move past the '#'
         } else {
-            break;
+            break; // No more '#' found
         }
     }
 
-    Ok((
-        sections[0], sections[1], sections[2], sections[3],
-        sections[4], sections[5], sections[6], sections[7],
-        sections[8], sections[9], sections[10],
-        notes_list,
-    ))
+    Ok(result)
 }
 
 fn parse_tag(data: &[u8], tag_len: usize) -> Option<&[u8]> {

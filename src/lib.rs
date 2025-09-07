@@ -107,6 +107,63 @@ fn compute_mono_and_candle_stats(
     (facing_left, facing_right, mono_total, mono_percent, candle_total, candle_percent)
 }
 
+// A private helper struct to bundle metrics derived from density and BPMs.
+struct DerivedChartMetrics {
+    stream_counts: StreamCounts,
+    total_streams: u32,
+    detailed_breakdown: String,
+    partial_breakdown: String,
+    simple_breakdown: String,
+    measure_nps_vec: Vec<f64>,
+    max_nps: f64,
+    median_nps: f64,
+    short_hash: String,
+    bpm_neutral_hash: String,
+    tier_bpm: f64,
+    matrix_rating: f64,
+}
+
+// Computes various metrics derived from measure densities and the BPM map.
+fn compute_derived_chart_metrics(
+    measure_densities: &[usize],
+    bpm_map: &[(f64, f64)],
+    minimized_chart: &[u8],
+    bpms_to_use: &str,
+) -> DerivedChartMetrics {
+    let stream_counts = compute_stream_counts(measure_densities);
+    let total_streams = stream_counts.run16_streams
+        + stream_counts.run20_streams
+        + stream_counts.run24_streams
+        + stream_counts.run32_streams;
+
+    let detailed_breakdown = generate_breakdown(measure_densities, BreakdownMode::Detailed);
+    let partial_breakdown = generate_breakdown(measure_densities, BreakdownMode::Partial);
+    let simple_breakdown = generate_breakdown(measure_densities, BreakdownMode::Simplified);
+
+    let measure_nps_vec = compute_measure_nps_vec(measure_densities, bpm_map);
+    let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
+
+    let short_hash = compute_chart_hash(minimized_chart, bpms_to_use);
+    let bpm_neutral_hash = compute_chart_hash(minimized_chart, "0.000=0.000");
+    let tier_bpm = compute_tier_bpm(measure_densities, bpm_map, 4.0);
+    let matrix_rating = compute_matrix_rating(measure_densities, bpm_map);
+
+    DerivedChartMetrics {
+        stream_counts,
+        total_streams,
+        detailed_breakdown,
+        partial_breakdown,
+        simple_breakdown,
+        measure_nps_vec,
+        max_nps,
+        median_nps,
+        short_hash,
+        bpm_neutral_hash,
+        tier_bpm,
+        matrix_rating,
+    }
+}
+
 /// Processes a single chart's data to produce a `ChartSummary`.
 fn build_chart_summary(
     notes_data: Vec<u8>,
@@ -131,29 +188,16 @@ fn build_chart_summary(
     } else {
         String::new()
     };
-
     let (step_artist_str, tech_notation_str) = parse_step_artist_and_tech(&credit, &description);
+
     let (mut minimized_chart, stats, measure_densities) = minimize_chart_and_count(chart_data);
     if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
         minimized_chart.truncate(pos + 1);
     }
 
     let (bpms_to_use, bpm_map) = prepare_bpm_map(chart_bpms_opt, normalized_global_bpms);
-    let stream_counts = compute_stream_counts(&measure_densities);
-    let total_streams = stream_counts.run16_streams + stream_counts.run20_streams
-        + stream_counts.run24_streams + stream_counts.run32_streams;
-
-    let detailed = generate_breakdown(&measure_densities, BreakdownMode::Detailed);
-    let partial = generate_breakdown(&measure_densities, BreakdownMode::Partial);
-    let simple = generate_breakdown(&measure_densities, BreakdownMode::Simplified);
-
-    let measure_nps_vec = compute_measure_nps_vec(&measure_densities, &bpm_map);
-    let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
-
-    let short_hash = compute_chart_hash(&minimized_chart, &bpms_to_use);
-    let bpm_neutral_hash = compute_chart_hash(&minimized_chart, "0.000=0.000");
-    let tier_bpm = compute_tier_bpm(&measure_densities, &bpm_map, 4.0);
-    let matrix_rating = compute_matrix_rating(&measure_densities, &bpm_map);
+    let metrics =
+        compute_derived_chart_metrics(&measure_densities, &bpm_map, &minimized_chart, &bpms_to_use);
 
     let bitmasks = generate_bitmasks(&minimized_chart);
     let (detected_patterns, (anchor_left, anchor_down, anchor_up, anchor_right)) =
@@ -161,17 +205,25 @@ fn build_chart_summary(
     let (facing_left, facing_right, mono_total, mono_percent, candle_total, candle_percent) =
         compute_mono_and_candle_stats(&bitmasks, &stats, &detected_patterns, options);
 
-    let density_graph =
-        graph::generate_density_graph_rgba_data(&measure_nps_vec, max_nps, &graph::ColorScheme::Default).ok();
+    let density_graph = graph::generate_density_graph_rgba_data(
+        &metrics.measure_nps_vec,
+        metrics.max_nps,
+        &graph::ColorScheme::Default,
+    )
+    .ok();
     let elapsed_chart = chart_start_time.elapsed();
 
     Some(ChartSummary {
         step_type_str, step_artist_str, difficulty_str, rating_str, tech_notation_str,
-        tier_bpm, matrix_rating, stats, stream_counts, total_streams,
-        total_measures: measure_densities.len(), detailed, partial, simple, max_nps, median_nps,
+        tier_bpm: metrics.tier_bpm, matrix_rating: metrics.matrix_rating, stats,
+        stream_counts: metrics.stream_counts, total_streams: metrics.total_streams,
+        total_measures: measure_densities.len(), detailed: metrics.detailed_breakdown,
+        partial: metrics.partial_breakdown, simple: metrics.simple_breakdown,
+        max_nps: metrics.max_nps, median_nps: metrics.median_nps,
         detected_patterns, anchor_left, anchor_down, anchor_up, anchor_right, facing_left,
-        facing_right, mono_total, mono_percent, candle_total, candle_percent, short_hash,
-        bpm_neutral_hash, elapsed: elapsed_chart, measure_densities, measure_nps_vec,
+        facing_right, mono_total, mono_percent, candle_total, candle_percent,
+        short_hash: metrics.short_hash, bpm_neutral_hash: metrics.bpm_neutral_hash,
+        elapsed: elapsed_chart, measure_densities, measure_nps_vec: metrics.measure_nps_vec,
         notes: bitmasks, density_graph, minimized_note_data: minimized_chart,
     })
 }
@@ -183,40 +235,27 @@ pub fn analyze(
 ) -> Result<SimfileSummary, String> {
     let total_start_time = Instant::now();
 
-    let (
-        title_opt,
-        subtitle_opt,
-        artist_opt,
-        titletranslit_opt,
-        subtitletranslit_opt,
-        artisttranslit_opt,
-        offset_opt,
-        bpms_opt,
-        banner_opt,
-        background_opt,
-        music_opt,
-        notes_list,
-    ) = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
+    let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
 
-    let mut title_str = title_opt
+    let mut title_str = parsed_data
+        .title
         .and_then(|b| std::str::from_utf8(b).ok())
-        .map(unescape_tag)
-        .map(|s| clean_tag(&s))
+        .map(|tag| clean_tag(&unescape_tag(tag))) // Combined map call fixes the error
         .unwrap_or_else(|| "<invalid-title>".to_string());
     if options.strip_tags {
         title_str = strip_title_tags(&title_str);
     }
 
-    let subtitle_str = subtitle_opt.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
-    let artist_str = artist_opt.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
-    let titletranslit_str = titletranslit_opt.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
-    let subtitletranslit_str = subtitletranslit_opt.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
-    let artisttranslit_str = artisttranslit_opt.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
-    let banner_path_str = banner_opt.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
-    let background_path_str = background_opt.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
-    let music_path_str = music_opt.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
-    let offset = offset_opt.and_then(|b| std::str::from_utf8(b).ok()).and_then(|s| s.parse::<f64>().ok()).map(|f| (f * 1000.0).trunc() / 1000.0).unwrap_or(0.0);
-    let global_bpms_raw = std::str::from_utf8(bpms_opt.unwrap_or(b"<invalid-bpms>")).unwrap_or("<invalid-bpms>");
+    let subtitle_str = parsed_data.subtitle.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let artist_str = parsed_data.artist.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let titletranslit_str = parsed_data.title_translit.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let subtitletranslit_str = parsed_data.subtitle_translit.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let artisttranslit_str = parsed_data.artist_translit.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let banner_path_str = parsed_data.banner.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let background_path_str = parsed_data.background.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let music_path_str = parsed_data.music.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let offset = parsed_data.offset.and_then(|b| std::str::from_utf8(b).ok()).and_then(|s| s.parse::<f64>().ok()).map(|f| (f * 1000.0).trunc() / 1000.0).unwrap_or(0.0);
+    let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"<invalid-bpms>")).unwrap_or("<invalid-bpms>");
     let normalized_global_bpms = normalize_float_digits(global_bpms_raw);
 
     let global_bpm_map = parse_bpm_map(&normalized_global_bpms);
@@ -224,7 +263,7 @@ pub fn analyze(
     let bpm_values: Vec<f64> = global_bpm_map.iter().map(|&(_, bpm)| bpm).collect();
     let (median_bpm, average_bpm) = compute_bpm_stats(&bpm_values);
 
-    let chart_summaries: Vec<ChartSummary> = notes_list
+    let chart_summaries: Vec<ChartSummary> = parsed_data.notes_list
         .into_iter()
         .filter_map(|(notes_data, chart_bpms_opt)| {
             build_chart_summary(
