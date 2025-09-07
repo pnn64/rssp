@@ -67,26 +67,24 @@ pub fn minimize_measure(measure: &mut Vec<[u8; 4]>) {
     }
 }
 
+/// Counts basic notes and objects on a line, returning masks for further processing.
 #[inline]
-fn count_line(
-    line: &[u8; 4],
-    stats: &mut ArrowStats,
-    holds_started: &mut u32,
-    ends_seen: &mut u32,
-) -> bool {
+fn count_line_objects(line: &[u8; 4], stats: &mut ArrowStats) -> (u8, u8, u8) {
     let mut note_mask = 0u8;
     let mut hold_start_mask = 0u8;
     let mut end_mask = 0u8;
-    let mut mine_count = 0u32;
-    let mut lift_count = 0u32;
-    let mut fake_count = 0u32;
 
     for (i, &ch) in line.iter().enumerate() {
         match ch {
             b'1' | b'2' | b'4' => {
                 note_mask |= 1 << i;
-                if ch == b'2' || ch == b'4' {
+                stats.total_arrows += 1;
+                if ch == b'2' {
                     hold_start_mask |= 1 << i;
+                    stats.holds += 1;
+                } else if ch == b'4' {
+                    hold_start_mask |= 1 << i;
+                    stats.rolls += 1;
                 }
                 match i {
                     0 => stats.left += 1,
@@ -95,32 +93,35 @@ fn count_line(
                     3 => stats.right += 1,
                     _ => {}
                 }
-                stats.total_arrows += 1;
-                if ch == b'2' {
-                    stats.holds += 1;
-                } else if ch == b'4' {
-                    stats.rolls += 1;
-                }
             }
             b'3' => end_mask |= 1 << i,
-            b'M' => mine_count += 1,
-            b'L' => lift_count += 1,
-            b'F' => fake_count += 1,
+            b'M' => stats.mines += 1,
+            b'L' => stats.lifts += 1,
+            b'F' => stats.fakes += 1,
             _ => {}
         }
     }
+    (note_mask, hold_start_mask, end_mask)
+}
 
-    stats.mines += mine_count;
-    stats.lifts += lift_count;
-    stats.fakes += fake_count;
-    let notes_on_line = note_mask.count_ones() as u32;
-    *holds_started += hold_start_mask.count_ones() as u32;
-    *ends_seen += end_mask.count_ones() as u32;
+#[inline]
+fn count_line(
+    line: &[u8; 4],
+    stats: &mut ArrowStats,
+    holds_started: &mut u32,
+    ends_seen: &mut u32,
+) -> bool {
+    // Phase 1: Count simple objects and get masks for complex logic.
+    let (note_mask, hold_start_mask, end_mask) = count_line_objects(line, stats);
 
+    *holds_started += hold_start_mask.count_ones();
+    *ends_seen += end_mask.count_ones();
+
+    // Phase 2: Handle step counting and state updates.
+    let notes_on_line = note_mask.count_ones();
     if notes_on_line == 0 {
-        let ends = end_mask.count_ones() as i32;
-        stats.holding = (stats.holding - ends).max(0);
-        return false;
+        stats.holding = (stats.holding - end_mask.count_ones() as i32).max(0);
+        return false; // No steps on this line.
     }
 
     stats.total_steps += 1;
@@ -131,14 +132,17 @@ fn count_line(
         stats.hands += 1;
     }
 
-    let holding_val = stats.holding;
-    if (holding_val == 1 && notes_on_line >= 2) || (holding_val >= 2 && notes_on_line >= 1) {
+    // Hands can also be formed by stepping while holding other notes.
+    if (stats.holding == 1 && notes_on_line >= 2) || (stats.holding >= 2 && notes_on_line >= 1) {
         stats.hands += 1;
     }
 
+    // Update the number of currently held notes.
     let new_holds = hold_start_mask.count_ones() as i32;
-    stats.holding = (stats.holding + new_holds - end_mask.count_ones() as i32).max(0);
-    true
+    let released_holds = end_mask.count_ones() as i32;
+    stats.holding = (stats.holding + new_holds - released_holds).max(0);
+
+    true // There was a step on this line.
 }
 
 /// Recalculates chart stats after identifying and ignoring phantom (unclosed) holds.
