@@ -255,6 +255,8 @@ pub fn analyze(
     let background_path_str = parsed_data.background.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
     let music_path_str = parsed_data.music.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
     let offset = parsed_data.offset.and_then(|b| std::str::from_utf8(b).ok()).and_then(|s| s.parse::<f64>().ok()).map(|f| (f * 1000.0).trunc() / 1000.0).unwrap_or(0.0);
+    let sample_start = parsed_data.sample_start.and_then(|b| std::str::from_utf8(b).ok()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+    let sample_length = parsed_data.sample_length.and_then(|b| std::str::from_utf8(b).ok()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"<invalid-bpms>")).unwrap_or("<invalid-bpms>");
     let normalized_global_bpms = normalize_float_digits(global_bpms_raw);
 
@@ -290,6 +292,7 @@ pub fn analyze(
         banner_path: banner_path_str,
         background_path: background_path_str,
         music_path: music_path_str,
+        sample_start, sample_length,
         min_bpm: min_bpm_i32 as f64, max_bpm: max_bpm_i32 as f64,
         median_bpm, average_bpm, total_length, charts: chart_summaries, total_elapsed,
     })

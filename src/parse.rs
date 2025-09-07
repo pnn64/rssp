@@ -72,6 +72,8 @@ pub struct ParsedSimfileData<'a> {
     pub banner:           Option<&'a [u8]>,
     pub background:       Option<&'a [u8]>,
     pub music:            Option<&'a [u8]>,
+    pub sample_start:     Option<&'a [u8]>,
+    pub sample_length:    Option<&'a [u8]>,
     pub notes_list:       Vec<(Vec<u8>, Option<Vec<u8>>)>,
 }
 
@@ -117,6 +119,10 @@ pub fn extract_sections<'a>(
                 result.background = parse_tag(current_slice, b"#BACKGROUND:".len());
             } else if current_slice.starts_with(b"#MUSIC:") {
                 result.music = parse_tag(current_slice, b"#MUSIC:".len());
+            } else if current_slice.starts_with(b"#SAMPLESTART:") {
+                result.sample_start = parse_tag(current_slice, b"#SAMPLESTART:".len());
+            } else if current_slice.starts_with(b"#SAMPLELENGTH:") {
+                result.sample_length = parse_tag(current_slice, b"#SAMPLELENGTH:".len());
             } else if is_ssc && current_slice.starts_with(b"#NOTEDATA:") {
                 let notedata_start = i;
                 let mut notedata_end = notedata_start + 1;

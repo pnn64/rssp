@@ -59,6 +59,8 @@ pub struct SimfileSummary {
     pub banner_path:          String,
     pub background_path:      String,
     pub music_path:           String,
+    pub sample_start:         f64,
+    pub sample_length:        f64,
     pub min_bpm:              f64,
     pub max_bpm:              f64,
     pub median_bpm:           f64,
