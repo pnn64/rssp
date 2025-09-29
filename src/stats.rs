@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct ArrowStats {
     pub total_arrows: u32,
     pub left: u32,
