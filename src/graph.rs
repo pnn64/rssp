@@ -1,6 +1,5 @@
 use png;
 use std::fs::File;
-use std::io;
 
 #[derive(Debug, Clone, Copy)]
 pub enum ColorScheme {
@@ -22,9 +21,8 @@ fn generate_graph_pixels(
     height: u32,
     bottom_color: [u8; 3],
     top_color: [u8; 3],
+    bg_color: [u8; 3],
 ) -> Vec<u8> {
-    let bg_color = [30, 40, 47];
-
     let color_gradient: Vec<[u8; 3]> = (0..height)
         .map(|y| {
             let frac = (height - 1 - y) as f64 / (height as f64 - 1.0);
@@ -85,16 +83,15 @@ pub fn generate_density_graph_png(
     max_nps: f64,
     short_hash: &str,
     color_scheme: &ColorScheme,
-) -> io::Result<()> {
+) -> std::io::Result<()> {
     const IMAGE_WIDTH: u32 = 1000;
     const GRAPH_HEIGHT: u32 = 400;
-    
-    let (bottom_color, top_color) = match color_scheme {
-        ColorScheme::Default => ([0, 184, 204], [130, 0, 161]),       // Cyan to Purple
-        ColorScheme::Alternative => ([247, 243, 51], [236, 122, 25]), // Yellow to Orange
+
+    let (bottom_color, top_color, bg_color) = match color_scheme {
+        ColorScheme::Default => ([0, 184, 204], [130, 0, 161], [30, 40, 47]),       // Cyan to Purple
+        ColorScheme::Alternative => ([247, 243, 51], [236, 122, 25], [30, 40, 47]), // Yellow to Orange
     };
-    
-    let img_buffer_rgb = generate_graph_pixels(measure_nps_vec, max_nps, IMAGE_WIDTH, GRAPH_HEIGHT, bottom_color, top_color);
+    let img_buffer_rgb = generate_graph_pixels(measure_nps_vec, max_nps, IMAGE_WIDTH, GRAPH_HEIGHT, bottom_color, top_color, bg_color);
 
     let filename = match color_scheme {
         ColorScheme::Default => format!("{}.png", short_hash),
@@ -115,14 +112,11 @@ pub fn generate_density_graph_rgba_data(
     max_nps: f64,
     width: u32,
     height: u32,
-    color_scheme: &ColorScheme,
+    bottom_color: [u8; 3],
+    top_color: [u8; 3],
+    bg_color: [u8; 3],
 ) -> Result<GraphImageData, String> {
-    let (bottom_color, top_color) = match color_scheme {
-        ColorScheme::Default => ([0, 184, 204], [130, 0, 161]),       // Cyan to Purple
-        ColorScheme::Alternative => ([247, 243, 51], [236, 122, 25]), // Yellow to Orange
-    };
-    
-    let rgb_data = generate_graph_pixels(measure_nps_vec, max_nps, width, height, bottom_color, top_color);
+    let rgb_data = generate_graph_pixels(measure_nps_vec, max_nps, width, height, bottom_color, top_color, bg_color);
 
     let rgba_data = rgb_data
         .chunks_exact(3)
