@@ -208,6 +208,8 @@ fn build_chart_summary(
     let density_graph = graph::generate_density_graph_rgba_data(
         &metrics.measure_nps_vec,
         metrics.max_nps,
+        1000, // Default width
+        400,  // Default height
         &graph::ColorScheme::Default,
     )
     .ok();
