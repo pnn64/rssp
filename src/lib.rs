@@ -231,7 +231,7 @@ fn build_chart_summary(
         facing_right, mono_total, mono_percent, candle_total, candle_percent,
         short_hash: metrics.short_hash, bpm_neutral_hash: metrics.bpm_neutral_hash,
         elapsed: elapsed_chart, measure_densities, measure_nps_vec: metrics.measure_nps_vec,
-        notes: bitmasks, density_graph, minimized_note_data: minimized_chart,
+        density_graph, minimized_note_data: minimized_chart,
     })
 }
 
