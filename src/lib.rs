@@ -205,19 +205,6 @@ fn build_chart_summary(
     let (facing_left, facing_right, mono_total, mono_percent, candle_total, candle_percent) =
         compute_mono_and_candle_stats(&bitmasks, &stats, &detected_patterns, options);
 
-    let default_bottom_color = [0, 184, 204]; // Cyan
-    let default_top_color = [130, 0, 161];    // Purple
-    let default_bg_color = [30, 40, 47];      // Dark blue-gray
-    let density_graph = graph::generate_density_graph_rgba_data(
-        &metrics.measure_nps_vec,
-        metrics.max_nps,
-        1000, // Default width
-        400,  // Default height
-        default_bottom_color,
-        default_top_color,
-        default_bg_color,
-    )
-    .ok();
     let elapsed_chart = chart_start_time.elapsed();
 
     Some(ChartSummary {
@@ -229,9 +216,8 @@ fn build_chart_summary(
         max_nps: metrics.max_nps, median_nps: metrics.median_nps,
         detected_patterns, anchor_left, anchor_down, anchor_up, anchor_right, facing_left,
         facing_right, mono_total, mono_percent, candle_total, candle_percent,
-        short_hash: metrics.short_hash, bpm_neutral_hash: metrics.bpm_neutral_hash,
-        elapsed: elapsed_chart, measure_densities, measure_nps_vec: metrics.measure_nps_vec,
-        density_graph, minimized_note_data: minimized_chart,
+        short_hash: metrics.short_hash, bpm_neutral_hash: metrics.bpm_neutral_hash, elapsed: elapsed_chart,
+        measure_densities, measure_nps_vec: metrics.measure_nps_vec, minimized_note_data: minimized_chart,
     })
 }
 

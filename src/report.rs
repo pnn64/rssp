@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use crate::patterns::PatternVariant;
 use crate::stats::{ArrowStats, StreamCounts};
-use crate::graph::GraphImageData;
 
 // Make the struct and its fields public
 #[derive(Debug)]
@@ -40,7 +39,6 @@ pub struct ChartSummary {
     pub elapsed:           Duration,
     pub measure_densities: Vec<usize>,
     pub measure_nps_vec:   Vec<f64>,
-    pub density_graph:     Option<GraphImageData>,
     pub minimized_note_data: Vec<u8>,
 }
 
