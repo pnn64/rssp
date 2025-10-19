@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use crate::patterns::PatternVariant;
 use crate::stats::{ArrowStats, StreamCounts};
+use crate::step_parity::TechCounts;
 
 // Make the struct and its fields public
 #[derive(Debug)]
@@ -34,6 +35,7 @@ pub struct ChartSummary {
     pub mono_percent:      f64,
     pub candle_total:      u32,
     pub candle_percent:    f64,
+    pub tech_counts:       TechCounts,
     pub short_hash:        String,
     pub bpm_neutral_hash:  String,
     pub elapsed:           Duration,
@@ -239,6 +241,14 @@ fn print_pretty_chart(chart: &ChartSummary) {
     println!("Anchors: {} ({} left, {} down, {} up, {} right)",
         anchor_total, chart.anchor_left, chart.anchor_down, chart.anchor_up, chart.anchor_right);
 
+    println!("\n--- Step Parity Analysis ---");
+    println!("Crossovers: {} ({} full, {} half)", chart.tech_counts.crossovers, chart.tech_counts.full_crossovers, chart.tech_counts.half_crossovers);
+    println!("Footswitches: {} ({} up, {} down)", chart.tech_counts.footswitches, chart.tech_counts.up_footswitches, chart.tech_counts.down_footswitches);
+    println!("Sideswitches: {}", chart.tech_counts.sideswitches);
+    println!("Jacks: {}", chart.tech_counts.jacks);
+    println!("Brackets: {}", chart.tech_counts.brackets);
+    println!("Doublesteps: {}", chart.tech_counts.doublesteps);
+
     if !chart.detailed.is_empty() {
         println!("\n--- Detailed Breakdown ---");
         println!("{}", chart.detailed);
@@ -352,6 +362,14 @@ fn print_full_chart(chart: &ChartSummary) {
     let anchor_total = chart.anchor_left + chart.anchor_down + chart.anchor_up + chart.anchor_right;
     println!("Anchors: {} ({} left, {} down, {} up, {} right)",
         anchor_total, chart.anchor_left, chart.anchor_down, chart.anchor_up, chart.anchor_right);
+
+    println!("\n--- Step Parity Analysis ---");
+    println!("Crossovers: {} ({} full, {} half)", chart.tech_counts.crossovers, chart.tech_counts.full_crossovers, chart.tech_counts.half_crossovers);
+    println!("Footswitches: {} ({} up, {} down)", chart.tech_counts.footswitches, chart.tech_counts.up_footswitches, chart.tech_counts.down_footswitches);
+    println!("Sideswitches: {}", chart.tech_counts.sideswitches);
+    println!("Jacks: {}", chart.tech_counts.jacks);
+    println!("Brackets: {}", chart.tech_counts.brackets);
+    println!("Doublesteps: {}", chart.tech_counts.doublesteps);
 
     if !chart.detailed.is_empty() {
         println!("\n--- Detailed Breakdown ---");
@@ -767,6 +785,19 @@ fn print_pattern_counts_fields(chart: &ChartSummary, indent: usize) {
     print_indented("}", indent);
 }
 
+fn print_tech_counts_fields(chart: &ChartSummary, indent: usize) {
+    print_kv_int("crossovers", chart.tech_counts.crossovers, indent);
+    print_kv_int("half_crossovers", chart.tech_counts.half_crossovers, indent);
+    print_kv_int("full_crossovers", chart.tech_counts.full_crossovers, indent);
+    print_kv_int("footswitches", chart.tech_counts.footswitches, indent);
+    print_kv_int("up_footswitches", chart.tech_counts.up_footswitches, indent);
+    print_kv_int("down_footswitches", chart.tech_counts.down_footswitches, indent);
+    print_kv_int("sideswitches", chart.tech_counts.sideswitches, indent);
+    print_kv_int("jacks", chart.tech_counts.jacks, indent);
+    print_kv_int("brackets", chart.tech_counts.brackets, indent);
+    print_kv_int_last("doublesteps", chart.tech_counts.doublesteps, indent);
+}
+
 fn print_breakdown_fields(chart: &ChartSummary, indent: usize) {
     print_kv_str("detailed_breakdown", &chart.detailed, indent);
     print_kv_str("partial_breakdown", &chart.partial, indent);
@@ -801,6 +832,10 @@ fn print_json_chart(chart: &ChartSummary, is_last: bool) {
 
     print_indented("\"pattern_counts\": {", 6);
     print_pattern_counts_fields(chart, 8);
+    print_indented("},", 6);
+
+    print_indented("\"tech_counts\": {", 6);
+    print_tech_counts_fields(chart, 8);
     print_indented("}", 6);
 
     if is_last {
@@ -852,6 +887,7 @@ total_anchors,left_anchors,down_anchors,up_anchors,right_anchors,\
 detailed_breakdown,partial_breakdown,simple_breakdown,\
 total_towers,lr_towers,ud_towers,corner_towers,ld_towers,lu_towers,rd_towers,ru_towers,\
 total_triangles,ldl_triangles,lul_triangles,rdr_triangles,rur_triangles,\
+crossovers,half_crossovers,full_crossovers,footswitches,up_footswitches,down_footswitches,sideswitches,jacks,brackets,doublesteps,\
 total staircases,left_staircases,right_staircases,left_inv_staircases,right_inv_staircases,\
 total_alt_staircases,left_alt_staircases,right_alt_staircases,left_inv_alt_staircases,right_inv_alt_staircases,\
 total_double_staircases,left_double_staircases,right_double_staircases,left_inv_double_staircases,right_inv_double_staircases,\
@@ -1036,6 +1072,19 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
         lul_triangles,
         rdr_triangles,
         rur_triangles,
+    );
+
+    print!("{},{},{},{},{},{},{},{},{},{},",
+        chart.tech_counts.crossovers,
+        chart.tech_counts.half_crossovers,
+        chart.tech_counts.full_crossovers,
+        chart.tech_counts.footswitches,
+        chart.tech_counts.up_footswitches,
+        chart.tech_counts.down_footswitches,
+        chart.tech_counts.sideswitches,
+        chart.tech_counts.jacks,
+        chart.tech_counts.brackets,
+        chart.tech_counts.doublesteps,
     );
 
     let left_staircases = count(&chart.detected_patterns, PatternVariant::StaircaseLeft);

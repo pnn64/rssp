@@ -9,10 +9,12 @@ pub mod parse;
 pub mod patterns;
 pub mod report;
 pub mod stats;
+pub mod step_parity;
 pub mod tech;
 
 // Re-export the primary data structures for library users
 pub use report::{ChartSummary, SimfileSummary};
+pub use step_parity::TechCounts;
 
 use crate::bpm::*;
 use crate::hashing::*;
@@ -91,7 +93,7 @@ fn compute_mono_and_candle_stats(
 
     let (facing_left, facing_right) = count_facing_steps(bitmasks, options.mono_threshold);
     let mono_total = facing_left + facing_right;
-    let mono_percent = (mono_total as f64 / stats.total_steps as f64) * 100.0;
+    let mono_percent = if stats.total_steps > 0 { (mono_total as f64 / stats.total_steps as f64) * 100.0 } else { 0.0 };
 
     let candle_left = *detected_patterns.get(&PatternVariant::CandleLeft).unwrap_or(&0);
     let candle_right = *detected_patterns.get(&PatternVariant::CandleRight).unwrap_or(&0);
@@ -171,14 +173,19 @@ fn build_chart_summary(
     normalized_global_bpms: &str,
     extension: &str,
     options: AnalysisOptions,
+    offset: f64,
 ) -> Option<ChartSummary> {
     let chart_start_time = Instant::now();
 
     let (fields, chart_data) = split_notes_fields(&notes_data);
-    if fields.len() < 5 { return None; }
+    if fields.len() < 5 {
+        return None;
+    }
 
     let step_type_str = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_owned();
-    if step_type_str == "lights-cabinet" { return None; }
+    if step_type_str == "lights-cabinet" {
+        return None;
+    }
 
     let description = std::str::from_utf8(fields[1]).unwrap_or("").trim().to_owned();
     let difficulty_str = std::str::from_utf8(fields[2]).unwrap_or("").trim().to_owned();
@@ -204,20 +211,46 @@ fn build_chart_summary(
         compute_pattern_and_anchor_stats(&bitmasks);
     let (facing_left, facing_right, mono_total, mono_percent, candle_total, candle_percent) =
         compute_mono_and_candle_stats(&bitmasks, &stats, &detected_patterns, options);
+    
+    let tech_counts = step_parity::analyze(&minimized_chart, &bpm_map, offset);
 
     let elapsed_chart = chart_start_time.elapsed();
 
     Some(ChartSummary {
-        step_type_str, step_artist_str, difficulty_str, rating_str, tech_notation_str,
-        tier_bpm: metrics.tier_bpm, matrix_rating: metrics.matrix_rating, stats,
-        stream_counts: metrics.stream_counts, total_streams: metrics.total_streams,
-        total_measures: measure_densities.len(), detailed: metrics.detailed_breakdown,
-        partial: metrics.partial_breakdown, simple: metrics.simple_breakdown,
-        max_nps: metrics.max_nps, median_nps: metrics.median_nps,
-        detected_patterns, anchor_left, anchor_down, anchor_up, anchor_right, facing_left,
-        facing_right, mono_total, mono_percent, candle_total, candle_percent,
-        short_hash: metrics.short_hash, bpm_neutral_hash: metrics.bpm_neutral_hash, elapsed: elapsed_chart,
-        measure_densities, measure_nps_vec: metrics.measure_nps_vec, minimized_note_data: minimized_chart,
+        step_type_str,
+        step_artist_str,
+        difficulty_str,
+        rating_str,
+        tech_notation_str,
+        tier_bpm: metrics.tier_bpm,
+        matrix_rating: metrics.matrix_rating,
+        stats,
+        stream_counts: metrics.stream_counts,
+        total_streams: metrics.total_streams,
+        total_measures: measure_densities.len(),
+        detailed: metrics.detailed_breakdown,
+        partial: metrics.partial_breakdown,
+        simple: metrics.simple_breakdown,
+        max_nps: metrics.max_nps,
+        median_nps: metrics.median_nps,
+        detected_patterns,
+        anchor_left,
+        anchor_down,
+        anchor_up,
+        anchor_right,
+        facing_left,
+        facing_right,
+        mono_total,
+        mono_percent,
+        candle_total,
+        candle_percent,
+        tech_counts,
+        short_hash: metrics.short_hash,
+        bpm_neutral_hash: metrics.bpm_neutral_hash,
+        elapsed: elapsed_chart,
+        measure_densities,
+        measure_nps_vec: metrics.measure_nps_vec,
+        minimized_note_data: minimized_chart,
     })
 }
 
@@ -233,7 +266,7 @@ pub fn analyze(
     let mut title_str = parsed_data
         .title
         .and_then(|b| std::str::from_utf8(b).ok())
-        .map(|tag| clean_tag(&unescape_tag(tag))) // Combined map call fixes the error
+        .map(|tag| clean_tag(&unescape_tag(tag)))
         .unwrap_or_else(|| "<invalid-title>".to_string());
     if options.strip_tags {
         title_str = strip_title_tags(&title_str);
@@ -267,6 +300,7 @@ pub fn analyze(
                 &normalized_global_bpms,
                 extension,
                 options,
+                offset,
             )
         })
         .collect();
