@@ -1025,13 +1025,22 @@ fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCo
         let prev_right_pos = layout.average_point(prev_right_heel, prev_right_toe);
         let prev_is_crossed = prev_right_pos.x != 0.0 && prev_left_pos.x != 0.0 && prev_left_pos.x > prev_right_pos.x;
 
-        let curr_left_pos = layout.average_point(current_row.where_the_feet_are[Foot::LeftHeel as usize], current_row.where_the_feet_are[Foot::LeftToe as usize]);
-        let curr_right_pos = layout.average_point(current_row.where_the_feet_are[Foot::RightHeel as usize], current_row.where_the_feet_are[Foot::RightToe as usize]);
+        let curr_left_heel = current_row.where_the_feet_are[Foot::LeftHeel as usize];
+        let curr_left_toe = current_row.where_the_feet_are[Foot::LeftToe as usize];
+        let curr_right_heel = current_row.where_the_feet_are[Foot::RightHeel as usize];
+        let curr_right_toe = current_row.where_the_feet_are[Foot::RightToe as usize];
+
+        let curr_left_pos = layout.average_point(curr_left_heel, curr_left_toe);
+        let curr_right_pos = layout.average_point(curr_right_heel, curr_right_toe);
         let curr_is_crossed = curr_right_pos.x != 0.0 && curr_left_pos.x != 0.0 && curr_left_pos.x > curr_right_pos.x;
 
         if curr_is_crossed && !prev_is_crossed {
             out.crossovers += 1;
-            // TODO: Implement full/half crossover detection if needed.
+            if curr_left_pos.x >= 1.5 && curr_right_pos.x <= 0.5 {
+                out.full_crossovers += 1;
+            } else {
+                out.half_crossovers += 1;
+            }
         }
     }
     out
