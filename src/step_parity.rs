@@ -267,21 +267,20 @@ impl Row {
     }
 
     fn set_foot_placement(&mut self, foot_placement: &[Foot]) {
-        for slot in &mut self.columns {
-            *slot = Foot::None;
+        for (slot, &foot) in self.columns.iter_mut().zip(foot_placement.iter()) {
+            *slot = foot;
         }
         for slot in &mut self.where_the_feet_are {
             *slot = INVALID_COLUMN;
         }
         self.note_count = 0;
         for c in 0..self.column_count {
+            let foot = foot_placement[c];
+            if foot != Foot::None {
+                self.where_the_feet_are[foot.as_index()] = c as isize;
+            }
             if self.notes[c].note_type != TapNoteType::Empty {
-                let foot = foot_placement[c];
                 self.notes[c].parity = foot;
-                self.columns[c] = foot;
-                if foot != Foot::None {
-                    self.where_the_feet_are[foot.as_index()] = c as isize;
-                }
                 self.note_count += 1;
             }
         }
