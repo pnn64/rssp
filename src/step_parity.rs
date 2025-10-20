@@ -1,4 +1,3 @@
-
 //! Step Parity analysis engine ported from ITGmania/StepMania.
 //! This module determines the optimal foot placement for a `dance-single` chart
 //! and calculates various technical statistics based on that placement.
@@ -27,6 +26,7 @@ const DISTANCE_WEIGHT: f32 = 6.0;
 const SPIN_WEIGHT: f32 = 1000.0;
 const SIDESWITCH_WEIGHT: f32 = 130.0;
 const CROWDED_BRACKET_WEIGHT: f32 = 0.0;
+const OTHER_WEIGHT: f32 = 0.0;
 
 // 0.1 = 1/16th at 150bpm. Jacks quicker than this are harder.
 const JACK_THRESHOLD: f32 = 0.1;
@@ -126,43 +126,13 @@ impl StageLayout {
         }
         let left = self.columns[left_index as usize];
         let right = self.columns[right_index as usize];
-        let mut dx = right.x - left.x;
+        let dx = right.x - left.x;
         let dy = right.y - left.y;
         let distance = (dx * dx + dy * dy).sqrt();
         if distance == 0.0 {
             return 0.0;
         }
-        dx /= distance;
-        let negative = dx <= 0.0;
-        let mut value = dx.abs().powf(4.0);
-        if negative {
-            value = -value;
-        }
-        value
-    }
-
-    fn get_y_difference(&self, left_index: isize, right_index: isize) -> f32 {
-        if left_index == right_index {
-            return 0.0;
-        }
-        if left_index == INVALID_COLUMN || right_index == INVALID_COLUMN {
-            return 0.0;
-        }
-        let left = self.columns[left_index as usize];
-        let right = self.columns[right_index as usize];
-        let dx = right.x - left.x;
-        let mut dy = right.y - left.y;
-        let distance = (dx * dx + dy * dy).sqrt();
-        if distance == 0.0 {
-            return 0.0;
-        }
-        dy /= distance;
-        let negative = dy <= 0.0;
-        let mut value = dy.abs().powf(4.0);
-        if negative {
-            value = -value;
-        }
-        value
+        dx / distance
     }
 
     fn average_point(&self, left_index: isize, right_index: isize) -> StagePoint {
@@ -290,9 +260,7 @@ impl Row {
 
 #[derive(Debug, Clone)]
 struct RowCounter {
-    notes: Vec<IntermediateNoteData>
-
-    ,
+    notes: Vec<IntermediateNoteData>,
     active_holds: Vec<IntermediateNoteData>,
     mines: Vec<f32>,
     fake_mines: Vec<f32>,
@@ -429,13 +397,7 @@ impl StepParityGenerator {
             }
 
             if note.note_type == TapNoteType::Mine {
-                if note.second == counter.last_column_second && !self.rows.is_empty() {
-                    if note.fake {
-                        counter.next_fake_mines[note.col] = note.second;
-                    } else {
-                        counter.next_mines[note.col] = note.second;
-                    }
-                } else if note.fake {
+                if note.fake {
                     counter.fake_mines[note.col] = note.second;
                 } else {
                     counter.mines[note.col] = note.second;
@@ -454,16 +416,13 @@ impl StepParityGenerator {
 
                 counter.last_column_second = note.second;
                 counter.last_column_beat = note.beat;
-                counter.next_mines.clone_from(&counter.mines);
-                counter.next_fake_mines.clone_from(&counter.fake_mines);
                 counter.notes = vec![IntermediateNoteData::default(); column_count];
                 counter.mines.fill(0.0);
                 counter.fake_mines.fill(0.0);
 
                 for c in 0..column_count {
                     if counter.active_holds[c].note_type == TapNoteType::Empty
-                        || note.beat
-                            > counter.active_holds[c].beat + counter.active_holds[c].hold_length
+                        || note.beat > counter.active_holds[c].beat + counter.active_holds[c].hold_length
                     {
                         counter.active_holds[c] = IntermediateNoteData::default();
                     }
@@ -491,8 +450,8 @@ impl StepParityGenerator {
     fn create_row(&self, counter: &RowCounter) -> Row {
         let mut row = Row::new(self.column_count);
         row.notes.clone_from(&counter.notes);
-        row.mines.clone_from(&counter.next_mines);
-        row.fake_mines.clone_from(&counter.next_fake_mines);
+        row.mines.clone_from(&counter.mines);
+        row.fake_mines.clone_from(&counter.fake_mines);
         row.second = counter.last_column_second;
         row.beat = counter.last_column_beat;
 
@@ -935,6 +894,7 @@ impl<'a> CostCalculator<'a> {
         cost += self.calc_mine_cost(result, row, column_count);
         cost += self.calc_hold_switch_cost(initial, result, row, column_count);
         cost += self.calc_bracket_tap_cost(initial, result, row, left_heel, left_toe, right_heel, right_toe, elapsed, column_count);
+        cost += self.calc_moving_foot_while_other_isnt_on_pad_cost(initial, result);
         cost += self.calc_bracket_jack_cost(
             initial,
             result,
@@ -1079,6 +1039,34 @@ impl<'a> CostCalculator<'a> {
             }
         }
 
+        cost
+    }
+
+    fn calc_moving_foot_while_other_isnt_on_pad_cost(
+        &self,
+        initial: &State,
+        result: &State,
+    ) -> f32 {
+        let mut cost = 0.0;
+        if initial.combined_columns.iter().any(|&f| f != Foot::None) {
+            for &f in &result.moved_feet {
+                match f {
+                    Foot::LeftHeel | Foot::LeftToe => {
+                        if initial.where_the_feet_are[Foot::RightHeel.as_index()] == INVALID_COLUMN &&
+                            initial.where_the_feet_are[Foot::RightToe.as_index()] == INVALID_COLUMN {
+                            cost += OTHER_WEIGHT;
+                        }
+                    }
+                    Foot::RightHeel | Foot::RightToe => {
+                        if initial.where_the_feet_are[Foot::LeftHeel.as_index()] == INVALID_COLUMN &&
+                            initial.where_the_feet_are[Foot::LeftToe.as_index()] == INVALID_COLUMN {
+                            cost += OTHER_WEIGHT;
+                        }
+                    }
+                    _ => {},
+                }
+            }
+        }
         cost
     }
 
@@ -1234,39 +1222,12 @@ impl<'a> CostCalculator<'a> {
         } else {
             0.0
         };
-        let toe_facing = if end_left_toe != INVALID_COLUMN && end_right_toe != INVALID_COLUMN {
-            self.layout.get_x_difference(end_left_toe, end_right_toe)
-        } else {
-            0.0
-        };
-        let left_facing = if end_left_heel != INVALID_COLUMN && end_left_toe != INVALID_COLUMN {
-            self.layout.get_y_difference(end_left_heel, end_left_toe)
-        } else {
-            0.0
-        };
-        let right_facing = if end_right_heel != INVALID_COLUMN && end_right_toe != INVALID_COLUMN {
-            self.layout.get_y_difference(end_right_heel, end_right_toe)
-        } else {
-            0.0
-        };
 
-        let heel_penalty = (-heel_facing.min(0.0)).powf(1.8) * 100.0;
-        let toe_penalty = (-toe_facing.min(0.0)).powf(1.8) * 100.0;
-        let left_penalty = (-left_facing.min(0.0)).powf(1.8) * 100.0;
-        let right_penalty = (-right_facing.min(0.0)).powf(1.8) * 100.0;
+        let heel_penalty = (-heel_facing.min(0.0)).powf(7.2) * 200.0;
 
         let mut cost = 0.0;
         if heel_penalty > 0.0 {
             cost += heel_penalty * FACING_WEIGHT;
-        }
-        if toe_penalty > 0.0 {
-            cost += toe_penalty * FACING_WEIGHT;
-        }
-        if left_penalty > 0.0 {
-            cost += left_penalty * FACING_WEIGHT;
-        }
-        if right_penalty > 0.0 {
-            cost += right_penalty * FACING_WEIGHT;
         }
         cost
     }
@@ -1598,14 +1559,19 @@ fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCo
         let elapsed_time = current_row.second - previous_row.second;
 
         if current_row.note_count == 1 && previous_row.note_count == 1 {
-            for foot in [Foot::LeftHeel, Foot::LeftToe, Foot::RightHeel, Foot::RightToe] {
+            for &foot in &FEET {
                 let current_col = current_row.where_the_feet_are[foot.as_index()];
                 let previous_col = previous_row.where_the_feet_are[foot.as_index()];
                 if current_col == INVALID_COLUMN || previous_col == INVALID_COLUMN {
                     continue;
                 }
+                if previous_row.notes[previous_col as usize].note_type != TapNoteType::Tap {
+                    continue;
+                }
+                let hold_extends = previous_row.holds[previous_col as usize].note_type != TapNoteType::Empty &&
+                    previous_row.holds[previous_col as usize].beat + previous_row.holds[previous_col as usize].hold_length >= current_row.beat;
                 if current_col == previous_col {
-                    if elapsed_time < JACK_CUTOFF {
+                    if !hold_extends && elapsed_time < JACK_CUTOFF {
                         out.jacks += 1;
                     }
                 } else if elapsed_time < DOUBLESTEP_CUTOFF {
@@ -1673,16 +1639,9 @@ fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCo
                     let prev_prev_right_heel =
                         prev_prev_row.where_the_feet_are[Foot::RightHeel.as_index()];
                     if prev_prev_right_heel != INVALID_COLUMN && prev_prev_right_heel != right_heel {
-                        let prev_prev_right_pos = layout.columns[prev_prev_right_heel as usize];
-                        if prev_prev_right_pos.x > left_pos.x {
-                            out.full_crossovers += 1;
-                        } else {
-                            out.half_crossovers += 1;
-                        }
                         out.crossovers += 1;
                     }
                 } else {
-                    out.half_crossovers += 1;
                     out.crossovers += 1;
                 }
             }
@@ -1698,16 +1657,9 @@ fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCo
                     let prev_prev_left_heel =
                         prev_prev_row.where_the_feet_are[Foot::LeftHeel.as_index()];
                     if prev_prev_left_heel != INVALID_COLUMN && prev_prev_left_heel != left_heel {
-                        let prev_prev_left_pos = layout.columns[prev_prev_left_heel as usize];
-                        if right_pos.x > prev_prev_left_pos.x {
-                            out.full_crossovers += 1;
-                        } else {
-                            out.half_crossovers += 1;
-                        }
                         out.crossovers += 1;
                     }
                 } else {
-                    out.half_crossovers += 1;
                     out.crossovers += 1;
                 }
             }
