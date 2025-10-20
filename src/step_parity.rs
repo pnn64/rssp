@@ -1571,13 +1571,9 @@ fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCo
                 if current_col == INVALID_COLUMN || previous_col == INVALID_COLUMN {
                     continue;
                 }
-                if previous_row.notes[previous_col as usize].note_type != TapNoteType::Tap {
-                    continue;
-                }
-                let hold_extends = previous_row.holds[previous_col as usize].note_type != TapNoteType::Empty &&
-                    previous_row.holds[previous_col as usize].beat + previous_row.holds[previous_col as usize].hold_length >= current_row.beat;
+
                 if current_col == previous_col {
-                    if !hold_extends && elapsed_time < JACK_CUTOFF {
+                    if elapsed_time < JACK_CUTOFF {
                         out.jacks += 1;
                     }
                 } else if elapsed_time < DOUBLESTEP_CUTOFF {
@@ -1586,13 +1582,7 @@ fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCo
             }
         }
 
-        if current_row
-            .notes
-            .iter()
-            .filter(|note| note.note_type != TapNoteType::Empty)
-            .count()
-            >= 2
-        {
+        if current_row.note_count >= 2 {
             if current_row.where_the_feet_are[Foot::LeftHeel.as_index()] != INVALID_COLUMN
                 && current_row.where_the_feet_are[Foot::LeftToe.as_index()] != INVALID_COLUMN
             {
@@ -1645,9 +1635,16 @@ fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCo
                     let prev_prev_right_heel =
                         prev_prev_row.where_the_feet_are[Foot::RightHeel.as_index()];
                     if prev_prev_right_heel != INVALID_COLUMN && prev_prev_right_heel != right_heel {
+                        let prev_prev_right_pos = layout.columns[prev_prev_right_heel as usize];
+                        if prev_prev_right_pos.x > left_pos.x {
+                            out.full_crossovers += 1;
+                        } else {
+                            out.half_crossovers += 1;
+                        }
                         out.crossovers += 1;
                     }
                 } else {
+                    out.half_crossovers += 1;
                     out.crossovers += 1;
                 }
             }
@@ -1663,9 +1660,16 @@ fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCo
                     let prev_prev_left_heel =
                         prev_prev_row.where_the_feet_are[Foot::LeftHeel.as_index()];
                     if prev_prev_left_heel != INVALID_COLUMN && prev_prev_left_heel != left_heel {
+                        let prev_prev_left_pos = layout.columns[prev_prev_left_heel as usize];
+                        if right_pos.x > prev_prev_left_pos.x {
+                            out.full_crossovers += 1;
+                        } else {
+                            out.half_crossovers += 1;
+                        }
                         out.crossovers += 1;
                     }
                 } else {
+                    out.half_crossovers += 1;
                     out.crossovers += 1;
                 }
             }
@@ -1676,15 +1680,13 @@ fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCo
 }
 
 fn is_footswitch(column: usize, current_row: &Row, previous_row: &Row, elapsed_time: f32) -> bool {
-    if elapsed_time >= FOOTSWITCH_CUTOFF {
-        return false;
-    }
     let prev = previous_row.columns[column];
     let curr = current_row.columns[column];
     if prev == Foot::None || curr == Foot::None {
         return false;
     }
-    prev != curr && OTHER_PART_OF_FOOT[prev.as_index()] != curr
+
+    prev != curr && OTHER_PART_OF_FOOT[prev.as_index()] != curr && elapsed_time < FOOTSWITCH_CUTOFF
 }
 
 const JACK_CUTOFF: f32 = 0.176;
