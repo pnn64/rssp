@@ -1539,7 +1539,7 @@ impl<'a> CostCalculator<'a> {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct TechCounts {
     pub crossovers: u32,
     pub half_crossovers: u32,
