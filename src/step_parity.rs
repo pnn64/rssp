@@ -1615,13 +1615,7 @@ fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCo
             }
         }
 
-        if current_row
-            .notes
-            .iter()
-            .filter(|note| note.note_type != TapNoteType::Empty)
-            .count()
-            >= 2
-        {
+        if current_row.note_count >= 2 {
             if current_row.where_the_feet_are[Foot::LeftHeel.as_index()] != INVALID_COLUMN
                 && current_row.where_the_feet_are[Foot::LeftToe.as_index()] != INVALID_COLUMN
             {
@@ -1662,10 +1656,23 @@ fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCo
         let prev_right_heel = previous_row.where_the_feet_are[Foot::RightHeel.as_index()];
         let prev_right_toe = previous_row.where_the_feet_are[Foot::RightToe.as_index()];
 
-        if right_heel != INVALID_COLUMN
-            && prev_left_heel != INVALID_COLUMN
-            && prev_right_heel == INVALID_COLUMN
-        {
+        let has_right = right_heel != INVALID_COLUMN || right_toe != INVALID_COLUMN;
+        let has_prev_right = prev_right_heel != INVALID_COLUMN || prev_right_toe != INVALID_COLUMN;
+        let has_left = left_heel != INVALID_COLUMN || left_toe != INVALID_COLUMN;
+        let has_prev_left = prev_left_heel != INVALID_COLUMN || prev_left_toe != INVALID_COLUMN;
+
+        let current_right_col = if right_heel != INVALID_COLUMN {
+            right_heel
+        } else {
+            right_toe
+        };
+        let current_left_col = if left_heel != INVALID_COLUMN {
+            left_heel
+        } else {
+            left_toe
+        };
+
+        if has_right && has_prev_left && !has_prev_right {
             let left_pos = layout.average_point(prev_left_heel, prev_left_toe);
             let right_pos = layout.average_point(right_heel, right_toe);
             if right_pos.x < left_pos.x {
@@ -1673,8 +1680,18 @@ fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCo
                     let prev_prev_row = &rows[i - 2];
                     let prev_prev_right_heel =
                         prev_prev_row.where_the_feet_are[Foot::RightHeel.as_index()];
-                    if prev_prev_right_heel != INVALID_COLUMN && prev_prev_right_heel != right_heel {
-                        let prev_prev_right_pos = layout.columns[prev_prev_right_heel as usize];
+                    let prev_prev_right_toe =
+                        prev_prev_row.where_the_feet_are[Foot::RightToe.as_index()];
+                    let prev_prev_has_right =
+                        prev_prev_right_heel != INVALID_COLUMN || prev_prev_right_toe != INVALID_COLUMN;
+                    let prev_prev_right_col = if prev_prev_right_heel != INVALID_COLUMN {
+                        prev_prev_right_heel
+                    } else {
+                        prev_prev_right_toe
+                    };
+                    if prev_prev_has_right && prev_prev_right_col != current_right_col {
+                        let prev_prev_right_pos =
+                            layout.average_point(prev_prev_right_heel, prev_prev_right_toe);
                         if prev_prev_right_pos.x > left_pos.x {
                             out.full_crossovers += 1;
                         } else {
@@ -1687,10 +1704,7 @@ fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCo
                     out.crossovers += 1;
                 }
             }
-        } else if left_heel != INVALID_COLUMN
-            && prev_right_heel != INVALID_COLUMN
-            && prev_left_heel == INVALID_COLUMN
-        {
+        } else if has_left && has_prev_right && !has_prev_left {
             let left_pos = layout.average_point(left_heel, left_toe);
             let right_pos = layout.average_point(prev_right_heel, prev_right_toe);
             if right_pos.x < left_pos.x {
@@ -1698,8 +1712,18 @@ fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCo
                     let prev_prev_row = &rows[i - 2];
                     let prev_prev_left_heel =
                         prev_prev_row.where_the_feet_are[Foot::LeftHeel.as_index()];
-                    if prev_prev_left_heel != INVALID_COLUMN && prev_prev_left_heel != left_heel {
-                        let prev_prev_left_pos = layout.columns[prev_prev_left_heel as usize];
+                    let prev_prev_left_toe =
+                        prev_prev_row.where_the_feet_are[Foot::LeftToe.as_index()];
+                    let prev_prev_has_left =
+                        prev_prev_left_heel != INVALID_COLUMN || prev_prev_left_toe != INVALID_COLUMN;
+                    let prev_prev_left_col = if prev_prev_left_heel != INVALID_COLUMN {
+                        prev_prev_left_heel
+                    } else {
+                        prev_prev_left_toe
+                    };
+                    if prev_prev_has_left && prev_prev_left_col != current_left_col {
+                        let prev_prev_left_pos =
+                            layout.average_point(prev_prev_left_heel, prev_prev_left_toe);
                         if right_pos.x > prev_prev_left_pos.x {
                             out.full_crossovers += 1;
                         } else {
