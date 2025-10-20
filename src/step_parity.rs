@@ -275,15 +275,13 @@ impl Row {
         }
         self.note_count = 0;
         for c in 0..self.column_count {
-            let foot = foot_placement[c];
-            self.columns[c] = foot;
-
-            if foot != Foot::None {
-                self.where_the_feet_are[foot.as_index()] = c as isize;
-            }
-
             if self.notes[c].note_type != TapNoteType::Empty {
+                let foot = foot_placement[c];
                 self.notes[c].parity = foot;
+                self.columns[c] = foot;
+                if foot != Foot::None {
+                    self.where_the_feet_are[foot.as_index()] = c as isize;
+                }
                 self.note_count += 1;
             }
         }
@@ -1664,6 +1662,12 @@ fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCo
         let prev_right_heel = previous_row.where_the_feet_are[Foot::RightHeel.as_index()];
         let prev_right_toe = previous_row.where_the_feet_are[Foot::RightToe.as_index()];
 
+        let right_prev_valid = prev_right_heel != INVALID_COLUMN || prev_right_toe != INVALID_COLUMN;
+        let left_prev_valid = prev_left_heel != INVALID_COLUMN || prev_left_toe != INVALID_COLUMN;
+        let right_current_valid = right_heel != INVALID_COLUMN || right_toe != INVALID_COLUMN;
+        let left_current_valid = left_heel != INVALID_COLUMN || left_toe != INVALID_COLUMN;
+
+        let mut right_counted = false;
         if right_heel != INVALID_COLUMN
             && prev_left_heel != INVALID_COLUMN
             && prev_right_heel == INVALID_COLUMN
@@ -1683,13 +1687,53 @@ fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCo
                             out.half_crossovers += 1;
                         }
                         out.crossovers += 1;
+                        right_counted = true;
                     }
                 } else {
                     out.half_crossovers += 1;
                     out.crossovers += 1;
+                    right_counted = true;
                 }
             }
-        } else if left_heel != INVALID_COLUMN
+        }
+        if !right_counted && right_current_valid && left_prev_valid && right_prev_valid {
+            if right_heel != prev_right_heel || right_toe != prev_right_toe {
+                let left_pos = layout.average_point(prev_left_heel, prev_left_toe);
+                let right_pos = layout.average_point(right_heel, right_toe);
+                if right_pos.x < left_pos.x {
+                    let mut classified = false;
+                    if i > 1 {
+                        let prev_prev_row = &rows[i - 2];
+                        let prev_prev_right_heel =
+                            prev_prev_row.where_the_feet_are[Foot::RightHeel.as_index()];
+                        let prev_prev_right_toe =
+                            prev_prev_row.where_the_feet_are[Foot::RightToe.as_index()];
+                        let prev_prev_right_valid = prev_prev_right_heel != INVALID_COLUMN
+                            || prev_prev_right_toe != INVALID_COLUMN;
+                        if prev_prev_right_valid
+                            && (prev_prev_right_heel != right_heel || prev_prev_right_toe != right_toe)
+                        {
+                            let prev_prev_right_pos =
+                                layout.average_point(prev_prev_right_heel, prev_prev_right_toe);
+                            if prev_prev_right_pos.x > left_pos.x {
+                                out.full_crossovers += 1;
+                            } else {
+                                out.half_crossovers += 1;
+                            }
+                            out.crossovers += 1;
+                            classified = true;
+                        }
+                    }
+                    if !classified {
+                        out.half_crossovers += 1;
+                        out.crossovers += 1;
+                    }
+                }
+            }
+        }
+
+        let mut left_counted = false;
+        if left_heel != INVALID_COLUMN
             && prev_right_heel != INVALID_COLUMN
             && prev_left_heel == INVALID_COLUMN
         {
@@ -1708,10 +1752,47 @@ fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCo
                             out.half_crossovers += 1;
                         }
                         out.crossovers += 1;
+                        left_counted = true;
                     }
                 } else {
                     out.half_crossovers += 1;
                     out.crossovers += 1;
+                    left_counted = true;
+                }
+            }
+        }
+        if !left_counted && left_current_valid && right_prev_valid && left_prev_valid {
+            if left_heel != prev_left_heel || left_toe != prev_left_toe {
+                let left_pos = layout.average_point(left_heel, left_toe);
+                let right_pos = layout.average_point(prev_right_heel, prev_right_toe);
+                if right_pos.x < left_pos.x {
+                    let mut classified = false;
+                    if i > 1 {
+                        let prev_prev_row = &rows[i - 2];
+                        let prev_prev_left_heel =
+                            prev_prev_row.where_the_feet_are[Foot::LeftHeel.as_index()];
+                        let prev_prev_left_toe =
+                            prev_prev_row.where_the_feet_are[Foot::LeftToe.as_index()];
+                        let prev_prev_left_valid = prev_prev_left_heel != INVALID_COLUMN
+                            || prev_prev_left_toe != INVALID_COLUMN;
+                        if prev_prev_left_valid
+                            && (prev_prev_left_heel != left_heel || prev_prev_left_toe != left_toe)
+                        {
+                            let prev_prev_left_pos =
+                                layout.average_point(prev_prev_left_heel, prev_prev_left_toe);
+                            if right_pos.x > prev_prev_left_pos.x {
+                                out.full_crossovers += 1;
+                            } else {
+                                out.half_crossovers += 1;
+                            }
+                            out.crossovers += 1;
+                            classified = true;
+                        }
+                    }
+                    if !classified {
+                        out.half_crossovers += 1;
+                        out.crossovers += 1;
+                    }
                 }
             }
         }
