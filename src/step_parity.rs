@@ -1466,42 +1466,41 @@ impl<'a> CostCalculator<'a> {
         moved_right: bool,
         jacked_right: bool,
     ) -> bool {
+        let mut doublestepped = false;
         if moved_left
             && !jacked_left
             && ((initial.did_the_foot_move[Foot::LeftHeel.as_index()] && !initial.is_the_foot_holding[Foot::LeftHeel.as_index()])
                 || (initial.did_the_foot_move[Foot::LeftToe.as_index()] && !initial.is_the_foot_holding[Foot::LeftToe.as_index()]))
         {
-            return true;
+            doublestepped = true;
         }
         if moved_right
             && !jacked_right
             && ((initial.did_the_foot_move[Foot::RightHeel.as_index()] && !initial.is_the_foot_holding[Foot::RightHeel.as_index()])
                 || (initial.did_the_foot_move[Foot::RightToe.as_index()] && !initial.is_the_foot_holding[Foot::RightToe.as_index()]))
         {
-            return true;
+            doublestepped = true;
         }
 
-        if row_index == 0 {
-            return false;
-        }
-
-        let last_row = &rows[row_index - 1];
-        for hold in &last_row.holds {
-            if hold.note_type == TapNoteType::Empty {
-                continue;
-            }
-            let end_beat = rows[row_index].beat;
-            let start_beat = last_row.beat;
-            let hold_end = hold.beat + hold.hold_length;
-            if hold_end > start_beat && hold_end < end_beat {
-                return false;
-            }
-            if hold_end >= end_beat {
-                return false;
+        if row_index > 0 {
+            let last_row = &rows[row_index - 1];
+            for hold in &last_row.holds {
+                if hold.note_type == TapNoteType::Empty {
+                    continue;
+                }
+                let end_beat = rows[row_index].beat;
+                let start_beat = last_row.beat;
+                let hold_end = hold.beat + hold.hold_length;
+                if hold_end > start_beat && hold_end < end_beat {
+                    doublestepped = false;
+                }
+                if hold_end >= end_beat {
+                    doublestepped = false;
+                }
             }
         }
 
-        false
+        doublestepped
     }
 
     fn did_jack_left(
