@@ -242,7 +242,7 @@ fn print_pretty_chart(chart: &ChartSummary) {
         anchor_total, chart.anchor_left, chart.anchor_down, chart.anchor_up, chart.anchor_right);
 
     println!("\n--- Step Parity Analysis ---");
-    println!("Crossovers: {} ({} full, {} half)", chart.tech_counts.crossovers, chart.tech_counts.full_crossovers, chart.tech_counts.half_crossovers);
+    println!("Crossovers: {}", chart.tech_counts.crossovers);
     println!("Footswitches: {} ({} up, {} down)", chart.tech_counts.footswitches, chart.tech_counts.up_footswitches, chart.tech_counts.down_footswitches);
     println!("Sideswitches: {}", chart.tech_counts.sideswitches);
     println!("Jacks: {}", chart.tech_counts.jacks);
@@ -364,7 +364,7 @@ fn print_full_chart(chart: &ChartSummary) {
         anchor_total, chart.anchor_left, chart.anchor_down, chart.anchor_up, chart.anchor_right);
 
     println!("\n--- Step Parity Analysis ---");
-    println!("Crossovers: {} ({} full, {} half)", chart.tech_counts.crossovers, chart.tech_counts.full_crossovers, chart.tech_counts.half_crossovers);
+    println!("Crossovers: {}", chart.tech_counts.crossovers);
     println!("Footswitches: {} ({} up, {} down)", chart.tech_counts.footswitches, chart.tech_counts.up_footswitches, chart.tech_counts.down_footswitches);
     println!("Sideswitches: {}", chart.tech_counts.sideswitches);
     println!("Jacks: {}", chart.tech_counts.jacks);
@@ -787,8 +787,6 @@ fn print_pattern_counts_fields(chart: &ChartSummary, indent: usize) {
 
 fn print_tech_counts_fields(chart: &ChartSummary, indent: usize) {
     print_kv_int("crossovers", chart.tech_counts.crossovers, indent);
-    print_kv_int("half_crossovers", chart.tech_counts.half_crossovers, indent);
-    print_kv_int("full_crossovers", chart.tech_counts.full_crossovers, indent);
     print_kv_int("footswitches", chart.tech_counts.footswitches, indent);
     print_kv_int("up_footswitches", chart.tech_counts.up_footswitches, indent);
     print_kv_int("down_footswitches", chart.tech_counts.down_footswitches, indent);
@@ -1074,10 +1072,8 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
         rur_triangles,
     );
 
-    print!("{},{},{},{},{},{},{},{},{},{},",
+    print!("{},{},{},{},{},{},{},{},",
         chart.tech_counts.crossovers,
-        chart.tech_counts.half_crossovers,
-        chart.tech_counts.full_crossovers,
         chart.tech_counts.footswitches,
         chart.tech_counts.up_footswitches,
         chart.tech_counts.down_footswitches,

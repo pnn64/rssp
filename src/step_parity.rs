@@ -37,7 +37,7 @@ const SLOW_FOOTSWITCH_THRESHOLD: f32 = 0.2;
 // 0.4 = 1/4th at 150bpm. Ignore footswitch penalty after this.
 const SLOW_FOOTSWITCH_IGNORE: f32 = 0.4;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 #[repr(usize)]
 pub enum Foot {
     None = 0,
@@ -289,8 +289,8 @@ impl RowCounter {
 struct State {
     columns: Vec<Foot>,
     combined_columns: Vec<Foot>,
-    moved_feet: Vec<Foot>,
-    hold_feet: Vec<Foot>,
+    moved_feet: HashSet<Foot>,
+    hold_feet: HashSet<Foot>,
     where_the_feet_are: [isize; NUM_FEET],
     what_note_the_foot_is_hitting: [isize; NUM_FEET],
     did_the_foot_move: [bool; NUM_FEET],
@@ -302,8 +302,8 @@ impl State {
         Self {
             columns: vec![Foot::None; column_count],
             combined_columns: vec![Foot::None; column_count],
-            moved_feet: vec![Foot::None; column_count],
-            hold_feet: vec![Foot::None; column_count],
+            moved_feet: HashSet::new(),
+            hold_feet: HashSet::new(),
             where_the_feet_are: [INVALID_COLUMN; NUM_FEET],
             what_note_the_foot_is_hitting: [INVALID_COLUMN; NUM_FEET],
             did_the_foot_move: [false; NUM_FEET],
@@ -397,7 +397,13 @@ impl StepParityGenerator {
             }
 
             if note.note_type == TapNoteType::Mine {
-                if note.fake {
+                if note.second == counter.last_column_second && !self.rows.is_empty() {
+                    if note.fake {
+                        counter.next_fake_mines[note.col] = note.second;
+                    } else {
+                        counter.next_mines[note.col] = note.second;
+                    }
+                } else if note.fake {
                     counter.fake_mines[note.col] = note.second;
                 } else {
                     counter.mines[note.col] = note.second;
@@ -416,13 +422,16 @@ impl StepParityGenerator {
 
                 counter.last_column_second = note.second;
                 counter.last_column_beat = note.beat;
+                counter.next_mines.clone_from(&counter.mines);
+                counter.next_fake_mines.clone_from(&counter.fake_mines);
                 counter.notes = vec![IntermediateNoteData::default(); column_count];
                 counter.mines.fill(0.0);
                 counter.fake_mines.fill(0.0);
 
                 for c in 0..column_count {
                     if counter.active_holds[c].note_type == TapNoteType::Empty
-                        || note.beat > counter.active_holds[c].beat + counter.active_holds[c].hold_length
+                        || note.beat
+                            > counter.active_holds[c].beat + counter.active_holds[c].hold_length
                     {
                         counter.active_holds[c] = IntermediateNoteData::default();
                     }
@@ -450,8 +459,8 @@ impl StepParityGenerator {
     fn create_row(&self, counter: &RowCounter) -> Row {
         let mut row = Row::new(self.column_count);
         row.notes.clone_from(&counter.notes);
-        row.mines.clone_from(&counter.mines);
-        row.fake_mines.clone_from(&counter.fake_mines);
+        row.mines.clone_from(&counter.next_mines);
+        row.fake_mines.clone_from(&counter.next_fake_mines);
         row.second = counter.last_column_second;
         row.beat = counter.last_column_beat;
 
@@ -571,8 +580,6 @@ impl StepParityGenerator {
         for i in 0..self.column_count {
             result_state.columns[i] = columns[i];
             result_state.combined_columns[i] = Foot::None;
-            result_state.moved_feet[i] = Foot::None;
-            result_state.hold_feet[i] = Foot::None;
         }
 
         for (i, &foot) in columns.iter().enumerate() {
@@ -583,12 +590,12 @@ impl StepParityGenerator {
             result_state.what_note_the_foot_is_hitting[foot_index] = i as isize;
 
             if row.holds[i].note_type == TapNoteType::Empty {
-                result_state.moved_feet[i] = foot;
+                result_state.moved_feet.insert(foot);
                 result_state.did_the_foot_move[foot_index] = true;
                 continue;
             }
             if initial_state.combined_columns[i] != foot {
-                result_state.moved_feet[i] = foot;
+                result_state.moved_feet.insert(foot);
                 result_state.did_the_foot_move[foot_index] = true;
             }
         }
@@ -598,7 +605,7 @@ impl StepParityGenerator {
                 continue;
             }
             if row.holds[i].note_type != TapNoteType::Empty {
-                result_state.hold_feet[i] = foot;
+                result_state.hold_feet.insert(foot);
                 result_state.is_the_foot_holding[foot.as_index()] = true;
             }
         }
@@ -635,20 +642,20 @@ impl StepParityGenerator {
             match initial.combined_columns[i] {
                 Foot::LeftHeel | Foot::RightHeel => {
                     let prev = initial.combined_columns[i];
-                    if prev != Foot::None && !result.did_the_foot_move[prev.as_index()] {
+                    if prev != Foot::None && !result.moved_feet.contains(&prev) {
                         result.combined_columns[i] = prev;
                     }
                 }
                 Foot::LeftToe => {
-                    if !result.did_the_foot_move[Foot::LeftToe.as_index()]
-                        && !result.did_the_foot_move[Foot::LeftHeel.as_index()]
+                    if !result.moved_feet.contains(&Foot::LeftToe)
+                        && !result.moved_feet.contains(&Foot::LeftHeel)
                     {
                         result.combined_columns[i] = Foot::LeftToe;
                     }
                 }
                 Foot::RightToe => {
-                    if !result.did_the_foot_move[Foot::RightToe.as_index()]
-                        && !result.did_the_foot_move[Foot::RightHeel.as_index()]
+                    if !result.moved_feet.contains(&Foot::RightToe)
+                        && !result.moved_feet.contains(&Foot::RightHeel)
                     {
                         result.combined_columns[i] = Foot::RightToe;
                     }
@@ -831,12 +838,19 @@ fn get_state_cache_key(state: &State) -> u64 {
     for &foot in &state.combined_columns {
         value = value.wrapping_mul(prime).wrapping_add(foot as u64);
     }
-    for &foot in &state.moved_feet {
-        value = value.wrapping_mul(prime).wrapping_add(foot as u64);
+
+    let mut moved_feet_vec: Vec<Foot> = state.moved_feet.iter().cloned().collect();
+    moved_feet_vec.sort_by_key(|f| *f as usize);
+    for &f in &moved_feet_vec {
+        value = value.wrapping_mul(prime).wrapping_add(f as u64);
     }
-    for &foot in &state.hold_feet {
-        value = value.wrapping_mul(prime).wrapping_add(foot as u64);
+
+    let mut hold_feet_vec: Vec<Foot> = state.hold_feet.iter().cloned().collect();
+    hold_feet_vec.sort_by_key(|f| *f as usize);
+    for &f in &hold_feet_vec {
+        value = value.wrapping_mul(prime).wrapping_add(f as u64);
     }
+
     value
 }
 
@@ -881,10 +895,10 @@ impl<'a> CostCalculator<'a> {
             || result.did_the_foot_move[Foot::RightToe.as_index()];
 
         let did_jump =
-            (initial.did_the_foot_move[Foot::LeftHeel.as_index()] && !initial.is_the_foot_holding[Foot::LeftHeel.as_index()]
-                || initial.did_the_foot_move[Foot::LeftToe.as_index()] && !initial.is_the_foot_holding[Foot::LeftToe.as_index()])
-                && (initial.did_the_foot_move[Foot::RightHeel.as_index()] && !initial.is_the_foot_holding[Foot::RightHeel.as_index()]
-                    || initial.did_the_foot_move[Foot::RightToe.as_index()] && !initial.is_the_foot_holding[Foot::RightToe.as_index()]);
+            (initial.moved_feet.contains(&Foot::LeftHeel) && !initial.hold_feet.contains(&Foot::LeftHeel)
+                || initial.moved_feet.contains(&Foot::LeftToe) && !initial.hold_feet.contains(&Foot::LeftToe))
+                && (initial.moved_feet.contains(&Foot::RightHeel) && !initial.hold_feet.contains(&Foot::RightHeel)
+                    || initial.moved_feet.contains(&Foot::RightToe) && !initial.hold_feet.contains(&Foot::RightToe));
 
         let jacked_left = self.did_jack_left(initial, result, left_heel, left_toe, moved_left, did_jump);
         let jacked_right =
@@ -1074,20 +1088,16 @@ impl<'a> CostCalculator<'a> {
         &self,
         initial: &State,
         result: &State,
-        rows: &[Row],
-        row_index: usize,
+        _rows: &[Row],
+        _row_index: usize,
         moved_left: bool,
         moved_right: bool,
         jacked_left: bool,
         jacked_right: bool,
         did_jump: bool,
-        column_count: usize,
+        _column_count: usize,
     ) -> f32 {
-        let hold_empty = result
-            .hold_feet
-            .iter()
-            .take(column_count)
-            .all(|&foot| foot == Foot::None);
+        let hold_empty = result.hold_feet.is_empty();
 
         let mut cost = 0.0;
         if moved_left != moved_right && (moved_left || moved_right) && hold_empty && !did_jump {
@@ -1121,11 +1131,7 @@ impl<'a> CostCalculator<'a> {
         did_jump: bool,
         column_count: usize,
     ) -> f32 {
-        let hold_empty = result
-            .hold_feet
-            .iter()
-            .take(column_count)
-            .all(|&foot| foot == Foot::None);
+        let hold_empty = result.hold_feet.is_empty();
 
         if moved_left != moved_right && (moved_left || moved_right) && hold_empty && !did_jump {
             if self.did_double_step(
@@ -1194,7 +1200,7 @@ impl<'a> CostCalculator<'a> {
         }
     }
 
-    fn calc_facing_cost(&self, initial: &State, result: &State, column_count: usize) -> f32 {
+    fn calc_facing_cost(&self, _initial: &State, result: &State, column_count: usize) -> f32 {
         let mut end_left_heel = INVALID_COLUMN;
         let mut end_left_toe = INVALID_COLUMN;
         let mut end_right_heel = INVALID_COLUMN;
@@ -1381,7 +1387,7 @@ impl<'a> CostCalculator<'a> {
             return 0.0;
         }
         let mut cost = 0.0;
-        for (column, &foot) in result.moved_feet.iter().enumerate() {
+        for &foot in &result.moved_feet {
             if foot == Foot::None {
                 continue;
             }
@@ -1419,9 +1425,9 @@ impl<'a> CostCalculator<'a> {
     fn did_double_step(
         &self,
         initial: &State,
-        result: &State,
-        rows: &[Row],
-        row_index: usize,
+        _result: &State,
+        _rows: &[Row],
+        _row_index: usize,
         moved_left: bool,
         jacked_left: bool,
         moved_right: bool,
@@ -1430,26 +1436,26 @@ impl<'a> CostCalculator<'a> {
         let mut doublestepped = false;
         if moved_left
             && !jacked_left
-            && ((initial.did_the_foot_move[Foot::LeftHeel.as_index()] && !initial.is_the_foot_holding[Foot::LeftHeel.as_index()])
-                || (initial.did_the_foot_move[Foot::LeftToe.as_index()] && !initial.is_the_foot_holding[Foot::LeftToe.as_index()]))
+            && ((initial.moved_feet.contains(&Foot::LeftHeel) && !initial.hold_feet.contains(&Foot::LeftHeel))
+                || (initial.moved_feet.contains(&Foot::LeftToe) && !initial.hold_feet.contains(&Foot::LeftToe)))
         {
             doublestepped = true;
         }
         if moved_right
             && !jacked_right
-            && ((initial.did_the_foot_move[Foot::RightHeel.as_index()] && !initial.is_the_foot_holding[Foot::RightHeel.as_index()])
-                || (initial.did_the_foot_move[Foot::RightToe.as_index()] && !initial.is_the_foot_holding[Foot::RightToe.as_index()]))
+            && ((initial.moved_feet.contains(&Foot::RightHeel) && !initial.hold_feet.contains(&Foot::RightHeel))
+                || (initial.moved_feet.contains(&Foot::RightToe) && !initial.hold_feet.contains(&Foot::RightToe)))
         {
             doublestepped = true;
         }
 
-        if row_index > 0 {
-            let last_row = &rows[row_index - 1];
+        if _row_index > 0 {
+            let last_row = &_rows[_row_index - 1];
             for hold in &last_row.holds {
                 if hold.note_type == TapNoteType::Empty {
                     continue;
                 }
-                let end_beat = rows[row_index].beat;
+                let end_beat = _rows[_row_index].beat;
                 let start_beat = last_row.beat;
                 let hold_end = hold.beat + hold.hold_length;
                 if hold_end > start_beat && hold_end < end_beat {
@@ -1480,8 +1486,8 @@ impl<'a> CostCalculator<'a> {
         if left_heel > INVALID_COLUMN
             && initial.combined_columns[left_heel as usize] == Foot::LeftHeel
             && !result.is_the_foot_holding[Foot::LeftHeel.as_index()]
-            && ((initial.did_the_foot_move[Foot::LeftHeel.as_index()] && !initial.is_the_foot_holding[Foot::LeftHeel.as_index()])
-                || (initial.did_the_foot_move[Foot::LeftToe.as_index()] && !initial.is_the_foot_holding[Foot::LeftToe.as_index()]))
+            && ((initial.moved_feet.contains(&Foot::LeftHeel) && !initial.hold_feet.contains(&Foot::LeftHeel))
+                || (initial.moved_feet.contains(&Foot::LeftToe) && !initial.hold_feet.contains(&Foot::LeftToe)))
         {
             return true;
         }
@@ -1489,8 +1495,8 @@ impl<'a> CostCalculator<'a> {
         if left_toe > INVALID_COLUMN
             && initial.combined_columns[left_toe as usize] == Foot::LeftToe
             && !result.is_the_foot_holding[Foot::LeftToe.as_index()]
-            && ((initial.did_the_foot_move[Foot::LeftHeel.as_index()] && !initial.is_the_foot_holding[Foot::LeftHeel.as_index()])
-                || (initial.did_the_foot_move[Foot::LeftToe.as_index()] && !initial.is_the_foot_holding[Foot::LeftToe.as_index()]))
+            && ((initial.moved_feet.contains(&Foot::LeftHeel) && !initial.hold_feet.contains(&Foot::LeftHeel))
+                || (initial.moved_feet.contains(&Foot::LeftToe) && !initial.hold_feet.contains(&Foot::LeftToe)))
         {
             return true;
         }
@@ -1514,8 +1520,8 @@ impl<'a> CostCalculator<'a> {
         if right_heel > INVALID_COLUMN
             && initial.combined_columns[right_heel as usize] == Foot::RightHeel
             && !result.is_the_foot_holding[Foot::RightHeel.as_index()]
-            && ((initial.did_the_foot_move[Foot::RightHeel.as_index()] && !initial.is_the_foot_holding[Foot::RightHeel.as_index()])
-                || (initial.did_the_foot_move[Foot::RightToe.as_index()] && !initial.is_the_foot_holding[Foot::RightToe.as_index()]))
+            && ((initial.moved_feet.contains(&Foot::RightHeel) && !initial.hold_feet.contains(&Foot::RightHeel))
+                || (initial.moved_feet.contains(&Foot::RightToe) && !initial.hold_feet.contains(&Foot::RightToe)))
         {
             return true;
         }
@@ -1523,8 +1529,8 @@ impl<'a> CostCalculator<'a> {
         if right_toe > INVALID_COLUMN
             && initial.combined_columns[right_toe as usize] == Foot::RightToe
             && !result.is_the_foot_holding[Foot::RightToe.as_index()]
-            && ((initial.did_the_foot_move[Foot::RightHeel.as_index()] && !initial.is_the_foot_holding[Foot::RightHeel.as_index()])
-                || (initial.did_the_foot_move[Foot::RightToe.as_index()] && !initial.is_the_foot_holding[Foot::RightToe.as_index()]))
+            && ((initial.moved_feet.contains(&Foot::RightHeel) && !initial.hold_feet.contains(&Foot::RightHeel))
+                || (initial.moved_feet.contains(&Foot::RightToe) && !initial.hold_feet.contains(&Foot::RightToe)))
         {
             return true;
         }
