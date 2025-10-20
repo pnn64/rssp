@@ -423,7 +423,7 @@ impl StepParityGenerator {
         let column_count = self.column_count;
         let mut counter = RowCounter::new(column_count);
 
-        for note in note_data {
+        for note in note_data.into_iter() {
             if note.note_type == TapNoteType::Empty {
                 continue;
             }
@@ -472,7 +472,7 @@ impl StepParityGenerator {
 
             counter.notes[note.col] = note.clone();
             if note.note_type == TapNoteType::HoldHead {
-                counter.active_holds[note.col] = note;
+                counter.active_holds[note.col] = note.clone();
             }
         }
 
@@ -533,18 +533,20 @@ impl StepParityGenerator {
         let start_id = self.add_node(start_state, start_second, -1);
 
         let mut prev_node_ids = vec![start_id];
-        let cost_calculator = CostCalculator::new(&self.layout);
+        let layout = self.layout.clone();
+        let cost_calculator = CostCalculator::new(&layout);
 
-        for (i, row) in self.rows.iter().enumerate() {
-            let permutations = self.get_foot_placement_permutations(row).to_vec();
+        for i in 0..self.rows.len() {
+            let row_clone = self.rows[i].clone();
+            let permutations = self.get_foot_placement_permutations(&row_clone).to_vec();
             let mut result_nodes_for_row: Vec<usize> = Vec::new();
 
             for &initial_node_id in &prev_node_ids {
                 let initial_state = Rc::clone(&self.nodes[initial_node_id].state);
-                let elapsed = row.second - self.nodes[initial_node_id].second;
+                let elapsed = row_clone.second - self.nodes[initial_node_id].second;
 
                 for perm in &permutations {
-                    let result_state = self.init_result_state(&initial_state, row, perm);
+                    let result_state = self.init_result_state(&initial_state, &row_clone, perm);
                     let cost = cost_calculator.get_action_cost(
                         &initial_state,
                         &result_state,
@@ -559,7 +561,11 @@ impl StepParityGenerator {
                     {
                         id
                     } else {
-                        let id = self.add_node(Rc::clone(&result_state), row.second, row.row_index as isize);
+                        let id = self.add_node(
+                            Rc::clone(&result_state),
+                            row_clone.second,
+                            row_clone.row_index as isize,
+                        );
                         result_nodes_for_row.push(id);
                         id
                     };
@@ -1777,9 +1783,19 @@ fn parse_chart_rows(
 
     for measure in note_data.split(|&b| b == b',') {
         let lines: Vec<&[u8]> = measure
-            .split(|&b| b == b'
-')
-            .filter(|line| !line.is_empty())
+            .split(|&b| b == b'\n')
+            .filter_map(|line| {
+                let trimmed = if let Some(stripped) = line.strip_suffix(b"\r") {
+                    stripped
+                } else {
+                    line
+                };
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed)
+                }
+            })
             .collect();
         let num_rows = lines.len();
         if num_rows == 0 {
