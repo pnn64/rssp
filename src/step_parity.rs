@@ -275,13 +275,15 @@ impl Row {
         }
         self.note_count = 0;
         for c in 0..self.column_count {
+            let foot = foot_placement[c];
+            self.columns[c] = foot;
+
+            if foot != Foot::None {
+                self.where_the_feet_are[foot.as_index()] = c as isize;
+            }
+
             if self.notes[c].note_type != TapNoteType::Empty {
-                let foot = foot_placement[c];
                 self.notes[c].parity = foot;
-                self.columns[c] = foot;
-                if foot != Foot::None {
-                    self.where_the_feet_are[foot.as_index()] = c as isize;
-                }
                 self.note_count += 1;
             }
         }
