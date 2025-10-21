@@ -2,13 +2,20 @@ fn normalize_entry(beat_bpm: &str) -> String {
     if let Some((beat_str, bpm_str)) = beat_bpm.split_once('=') {
         let beat_str = beat_str.trim_matches(|c: char| c.is_control());
         let bpm_str = bpm_str.trim_matches(|c: char| c.is_control());
-        if let (Ok(beat_val), Ok(bpm_val)) = (beat_str.parse::<f64>(), bpm_str.parse::<f64>()) {
-            let beat_rounded = (beat_val * 1000.0).round() / 1000.0;
-            let bpm_rounded = (bpm_val * 1000.0).round() / 1000.0;
-            return format!("{:.3}={:.3}", beat_rounded, bpm_rounded);
+        if let (Some(clean_beat), Some(clean_bpm)) = (non_empty(beat_str), non_empty(bpm_str)) {
+            return format!("{}={}", clean_beat, clean_bpm);
         }
     }
     beat_bpm.to_string()
+}
+
+fn non_empty(s: &str) -> Option<&str> {
+    let trimmed = s.trim_matches(|c: char| c.is_control() || c.is_whitespace());
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
 }
 
 pub fn normalize_float_digits(param: &str) -> String {

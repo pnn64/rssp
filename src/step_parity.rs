@@ -273,12 +273,6 @@ impl Row {
     }
 
     fn set_foot_placement(&mut self, foot_placement: &[Foot]) {
-        for slot in &mut self.columns {
-            *slot = Foot::None;
-        }
-        for slot in &mut self.where_the_feet_are {
-            *slot = INVALID_COLUMN;
-        }
         self.note_count = 0;
         for c in 0..self.column_count {
             if self.notes[c].note_type != TapNoteType::Empty {
@@ -289,10 +283,11 @@ impl Row {
                     self.where_the_feet_are[foot.as_index()] = c as isize;
                 }
                 self.note_count += 1;
+            } else {
+                self.columns[c] = Foot::None;
             }
         }
     }
-
 }
 
 #[derive(Debug, Clone)]
@@ -368,7 +363,7 @@ struct StepParityNode {
     state: Rc<State>,
     second: f32,
     row_index: isize,
-    neighbors: HashMap<usize, f32>,
+    neighbors: Vec<(usize, f32)>,
 }
 
 impl StepParityNode {
@@ -378,7 +373,7 @@ impl StepParityNode {
             state,
             second,
             row_index,
-            neighbors: HashMap::new(),
+            neighbors: Vec::new(),
         }
     }
 }
@@ -797,9 +792,10 @@ impl StepParityGenerator {
             if cost[i] == f32::MAX {
                 continue;
             }
-            for (&neighbor_id, &weight) in &self.nodes[i].neighbors {
-                if cost[i] + weight < cost[neighbor_id] {
-                    cost[neighbor_id] = cost[i] + weight;
+            for &(neighbor_id, weight) in self.nodes[i].neighbors.iter().rev() {
+                let new_cost = cost[i] + weight;
+                if new_cost < cost[neighbor_id] {
+                    cost[neighbor_id] = new_cost;
                     predecessor[neighbor_id] = i;
                 }
             }
@@ -848,9 +844,56 @@ impl StepParityGenerator {
     }
 
     fn add_edge(&mut self, from_id: usize, to_id: usize, cost: f32) {
+        let adjusted_cost = cost + self.tie_breaker_cost(from_id, to_id);
         if let Some(node) = self.nodes.get_mut(from_id) {
-            node.neighbors.insert(to_id, cost);
+            if let Some((_, existing_cost)) = node.neighbors.iter_mut().find(|(id, _)| *id == to_id)
+            {
+                *existing_cost = adjusted_cost;
+            } else {
+                node.neighbors.push((to_id, adjusted_cost));
+            }
         }
+    }
+
+    fn tie_breaker_cost(&self, from_id: usize, to_id: usize) -> f32 {
+        let Some(from_node) = self.nodes.get(from_id) else {
+            return 0.0;
+        };
+        let Some(to_node) = self.nodes.get(to_id) else {
+            return 0.0;
+        };
+
+        let note_count = to_node
+            .state
+            .columns
+            .iter()
+            .filter(|&&foot| foot != Foot::None)
+            .count();
+        if note_count != 1 {
+            return 0.0;
+        }
+
+        let from_state = &from_node.state;
+        let to_state = &to_node.state;
+        let mut switches = 0;
+        let cols = from_state
+            .combined_columns
+            .len()
+            .min(to_state.columns.len());
+        for c in 0..cols {
+            let prev = from_state.combined_columns[c];
+            let curr = to_state.columns[c];
+            if prev == Foot::None || curr == Foot::None {
+                continue;
+            }
+            if prev != curr && OTHER_PART_OF_FOOT[prev.as_index()] != curr {
+                if self.layout.up_arrows.contains(&c) {
+                    switches += 1;
+                }
+            }
+        }
+
+        switches as f32 * TIE_BREAKER_EPSILON
     }
 }
 
@@ -1677,8 +1720,7 @@ fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCo
                     let prev_prev_row = &rows[i - 2];
                     let prev_prev_right_heel =
                         prev_prev_row.where_the_feet_are[Foot::RightHeel.as_index()];
-                    if prev_prev_right_heel != INVALID_COLUMN
-                        && prev_prev_right_heel != right_heel
+                    if prev_prev_right_heel != INVALID_COLUMN && prev_prev_right_heel != right_heel
                     {
                         let prev_prev_right_pos = layout.columns[prev_prev_right_heel as usize];
                         if prev_prev_right_pos.x > left_pos.x {
@@ -1737,6 +1779,7 @@ fn is_footswitch(column: usize, current_row: &Row, previous_row: &Row, elapsed_t
 const JACK_CUTOFF: f32 = 0.176;
 const FOOTSWITCH_CUTOFF: f32 = 0.3;
 const DOUBLESTEP_CUTOFF: f32 = 0.235;
+const TIE_BREAKER_EPSILON: f32 = 1e-2;
 
 pub fn analyze(minimized_note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> TechCounts {
     let layout = StageLayout::new_dance_single();
@@ -1783,7 +1826,7 @@ struct ParsedRow {
 
 fn parse_chart_rows(note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> Vec<ParsedRow> {
     let mut rows = Vec::new();
-    let mut measure_start_beat = 0.0;
+    let mut measure_start_row: i32 = 0;
 
     for measure in note_data.split(|&b| b == b',') {
         let lines: Vec<&[u8]> = measure
@@ -1803,12 +1846,15 @@ fn parse_chart_rows(note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> Ve
             .collect();
         let num_rows = lines.len();
         if num_rows == 0 {
-            measure_start_beat += 4.0;
+            measure_start_row += 192;
             continue;
         }
 
         for (i, line) in lines.iter().enumerate() {
-            let beat = measure_start_beat + (i as f64 / num_rows as f64 * 4.0);
+            let fractional_row = (i as f64 * 192.0) / num_rows as f64;
+            let row_offset = fractional_row.round() as i32;
+            let note_row = measure_start_row + row_offset;
+            let beat = note_row as f64 / 48.0;
             let second = beat_to_time(beat, bpm_map, offset);
             let mut chars = [b'0'; NUM_TRACKS];
             for (col, ch) in line.iter().take(NUM_TRACKS).enumerate() {
@@ -1821,7 +1867,7 @@ fn parse_chart_rows(note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> Ve
             });
         }
 
-        measure_start_beat += 4.0;
+        measure_start_row += 192;
     }
 
     rows
@@ -1863,7 +1909,7 @@ fn build_intermediate_notes(rows: &[ParsedRow]) -> Vec<IntermediateNoteData> {
                 _ => TapNoteType::Empty,
             };
 
-            if note_type == TapNoteType::Empty || note_type == TapNoteType::HoldTail {
+            if matches!(note_type, TapNoteType::Empty | TapNoteType::HoldTail) {
                 continue;
             }
 
