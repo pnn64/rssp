@@ -1,7 +1,3 @@
-//! Step Parity analysis engine ported from ITGmania/StepMania.
-//! This module determines the optimal foot placement for a `dance-single` chart
-//! and calculates various technical statistics based on that placement.
-
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
@@ -13,7 +9,6 @@ const CLM_SECOND_INVALID: f32 = -1.0;
 const DOUBLESTEP_WEIGHT: f32 = 850.0;
 const BRACKETJACK_WEIGHT: f32 = 20.0;
 const JACK_WEIGHT: f32 = 30.0;
-const JUMP_WEIGHT: f32 = 0.0;
 const SLOW_BRACKET_WEIGHT: f32 = 300.0;
 const TWISTED_FOOT_WEIGHT: f32 = 100000.0;
 const BRACKETTAP_WEIGHT: f32 = 400.0;
@@ -215,7 +210,6 @@ struct IntermediateNoteData {
     row: usize,
     beat: f32,
     hold_length: f32,
-    warped: bool,
     fake: bool,
     second: f32,
     parity: Foot,
@@ -230,7 +224,6 @@ impl Default for IntermediateNoteData {
             row: 0,
             beat: 0.0,
             hold_length: -1.0,
-            warped: false,
             fake: false,
             second: 0.0,
             parity: Foot::None,
@@ -359,20 +352,16 @@ type FootPlacement = Vec<Foot>;
 
 #[derive(Debug, Clone)]
 struct StepParityNode {
-    id: usize,
     state: Rc<State>,
     second: f32,
-    row_index: isize,
     neighbors: Vec<(usize, f32)>,
 }
 
 impl StepParityNode {
-    fn new(id: usize, state: Rc<State>, second: f32, row_index: isize) -> Self {
+    fn new(state: Rc<State>, second: f32) -> Self {
         Self {
-            id,
             state,
             second,
-            row_index,
             neighbors: Vec::new(),
         }
     }
@@ -836,10 +825,10 @@ impl StepParityGenerator {
         true
     }
 
-    fn add_node(&mut self, state: Rc<State>, second: f32, row_index: isize) -> usize {
+    fn add_node(&mut self, state: Rc<State>, second: f32, _row_index: isize) -> usize {
         let id = self.nodes.len();
         self.nodes
-            .push(StepParityNode::new(id, state, second, row_index));
+            .push(StepParityNode::new(state, second));
         id
     }
 
@@ -1078,14 +1067,14 @@ impl<'a> CostCalculator<'a> {
     fn calc_bracket_tap_cost(
         &self,
         initial: &State,
-        result: &State,
+        _result: &State,
         row: &Row,
         left_heel: isize,
         left_toe: isize,
         right_heel: isize,
         right_toe: isize,
         elapsed: f32,
-        column_count: usize,
+        _column_count: usize,
     ) -> f32 {
         let mut cost = 0.0;
         if left_heel != INVALID_COLUMN && left_toe != INVALID_COLUMN {
@@ -1139,7 +1128,7 @@ impl<'a> CostCalculator<'a> {
 
     fn calc_bracket_jack_cost(
         &self,
-        initial: &State,
+        _initial: &State,
         result: &State,
         _rows: &[Row],
         _row_index: usize,
@@ -1182,7 +1171,7 @@ impl<'a> CostCalculator<'a> {
         jacked_left: bool,
         jacked_right: bool,
         did_jump: bool,
-        column_count: usize,
+        _column_count: usize,
     ) -> f32 {
         let hold_empty = result.hold_feet.iter().all(|&f| f == Foot::None);
 
@@ -1500,8 +1489,8 @@ impl<'a> CostCalculator<'a> {
         &self,
         initial: &State,
         _result: &State,
-        _rows: &[Row],
-        _row_index: usize,
+        rows: &[Row],
+        row_index: usize,
         moved_left: bool,
         jacked_left: bool,
         moved_right: bool,
@@ -1527,13 +1516,13 @@ impl<'a> CostCalculator<'a> {
             doublestepped = true;
         }
 
-        if _row_index > 0 {
-            let last_row = &_rows[_row_index - 1];
+        if row_index > 0 {
+            let last_row = &rows[row_index - 1];
             for hold in &last_row.holds {
                 if hold.note_type == TapNoteType::Empty {
                     continue;
                 }
-                let end_beat = _rows[_row_index].beat;
+                let end_beat = rows[row_index].beat;
                 let start_beat = last_row.beat;
                 let hold_end = hold.beat + hold.hold_length;
                 if hold_end > start_beat && hold_end < end_beat {
