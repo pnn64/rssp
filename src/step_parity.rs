@@ -1639,7 +1639,43 @@ pub struct TechCounts {
     pub doublesteps: u32,
 }
 
-fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCounts {
+fn time_between_beats(start: f32, end: f32, bpm_map: &[(f64, f64)]) -> f64 {
+    if end <= start {
+        return 0.0;
+    }
+
+    let mut bpm = if bpm_map.is_empty() { 120.0 } else { bpm_map[0].1 };
+    for &(beat, value) in bpm_map {
+        if beat <= start as f64 {
+            bpm = value;
+        } else {
+            break;
+        }
+    }
+
+    let mut time = 0.0;
+    let mut last = start as f64;
+    let target = end as f64;
+    for &(beat, value) in bpm_map {
+        if beat <= last {
+            continue;
+        }
+        if beat >= target {
+            break;
+        }
+        time += (beat - last) * 60.0 / bpm;
+        last = beat;
+        bpm = value;
+    }
+    time += (target - last) * 60.0 / bpm;
+    time
+}
+
+fn calculate_tech_counts_from_rows(
+    rows: &[Row],
+    layout: &StageLayout,
+    bpm_map: &[(f64, f64)],
+) -> TechCounts {
     let mut out = TechCounts::default();
     if rows.len() < 2 {
         return out;
@@ -1648,7 +1684,14 @@ fn calculate_tech_counts_from_rows(rows: &[Row], layout: &StageLayout) -> TechCo
     for i in 1..rows.len() {
         let current_row = &rows[i];
         let previous_row = &rows[i - 1];
-        let elapsed_time = current_row.second - previous_row.second;
+        let mut elapsed_time = current_row.second - previous_row.second;
+        let expected_time = time_between_beats(previous_row.beat, current_row.beat, bpm_map);
+        if expected_time.is_finite() {
+            let expected_time = expected_time as f32;
+            if expected_time > elapsed_time + TIME_EPSILON {
+                elapsed_time = expected_time;
+            }
+        }
 
         if current_row.note_count == 1 && previous_row.note_count == 1 {
             for &foot in &FEET {
@@ -1780,6 +1823,7 @@ const JACK_CUTOFF: f32 = 0.176;
 const FOOTSWITCH_CUTOFF: f32 = 0.3;
 const DOUBLESTEP_CUTOFF: f32 = 0.235;
 const TIE_BREAKER_EPSILON: f32 = 1e-2;
+const TIME_EPSILON: f32 = 1e-6;
 
 pub fn analyze(minimized_note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> TechCounts {
     let layout = StageLayout::new_dance_single();
@@ -1789,32 +1833,11 @@ pub fn analyze(minimized_note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) 
     if !generator.analyze_note_data(note_data, layout.column_count()) {
         return TechCounts::default();
     }
-    calculate_tech_counts_from_rows(&generator.rows, &generator.layout)
+    calculate_tech_counts_from_rows(&generator.rows, &generator.layout, bpm_map)
 }
 
 fn beat_to_time(beat: f64, bpm_map: &[(f64, f64)], offset: f64) -> f64 {
-    let mut time = -offset;
-    let mut last_beat = 0.0;
-    let mut last_bpm = if bpm_map.is_empty() {
-        120.0
-    } else {
-        bpm_map[0].1
-    };
-
-    for &(b, bpm) in bpm_map {
-        if b > beat {
-            break;
-        }
-        if last_bpm > 0.0 {
-            time += (b - last_beat) * 60.0 / last_bpm;
-        }
-        last_beat = b;
-        last_bpm = bpm;
-    }
-    if last_bpm > 0.0 {
-        time += (beat - last_beat) * 60.0 / last_bpm;
-    }
-    time
+    time_between_beats(0.0, beat as f32, bpm_map) - offset
 }
 
 #[derive(Clone, Copy)]
