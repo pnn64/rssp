@@ -12,6 +12,8 @@ pub mod stats;
 pub mod step_parity;
 pub mod tech;
 
+pub const RSSP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 // Re-export the primary data structures for library users
 pub use report::{ChartSummary, SimfileSummary};
 pub use step_parity::TechCounts;
