@@ -58,23 +58,36 @@ pub fn unescape_tag(tag: &str) -> String {
     out
 }
 
+/// Parsed note data for a single chart found in the simfile.
+#[derive(Default)]
+pub struct ParsedChartEntry {
+    pub notes: Vec<u8>,
+    pub chart_bpms: Option<Vec<u8>>,
+    pub chart_stops: Option<Vec<u8>>,
+    pub chart_speeds: Option<Vec<u8>>,
+    pub chart_scrolls: Option<Vec<u8>>,
+}
+
 /// A struct to hold the raw data parsed from a simfile's header tags.
 #[derive(Default)]
 pub struct ParsedSimfileData<'a> {
-    pub title:            Option<&'a [u8]>,
-    pub subtitle:         Option<&'a [u8]>,
-    pub artist:           Option<&'a [u8]>,
-    pub title_translit:   Option<&'a [u8]>,
-    pub subtitle_translit:Option<&'a [u8]>,
-    pub artist_translit:  Option<&'a [u8]>,
-    pub offset:           Option<&'a [u8]>,
-    pub bpms:             Option<&'a [u8]>,
-    pub banner:           Option<&'a [u8]>,
-    pub background:       Option<&'a [u8]>,
-    pub music:            Option<&'a [u8]>,
-    pub sample_start:     Option<&'a [u8]>,
-    pub sample_length:    Option<&'a [u8]>,
-    pub notes_list:       Vec<(Vec<u8>, Option<Vec<u8>>)>,
+    pub title: Option<&'a [u8]>,
+    pub subtitle: Option<&'a [u8]>,
+    pub artist: Option<&'a [u8]>,
+    pub title_translit: Option<&'a [u8]>,
+    pub subtitle_translit: Option<&'a [u8]>,
+    pub artist_translit: Option<&'a [u8]>,
+    pub offset: Option<&'a [u8]>,
+    pub bpms: Option<&'a [u8]>,
+    pub stops: Option<&'a [u8]>,
+    pub speeds: Option<&'a [u8]>,
+    pub scrolls: Option<&'a [u8]>,
+    pub banner: Option<&'a [u8]>,
+    pub background: Option<&'a [u8]>,
+    pub music: Option<&'a [u8]>,
+    pub sample_start: Option<&'a [u8]>,
+    pub sample_length: Option<&'a [u8]>,
+    pub notes_list: Vec<ParsedChartEntry>,
 }
 
 pub fn extract_sections<'a>(
@@ -113,6 +126,15 @@ pub fn extract_sections<'a>(
                 result.offset = parse_tag(current_slice, b"#OFFSET:".len());
             } else if current_slice.starts_with(b"#BPMS:") {
                 result.bpms = parse_tag(current_slice, b"#BPMS:".len());
+            } else if current_slice.starts_with(b"#STOPS:") {
+                result.stops = parse_tag(current_slice, b"#STOPS:".len());
+            } else if current_slice.starts_with(b"#FREEZES:") {
+                // Older charts sometimes use #FREEZES instead of #STOPS.
+                result.stops = parse_tag(current_slice, b"#FREEZES:".len());
+            } else if current_slice.starts_with(b"#SPEEDS:") {
+                result.speeds = parse_tag(current_slice, b"#SPEEDS:".len());
+            } else if current_slice.starts_with(b"#SCROLLS:") {
+                result.scrolls = parse_tag(current_slice, b"#SCROLLS:".len());
             } else if current_slice.starts_with(b"#BANNER:") {
                 result.banner = parse_tag(current_slice, b"#BANNER:".len());
             } else if current_slice.starts_with(b"#BACKGROUND:") {
@@ -126,28 +148,51 @@ pub fn extract_sections<'a>(
             } else if is_ssc && current_slice.starts_with(b"#NOTEDATA:") {
                 let notedata_start = i;
                 let mut notedata_end = notedata_start + 1;
-                while notedata_end < data.len() && !data[notedata_end..].starts_with(b"#NOTEDATA:") {
+                while notedata_end < data.len() && !data[notedata_end..].starts_with(b"#NOTEDATA:")
+                {
                     notedata_end += 1;
                 }
-                
-                let notedata_slice = &data[notedata_start..notedata_end];
-                let step_type   = parse_subtag(notedata_slice, b"#STEPSTYPE:").unwrap_or_default();
-                let description = parse_subtag(notedata_slice, b"#DESCRIPTION:").unwrap_or_default();
-                let credit      = parse_subtag(notedata_slice, b"#CREDIT:").unwrap_or_default();
-                let difficulty  = parse_subtag(notedata_slice, b"#DIFFICULTY:").unwrap_or_default();
-                let meter       = parse_subtag(notedata_slice, b"#METER:").unwrap_or_default();
-                let notes       = parse_subtag(notedata_slice, b"#NOTES:").unwrap_or_default();
-                let chart_bpms  = parse_subtag(notedata_slice, b"#BPMS:");
 
-                let concatenated = [step_type, description, difficulty, meter, credit, notes].join(&b':');
-                result.notes_list.push((concatenated, chart_bpms));
+                let notedata_slice = &data[notedata_start..notedata_end];
+                let step_type = parse_subtag(notedata_slice, b"#STEPSTYPE:").unwrap_or_default();
+                let description =
+                    parse_subtag(notedata_slice, b"#DESCRIPTION:").unwrap_or_default();
+                let credit = parse_subtag(notedata_slice, b"#CREDIT:").unwrap_or_default();
+                let difficulty = parse_subtag(notedata_slice, b"#DIFFICULTY:").unwrap_or_default();
+                let meter = parse_subtag(notedata_slice, b"#METER:").unwrap_or_default();
+                let notes = parse_subtag(notedata_slice, b"#NOTES:").unwrap_or_default();
+                let chart_bpms = parse_subtag(notedata_slice, b"#BPMS:");
+                let chart_stops = parse_subtag(notedata_slice, b"#STOPS:")
+                    .or_else(|| parse_subtag(notedata_slice, b"#FREEZES:"));
+                let chart_speeds = parse_subtag(notedata_slice, b"#SPEEDS:");
+                let chart_scrolls = parse_subtag(notedata_slice, b"#SCROLLS:");
+
+                let concatenated =
+                    [step_type, description, difficulty, meter, credit, notes].join(&b':');
+                result.notes_list.push(ParsedChartEntry {
+                    notes: concatenated,
+                    chart_bpms,
+                    chart_stops,
+                    chart_speeds,
+                    chart_scrolls,
+                });
 
                 i = notedata_end;
                 continue; // Skip the i += 1 at the end
             } else if !is_ssc && current_slice.starts_with(b"#NOTES:") {
                 let notes_start = i + b"#NOTES:".len();
-                let notes_end = data[notes_start..].iter().position(|&b| b == b';').map(|e| notes_start + e).unwrap_or(data.len());
-                result.notes_list.push((data[notes_start..notes_end].to_vec(), None));
+                let notes_end = data[notes_start..]
+                    .iter()
+                    .position(|&b| b == b';')
+                    .map(|e| notes_start + e)
+                    .unwrap_or(data.len());
+                result.notes_list.push(ParsedChartEntry {
+                    notes: data[notes_start..notes_end].to_vec(),
+                    chart_bpms: None,
+                    chart_stops: None,
+                    chart_speeds: None,
+                    chart_scrolls: None,
+                });
                 i = notes_end + 1;
                 continue; // Skip the i += 1 at the end
             }
@@ -207,6 +252,10 @@ pub fn split_notes_fields(notes_block: &[u8]) -> (Vec<&[u8]>, &[u8]) {
         }
         i += 1;
     }
-    let rest = if start <= notes_block.len() { &notes_block[start..] } else { &[] };
+    let rest = if start <= notes_block.len() {
+        &notes_block[start..]
+    } else {
+        &[]
+    };
     (fields, rest)
 }

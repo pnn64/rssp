@@ -172,6 +172,9 @@ fn compute_derived_chart_metrics(
 fn build_chart_summary(
     notes_data: Vec<u8>,
     chart_bpms_opt: Option<Vec<u8>>,
+    chart_stops_opt: Option<Vec<u8>>,
+    chart_speeds_opt: Option<Vec<u8>>,
+    chart_scrolls_opt: Option<Vec<u8>>,
     normalized_global_bpms: &str,
     extension: &str,
     options: AnalysisOptions,
@@ -205,6 +208,24 @@ fn build_chart_summary(
     }
 
     let (bpms_to_use, bpm_map) = prepare_bpm_map(chart_bpms_opt, normalized_global_bpms);
+    let chart_stops = chart_stops_opt.and_then(|bytes| {
+        std::str::from_utf8(&bytes)
+            .ok()
+            .map(normalize_float_digits)
+            .filter(|s| !s.is_empty())
+    });
+    let chart_speeds = chart_speeds_opt.and_then(|bytes| {
+        std::str::from_utf8(&bytes)
+            .ok()
+            .map(normalize_float_digits)
+            .filter(|s| !s.is_empty())
+    });
+    let chart_scrolls = chart_scrolls_opt.and_then(|bytes| {
+        std::str::from_utf8(&bytes)
+            .ok()
+            .map(normalize_float_digits)
+            .filter(|s| !s.is_empty())
+    });
     let metrics =
         compute_derived_chart_metrics(&measure_densities, &bpm_map, &minimized_chart, &bpms_to_use);
 
@@ -253,6 +274,9 @@ fn build_chart_summary(
         measure_densities,
         measure_nps_vec: metrics.measure_nps_vec,
         minimized_note_data: minimized_chart,
+        chart_stops,
+        chart_speeds,
+        chart_scrolls,
     })
 }
 
@@ -287,18 +311,37 @@ pub fn analyze(
     let sample_length = parsed_data.sample_length.and_then(|b| std::str::from_utf8(b).ok()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"<invalid-bpms>")).unwrap_or("<invalid-bpms>");
     let normalized_global_bpms = normalize_float_digits(global_bpms_raw);
+    let global_stops_raw = parsed_data
+        .stops
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .unwrap_or("");
+    let normalized_global_stops = normalize_float_digits(global_stops_raw);
+    let global_speeds_raw = parsed_data
+        .speeds
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .unwrap_or("");
+    let normalized_global_speeds = normalize_float_digits(global_speeds_raw);
+    let global_scrolls_raw = parsed_data
+        .scrolls
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .unwrap_or("");
+    let normalized_global_scrolls = normalize_float_digits(global_scrolls_raw);
 
     let global_bpm_map = parse_bpm_map(&normalized_global_bpms);
     let (min_bpm_i32, max_bpm_i32) = compute_bpm_range(&global_bpm_map);
     let bpm_values: Vec<f64> = global_bpm_map.iter().map(|&(_, bpm)| bpm).collect();
     let (median_bpm, average_bpm) = compute_bpm_stats(&bpm_values);
 
-    let chart_summaries: Vec<ChartSummary> = parsed_data.notes_list
+    let chart_summaries: Vec<ChartSummary> = parsed_data
+        .notes_list
         .into_iter()
-        .filter_map(|(notes_data, chart_bpms_opt)| {
+        .filter_map(|entry| {
             build_chart_summary(
-                notes_data,
-                chart_bpms_opt,
+                entry.notes,
+                entry.chart_bpms,
+                entry.chart_stops,
+                entry.chart_speeds,
+                entry.chart_scrolls,
                 &normalized_global_bpms,
                 extension,
                 options,
@@ -318,6 +361,9 @@ pub fn analyze(
     Ok(SimfileSummary {
         title_str, subtitle_str, artist_str, titletranslit_str, subtitletranslit_str,
         artisttranslit_str, offset, normalized_bpms: normalized_global_bpms,
+        normalized_stops: normalized_global_stops,
+        normalized_speeds: normalized_global_speeds,
+        normalized_scrolls: normalized_global_scrolls,
         banner_path: banner_path_str,
         background_path: background_path_str,
         music_path: music_path_str,

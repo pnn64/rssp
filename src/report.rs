@@ -42,6 +42,9 @@ pub struct ChartSummary {
     pub measure_densities: Vec<usize>,
     pub measure_nps_vec:   Vec<f64>,
     pub minimized_note_data: Vec<u8>,
+    pub chart_stops:       Option<String>,
+    pub chart_speeds:      Option<String>,
+    pub chart_scrolls:     Option<String>,
 }
 
 // Make the struct and its fields public
@@ -55,6 +58,9 @@ pub struct SimfileSummary {
     pub artisttranslit_str:   String,
     pub offset:               f64,
     pub normalized_bpms:      String,
+    pub normalized_stops:     String,
+    pub normalized_speeds:    String,
+    pub normalized_scrolls:   String,
     pub banner_path:          String,
     pub background_path:      String,
     pub music_path:           String,
