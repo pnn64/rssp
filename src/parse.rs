@@ -91,6 +91,7 @@ pub struct ParsedSimfileData<'a> {
     pub music: Option<&'a [u8]>,
     pub sample_start: Option<&'a [u8]>,
     pub sample_length: Option<&'a [u8]>,
+    pub display_bpm: Option<&'a [u8]>,
     pub notes_list: Vec<ParsedChartEntry>,
 }
 
@@ -153,6 +154,8 @@ pub fn extract_sections<'a>(
                 result.sample_start = parse_tag(current_slice, b"#SAMPLESTART:".len());
             } else if current_slice.starts_with(b"#SAMPLELENGTH:") {
                 result.sample_length = parse_tag(current_slice, b"#SAMPLELENGTH:".len());
+            } else if current_slice.starts_with(b"#DISPLAYBPM:") {
+                result.display_bpm = parse_tag(current_slice, b"#DISPLAYBPM:".len());    
             } else if is_ssc && current_slice.starts_with(b"#NOTEDATA:") {
                 let notedata_start = i;
                 let mut notedata_end = notedata_start + 1;
