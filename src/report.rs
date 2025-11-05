@@ -45,6 +45,9 @@ pub struct ChartSummary {
     pub chart_stops:       Option<String>,
     pub chart_speeds:      Option<String>,
     pub chart_scrolls:     Option<String>,
+    pub chart_bpms:        Option<String>,
+    pub chart_delays:      Option<String>,
+    pub chart_warps:       Option<String>,
 }
 
 // Make the struct and its fields public
@@ -59,6 +62,7 @@ pub struct SimfileSummary {
     pub offset:               f64,
     pub normalized_bpms:      String,
     pub normalized_stops:     String,
+    pub normalized_delays:    String,
     pub normalized_speeds:    String,
     pub normalized_scrolls:   String,
     pub banner_path:          String,
@@ -68,6 +72,7 @@ pub struct SimfileSummary {
     pub sample_length:        f64,
     pub min_bpm:              f64,
     pub max_bpm:              f64,
+    pub normalized_warps:     String,
     pub median_bpm:           f64,
     pub average_bpm:          f64,
     pub total_length:         i32,

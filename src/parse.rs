@@ -64,6 +64,8 @@ pub struct ParsedChartEntry {
     pub notes: Vec<u8>,
     pub chart_bpms: Option<Vec<u8>>,
     pub chart_stops: Option<Vec<u8>>,
+    pub chart_delays: Option<Vec<u8>>,
+    pub chart_warps: Option<Vec<u8>>,
     pub chart_speeds: Option<Vec<u8>>,
     pub chart_scrolls: Option<Vec<u8>>,
 }
@@ -80,6 +82,8 @@ pub struct ParsedSimfileData<'a> {
     pub offset: Option<&'a [u8]>,
     pub bpms: Option<&'a [u8]>,
     pub stops: Option<&'a [u8]>,
+    pub delays: Option<&'a [u8]>,
+    pub warps: Option<&'a [u8]>,
     pub speeds: Option<&'a [u8]>,
     pub scrolls: Option<&'a [u8]>,
     pub banner: Option<&'a [u8]>,
@@ -131,6 +135,10 @@ pub fn extract_sections<'a>(
             } else if current_slice.starts_with(b"#FREEZES:") {
                 // Older charts sometimes use #FREEZES instead of #STOPS.
                 result.stops = parse_tag(current_slice, b"#FREEZES:".len());
+            } else if current_slice.starts_with(b"#DELAYS:") {
+                result.delays = parse_tag(current_slice, b"#DELAYS:".len());
+            } else if current_slice.starts_with(b"#WARPS:") {
+                result.warps = parse_tag(current_slice, b"#WARPS:".len());
             } else if current_slice.starts_with(b"#SPEEDS:") {
                 result.speeds = parse_tag(current_slice, b"#SPEEDS:".len());
             } else if current_slice.starts_with(b"#SCROLLS:") {
@@ -164,6 +172,8 @@ pub fn extract_sections<'a>(
                 let chart_bpms = parse_subtag(notedata_slice, b"#BPMS:");
                 let chart_stops = parse_subtag(notedata_slice, b"#STOPS:")
                     .or_else(|| parse_subtag(notedata_slice, b"#FREEZES:"));
+                let chart_delays = parse_subtag(notedata_slice, b"#DELAYS:");
+                let chart_warps = parse_subtag(notedata_slice, b"#WARPS:");
                 let chart_speeds = parse_subtag(notedata_slice, b"#SPEEDS:");
                 let chart_scrolls = parse_subtag(notedata_slice, b"#SCROLLS:");
 
@@ -173,6 +183,8 @@ pub fn extract_sections<'a>(
                     notes: concatenated,
                     chart_bpms,
                     chart_stops,
+                    chart_delays,
+                    chart_warps,
                     chart_speeds,
                     chart_scrolls,
                 });
@@ -190,6 +202,8 @@ pub fn extract_sections<'a>(
                     notes: data[notes_start..notes_end].to_vec(),
                     chart_bpms: None,
                     chart_stops: None,
+                    chart_delays: None,
+                    chart_warps: None,
                     chart_speeds: None,
                     chart_scrolls: None,
                 });

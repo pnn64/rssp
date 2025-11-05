@@ -172,6 +172,8 @@ fn compute_derived_chart_metrics(
 fn build_chart_summary(
     notes_data: Vec<u8>,
     chart_bpms_opt: Option<Vec<u8>>,
+    chart_delays_opt: Option<Vec<u8>>,
+    chart_warps_opt: Option<Vec<u8>>,
     chart_stops_opt: Option<Vec<u8>>,
     chart_speeds_opt: Option<Vec<u8>>,
     chart_scrolls_opt: Option<Vec<u8>>,
@@ -207,7 +209,7 @@ fn build_chart_summary(
         minimized_chart.truncate(pos + 1);
     }
 
-    let (bpms_to_use, bpm_map) = prepare_bpm_map(chart_bpms_opt, normalized_global_bpms);
+    let (bpms_to_use, bpm_map) = prepare_bpm_map(chart_bpms_opt.clone(), normalized_global_bpms);
     let chart_stops = chart_stops_opt.and_then(|bytes| {
         std::str::from_utf8(&bytes)
             .ok()
@@ -220,7 +222,25 @@ fn build_chart_summary(
             .map(normalize_float_digits)
             .filter(|s| !s.is_empty())
     });
+    let chart_delays = chart_delays_opt.and_then(|bytes| {
+        std::str::from_utf8(&bytes)
+            .ok()
+            .map(normalize_float_digits)
+            .filter(|s| !s.is_empty())
+    });
     let chart_scrolls = chart_scrolls_opt.and_then(|bytes| {
+        std::str::from_utf8(&bytes)
+            .ok()
+            .map(normalize_float_digits)
+            .filter(|s| !s.is_empty())
+    });
+    let chart_bpms = chart_bpms_opt.and_then(|bytes| {
+        std::str::from_utf8(&bytes)
+            .ok()
+            .map(normalize_float_digits)
+            .filter(|s| !s.is_empty())
+    });
+    let chart_warps = chart_warps_opt.and_then(|bytes| {
         std::str::from_utf8(&bytes)
             .ok()
             .map(normalize_float_digits)
@@ -277,6 +297,9 @@ fn build_chart_summary(
         chart_stops,
         chart_speeds,
         chart_scrolls,
+        chart_bpms,
+        chart_delays,
+        chart_warps,
     })
 }
 
@@ -316,6 +339,16 @@ pub fn analyze(
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
     let normalized_global_stops = normalize_float_digits(global_stops_raw);
+    let global_delays_raw = parsed_data
+        .delays
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .unwrap_or("");
+    let normalized_global_delays = normalize_float_digits(global_delays_raw);
+    let global_warps_raw = parsed_data
+        .warps
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .unwrap_or("");
+    let normalized_global_warps = normalize_float_digits(global_warps_raw);
     let global_speeds_raw = parsed_data
         .speeds
         .and_then(|b| std::str::from_utf8(b).ok())
@@ -339,6 +372,8 @@ pub fn analyze(
             build_chart_summary(
                 entry.notes,
                 entry.chart_bpms,
+                entry.chart_delays,
+                entry.chart_warps,
                 entry.chart_stops,
                 entry.chart_speeds,
                 entry.chart_scrolls,
@@ -362,6 +397,8 @@ pub fn analyze(
         title_str, subtitle_str, artist_str, titletranslit_str, subtitletranslit_str,
         artisttranslit_str, offset, normalized_bpms: normalized_global_bpms,
         normalized_stops: normalized_global_stops,
+        normalized_delays: normalized_global_delays,
+        normalized_warps: normalized_global_warps,
         normalized_speeds: normalized_global_speeds,
         normalized_scrolls: normalized_global_scrolls,
         banner_path: banner_path_str,
