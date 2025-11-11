@@ -74,12 +74,14 @@ Why create another simfile parser?
 The basic command structure is:
 
 ```bash
-rssp <path/to/simfile.sm_or_ssc> [options]
+rssp <path/to/simfile_or_folder> [options]
 ```
 
 **Arguments:**
 
-* `<path/to/simfile.sm_or_ssc>`: **Required.** The path to the simfile you want to analyze.
+* `<path/to/simfile_or_folder>`: **Required.** The path to a simfile (`.sm` or `.ssc`) or a folder containing simfiles.
+  * **Single File:** Analyzes the specified simfile.
+  * **Folder:** Recursively scans the folder for simfiles. When both `.sm` and `.ssc` files exist in the same directory, the `.ssc` file is preferred.
 
 **Options:**
 
@@ -108,6 +110,18 @@ rssp <path/to/simfile.sm_or_ssc> [options]
 *   Generate a CSV report with a higher mono threshold and stripped title tags:
     ```bash
     ./rssp song.ssc --csv --mono-threshold 8 --strip-tags
+    ```
+*   Analyze an entire folder recursively:
+    ```bash
+    ./rssp "C:/Games/ITGmania/Songs" --csv
+    ```
+*   Analyze a specific pack folder:
+    ```bash
+    ./rssp "Songs/MyCrazyPack" --json
+    ```
+*   Save folder analysis results to a file using shell redirection:
+    ```bash
+    ./rssp "Songs/MyPack" --csv > output.csv
     ```
 *   Calculate a matrix rating without analyzing a file, use the `--matrix` flag with BPM and measure counts:
     ```bash
@@ -204,7 +218,7 @@ Elapsed Time: 18.667896ms
 - [x] Fix parsing for "No Tech" in artist name
 - [ ] Doubles (8-panel) parsing
 - [ ] Custom patterns flag --custom-pattern DULDUDLR
-- [ ] Proper parsing for Tech (adopt from new ITGMania version)
+- [x] Proper parsing for Tech (port Step Parity from ITGMania)
 - [ ] Add many tests for edge case simfiles
 - [x] Add "matrix rating" (calculate estimated rating based on rating matrix sheet)
 

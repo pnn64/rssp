@@ -1,17 +1,81 @@
 use std::env::args;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, Read};
+use std::path::{Path, PathBuf};
 
-use rssp::analyze; // <-- Use the new library function
+use rssp::analyze;
 use rssp::graph::{generate_density_graph_png, ColorScheme};
 use rssp::matrix::get_difficulty;
 use rssp::report::{print_reports, OutputMode};
-use rssp::AnalysisOptions; // <-- Use the new options struct
+use rssp::AnalysisOptions;
+
+/// Finds the best simfile in a directory (prefers .ssc over .sm)
+fn find_simfile_in_dir(dir: &Path) -> Option<PathBuf> {
+    let entries = fs::read_dir(dir).ok()?;
+    
+    let mut ssc_file: Option<PathBuf> = None;
+    let mut sm_file: Option<PathBuf> = None;
+    
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(ext) = path.extension() {
+                let ext_str = ext.to_string_lossy().to_lowercase();
+                if ext_str == "ssc" {
+                    ssc_file = Some(path);
+                } else if ext_str == "sm" && ssc_file.is_none() {
+                    sm_file = Some(path);
+                }
+            }
+        }
+    }
+    
+    // Prefer .ssc over .sm
+    ssc_file.or(sm_file)
+}
+
+/// Recursively finds all simfiles in a directory structure
+fn find_all_simfiles(root: &Path) -> Vec<PathBuf> {
+    let mut simfiles = Vec::new();
+    
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            
+            if path.is_dir() {
+                // Check if this directory contains a simfile
+                if let Some(simfile) = find_simfile_in_dir(&path) {
+                    simfiles.push(simfile);
+                } else {
+                    // Recursively search subdirectories
+                    simfiles.extend(find_all_simfiles(&path));
+                }
+            }
+        }
+    }
+    
+    simfiles
+}
+
+/// Analyzes a single simfile and returns the summary
+fn analyze_simfile(path: &Path, options: AnalysisOptions) -> io::Result<rssp::report::SimfileSummary> {
+    let mut file = File::open(path)?;
+    let mut simfile_data = Vec::new();
+    file.read_to_end(&mut simfile_data)?;
+    
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    
+    analyze(&simfile_data, extension, options)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = args().collect();
 
-    // --- Matrix Calculation Mode (no changes needed) ---
+    // --- Matrix Calculation Mode ---
     if args.iter().any(|a| a == "--matrix") {
         let mut bpm_opt: Option<f64> = None;
         let mut measures_opt: Option<f64> = None;
@@ -36,22 +100,25 @@ fn main() -> io::Result<()> {
 
     // --- Simfile Analysis Mode ---
     if args.len() < 2 {
-        eprintln!("Usage: {} <simfile_path> [OPTIONS]", args[0]);
+        eprintln!("Usage: {} <simfile_or_folder_path> [OPTIONS]", args[0]);
         eprintln!("   or: {} --matrix -b <BPM> -m <MEASURES>", args[0]);
-        eprintln!("\nRun with a simfile path to analyze a file. Options for analysis:");
-        eprintln!("  --full, --png, --png-alt, --json, --csv, --strip-tags, --mono-threshold <value>");
+        eprintln!("\nOptions for simfile/folder analysis:");
+        eprintln!("  --full          Full output mode");
+        eprintln!("  --png           Generate density graph PNG (default colors)");
+        eprintln!("  --png-alt       Generate density graph PNG (alternative colors)");
+        eprintln!("  --json          JSON output format");
+        eprintln!("  --csv           CSV output format");
+        eprintln!("  --strip-tags    Strip title tags from output");
+        eprintln!("  --mono-threshold <value>  Set mono threshold (default: 6)");
+        eprintln!("\nFolder analysis:");
+        eprintln!("  When a folder path is provided, rssp will recursively scan for");
+        eprintln!("  simfiles, preferring .ssc files over .sm files when both exist.");
         std::process::exit(1);
     }
 
     let simfile_path = &args[1];
 
-    // --- Read file and extension ---
-    let mut file = File::open(simfile_path)?;
-    let mut simfile_data = Vec::new();
-    file.read_to_end(&mut simfile_data)?;
-    let extension = simfile_path.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("");
-
-    // --- Build options from CLI args ---
+    // --- Parse flags ---
     let generate_png = args.iter().any(|a| a == "--png");
     let generate_png_alt = args.iter().any(|a| a == "--png-alt");
 
@@ -75,16 +142,7 @@ fn main() -> io::Result<()> {
         mono_threshold,
     };
 
-    // --- Call the library's main analysis function ---
-    let simfile = match analyze(&simfile_data, extension, options) {
-        Ok(summary) => summary,
-        Err(e) => {
-            eprintln!("Error analyzing simfile: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    // --- Handle reporting and image generation ---
+    // --- Determine output mode ---
     let mode = if args.iter().any(|a| a == "--csv") {
         OutputMode::CSV
     } else if args.iter().any(|a| a == "--json") {
@@ -95,17 +153,62 @@ fn main() -> io::Result<()> {
         OutputMode::Pretty
     };
 
-    print_reports(&simfile, mode);
+    // --- Determine if path is file or folder ---
+    let path = Path::new(simfile_path);
+    
+    if !path.exists() {
+        eprintln!("Error: Path does not exist: {}", path.display());
+        std::process::exit(1);
+    }
 
-    if generate_png || generate_png_alt {
-        let color_scheme = if generate_png_alt { ColorScheme::Alternative } else { ColorScheme::Default };
-        for chart_summary in &simfile.charts {
-            generate_density_graph_png(
-                &chart_summary.measure_nps_vec,
-                chart_summary.max_nps,
-                &chart_summary.short_hash,
-                &color_scheme,
-            )?;
+    let simfiles = if path.is_file() {
+        vec![path.to_path_buf()]
+    } else if path.is_dir() {
+        let files = find_all_simfiles(path);
+        if files.is_empty() {
+            eprintln!("No simfiles found in directory: {}", path.display());
+            std::process::exit(1);
+        }
+        eprintln!("Found {} simfile(s) to analyze", files.len());
+        files
+    } else {
+        eprintln!("Error: Path is neither a file nor a directory");
+        std::process::exit(1);
+    };
+
+    // --- Process simfiles ---
+    for (idx, simfile_path) in simfiles.iter().enumerate() {
+        if simfiles.len() > 1 {
+            eprintln!("Analyzing [{}/{}]: {}", idx + 1, simfiles.len(), simfile_path.display());
+        }
+
+        let simfile = match analyze_simfile(simfile_path, options) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Error analyzing {}: {}", simfile_path.display(), e);
+                continue;
+            }
+        };
+
+        // --- Print reports ---
+        print_reports(&simfile, mode);
+
+        // --- Generate PNG graphs if requested ---
+        if generate_png || generate_png_alt {
+            let color_scheme = if generate_png_alt {
+                ColorScheme::Alternative
+            } else {
+                ColorScheme::Default
+            };
+
+            for chart_summary in &simfile.charts {
+                generate_density_graph_png(
+                    &chart_summary.measure_nps_vec,
+                    chart_summary.max_nps,
+                    &chart_summary.short_hash,
+                    &color_scheme,
+                )?;
+            }
         }
     }
 
