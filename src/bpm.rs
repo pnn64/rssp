@@ -65,6 +65,17 @@ pub fn get_current_bpm(beat: f64, bpm_map: &[(f64, f64)]) -> f64 {
     }
 }
 
+/// Threshold for determining if a BPM is a "gimmick" (warp/visual effect) vs playable.
+/// Matches Simply Love's logic roughly (SL uses 0.12s/measure which is ~2000 BPM).
+/// We use 10,000 here to be conservative but catch the millions.
+const GIMMICK_BPM_THRESHOLD: f64 = 10000.0;
+
+/// Determines if a BPM is considered "playable" for stats/display purposes.
+/// Filters out stops (<= 0) and visual gimmick warps (>= 10000).
+fn is_display_bpm(bpm: f64) -> bool {
+    bpm > 0.0 && bpm < GIMMICK_BPM_THRESHOLD
+}
+
 /// Computes the min/max BPM range for display purposes.
 ///
 /// Applies a heuristic to ignore "gimmick" BPMs (e.g., <= 0 or >= 10,000) which are
@@ -74,18 +85,15 @@ pub fn compute_bpm_range(bpm_map: &[(f64, f64)]) -> (i32, i32) {
         return (0, 0);
     }
 
-    // Filter out gimmick BPMs for display calculation
-    let filter = |bpm: f64| bpm > 0.0 && bpm < 10000.0;
-
     let (mut min_bpm, mut max_bpm, count) = bpm_map.iter()
         .map(|&(_, bpm)| bpm)
-        .filter(|&bpm| filter(bpm))
+        .filter(|&bpm| is_display_bpm(bpm))
         .fold((f64::MAX, f64::MIN, 0), |(min, max, count), bpm| {
             (min.min(bpm), max.max(bpm), count + 1)
         });
 
     if count == 0 {
-        // Fallback: if all BPMs were filtered out (e.g., chart is entirely gimmicks), include everything.
+        // Fallback: if all BPMs were filtered out (e.g., gimmicks only), include everything.
         let (fmin, fmax) = bpm_map.iter().map(|&(_, bpm)| bpm).fold(
             (f64::MAX, f64::MIN),
             |(min, max), bpm| (min.min(bpm), max.max(bpm)),
@@ -104,6 +112,8 @@ pub fn compute_total_chart_length(measure_densities: &[usize], bpm_map: &[(f64, 
         .map(|(i, _)| {
             let measure_start_beat = i as f64 * 4.0;
             let curr_bpm = get_current_bpm(measure_start_beat, bpm_map);
+            // For length calculation, we use the raw BPM because high BPMs
+            // legitimately shorten the chart duration (warps).
             if curr_bpm > 0.0 {
                 (4.0 / curr_bpm) * 60.0
             } else {
@@ -121,11 +131,15 @@ pub fn compute_measure_nps_vec(measure_densities: &[usize], bpm_map: &[(f64, f64
         .map(|(i, &density)| {
             let measure_start_beat = i as f64 * 4.0;
             let curr_bpm = get_current_bpm(measure_start_beat, bpm_map);
-            if curr_bpm > 0.0 {
+            
+            // For NPS calculation, if the BPM is a gimmick (too high),
+            // it implies the measure passes instantly (warp), so effective NPS
+            // for a human reading it is treated as 0/unplayable, matching Simply Love.
+            if !is_display_bpm(curr_bpm) {
+                0.0
+            } else {
                 // NPS = density / (4 * 60 / BPM) = density * BPM / 240
                 density as f64 * curr_bpm / 240.0
-            } else {
-                0.0
             }
         })
         .collect()
@@ -170,8 +184,7 @@ pub fn compute_bpm_stats(bpm_values: &[f64]) -> (f64, f64) {
     }
 
     // Filter out gimmick BPMs for stats
-    let filter = |&bpm: &f64| bpm > 0.0 && bpm < 10000.0;
-    let mut sorted: Vec<f64> = bpm_values.iter().copied().filter(filter).collect();
+    let mut sorted: Vec<f64> = bpm_values.iter().copied().filter(|&b| is_display_bpm(b)).collect();
 
     // Fallback if everything was filtered
     if sorted.is_empty() {
@@ -192,10 +205,17 @@ pub fn compute_tier_bpm(
     use crate::stats::categorize_measure_density;
     use crate::stats::RunDensity;
 
+    // Filter max BPM search
     let max_bpm = bpm_map
         .iter()
         .map(|&(_, bpm)| bpm)
+        .filter(|&bpm| is_display_bpm(bpm))
         .fold(f64::NEG_INFINITY, f64::max);
+    
+    // If we filtered everything out (e.g. all gimmicks), just fallback to 0 or whatever is there
+    let max_bpm = if max_bpm.is_finite() { max_bpm } else { 
+        bpm_map.iter().map(|&(_, bpm)| bpm).fold(f64::NEG_INFINITY, f64::max)
+    };
 
     let cats: Vec<RunDensity> = measure_densities
         .iter()
@@ -221,9 +241,14 @@ pub fn compute_tier_bpm(
             for k in i..j {
                 let beat = k as f64 * beats_per_measure;
                 let bpm_k = get_current_bpm(beat, bpm_map);
-                let d_k = measure_densities[k] as f64;
-                let e_k = (d_k * bpm_k) / 16.0;
-                max_e = max_e.max(e_k);
+                
+                // Only count stream density for playable BPMs.
+                // If it's a gimmick warp, the stream doesn't physically exist for the player.
+                if is_display_bpm(bpm_k) {
+                    let d_k = measure_densities[k] as f64;
+                    let e_k = (d_k * bpm_k) / 16.0;
+                    max_e = max_e.max(e_k);
+                }
             }
         }
         i = j;
