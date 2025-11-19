@@ -44,7 +44,8 @@ pub fn parse_bpm_map(normalized_bpms: &str) -> Vec<(f64, f64)> {
     bpms_vec
 }
 
-/// Returns the BPM in effect at a given beat
+/// Returns the BPM in effect at a given beat.
+/// This is used for actual timing calculations and is NOT filtered.
 pub fn get_current_bpm(beat: f64, bpm_map: &[(f64, f64)]) -> f64 {
     if bpm_map.is_empty() {
         return 0.0;
@@ -64,14 +65,35 @@ pub fn get_current_bpm(beat: f64, bpm_map: &[(f64, f64)]) -> f64 {
     }
 }
 
+/// Computes the min/max BPM range for display purposes.
+///
+/// Applies a heuristic to ignore "gimmick" BPMs (e.g., <= 0 or >= 10,000) which are
+/// often used for visual effects or stops, unless no valid BPMs remain.
 pub fn compute_bpm_range(bpm_map: &[(f64, f64)]) -> (i32, i32) {
     if bpm_map.is_empty() {
         return (0, 0);
     }
-    let (min_bpm, max_bpm) = bpm_map.iter().map(|&(_, bpm)| bpm).fold(
-        (f64::MAX, f64::MIN),
-        |(min, max), bpm| (min.min(bpm), max.max(bpm)),
-    );
+
+    // Filter out gimmick BPMs for display calculation
+    let filter = |bpm: f64| bpm > 0.0 && bpm < 10000.0;
+
+    let (mut min_bpm, mut max_bpm, count) = bpm_map.iter()
+        .map(|&(_, bpm)| bpm)
+        .filter(|&bpm| filter(bpm))
+        .fold((f64::MAX, f64::MIN, 0), |(min, max, count), bpm| {
+            (min.min(bpm), max.max(bpm), count + 1)
+        });
+
+    if count == 0 {
+        // Fallback: if all BPMs were filtered out (e.g., chart is entirely gimmicks), include everything.
+        let (fmin, fmax) = bpm_map.iter().map(|&(_, bpm)| bpm).fold(
+            (f64::MAX, f64::MIN),
+            |(min, max), bpm| (min.min(bpm), max.max(bpm)),
+        );
+        min_bpm = fmin;
+        max_bpm = fmax;
+    }
+
     (min_bpm.round() as i32, max_bpm.round() as i32)
 }
 
@@ -141,11 +163,21 @@ pub fn get_nps_stats(measure_nps_vec: &[f64]) -> (f64, f64) {
     (max_nps, median_nps)
 }
 
+/// Computes median and average BPM, filtering out gimmick values unless unavoidable.
 pub fn compute_bpm_stats(bpm_values: &[f64]) -> (f64, f64) {
     if bpm_values.is_empty() {
         return (0.0, 0.0);
     }
-    let mut sorted = bpm_values.to_vec();
+
+    // Filter out gimmick BPMs for stats
+    let filter = |&bpm: &f64| bpm > 0.0 && bpm < 10000.0;
+    let mut sorted: Vec<f64> = bpm_values.iter().copied().filter(filter).collect();
+
+    // Fallback if everything was filtered
+    if sorted.is_empty() {
+        sorted = bpm_values.to_vec();
+    }
+
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let median = median_of_sorted(&sorted);
     let average = sorted.iter().sum::<f64>() / sorted.len() as f64;
