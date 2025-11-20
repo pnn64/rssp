@@ -386,22 +386,48 @@ pub fn analyze(
         })
         .collect();
 
-    // Updated chart length calculation: parse global maps for timing events
-    let total_length = if let Some(first_chart) = chart_summaries.first() {
-        let global_stop_map = parse_timing_map(&normalized_global_stops);
-        let global_delay_map = parse_timing_map(&normalized_global_delays);
-        let global_warp_map = parse_timing_map(&normalized_global_warps);
+    // Song length should match ITGmania's Song::GetLastSecond semantics:
+    // take the maximum last note time across all charts, using chart-specific
+    // timing data when present, otherwise falling back to the song timing.
+    let global_stop_map = parse_timing_map(&normalized_global_stops);
+    let global_delay_map = parse_timing_map(&normalized_global_delays);
+    let global_warp_map = parse_timing_map(&normalized_global_warps);
 
-        compute_total_chart_length(
-            &first_chart.measure_densities,
-            &global_bpm_map,
-            &global_stop_map,
-            &global_delay_map,
-            &global_warp_map,
-        )
-    } else {
-        0
-    };
+    let total_length = chart_summaries
+        .iter()
+        .map(|chart| {
+            // Prefer chart-specific timing tags when available; otherwise, use song timing.
+            let bpm_map = if let Some(ref chart_bpms) = chart.chart_bpms {
+                parse_bpm_map(chart_bpms)
+            } else {
+                global_bpm_map.clone()
+            };
+            let stop_map = if let Some(ref stops) = chart.chart_stops {
+                parse_timing_map(stops)
+            } else {
+                global_stop_map.clone()
+            };
+            let delay_map = if let Some(ref delays) = chart.chart_delays {
+                parse_timing_map(delays)
+            } else {
+                global_delay_map.clone()
+            };
+            let warp_map = if let Some(ref warps) = chart.chart_warps {
+                parse_timing_map(warps)
+            } else {
+                global_warp_map.clone()
+            };
+
+            compute_total_chart_length(
+                &chart.minimized_note_data,
+                &bpm_map,
+                &stop_map,
+                &delay_map,
+                &warp_map,
+            )
+        })
+        .max()
+        .unwrap_or(0);
 
     let total_elapsed = total_start_time.elapsed();
 

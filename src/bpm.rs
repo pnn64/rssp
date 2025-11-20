@@ -185,17 +185,70 @@ pub fn get_elapsed_time(
     current_time
 }
 
+/// Computes the beat of the last playable object in the chart from minimized note data.
+///
+/// The minimized format produced by `minimize_chart_and_count` is:
+///   - 4-character note rows (columns 0-3) followed by '\n'
+///   - ",\n" as a measure separator
+/// Measures are assumed to be 4 beats long, matching StepMania's default behavior.
+fn compute_last_beat(minimized_note_data: &[u8]) -> f64 {
+    let mut rows_per_measure: Vec<usize> = Vec::new();
+    let mut current_rows: usize = 0;
+
+    let mut last_measure_idx: Option<usize> = None;
+    let mut last_row_in_measure: usize = 0;
+
+    for line in minimized_note_data.split(|&b| b == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        if line[0] == b',' {
+            rows_per_measure.push(current_rows);
+            current_rows = 0;
+            continue;
+        }
+
+        if line.len() >= 4 {
+            let has_object = line[..4]
+                .iter()
+                .any(|&b| matches!(b, b'1' | b'2' | b'3' | b'4'));
+            if has_object {
+                last_measure_idx = Some(rows_per_measure.len());
+                last_row_in_measure = current_rows;
+            }
+            current_rows += 1;
+        }
+    }
+
+    // Push the final measure's row count.
+    rows_per_measure.push(current_rows);
+
+    let Some(measure_idx) = last_measure_idx else {
+        return 0.0;
+    };
+
+    let total_rows_in_measure = rows_per_measure
+        .get(measure_idx)
+        .copied()
+        .unwrap_or(0)
+        .max(1) as f64;
+    let row_index = last_row_in_measure as f64;
+
+    let beats_into_measure = 4.0 * (row_index / total_rows_in_measure);
+    (measure_idx as f64) * 4.0 + beats_into_measure
+}
+
 pub fn compute_total_chart_length(
-    measure_densities: &[usize],
+    minimized_note_data: &[u8],
     bpm_map: &[(f64, f64)],
     stop_map: &[(f64, f64)],
     delay_map: &[(f64, f64)],
     warp_map: &[(f64, f64)],
 ) -> i32 {
-    // Find the last measure that actually has notes
-    let last_measure_idx = measure_densities.iter().rposition(|&d| d > 0).unwrap_or(0);
-    // Calculate the end beat of that measure (measures are 4 beats)
-    let target_beat = (last_measure_idx as f64 + 1.0) * 4.0;
+    let target_beat = compute_last_beat(minimized_note_data);
+    if target_beat <= 0.0 || bpm_map.is_empty() {
+        return 0;
+    }
 
     get_elapsed_time(target_beat, bpm_map, stop_map, delay_map, warp_map).floor() as i32
 }
