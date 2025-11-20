@@ -386,8 +386,19 @@ pub fn analyze(
         })
         .collect();
 
+    // Updated chart length calculation: parse global maps for timing events
     let total_length = if let Some(first_chart) = chart_summaries.first() {
-        compute_total_chart_length(&first_chart.measure_densities, &global_bpm_map)
+        let global_stop_map = parse_timing_map(&normalized_global_stops);
+        let global_delay_map = parse_timing_map(&normalized_global_delays);
+        let global_warp_map = parse_timing_map(&normalized_global_warps);
+
+        compute_total_chart_length(
+            &first_chart.measure_densities,
+            &global_bpm_map,
+            &global_stop_map,
+            &global_delay_map,
+            &global_warp_map,
+        )
     } else {
         0
     };

@@ -44,6 +44,11 @@ pub fn parse_bpm_map(normalized_bpms: &str) -> Vec<(f64, f64)> {
     bpms_vec
 }
 
+/// Alias for parsing generic beat=value timing maps (Stops, Delays, Warps).
+pub fn parse_timing_map(normalized: &str) -> Vec<(f64, f64)> {
+    parse_bpm_map(normalized)
+}
+
 /// Returns the BPM in effect at a given beat.
 /// This is used for actual timing calculations and is NOT filtered.
 pub fn get_current_bpm(beat: f64, bpm_map: &[(f64, f64)]) -> f64 {
@@ -105,23 +110,94 @@ pub fn compute_bpm_range(bpm_map: &[(f64, f64)]) -> (i32, i32) {
     (min_bpm.round() as i32, max_bpm.round() as i32)
 }
 
-pub fn compute_total_chart_length(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> i32 {
-    let total_length_seconds: f64 = measure_densities
-        .iter()
-        .enumerate()
-        .map(|(i, _)| {
-            let measure_start_beat = i as f64 * 4.0;
-            let curr_bpm = get_current_bpm(measure_start_beat, bpm_map);
-            // For length calculation, we use the raw BPM because high BPMs
-            // legitimately shorten the chart duration (warps).
-            if curr_bpm > 0.0 {
-                (4.0 / curr_bpm) * 60.0
-            } else {
-                0.0
+/// Calculates the accurate cumulative time to reach a target beat, accounting for
+/// BPM changes, Stops, Delays, and Warps.
+///
+/// Logic mimics StepMania/ITGmania's `GetElapsedTimeFromBeat`:
+/// - Beats advance time based on current BPM.
+/// - Warps skip beats instantly (time doesn't advance).
+/// - Stops/Delays add time instantly (beats don't advance).
+pub fn get_elapsed_time(
+    target_beat: f64,
+    bpm_map: &[(f64, f64)],
+    stop_map: &[(f64, f64)],
+    delay_map: &[(f64, f64)],
+    warp_map: &[(f64, f64)],
+) -> f64 {
+    // Event priority: 0=BPM, 1=Stop/Delay, 2=Warp
+    let mut events = Vec::with_capacity(bpm_map.len() + stop_map.len() + delay_map.len() + warp_map.len());
+    for &(b, v) in bpm_map { events.push((b, 0, v)); }
+    for &(b, v) in stop_map { events.push((b, 1, v)); }
+    for &(b, v) in delay_map { events.push((b, 1, v)); }
+    for &(b, v) in warp_map { events.push((b, 2, v)); }
+
+    // Sort by beat, then priority
+    events.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+           .then_with(|| a.1.cmp(&b.1))
+    });
+
+    let mut current_time = 0.0;
+    let mut current_beat = 0.0;
+    let mut current_bpm = if !bpm_map.is_empty() && bpm_map[0].0 <= 0.0 { bpm_map[0].1 } else { 120.0 };
+    let mut warp_end_beat = 0.0;
+
+    for (event_beat, priority, value) in events {
+        // Optimization: if we are past target and not currently warping, we can stop.
+        if event_beat > target_beat && warp_end_beat <= target_beat {
+            break;
+        }
+
+        // Advance time to the event beat
+        if event_beat > current_beat {
+            // We only accumulate time for beats that are NOT inside a warp.
+            let effective_start = current_beat.max(warp_end_beat);
+            if event_beat > effective_start {
+                let valid_dist = event_beat - effective_start;
+                if current_bpm > 0.0 {
+                    current_time += valid_dist * (60.0 / current_bpm);
+                }
             }
-        })
-        .sum();
-    total_length_seconds.floor() as i32
+            current_beat = event_beat;
+        }
+
+        match priority {
+            0 => current_bpm = value,
+            1 => current_time += value, // Stop/Delay adds time
+            2 => {
+                // Warp skips beats instantly.
+                let end = event_beat + value;
+                if end > warp_end_beat { warp_end_beat = end; }
+            }
+            _ => {}
+        }
+    }
+
+    // Final advance to target beat
+    let effective_start = current_beat.max(warp_end_beat);
+    if target_beat > effective_start {
+        let valid_dist = target_beat - effective_start;
+        if current_bpm > 0.0 {
+            current_time += valid_dist * (60.0 / current_bpm);
+        }
+    }
+
+    current_time
+}
+
+pub fn compute_total_chart_length(
+    measure_densities: &[usize],
+    bpm_map: &[(f64, f64)],
+    stop_map: &[(f64, f64)],
+    delay_map: &[(f64, f64)],
+    warp_map: &[(f64, f64)],
+) -> i32 {
+    // Find the last measure that actually has notes
+    let last_measure_idx = measure_densities.iter().rposition(|&d| d > 0).unwrap_or(0);
+    // Calculate the end beat of that measure (measures are 4 beats)
+    let target_beat = (last_measure_idx as f64 + 1.0) * 4.0;
+
+    get_elapsed_time(target_beat, bpm_map, stop_map, delay_map, warp_map).floor() as i32
 }
 
 pub fn compute_measure_nps_vec(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> Vec<f64> {
