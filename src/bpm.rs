@@ -1,21 +1,22 @@
-fn normalize_entry(beat_bpm: &str) -> String {
-    if let Some((beat_str, bpm_str)) = beat_bpm.split_once('=') {
-        let beat_str = beat_str.trim_matches(|c: char| c.is_control());
-        let bpm_str = bpm_str.trim_matches(|c: char| c.is_control());
-        if let (Some(clean_beat), Some(clean_bpm)) = (non_empty(beat_str), non_empty(bpm_str)) {
-            return format!("{}={}", clean_beat, clean_bpm);
-        }
-    }
-    beat_bpm.to_string()
+fn normalize_decimal(s: &str) -> Option<String> {
+    let cleaned: String = s.chars().filter(|c| !c.is_control()).collect();
+    let value: f64 = cleaned.trim().parse().ok()?;
+
+    let mult = 1000.0;
+    let temp = value * mult + 0.5;
+    let rounded = (temp - temp.rem_euclid(1.0)) / mult;
+
+    Some(format!("{:.3}", rounded))
 }
 
-fn non_empty(s: &str) -> Option<&str> {
-    let trimmed = s.trim_matches(|c: char| c.is_control() || c.is_whitespace());
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed)
+fn normalize_entry(beat_bpm: &str) -> String {
+    let trimmed = beat_bpm.trim();
+    if let Some((beat_str, bpm_str)) = trimmed.split_once('=') {
+        if let (Some(beat), Some(bpm)) = (normalize_decimal(beat_str), normalize_decimal(bpm_str)) {
+            return format!("{}={}", beat, bpm);
+        }
     }
+    trimmed.to_string()
 }
 
 pub fn normalize_float_digits(param: &str) -> String {
