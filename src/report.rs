@@ -1,5 +1,8 @@
 use std::collections::HashMap;
+use std::io::{self, Write};
 use std::time::Duration;
+
+use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use crate::patterns::{CustomPatternSummary, PatternVariant};
 use crate::stats::{ArrowStats, StreamCounts};
@@ -103,61 +106,6 @@ fn format_duration(seconds: i32) -> String {
     let minutes = seconds / 60;
     let seconds = seconds % 60;
     format!("{}m {:02}s", minutes, seconds)
-}
-
-fn esc(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
-fn print_indented(line: &str, indent: usize) {
-    println!("{}{}", " ".repeat(indent), line);
-}
-
-fn print_kv_str(key: &str, value: &str, indent: usize) {
-    print_indented(&format!("\"{}\": \"{}\",", key, esc(value)), indent);
-}
-
-fn print_kv_str_last(key: &str, value: &str, indent: usize) {
-    print_indented(&format!("\"{}\": \"{}\"", key, esc(value)), indent);
-}
-
-fn print_kv_int(key: &str, value: u32, indent: usize) {
-    print_indented(&format!("\"{}\": {},", key, value), indent);
-}
-
-fn print_kv_int_last(key: &str, value: u32, indent: usize) {
-    print_indented(&format!("\"{}\": {}", key, value), indent);
-}
-
-fn print_kv_float(key: &str, value: f64, indent: usize) {
-    print_indented(&format!("\"{}\": {:.2},", key, value), indent);
-}
-
-fn print_kv_float_last(key: &str, value: f64, indent: usize) {
-    print_indented(&format!("\"{}\": {:.2}", key, value), indent);
-}
-
-fn print_kv_array(key: &str, values: &[&str], indent: usize) {
-    let mut line = format!("\"{}\": [", key);
-    for (i, val) in values.iter().enumerate() {
-        if i > 0 {
-            line.push_str(", ");
-        }
-        line.push_str(&format!("\"{}\"", esc(val)));
-    }
-    line.push_str("],");
-    print_indented(&line, indent);
 }
 
 fn count(map: &HashMap<PatternVariant, u32>, variant: PatternVariant) -> u32 {
@@ -527,81 +475,104 @@ fn print_full_chart(chart: &ChartSummary) {
     }
 }
 
-fn print_chart_info_fields(chart: &ChartSummary, indent: usize) {
-    print_kv_str("step_type", &chart.step_type_str, indent);
-    print_kv_str("difficulty", &chart.difficulty_str, indent);
-    print_kv_float("tier_bpm", chart.tier_bpm, indent);
-    print_kv_str("rating", &chart.rating_str, indent);
-    print_kv_float("matrix_rating", chart.matrix_rating, indent);
-    let step_artists_refs: Vec<&str> = chart.step_artist_str.iter().map(|s| s.as_str()).collect();
-    print_kv_array("step_artists", &step_artists_refs, indent);
-    print_kv_str("tech_notation", &chart.tech_notation_str, indent);
-    print_kv_str("sha1", &chart.short_hash, indent);
-    print_kv_str_last("bpm_neutral_sha1", &chart.bpm_neutral_hash, indent);
+fn json_chart_info(chart: &ChartSummary) -> JsonValue {
+    serde_json::json!({
+        "step_type": chart.step_type_str,
+        "difficulty": chart.difficulty_str,
+        "tier_bpm": chart.tier_bpm,
+        "rating": chart.rating_str,
+        "matrix_rating": chart.matrix_rating,
+        "step_artists": chart.step_artist_str,
+        "tech_notation": chart.tech_notation_str,
+        "sha1": chart.short_hash,
+        "bpm_neutral_sha1": chart.bpm_neutral_hash,
+    })
 }
 
-
-fn print_arrow_stats_fields(chart: &ChartSummary, indent: usize) {
-    print_kv_int("total_arrows", chart.stats.total_arrows, indent);
-    print_kv_int("left_arrows", chart.stats.left, indent);
-    print_kv_int("down_arrows", chart.stats.down, indent);
-    print_kv_int("up_arrows", chart.stats.up, indent);
-    print_kv_int("right_arrows", chart.stats.right, indent);
-    print_kv_int("total_steps", chart.stats.total_steps, indent);
-    print_kv_int("jumps", chart.stats.jumps, indent);
-    print_kv_int("hands", chart.stats.hands, indent);
-    print_kv_int("holds", chart.stats.holds, indent);
-    print_kv_int("rolls", chart.stats.rolls, indent);
-    print_kv_int("mines", chart.stats.mines, indent);
-    print_kv_int("lifts", chart.stats.lifts, indent);
-    print_kv_int_last("fakes", chart.stats.fakes, indent);
+fn json_arrow_stats(chart: &ChartSummary) -> JsonValue {
+    serde_json::json!({
+        "total_arrows": chart.stats.total_arrows,
+        "left_arrows": chart.stats.left,
+        "down_arrows": chart.stats.down,
+        "up_arrows": chart.stats.up,
+        "right_arrows": chart.stats.right,
+        "total_steps": chart.stats.total_steps,
+        "jumps": chart.stats.jumps,
+        "hands": chart.stats.hands,
+        "holds": chart.stats.holds,
+        "rolls": chart.stats.rolls,
+        "mines": chart.stats.mines,
+        "lifts": chart.stats.lifts,
+        "fakes": chart.stats.fakes,
+    })
 }
 
-fn print_stream_info_fields(chart: &ChartSummary, indent: usize) {
+fn json_stream_info(chart: &ChartSummary) -> JsonValue {
     let total_stream = chart.total_streams;
     let total_break = chart.stream_counts.total_breaks;
     let total_measures = chart.total_measures;
 
     let adj_stream_percent = if total_stream + total_break > 0 {
         (total_stream as f64 / (total_stream + total_break) as f64) * 100.0
-    } else { 0.0 };
+    } else {
+        0.0
+    };
 
     let stream_percent = if total_measures > 0 {
         (total_stream as f64 / total_measures as f64) * 100.0
-    } else { 0.0 };
-    print_kv_int("total_streams", total_stream, indent);
-    print_kv_int("16th_streams", chart.stream_counts.run16_streams, indent);
-    print_kv_int("20th_streams", chart.stream_counts.run20_streams, indent);
-    print_kv_int("24th_streams", chart.stream_counts.run24_streams, indent);
-    print_kv_int("32nd_streams", chart.stream_counts.run32_streams, indent);
-    print_kv_int("total_breaks", total_break, indent);
-    print_kv_float("stream_percent", stream_percent, indent);
-    print_kv_float("adj_stream_percent", adj_stream_percent, indent);
-    print_kv_float_last("break_percent", 100.0 - adj_stream_percent, indent);
+    } else {
+        0.0
+    };
+
+    serde_json::json!({
+        "total_streams": total_stream,
+        "16th_streams": chart.stream_counts.run16_streams,
+        "20th_streams": chart.stream_counts.run20_streams,
+        "24th_streams": chart.stream_counts.run24_streams,
+        "32nd_streams": chart.stream_counts.run32_streams,
+        "total_breaks": total_break,
+        "stream_percent": stream_percent,
+        "adj_stream_percent": adj_stream_percent,
+        "break_percent": 100.0 - adj_stream_percent,
+    })
 }
 
-fn print_nps_fields(chart: &ChartSummary, indent: usize) {
-    print_kv_float("max_nps", chart.max_nps, indent);
-    print_kv_float_last("median_nps", chart.median_nps, indent);
+fn json_nps(chart: &ChartSummary) -> JsonValue {
+    serde_json::json!({
+        "max_nps": chart.max_nps,
+        "median_nps": chart.median_nps,
+    })
 }
 
-fn print_mono_candle_stats_fields(chart: &ChartSummary, indent: usize) {
+fn json_breakdown(chart: &ChartSummary) -> JsonValue {
+    serde_json::json!({
+        "detailed_breakdown": chart.detailed,
+        "partial_breakdown": chart.partial,
+        "simple_breakdown": chart.simple,
+    })
+}
+
+fn json_mono_candle_stats(chart: &ChartSummary) -> JsonValue {
     let left_foot_candles = count(&chart.detected_patterns, PatternVariant::CandleLeft);
     let right_foot_candles = count(&chart.detected_patterns, PatternVariant::CandleRight);
     let total_candles = left_foot_candles + right_foot_candles;
-    print_kv_int("total_candles", total_candles, indent);
-    print_kv_int("left_foot_candles", left_foot_candles, indent);
-    print_kv_int("right_foot_candles", right_foot_candles, indent);
-    print_kv_float("candles_percent", chart.candle_percent, indent);
-    print_kv_int("total_mono", chart.mono_total, indent);
-    print_kv_int("left_face_mono", chart.facing_left, indent);
-    print_kv_int("right_face_mono", chart.facing_right, indent);
-    print_kv_float_last("mono_percent", chart.mono_percent, indent);
+
+    serde_json::json!({
+        "total_candles": total_candles,
+        "left_foot_candles": left_foot_candles,
+        "right_foot_candles": right_foot_candles,
+        "candles_percent": chart.candle_percent,
+        "total_mono": chart.mono_total,
+        "left_face_mono": chart.facing_left,
+        "right_face_mono": chart.facing_right,
+        "mono_percent": chart.mono_percent,
+    })
 }
 
-fn print_pattern_counts_fields(chart: &ChartSummary, indent: usize) {
+fn json_pattern_counts(chart: &ChartSummary) -> JsonValue {
+    let mut obj = JsonMap::new();
+
     // Boxes
-    print_indented("\"boxes\": {", indent);
     let lr_boxes = count(&chart.detected_patterns, PatternVariant::BoxLR);
     let ud_boxes = count(&chart.detected_patterns, PatternVariant::BoxUD);
     let ld_boxes = count(&chart.detected_patterns, PatternVariant::BoxCornerLD);
@@ -610,28 +581,35 @@ fn print_pattern_counts_fields(chart: &ChartSummary, indent: usize) {
     let ru_boxes = count(&chart.detected_patterns, PatternVariant::BoxCornerRU);
     let corner_boxes = ld_boxes + lu_boxes + rd_boxes + ru_boxes;
     let total_boxes = lr_boxes + ud_boxes + corner_boxes;
-    print_kv_int("total_boxes", total_boxes, indent + 2);
-    print_kv_int("lr_boxes", lr_boxes, indent + 2);
-    print_kv_int("ud_boxes", ud_boxes, indent + 2);
-    print_kv_int("corner_boxes", corner_boxes, indent + 2);
-    print_kv_int("ld_boxes", ld_boxes, indent + 2);
-    print_kv_int("lu_boxes", lu_boxes, indent + 2);
-    print_kv_int("rd_boxes", rd_boxes, indent + 2);
-    print_kv_int_last("ru_boxes", ru_boxes, indent + 2);
-    print_indented("},", indent);
+    obj.insert(
+        "boxes".to_string(),
+        serde_json::json!({
+            "total_boxes": total_boxes,
+            "lr_boxes": lr_boxes,
+            "ud_boxes": ud_boxes,
+            "corner_boxes": corner_boxes,
+            "ld_boxes": ld_boxes,
+            "lu_boxes": lu_boxes,
+            "rd_boxes": rd_boxes,
+            "ru_boxes": ru_boxes,
+        }),
+    );
 
     // Anchors
-    print_indented("\"anchors\": {", indent);
-    let total_anchors = chart.anchor_left + chart.anchor_down + chart.anchor_up + chart.anchor_right;
-    print_kv_int("total_anchors", total_anchors, indent + 2);
-    print_kv_int("left_anchors", chart.anchor_left, indent + 2);
-    print_kv_int("down_anchors", chart.anchor_down, indent + 2);
-    print_kv_int("up_anchors", chart.anchor_up, indent + 2);
-    print_kv_int_last("right_anchors", chart.anchor_right, indent + 2);
-    print_indented("},", indent);
+    let total_anchors =
+        chart.anchor_left + chart.anchor_down + chart.anchor_up + chart.anchor_right;
+    obj.insert(
+        "anchors".to_string(),
+        serde_json::json!({
+            "total_anchors": total_anchors,
+            "left_anchors": chart.anchor_left,
+            "down_anchors": chart.anchor_down,
+            "up_anchors": chart.anchor_up,
+            "right_anchors": chart.anchor_right,
+        }),
+    );
 
     // Towers
-    print_indented("\"towers\": {", indent);
     let lr_towers = count(&chart.detected_patterns, PatternVariant::TowerLR);
     let ud_towers = count(&chart.detected_patterns, PatternVariant::TowerUD);
     let ld_towers = count(&chart.detected_patterns, PatternVariant::TowerCornerLD);
@@ -640,277 +618,445 @@ fn print_pattern_counts_fields(chart: &ChartSummary, indent: usize) {
     let ru_towers = count(&chart.detected_patterns, PatternVariant::TowerCornerRU);
     let corner_towers = ld_towers + lu_towers + rd_towers + ru_towers;
     let total_towers = lr_towers + ud_towers + corner_towers;
-    print_kv_int("total_towers", total_towers, indent + 2);
-    print_kv_int("lr_towers", lr_towers, indent + 2);
-    print_kv_int("ud_towers", ud_towers, indent + 2);
-    print_kv_int("corner_towers", corner_towers, indent + 2);
-    print_kv_int("ld_towers", ld_towers, indent + 2);
-    print_kv_int("lu_towers", lu_towers, indent + 2);
-    print_kv_int("rd_towers", rd_towers, indent + 2);
-    print_kv_int_last("ru_towers", ru_towers, indent + 2);
-    print_indented("},", indent);
+    obj.insert(
+        "towers".to_string(),
+        serde_json::json!({
+            "total_towers": total_towers,
+            "lr_towers": lr_towers,
+            "ud_towers": ud_towers,
+            "corner_towers": corner_towers,
+            "ld_towers": ld_towers,
+            "lu_towers": lu_towers,
+            "rd_towers": rd_towers,
+            "ru_towers": ru_towers,
+        }),
+    );
 
     // Triangles
-    print_indented("\"triangles\": {", indent);
     let ldl_triangles = count(&chart.detected_patterns, PatternVariant::TriangleLDL);
     let lul_triangles = count(&chart.detected_patterns, PatternVariant::TriangleLUL);
     let rdr_triangles = count(&chart.detected_patterns, PatternVariant::TriangleRDR);
     let rur_triangles = count(&chart.detected_patterns, PatternVariant::TriangleRUR);
-    let total_triangles = ldl_triangles + lul_triangles + rdr_triangles + rur_triangles;
-    print_kv_int("total_triangles", total_triangles, indent + 2);
-    print_kv_int("ldl_triangles", ldl_triangles, indent + 2);
-    print_kv_int("lul_triangles", lul_triangles, indent + 2);
-    print_kv_int("rdr_triangles", rdr_triangles, indent + 2);
-    print_kv_int_last("rur_triangles", rur_triangles, indent + 2);
-    print_indented("},", indent);
+    let total_triangles =
+        ldl_triangles + lul_triangles + rdr_triangles + rur_triangles;
+    obj.insert(
+        "triangles".to_string(),
+        serde_json::json!({
+            "total_triangles": total_triangles,
+            "ldl_triangles": ldl_triangles,
+            "lul_triangles": lul_triangles,
+            "rdr_triangles": rdr_triangles,
+            "rur_triangles": rur_triangles,
+        }),
+    );
 
     // Staircases
-    print_indented("\"staircases\": {", indent);
-    let left_staircases = count(&chart.detected_patterns, PatternVariant::StaircaseLeft);
-    let right_staircases = count(&chart.detected_patterns, PatternVariant::StaircaseRight);
-    let left_inv_staircases = count(&chart.detected_patterns, PatternVariant::StaircaseInvLeft);
-    let right_inv_staircases = count(&chart.detected_patterns, PatternVariant::StaircaseInvRight);
-    let total_staircases = left_staircases + right_staircases + left_inv_staircases + right_inv_staircases;
-    print_kv_int("total_staircases", total_staircases, indent + 2);
-    print_kv_int("left_staircases", left_staircases, indent + 2);
-    print_kv_int("right_staircases", right_staircases, indent + 2);
-    print_kv_int("left_inv_staircases", left_inv_staircases, indent + 2);
-    print_kv_int("right_inv_staircases", right_inv_staircases, indent + 2);
-    let alt_left = count(&chart.detected_patterns, PatternVariant::AltStaircasesLeft);
-    let alt_right = count(&chart.detected_patterns, PatternVariant::AltStaircasesRight);
-    let alt_left_inv = count(&chart.detected_patterns, PatternVariant::AltStaircasesInvLeft);
-    let alt_right_inv = count(&chart.detected_patterns, PatternVariant::AltStaircasesInvRight);
+    let left_staircases =
+        count(&chart.detected_patterns, PatternVariant::StaircaseLeft);
+    let right_staircases =
+        count(&chart.detected_patterns, PatternVariant::StaircaseRight);
+    let left_inv_staircases =
+        count(&chart.detected_patterns, PatternVariant::StaircaseInvLeft);
+    let right_inv_staircases =
+        count(&chart.detected_patterns, PatternVariant::StaircaseInvRight);
+    let total_staircases = left_staircases
+        + right_staircases
+        + left_inv_staircases
+        + right_inv_staircases;
+    let alt_left =
+        count(&chart.detected_patterns, PatternVariant::AltStaircasesLeft);
+    let alt_right =
+        count(&chart.detected_patterns, PatternVariant::AltStaircasesRight);
+    let alt_left_inv =
+        count(&chart.detected_patterns, PatternVariant::AltStaircasesInvLeft);
+    let alt_right_inv =
+        count(&chart.detected_patterns, PatternVariant::AltStaircasesInvRight);
     let total_alt = alt_left + alt_right + alt_left_inv + alt_right_inv;
-    print_kv_int("total_alt_staircases", total_alt, indent + 2);
-    print_kv_int("left_alt_staircases", alt_left, indent + 2);
-    print_kv_int("right_alt_staircases", alt_right, indent + 2);
-    print_kv_int("left_inv_alt_staircases", alt_left_inv, indent + 2);
-    print_kv_int("right_inv_alt_staircases", alt_right_inv, indent + 2);
-
     let d_left = count(&chart.detected_patterns, PatternVariant::DStaircaseLeft);
     let d_right = count(&chart.detected_patterns, PatternVariant::DStaircaseRight);
-    let d_left_inv = count(&chart.detected_patterns, PatternVariant::DStaircaseInvLeft);
-    let d_right_inv = count(&chart.detected_patterns, PatternVariant::DStaircaseInvRight);
+    let d_left_inv =
+        count(&chart.detected_patterns, PatternVariant::DStaircaseInvLeft);
+    let d_right_inv =
+        count(&chart.detected_patterns, PatternVariant::DStaircaseInvRight);
     let total_double = d_left + d_right + d_left_inv + d_right_inv;
-    print_kv_int("total_double_staircases", total_double, indent + 2);
-    print_kv_int("left_double_staircases", d_left, indent + 2);
-    print_kv_int("right_double_staircases", d_right, indent + 2);
-    print_kv_int("left_inv_double_staircases", d_left_inv, indent + 2);
-    print_kv_int_last("right_inv_double_staircases", d_right_inv, indent + 2);
-    print_indented("},", indent);
+    obj.insert(
+        "staircases".to_string(),
+        serde_json::json!({
+            "total_staircases": total_staircases,
+            "left_staircases": left_staircases,
+            "right_staircases": right_staircases,
+            "left_inv_staircases": left_inv_staircases,
+            "right_inv_staircases": right_inv_staircases,
+            "total_alt_staircases": total_alt,
+            "left_alt_staircases": alt_left,
+            "right_alt_staircases": alt_right,
+            "left_inv_alt_staircases": alt_left_inv,
+            "right_inv_alt_staircases": alt_right_inv,
+            "total_double_staircases": total_double,
+            "left_double_staircases": d_left,
+            "right_double_staircases": d_right,
+            "left_inv_double_staircases": d_left_inv,
+            "right_inv_double_staircases": d_right_inv,
+        }),
+    );
 
     // Sweeps
-    print_indented("\"sweeps\": {", indent);
     let left_sweeps = count(&chart.detected_patterns, PatternVariant::SweepLeft);
     let right_sweeps = count(&chart.detected_patterns, PatternVariant::SweepRight);
-    let left_inv_sweeps = count(&chart.detected_patterns, PatternVariant::SweepInvLeft);
-    let right_inv_sweeps = count(&chart.detected_patterns, PatternVariant::SweepInvRight);
-    let total_sweeps = left_sweeps + right_sweeps + left_inv_sweeps + right_inv_sweeps;
-    print_kv_int("total_sweeps", total_sweeps, indent + 2);
-    print_kv_int("left_sweeps", left_sweeps, indent + 2);
-    print_kv_int("right_sweeps", right_sweeps, indent + 2);
-    print_kv_int("left_inv_sweeps", left_inv_sweeps, indent + 2);
-    print_kv_int_last("right_inv_sweeps", right_inv_sweeps, indent + 2);
-    print_indented("},", indent);
+    let left_inv_sweeps =
+        count(&chart.detected_patterns, PatternVariant::SweepInvLeft);
+    let right_inv_sweeps =
+        count(&chart.detected_patterns, PatternVariant::SweepInvRight);
+    let total_sweeps =
+        left_sweeps + right_sweeps + left_inv_sweeps + right_inv_sweeps;
+    obj.insert(
+        "sweeps".to_string(),
+        serde_json::json!({
+            "total_sweeps": total_sweeps,
+            "left_sweeps": left_sweeps,
+            "right_sweeps": right_sweeps,
+            "left_inv_sweeps": left_inv_sweeps,
+            "right_inv_sweeps": right_inv_sweeps,
+        }),
+    );
 
     // Candle Sweeps
-    print_indented("\"candle_sweeps\": {", indent);
-    let left_candle_sweeps = count(&chart.detected_patterns, PatternVariant::SweepCandleLeft);
-    let right_candle_sweeps = count(&chart.detected_patterns, PatternVariant::SweepCandleRight);
-    let left_inv_candle_sweeps = count(&chart.detected_patterns, PatternVariant::SweepCandleInvLeft);
-    let right_inv_candle_sweeps = count(&chart.detected_patterns, PatternVariant::SweepCandleInvRight);
-    let total_candle_sweeps = left_candle_sweeps + right_candle_sweeps + left_inv_candle_sweeps + right_inv_candle_sweeps;
-    print_kv_int("total_candle_sweeps", total_candle_sweeps, indent + 2);
-    print_kv_int("left_candle_sweeps", left_candle_sweeps, indent + 2);
-    print_kv_int("right_candle_sweeps", right_candle_sweeps, indent + 2);
-    print_kv_int("left_inv_candle_sweeps", left_inv_candle_sweeps, indent + 2);
-    print_kv_int_last("right_inv_candle_sweeps", right_inv_candle_sweeps, indent + 2);
-    print_indented("},", indent);
+    let left_candle_sweeps =
+        count(&chart.detected_patterns, PatternVariant::SweepCandleLeft);
+    let right_candle_sweeps =
+        count(&chart.detected_patterns, PatternVariant::SweepCandleRight);
+    let left_inv_candle_sweeps =
+        count(&chart.detected_patterns, PatternVariant::SweepCandleInvLeft);
+    let right_inv_candle_sweeps =
+        count(&chart.detected_patterns, PatternVariant::SweepCandleInvRight);
+    let total_candle_sweeps = left_candle_sweeps
+        + right_candle_sweeps
+        + left_inv_candle_sweeps
+        + right_inv_candle_sweeps;
+    obj.insert(
+        "candle_sweeps".to_string(),
+        serde_json::json!({
+            "total_candle_sweeps": total_candle_sweeps,
+            "left_candle_sweeps": left_candle_sweeps,
+            "right_candle_sweeps": right_candle_sweeps,
+            "left_inv_candle_sweeps": left_inv_candle_sweeps,
+            "right_inv_candle_sweeps": right_inv_candle_sweeps,
+        }),
+    );
 
     // Copters
-    print_indented("\"copters\": {", indent);
-    let left_copters = count(&chart.detected_patterns, PatternVariant::CopterLeft);
-    let right_copters = count(&chart.detected_patterns, PatternVariant::CopterRight);
-    let left_inv_copters = count(&chart.detected_patterns, PatternVariant::CopterInvLeft);
-    let right_inv_copters = count(&chart.detected_patterns, PatternVariant::CopterInvRight);
-    let total_copters = left_copters + right_copters + left_inv_copters + right_inv_copters;
-    print_kv_int("total_copters", total_copters, indent + 2);
-    print_kv_int("left_copters", left_copters, indent + 2);
-    print_kv_int("right_copters", right_copters, indent + 2);
-    print_kv_int("left_inv_copters", left_inv_copters, indent + 2);
-    print_kv_int_last("right_inv_copters", right_inv_copters, indent + 2);
-    print_indented("},", indent);
+    let left_copters =
+        count(&chart.detected_patterns, PatternVariant::CopterLeft);
+    let right_copters =
+        count(&chart.detected_patterns, PatternVariant::CopterRight);
+    let left_inv_copters =
+        count(&chart.detected_patterns, PatternVariant::CopterInvLeft);
+    let right_inv_copters =
+        count(&chart.detected_patterns, PatternVariant::CopterInvRight);
+    let total_copters =
+        left_copters + right_copters + left_inv_copters + right_inv_copters;
+    obj.insert(
+        "copters".to_string(),
+        serde_json::json!({
+            "total_copters": total_copters,
+            "left_copters": left_copters,
+            "right_copters": right_copters,
+            "left_inv_copters": left_inv_copters,
+            "right_inv_copters": right_inv_copters,
+        }),
+    );
 
     // Spirals
-    print_indented("\"spirals\": {", indent);
-    let left_spirals = count(&chart.detected_patterns, PatternVariant::SpiralLeft);
-    let right_spirals = count(&chart.detected_patterns, PatternVariant::SpiralRight);
-    let left_inv_spirals = count(&chart.detected_patterns, PatternVariant::SpiralInvLeft);
-    let right_inv_spirals = count(&chart.detected_patterns, PatternVariant::SpiralInvRight);
-    let total_spirals = left_spirals + right_spirals + left_inv_spirals + right_inv_spirals;
-    print_kv_int("total_spirals", total_spirals, indent + 2);
-    print_kv_int("left_spirals", left_spirals, indent + 2);
-    print_kv_int("right_spirals", right_spirals, indent + 2);
-    print_kv_int("left_inv_spirals", left_inv_spirals, indent + 2);
-    print_kv_int_last("right_inv_spirals", right_inv_spirals, indent + 2);
-    print_indented("},", indent);
+    let left_spirals =
+        count(&chart.detected_patterns, PatternVariant::SpiralLeft);
+    let right_spirals =
+        count(&chart.detected_patterns, PatternVariant::SpiralRight);
+    let left_inv_spirals =
+        count(&chart.detected_patterns, PatternVariant::SpiralInvLeft);
+    let right_inv_spirals =
+        count(&chart.detected_patterns, PatternVariant::SpiralInvRight);
+    let total_spirals =
+        left_spirals + right_spirals + left_inv_spirals + right_inv_spirals;
+    obj.insert(
+        "spirals".to_string(),
+        serde_json::json!({
+            "total_spirals": total_spirals,
+            "left_spirals": left_spirals,
+            "right_spirals": right_spirals,
+            "left_inv_spirals": left_inv_spirals,
+            "right_inv_spirals": right_inv_spirals,
+        }),
+    );
 
     // Turbo Candles
-    print_indented("\"turbo_candles\": {", indent);
-    let left_turbo_candles = count(&chart.detected_patterns, PatternVariant::TurboCandleLeft);
-    let right_turbo_candles = count(&chart.detected_patterns, PatternVariant::TurboCandleRight);
-    let left_inv_turbo_candles = count(&chart.detected_patterns, PatternVariant::TurboCandleInvLeft);
-    let right_inv_turbo_candles = count(&chart.detected_patterns, PatternVariant::TurboCandleInvRight);
-    let total_turbo_candles = left_turbo_candles + right_turbo_candles + left_inv_turbo_candles + right_inv_turbo_candles;
-    print_kv_int("total_turbo_candles", total_turbo_candles, indent + 2);
-    print_kv_int("left_turbo_candles", left_turbo_candles, indent + 2);
-    print_kv_int("right_turbo_candles", right_turbo_candles, indent + 2);
-    print_kv_int("left_inv_turbo_candles", left_inv_turbo_candles, indent + 2);
-    print_kv_int_last("right_inv_turbo_candles", right_inv_turbo_candles, indent + 2);
-    print_indented("},", indent);
+    let left_turbo_candles =
+        count(&chart.detected_patterns, PatternVariant::TurboCandleLeft);
+    let right_turbo_candles =
+        count(&chart.detected_patterns, PatternVariant::TurboCandleRight);
+    let left_inv_turbo_candles = count(
+        &chart.detected_patterns,
+        PatternVariant::TurboCandleInvLeft,
+    );
+    let right_inv_turbo_candles = count(
+        &chart.detected_patterns,
+        PatternVariant::TurboCandleInvRight,
+    );
+    let total_turbo_candles = left_turbo_candles
+        + right_turbo_candles
+        + left_inv_turbo_candles
+        + right_inv_turbo_candles;
+    obj.insert(
+        "turbo_candles".to_string(),
+        serde_json::json!({
+            "total_turbo_candles": total_turbo_candles,
+            "left_turbo_candles": left_turbo_candles,
+            "right_turbo_candles": right_turbo_candles,
+            "left_inv_turbo_candles": left_inv_turbo_candles,
+            "right_inv_turbo_candles": right_inv_turbo_candles,
+        }),
+    );
 
     // Hip Breakers
-    print_indented("\"hip_breakers\": {", indent);
-    let left_hip_breakers = count(&chart.detected_patterns, PatternVariant::HipBreakerLeft);
-    let right_hip_breakers = count(&chart.detected_patterns, PatternVariant::HipBreakerRight);
-    let left_inv_hip_breakers = count(&chart.detected_patterns, PatternVariant::HipBreakerInvLeft);
-    let right_inv_hip_breakers = count(&chart.detected_patterns, PatternVariant::HipBreakerInvRight);
-    let total_hip_breakers = left_hip_breakers + right_hip_breakers + left_inv_hip_breakers + right_inv_hip_breakers;
-    print_kv_int("total_hip_breakers", total_hip_breakers, indent + 2);
-    print_kv_int("left_hip_breakers", left_hip_breakers, indent + 2);
-    print_kv_int("right_hip_breakers", right_hip_breakers, indent + 2);
-    print_kv_int("left_inv_hip_breakers", left_inv_hip_breakers, indent + 2);
-    print_kv_int_last("right_inv_hip_breakers", right_inv_hip_breakers, indent + 2);
-    print_indented("},", indent);
+    let left_hip_breakers =
+        count(&chart.detected_patterns, PatternVariant::HipBreakerLeft);
+    let right_hip_breakers =
+        count(&chart.detected_patterns, PatternVariant::HipBreakerRight);
+    let left_inv_hip_breakers = count(
+        &chart.detected_patterns,
+        PatternVariant::HipBreakerInvLeft,
+    );
+    let right_inv_hip_breakers = count(
+        &chart.detected_patterns,
+        PatternVariant::HipBreakerInvRight,
+    );
+    let total_hip_breakers = left_hip_breakers
+        + right_hip_breakers
+        + left_inv_hip_breakers
+        + right_inv_hip_breakers;
+    obj.insert(
+        "hip_breakers".to_string(),
+        serde_json::json!({
+            "total_hip_breakers": total_hip_breakers,
+            "left_hip_breakers": left_hip_breakers,
+            "right_hip_breakers": right_hip_breakers,
+            "left_inv_hip_breakers": left_inv_hip_breakers,
+            "right_inv_hip_breakers": right_inv_hip_breakers,
+        }),
+    );
 
     // Doritos
-    print_indented("\"doritos\": {", indent);
-    let left_doritos = count(&chart.detected_patterns, PatternVariant::DoritoLeft);
-    let right_doritos = count(&chart.detected_patterns, PatternVariant::DoritoRight);
-    let left_inv_doritos = count(&chart.detected_patterns, PatternVariant::DoritoInvLeft);
-    let right_inv_doritos = count(&chart.detected_patterns, PatternVariant::DoritoInvRight);
-    let total_doritos = left_doritos + right_doritos + left_inv_doritos + right_inv_doritos;
-    print_kv_int("total_doritos", total_doritos, indent + 2);
-    print_kv_int("left_doritos", left_doritos, indent + 2);
-    print_kv_int("right_doritos", right_doritos, indent + 2);
-    print_kv_int("left_inv_doritos", left_inv_doritos, indent + 2);
-    print_kv_int_last("right_inv_doritos", right_inv_doritos, indent + 2);
-    print_indented("},", indent);
+    let left_doritos =
+        count(&chart.detected_patterns, PatternVariant::DoritoLeft);
+    let right_doritos =
+        count(&chart.detected_patterns, PatternVariant::DoritoRight);
+    let left_inv_doritos =
+        count(&chart.detected_patterns, PatternVariant::DoritoInvLeft);
+    let right_inv_doritos =
+        count(&chart.detected_patterns, PatternVariant::DoritoInvRight);
+    let total_doritos =
+        left_doritos + right_doritos + left_inv_doritos + right_inv_doritos;
+    obj.insert(
+        "doritos".to_string(),
+        serde_json::json!({
+            "total_doritos": total_doritos,
+            "left_doritos": left_doritos,
+            "right_doritos": right_doritos,
+            "left_inv_doritos": left_inv_doritos,
+            "right_inv_doritos": right_inv_doritos,
+        }),
+    );
 
     // Luchis
-    print_indented("\"luchis\": {", indent);
-    let left_du_luchis = count(&chart.detected_patterns, PatternVariant::LuchiLeftDU);
-    let left_ud_luchis = count(&chart.detected_patterns, PatternVariant::LuchiLeftUD);
-    let right_du_luchis = count(&chart.detected_patterns, PatternVariant::LuchiRightDU);
-    let right_ud_luchis = count(&chart.detected_patterns, PatternVariant::LuchiRightUD);
-    let total_luchis = left_du_luchis + left_ud_luchis + right_du_luchis + right_ud_luchis;
-    print_kv_int("total_luchis", total_luchis, indent + 2);
-    print_kv_int("left_du_luchis", left_du_luchis, indent + 2);
-    print_kv_int("left_ud_luchis", left_ud_luchis, indent + 2);
-    print_kv_int("right_du_luchis", right_du_luchis, indent + 2);
-    print_kv_int_last("right_ud_luchis", right_ud_luchis, indent + 2);
-    print_indented("},", indent);
+    let left_du_luchis =
+        count(&chart.detected_patterns, PatternVariant::LuchiLeftDU);
+    let left_ud_luchis =
+        count(&chart.detected_patterns, PatternVariant::LuchiLeftUD);
+    let right_du_luchis =
+        count(&chart.detected_patterns, PatternVariant::LuchiRightDU);
+    let right_ud_luchis =
+        count(&chart.detected_patterns, PatternVariant::LuchiRightUD);
+    let total_luchis =
+        left_du_luchis + left_ud_luchis + right_du_luchis + right_ud_luchis;
+    obj.insert(
+        "luchis".to_string(),
+        serde_json::json!({
+            "total_luchis": total_luchis,
+            "left_du_luchis": left_du_luchis,
+            "left_ud_luchis": left_ud_luchis,
+            "right_du_luchis": right_du_luchis,
+            "right_ud_luchis": right_ud_luchis,
+        }),
+    );
 
     // Custom patterns
-    print_indented("\"custom_patterns\": {", indent);
-    if chart.custom_patterns.is_empty() {
-        print_indented("}", indent);
+    let mut custom = JsonMap::new();
+    for cp in &chart.custom_patterns {
+        custom.insert(cp.pattern.clone(), JsonValue::from(cp.count));
+    }
+    obj.insert("custom_patterns".to_string(), JsonValue::Object(custom));
+
+    JsonValue::Object(obj)
+}
+
+fn json_tech_counts(chart: &ChartSummary) -> JsonValue {
+    serde_json::json!({
+        "crossovers": chart.tech_counts.crossovers,
+        "footswitches": chart.tech_counts.footswitches,
+        "up_footswitches": chart.tech_counts.up_footswitches,
+        "down_footswitches": chart.tech_counts.down_footswitches,
+        "sideswitches": chart.tech_counts.sideswitches,
+        "jacks": chart.tech_counts.jacks,
+        "brackets": chart.tech_counts.brackets,
+        "doublesteps": chart.tech_counts.doublesteps,
+    })
+}
+
+fn write_indent<W: Write>(writer: &mut W, indent: usize) -> io::Result<()> {
+    for _ in 0..indent {
+        writer.write_all(b" ")?;
+    }
+    Ok(())
+}
+
+fn write_json_string<W: Write>(writer: &mut W, s: &str) -> io::Result<()> {
+    let encoded = serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string());
+    writer.write_all(encoded.as_bytes())
+}
+
+fn write_json_number_for_key<W: Write>(
+    writer: &mut W,
+    key: Option<&str>,
+    number: &JsonNumber,
+) -> io::Result<()> {
+    if let Some(i) = number.as_i64() {
+        write!(writer, "{}", i)
+    } else if let Some(u) = number.as_u64() {
+        write!(writer, "{}", u)
+    } else if let Some(f) = number.as_f64() {
+        match key {
+            Some("offset") => write!(writer, "{:.3}", f),
+            Some("bpm") => write!(writer, "{}", f),
+            _ => write!(writer, "{:.2}", f),
+        }
     } else {
-        for (idx, cp) in chart.custom_patterns.iter().enumerate() {
-            if idx + 1 == chart.custom_patterns.len() {
-                print_kv_int_last(&cp.pattern, cp.count, indent + 2);
+        write!(writer, "0")
+    }
+}
+
+fn write_json_value_with_key<W: Write>(
+    writer: &mut W,
+    key: Option<&str>,
+    value: &JsonValue,
+    indent: usize,
+) -> io::Result<()> {
+    match value {
+        JsonValue::Null => writer.write_all(b"null"),
+        JsonValue::Bool(b) => {
+            if *b {
+                writer.write_all(b"true")
             } else {
-                print_kv_int(&cp.pattern, cp.count, indent + 2);
+                writer.write_all(b"false")
             }
         }
-        print_indented("}", indent);
+        JsonValue::Number(n) => write_json_number_for_key(writer, key, n),
+        JsonValue::String(s) => write_json_string(writer, s),
+        JsonValue::Array(arr) => write_json_array(writer, arr, indent),
+        JsonValue::Object(obj) => write_json_object(writer, obj, indent),
     }
 }
 
-fn print_tech_counts_fields(chart: &ChartSummary, indent: usize) {
-    print_kv_int("crossovers", chart.tech_counts.crossovers, indent);
-    print_kv_int("footswitches", chart.tech_counts.footswitches, indent);
-    print_kv_int("up_footswitches", chart.tech_counts.up_footswitches, indent);
-    print_kv_int("down_footswitches", chart.tech_counts.down_footswitches, indent);
-    print_kv_int("sideswitches", chart.tech_counts.sideswitches, indent);
-    print_kv_int("jacks", chart.tech_counts.jacks, indent);
-    print_kv_int("brackets", chart.tech_counts.brackets, indent);
-    print_kv_int_last("doublesteps", chart.tech_counts.doublesteps, indent);
-}
-
-fn print_breakdown_fields(chart: &ChartSummary, indent: usize) {
-    print_kv_str("detailed_breakdown", &chart.detailed, indent);
-    print_kv_str("partial_breakdown", &chart.partial, indent);
-    print_kv_str_last("simple_breakdown", &chart.simple, indent);
-}
-
-fn print_json_chart(chart: &ChartSummary, is_last: bool) {
-    print_indented("{", 4); // Start of chart object
-    print_indented("\"chart_info\": {", 6);
-    print_chart_info_fields(chart, 8);
-    print_indented("},", 6);
-
-    print_indented("\"arrow_stats\": {", 6);
-    print_arrow_stats_fields(chart, 8);
-    print_indented("},", 6);
-
-    print_indented("\"stream_info\": {", 6);
-    print_stream_info_fields(chart, 8);
-    print_indented("},", 6);
-
-    print_indented("\"nps\": {", 6);
-    print_nps_fields(chart, 8);
-    print_indented("},", 6);
-
-    print_indented("\"breakdown\": {", 6);
-    print_breakdown_fields(chart, 8);
-    print_indented("},", 6);
-
-    print_indented("\"mono_candle_stats\": {", 6);
-    print_mono_candle_stats_fields(chart, 8);
-    print_indented("},", 6);
-
-    print_indented("\"pattern_counts\": {", 6);
-    print_pattern_counts_fields(chart, 8);
-    print_indented("},", 6);
-
-    print_indented("\"tech_counts\": {", 6);
-    print_tech_counts_fields(chart, 8);
-    print_indented("}", 6);
-
-    if is_last {
-        print_indented("}", 4);
-    } else {
-        println!("{}{},", " ".repeat(4), "}");
+fn write_json_array<W: Write>(
+    writer: &mut W,
+    arr: &[JsonValue],
+    indent: usize,
+) -> io::Result<()> {
+    writer.write_all(b"[\n")?;
+    let mut first = true;
+    for value in arr {
+        if !first {
+            writer.write_all(b",\n")?;
+        }
+        first = false;
+        write_indent(writer, indent + 2)?;
+        write_json_value_with_key(writer, None, value, indent + 2)?;
     }
+    writer.write_all(b"\n")?;
+    write_indent(writer, indent)?;
+    writer.write_all(b"]")
+}
+
+fn write_json_object<W: Write>(
+    writer: &mut W,
+    obj: &JsonMap<String, JsonValue>,
+    indent: usize,
+) -> io::Result<()> {
+    writer.write_all(b"{\n")?;
+    let mut first = true;
+    for (key, value) in obj {
+        if !first {
+            writer.write_all(b",\n")?;
+        }
+        first = false;
+        write_indent(writer, indent + 2)?;
+        write_json_string(writer, key)?;
+        writer.write_all(b": ")?;
+        write_json_value_with_key(writer, Some(key.as_str()), value, indent + 2)?;
+    }
+    if !obj.is_empty() {
+        writer.write_all(b"\n")?;
+    }
+    write_indent(writer, indent)?;
+    writer.write_all(b"}")
 }
 
 pub fn print_json_all(simfile: &SimfileSummary) {
-    println!("{{");
-    print_kv_str("title", &simfile.title_str, 2);
-    print_kv_str("subtitle", &simfile.subtitle_str, 2);
-    print_kv_str("artist", &simfile.artist_str, 2);
-    print_kv_str("title_trans", &simfile.titletranslit_str, 2);
-    print_kv_str("subtitle_trans", &simfile.subtitletranslit_str, 2);
-    print_kv_str("artist_trans", &simfile.artisttranslit_str, 2);
-    print_indented(&format!("\"length\": \"{}\",", simfile.total_length), 2);
-    if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
-        print_indented(&format!("\"bpm\": {},", simfile.min_bpm), 2);
+    let bpm_value = if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
+        JsonValue::from(simfile.min_bpm)
     } else {
-        print_indented(&format!("\"bpm\": \"{:.0}-{:.0}\",", simfile.min_bpm, simfile.max_bpm), 2);
+        JsonValue::from(format!("{:.0}-{:.0}", simfile.min_bpm, simfile.max_bpm))
+    };
+
+    let charts: Vec<JsonValue> = simfile
+        .charts
+        .iter()
+        .map(|chart| {
+            serde_json::json!({
+                "chart_info": json_chart_info(chart),
+                "arrow_stats": json_arrow_stats(chart),
+                "stream_info": json_stream_info(chart),
+                "nps": json_nps(chart),
+                "breakdown": json_breakdown(chart),
+                "mono_candle_stats": json_mono_candle_stats(chart),
+                "pattern_counts": json_pattern_counts(chart),
+                "tech_counts": json_tech_counts(chart),
+            })
+        })
+        .collect();
+
+    let mut root_obj = JsonMap::new();
+    root_obj.insert("title".to_string(), JsonValue::from(simfile.title_str.clone()));
+    root_obj.insert("subtitle".to_string(), JsonValue::from(simfile.subtitle_str.clone()));
+    root_obj.insert("artist".to_string(), JsonValue::from(simfile.artist_str.clone()));
+    root_obj.insert("title_trans".to_string(), JsonValue::from(simfile.titletranslit_str.clone()));
+    root_obj.insert("subtitle_trans".to_string(), JsonValue::from(simfile.subtitletranslit_str.clone()));
+    root_obj.insert("artist_trans".to_string(), JsonValue::from(simfile.artisttranslit_str.clone()));
+    root_obj.insert("length".to_string(), JsonValue::from(simfile.total_length.to_string()));
+    root_obj.insert("bpm".to_string(), bpm_value);
+    root_obj.insert("min_bpm".to_string(), JsonValue::from(simfile.min_bpm));
+    root_obj.insert("max_bpm".to_string(), JsonValue::from(simfile.max_bpm));
+    root_obj.insert("average_bpm".to_string(), JsonValue::from(simfile.average_bpm));
+    root_obj.insert("median_bpm".to_string(), JsonValue::from(simfile.median_bpm));
+    root_obj.insert("bpm_data".to_string(), JsonValue::from(simfile.normalized_bpms.clone()));
+    root_obj.insert("offset".to_string(), JsonValue::from(simfile.offset));
+    root_obj.insert("charts".to_string(), JsonValue::from(charts));
+
+    let root = JsonValue::Object(root_obj);
+
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    if write_json_value_with_key(&mut handle, None, &root, 0).is_ok() {
+        let _ = writeln!(handle);
     }
-    print_kv_float("min_bpm", simfile.min_bpm, 2);
-    print_kv_float("max_bpm", simfile.max_bpm, 2);
-    print_kv_float("average_bpm", simfile.average_bpm, 2);
-    print_kv_float("median_bpm", simfile.median_bpm, 2);
-    print_kv_str("bpm_data", &simfile.normalized_bpms, 2);
-    print_indented(&format!("\"offset\": {:.3},", simfile.offset), 2);
-    print_indented("\"charts\": [", 2);
-    for (i, chart) in simfile.charts.iter().enumerate() {
-        print_json_chart(chart, i + 1 == simfile.charts.len());
-    }
-    print_indented("]", 2);
-    println!("}}");
 }
 
 fn print_csv_all(simfile: &SimfileSummary) {
