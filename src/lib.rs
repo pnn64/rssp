@@ -27,10 +27,11 @@ use crate::stats::*;
 use crate::tech::parse_step_artist_and_tech;
 
 /// Options for controlling simfile analysis.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct AnalysisOptions {
     pub strip_tags: bool,
     pub mono_threshold: usize,
+    pub custom_patterns: Vec<String>,
 }
 
 /// Parses the minimized chart data string into a sequence of note bitmasks.
@@ -87,7 +88,7 @@ fn compute_mono_and_candle_stats(
     bitmasks: &[u8],
     stats: &stats::ArrowStats,
     detected_patterns: &HashMap<PatternVariant, u32>,
-    options: AnalysisOptions,
+    options: &AnalysisOptions,
 ) -> (u32, u32, u32, f64, u32, f64) {
     if stats.total_steps <= 1 {
         return (0, 0, 0, 0.0, 0, 0.0);
@@ -179,7 +180,7 @@ fn build_chart_summary(
     chart_scrolls_opt: Option<Vec<u8>>,
     normalized_global_bpms: &str,
     extension: &str,
-    options: AnalysisOptions,
+    options: &AnalysisOptions,
     offset: f64,
 ) -> Option<ChartSummary> {
     let chart_start_time = Instant::now();
@@ -254,6 +255,12 @@ fn build_chart_summary(
         compute_pattern_and_anchor_stats(&bitmasks);
     let (facing_left, facing_right, mono_total, mono_percent, candle_total, candle_percent) =
         compute_mono_and_candle_stats(&bitmasks, &stats, &detected_patterns, options);
+
+    let custom_patterns = if options.custom_patterns.is_empty() {
+        Vec::new()
+    } else {
+        detect_custom_patterns(&bitmasks, &options.custom_patterns)
+    };
     
     let tech_counts = step_parity::analyze(&minimized_chart, &bpm_map, offset);
 
@@ -288,6 +295,7 @@ fn build_chart_summary(
         candle_total,
         candle_percent,
         tech_counts,
+        custom_patterns,
         short_hash: metrics.short_hash,
         bpm_neutral_hash: metrics.bpm_neutral_hash,
         elapsed: elapsed_chart,
@@ -380,7 +388,7 @@ pub fn analyze(
                 entry.chart_scrolls,
                 &normalized_global_bpms,
                 extension,
-                options,
+                &options,
                 offset,
             )
         })

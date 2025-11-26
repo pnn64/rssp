@@ -58,7 +58,7 @@ fn find_all_simfiles(root: &Path) -> Vec<PathBuf> {
 }
 
 /// Analyzes a single simfile and returns the summary
-fn analyze_simfile(path: &Path, options: AnalysisOptions) -> io::Result<rssp::report::SimfileSummary> {
+fn analyze_simfile(path: &Path, options: &AnalysisOptions) -> io::Result<rssp::report::SimfileSummary> {
     let mut file = File::open(path)?;
     let mut simfile_data = Vec::new();
     file.read_to_end(&mut simfile_data)?;
@@ -68,7 +68,7 @@ fn analyze_simfile(path: &Path, options: AnalysisOptions) -> io::Result<rssp::re
         .and_then(|e| e.to_str())
         .unwrap_or("");
     
-    analyze(&simfile_data, extension, options)
+    analyze(&simfile_data, extension, options.clone())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
@@ -110,6 +110,7 @@ fn main() -> io::Result<()> {
         eprintln!("  --csv           CSV output format");
         eprintln!("  --strip-tags    Strip title tags from output");
         eprintln!("  --mono-threshold <value>  Set mono threshold (default: 6)");
+        eprintln!("  --custom-pattern <pattern>  Count a custom LRUDN pattern (e.g. DULDUDLR)");
         eprintln!("\nFolder analysis:");
         eprintln!("  When a folder path is provided, rssp will recursively scan for");
         eprintln!("  simfiles, preferring .ssc files over .sm files when both exist.");
@@ -137,9 +138,37 @@ fn main() -> io::Result<()> {
         }
     }
 
+    let mut custom_patterns: Vec<String> = Vec::new();
+    let mut i = 2;
+    while i < args.len() {
+        if args[i] == "--custom-pattern" {
+            if let Some(pattern_str) = args.get(i + 1) {
+                if pattern_str.is_empty() {
+                    eprintln!("Error: Empty value for --custom-pattern.");
+                    std::process::exit(1);
+                }
+                if !pattern_str.chars().all(|c| matches!(c, 'L' | 'l' | 'D' | 'd' | 'U' | 'u' | 'R' | 'r' | 'N' | 'n')) {
+                    eprintln!(
+                        "Error: Invalid character in custom pattern '{}'. Allowed characters: L, D, U, R, N.",
+                        pattern_str
+                    );
+                    std::process::exit(1);
+                }
+                custom_patterns.push(pattern_str.to_uppercase());
+                i += 2;
+                continue;
+            } else {
+                eprintln!("Error: Missing value for --custom-pattern.");
+                std::process::exit(1);
+            }
+        }
+        i += 1;
+    }
+
     let options = AnalysisOptions {
         strip_tags: args.iter().any(|a| a == "--strip-tags"),
         mono_threshold,
+        custom_patterns,
     };
 
     // --- Determine output mode ---
@@ -182,7 +211,7 @@ fn main() -> io::Result<()> {
             eprintln!("Analyzing [{}/{}]: {}", idx + 1, simfiles.len(), simfile_path.display());
         }
 
-        let simfile = match analyze_simfile(simfile_path, options) {
+        let simfile = match analyze_simfile(simfile_path, &options) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Error analyzing {}: {}", simfile_path.display(), e);

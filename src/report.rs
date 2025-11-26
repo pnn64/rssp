@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::patterns::PatternVariant;
+use crate::patterns::{CustomPatternSummary, PatternVariant};
 use crate::stats::{ArrowStats, StreamCounts};
 use crate::step_parity::TechCounts;
 
@@ -36,6 +36,7 @@ pub struct ChartSummary {
     pub candle_total:      u32,
     pub candle_percent:    f64,
     pub tech_counts:       TechCounts,
+    pub custom_patterns:   Vec<CustomPatternSummary>,
     pub short_hash:        String,
     pub bpm_neutral_hash:  String,
     pub elapsed:           Duration,
@@ -260,6 +261,13 @@ fn print_pretty_chart(chart: &ChartSummary) {
     println!("Jacks: {}", chart.tech_counts.jacks);
     println!("Brackets: {}", chart.tech_counts.brackets);
     println!("Doublesteps: {}", chart.tech_counts.doublesteps);
+
+    if !chart.custom_patterns.is_empty() {
+        println!("\n--- Custom Patterns ---");
+        for cp in &chart.custom_patterns {
+            println!("{}: {}", cp.pattern, cp.count);
+        }
+    }
 
     if !chart.detailed.is_empty() {
         println!("\n--- Detailed Breakdown ---");
@@ -510,6 +518,13 @@ fn print_full_chart(chart: &ChartSummary) {
     let total_luchis = left_du_luchis + left_ud_luchis + right_du_luchis + right_ud_luchis;
     println!("Luchis: {} ({} Left DU, {} Left UD, {} Right DU, {} Right UD)",
         total_luchis, left_du_luchis, left_ud_luchis, right_du_luchis, right_ud_luchis);
+
+    if !chart.custom_patterns.is_empty() {
+        println!("\n--- Custom Patterns ---");
+        for cp in &chart.custom_patterns {
+            println!("{}: {}", cp.pattern, cp.count);
+        }
+    }
 }
 
 fn print_chart_info_fields(chart: &ChartSummary, indent: usize) {
@@ -794,7 +809,22 @@ fn print_pattern_counts_fields(chart: &ChartSummary, indent: usize) {
     print_kv_int("left_ud_luchis", left_ud_luchis, indent + 2);
     print_kv_int("right_du_luchis", right_du_luchis, indent + 2);
     print_kv_int_last("right_ud_luchis", right_ud_luchis, indent + 2);
-    print_indented("}", indent);
+    print_indented("},", indent);
+
+    // Custom patterns
+    print_indented("\"custom_patterns\": {", indent);
+    if chart.custom_patterns.is_empty() {
+        print_indented("}", indent);
+    } else {
+        for (idx, cp) in chart.custom_patterns.iter().enumerate() {
+            if idx + 1 == chart.custom_patterns.len() {
+                print_kv_int_last(&cp.pattern, cp.count, indent + 2);
+            } else {
+                print_kv_int(&cp.pattern, cp.count, indent + 2);
+            }
+        }
+        print_indented("}", indent);
+    }
 }
 
 fn print_tech_counts_fields(chart: &ChartSummary, indent: usize) {
@@ -884,7 +914,7 @@ pub fn print_json_all(simfile: &SimfileSummary) {
 }
 
 fn print_csv_all(simfile: &SimfileSummary) {
-    println!(
+    let mut header = String::from(
         "Title,Subtitle,Artist,Title trans,Subtitle trans,Artist trans,Length,BPM,BPM Tier,min_bpm,max_bpm,average_bpm,median bpm,BPM-data,offset,file_md5_hash,\
 step_type,difficulty,rating,step_artist,tech_notation,sha1_hash,bpm_neutral_hash,\
 total_arrows,left_arrows,down_arrows,up_arrows,right_arrows,\
@@ -910,6 +940,16 @@ total_hip_breakers,left_hip_breakers,right_hip_breakers,left_inv_hip_breakers,ri
 total_doritos,left_doritos,right_doritos,left_inv_doritos,right_inv_doritos,\
 total_luchis,left_du_luchis,left_ud_luchis,right_du_luchis,right_ud_luchis"
     );
+
+    if let Some(first_chart) = simfile.charts.first() {
+        for cp in &first_chart.custom_patterns {
+            header.push(',');
+            header.push_str("custom_pattern_");
+            header.push_str(&cp.pattern);
+        }
+    }
+
+    println!("{}", header);
 
     for chart in &simfile.charts {
         print_csv_row(simfile, chart);
@@ -1229,13 +1269,17 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
     let right_du_luchis = count(&chart.detected_patterns, PatternVariant::LuchiRightDU);
     let right_ud_luchis = count(&chart.detected_patterns, PatternVariant::LuchiRightUD);
     let total_luchis = left_du_luchis + left_ud_luchis + right_du_luchis + right_ud_luchis;
-    print!("{},{},{},{},{},",
+    print!("{},{},{},{},{}",
         total_luchis,
         left_du_luchis,
         left_ud_luchis,
         right_du_luchis,
         right_ud_luchis,
     );
+
+    for cp in &chart.custom_patterns {
+        print!(",{}", cp.count);
+    }
 
     println!();
 }

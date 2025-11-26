@@ -217,7 +217,7 @@ Elapsed Time: 18.667896ms
 - [x] Check that some special characters are parser correctly (CODE:Ø as opposed to CODE\:Ø)
 - [x] Fix parsing for "No Tech" in artist name
 - [ ] Doubles (8-panel) parsing
-- [ ] Custom patterns flag --custom-pattern DULDUDLR
+- [x] Custom patterns flag --custom-pattern DULDUDLR
 - [x] Proper parsing for Tech (port Step Parity from ITGMania)
 - [ ] Add many tests for edge case simfiles
 - [x] Add "matrix rating" (calculate estimated rating based on rating matrix sheet)

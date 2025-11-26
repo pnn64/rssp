@@ -67,6 +67,12 @@ pub enum PatternVariant {
     TurboCandleInvRight,
 }
 
+#[derive(Debug, Clone)]
+pub struct CustomPatternSummary {
+    pub pattern: String,
+    pub count: u32,
+}
+
 pub static DEFAULT_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::new(|| {
     vec![
     // Candles
@@ -212,6 +218,32 @@ pub fn detect_patterns(
         }
     }
     results
+}
+
+pub fn detect_custom_patterns(bitmasks: &[u8], patterns: &[String]) -> Vec<CustomPatternSummary> {
+    let mut summaries = Vec::new();
+
+    for pattern_str in patterns {
+        let upper = pattern_str.to_uppercase();
+        let pat_bits = string_to_pattern_bits(&upper);
+        let plen = pat_bits.len();
+        let mut count = 0u32;
+
+        if plen > 0 && bitmasks.len() >= plen {
+            for i in 0..=bitmasks.len() - plen {
+                if bitmasks[i..i + plen] == pat_bits[..] {
+                    count += 1;
+                }
+            }
+        }
+
+        summaries.push(CustomPatternSummary {
+            pattern: upper,
+            count,
+        });
+    }
+
+    summaries
 }
 
 #[inline]
