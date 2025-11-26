@@ -269,6 +269,131 @@ fn count(map: &HashMap<PatternVariant, u32>, variant: PatternVariant) -> u32 {
     *map.get(&variant).unwrap_or(&0)
 }
 
+fn chart_or_global<'a>(chart_value: &'a Option<String>, global_value: &'a str) -> Option<&'a str> {
+    if let Some(s) = chart_value {
+        if !s.is_empty() {
+            return Some(s.as_str());
+        }
+    }
+    if !global_value.is_empty() {
+        Some(global_value)
+    } else {
+        None
+    }
+}
+
+fn count_timing_segments_from_str(s: &str) -> u32 {
+    s.split(',')
+        .filter(|part| !part.trim().is_empty())
+        .count() as u32
+}
+
+fn count_timing_segments(opt: Option<&str>) -> u32 {
+    opt.map_or(0, count_timing_segments_from_str)
+}
+
+fn count_gimmick_speed_segments(opt: Option<&str>) -> u32 {
+    let Some(s) = opt else {
+        return 0;
+    };
+
+    s.split(',')
+        .filter_map(|segment| {
+            let segment = segment.trim();
+            if segment.is_empty() {
+                return None;
+            }
+
+            let mut parts = segment.split('=');
+            let _beat = parts.next();
+            let factor_str = parts.next()?;
+            let factor = factor_str.trim().parse::<f64>().ok()?;
+
+            if (factor - 1.0).abs() > 1e-6 {
+                Some(())
+            } else {
+                None
+            }
+        })
+        .count() as u32
+}
+
+fn count_gimmick_scroll_segments(opt: Option<&str>) -> u32 {
+    let Some(s) = opt else {
+        return 0;
+    };
+
+    s.split(',')
+        .filter_map(|segment| {
+            let segment = segment.trim();
+            if segment.is_empty() {
+                return None;
+            }
+
+            let mut parts = segment.split('=');
+            let _beat = parts.next();
+            let value_str = parts.next()?;
+            let value = value_str.trim().parse::<f64>().ok()?;
+
+            if (value - 1.0).abs() > 1e-6 {
+                Some(())
+            } else {
+                None
+            }
+        })
+        .count() as u32
+}
+
+fn print_gimmicks(chart: &ChartSummary, simfile: &SimfileSummary) {
+    let has_lifts = chart.stats.lifts > 0;
+    let has_fakes = chart.stats.fakes > 0;
+    let stops = chart_or_global(&chart.chart_stops, &simfile.normalized_stops);
+    let delays = chart_or_global(&chart.chart_delays, &simfile.normalized_delays);
+    let warps = chart_or_global(&chart.chart_warps, &simfile.normalized_warps);
+    let speeds = chart_or_global(&chart.chart_speeds, &simfile.normalized_speeds);
+    let scrolls = chart_or_global(&chart.chart_scrolls, &simfile.normalized_scrolls);
+
+    let stop_count = count_timing_segments(stops);
+    let delay_count = count_timing_segments(delays);
+    let warp_count = count_timing_segments(warps);
+    let speed_count = count_gimmick_speed_segments(speeds);
+    let scroll_count = count_gimmick_scroll_segments(scrolls);
+
+    if !has_lifts
+        && !has_fakes
+        && stop_count == 0
+        && delay_count == 0
+        && warp_count == 0
+        && speed_count == 0
+        && scroll_count == 0
+    {
+        return;
+    }
+
+    println!("\n--- Gimmicks ---");
+    if has_lifts {
+        println!("Lifts: {}", chart.stats.lifts);
+    }
+    if has_fakes {
+        println!("Fakes: {}", chart.stats.fakes);
+    }
+    if stop_count > 0 {
+        println!("Stops/Freezes: {}", stop_count);
+    }
+    if speed_count > 0 {
+        println!("Speeds: {}", speed_count);
+    }
+    if scroll_count > 0 {
+        println!("Scrolls: {}", scroll_count);
+    }
+    if delay_count > 0 {
+        println!("Delays: {}", delay_count);
+    }
+    if warp_count > 0 {
+        println!("Warps: {}", warp_count);
+    }
+}
+
 fn print_pretty_all(simfile: &SimfileSummary) {
     println!("--- Song Details ---");
     println!("Title: {}{} by {}",
@@ -290,11 +415,11 @@ fn print_pretty_all(simfile: &SimfileSummary) {
     }
 
     for chart in &simfile.charts {
-        print_pretty_chart(chart);
+        print_pretty_chart(chart, simfile);
     }
 }
 
-fn print_pretty_chart(chart: &ChartSummary) {
+fn print_pretty_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
     let header = format!("{} {} : {}", chart.difficulty_str, chart.rating_str, chart.step_artist_str.join(", "));
     println!("\n{}", header);
     println!("{}", "-".repeat(header.len()));
@@ -325,13 +450,7 @@ fn print_pretty_chart(chart: &ChartSummary) {
     println!("Rolls: {}", chart.stats.rolls);
     println!("Mines: {}", chart.stats.mines);
 
-    if chart.stats.lifts > 0 {
-        println!("Lifts: {}", chart.stats.lifts);
-    }
-
-    if chart.stats.fakes > 0 {
-        println!("Fakes: {}", chart.stats.fakes);
-    }
+    print_gimmicks(chart, simfile);
 
     println!("\n--- Pattern Analysis ---");
     let candle_left = chart.detected_patterns.get(&PatternVariant::CandleLeft).unwrap_or(&0);
@@ -405,12 +524,12 @@ fn print_full_all(simfile: &SimfileSummary) {
     println!("Offset: {:.3}", simfile.offset);
 
     for chart in &simfile.charts {
-        print_full_chart(chart);
+        print_full_chart(chart, simfile);
     }
     println!("\nElapsed Time: {:?}", simfile.total_elapsed);
 }
 
-fn print_full_chart(chart: &ChartSummary) {
+fn print_full_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
     let header = format!("{} {} : {}", chart.difficulty_str, chart.rating_str, chart.step_artist_str.join(", "));
     println!("\n{}", header);
     println!("{}", "-".repeat(header.len()));
@@ -452,8 +571,8 @@ fn print_full_chart(chart: &ChartSummary) {
     println!("Holds: {}", chart.stats.holds);
     println!("Rolls: {}", chart.stats.rolls);
     println!("Mines: {}", chart.stats.mines);
-    println!("Lifts: {}", chart.stats.lifts);
-    println!("Fakes: {}", chart.stats.fakes);
+
+    print_gimmicks(chart, simfile);
 
     println!("\n--- Pattern Analysis ---");
     let candle_left = chart.detected_patterns.get(&PatternVariant::CandleLeft).unwrap_or(&0);
@@ -738,8 +857,6 @@ fn json_arrow_stats(chart: &ChartSummary) -> JsonValue {
         "holds": chart.stats.holds,
         "rolls": chart.stats.rolls,
         "mines": chart.stats.mines,
-        "lifts": chart.stats.lifts,
-        "fakes": chart.stats.fakes,
     })
 }
 
@@ -794,6 +911,34 @@ fn json_mono_candle_stats(chart: &ChartSummary) -> JsonValue {
         "right_face_mono": chart.facing_right,
         "mono_percent": chart.mono_percent,
     })
+}
+
+fn json_gimmicks(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
+    let lifts = chart.stats.lifts;
+    let fakes = chart.stats.fakes;
+    let stops = chart_or_global(&chart.chart_stops, &simfile.normalized_stops);
+    let delays = chart_or_global(&chart.chart_delays, &simfile.normalized_delays);
+    let warps = chart_or_global(&chart.chart_warps, &simfile.normalized_warps);
+    let speeds = chart_or_global(&chart.chart_speeds, &simfile.normalized_speeds);
+    let scrolls = chart_or_global(&chart.chart_scrolls, &simfile.normalized_scrolls);
+
+    let stop_count = count_timing_segments(stops);
+    let delay_count = count_timing_segments(delays);
+    let warp_count = count_timing_segments(warps);
+    let speed_count = count_gimmick_speed_segments(speeds);
+    let scroll_count = count_gimmick_scroll_segments(scrolls);
+
+    let mut obj = JsonMap::new();
+
+    obj.insert("lifts".to_string(), JsonValue::from(lifts));
+    obj.insert("fakes".to_string(), JsonValue::from(fakes));
+    obj.insert("stops_freezes".to_string(), JsonValue::from(stop_count));
+    obj.insert("speeds".to_string(), JsonValue::from(speed_count));
+    obj.insert("scrolls".to_string(), JsonValue::from(scroll_count));
+    obj.insert("delays".to_string(), JsonValue::from(delay_count));
+    obj.insert("warps".to_string(), JsonValue::from(warp_count));
+
+    JsonValue::Object(obj)
 }
 
 fn json_pattern_counts(chart: &ChartSummary) -> JsonValue {
@@ -1080,11 +1225,13 @@ fn json_pattern_counts(chart: &ChartSummary) -> JsonValue {
     );
 
     // Custom patterns
-    let mut custom = JsonMap::new();
-    for cp in &chart.custom_patterns {
-        custom.insert(cp.pattern.clone(), JsonValue::from(cp.count));
+    if !chart.custom_patterns.is_empty() {
+        let mut custom = JsonMap::new();
+        for cp in &chart.custom_patterns {
+            custom.insert(cp.pattern.clone(), JsonValue::from(cp.count));
+        }
+        obj.insert("custom_patterns".to_string(), JsonValue::Object(custom));
     }
-    obj.insert("custom_patterns".to_string(), JsonValue::Object(custom));
 
     JsonValue::Object(obj)
 }
@@ -1211,16 +1358,22 @@ pub fn print_json_all(simfile: &SimfileSummary) {
         .charts
         .iter()
         .map(|chart| {
-            serde_json::json!({
-                "chart_info": json_chart_info(chart),
-                "arrow_stats": json_arrow_stats(chart),
-                "stream_info": json_stream_info(chart),
-                "nps": json_nps(chart),
-                "breakdown": json_breakdown(chart),
-                "mono_candle_stats": json_mono_candle_stats(chart),
-                "pattern_counts": json_pattern_counts(chart),
-                "tech_counts": json_tech_counts(chart),
-            })
+            let mut chart_obj = JsonMap::new();
+
+            chart_obj.insert("chart_info".to_string(), json_chart_info(chart));
+            chart_obj.insert("arrow_stats".to_string(), json_arrow_stats(chart));
+            chart_obj.insert("gimmicks".to_string(), json_gimmicks(chart, simfile));
+            chart_obj.insert("stream_info".to_string(), json_stream_info(chart));
+            chart_obj.insert("nps".to_string(), json_nps(chart));
+            chart_obj.insert("breakdown".to_string(), json_breakdown(chart));
+            chart_obj.insert(
+                "mono_candle_stats".to_string(),
+                json_mono_candle_stats(chart),
+            );
+            chart_obj.insert("pattern_counts".to_string(), json_pattern_counts(chart));
+            chart_obj.insert("tech_counts".to_string(), json_tech_counts(chart));
+
+            JsonValue::Object(chart_obj)
         })
         .collect();
 
@@ -1255,7 +1408,7 @@ fn print_csv_all(simfile: &SimfileSummary) {
         "Title,Subtitle,Artist,Title trans,Subtitle trans,Artist trans,Length,BPM,BPM Tier,min_bpm,max_bpm,average_bpm,median bpm,BPM-data,offset,file_md5_hash,\
 step_type,difficulty,rating,step_artist,tech_notation,sha1_hash,bpm_neutral_hash,\
 total_arrows,left_arrows,down_arrows,up_arrows,right_arrows,\
-total_steps,jumps,hands,holds,rolls,mines,lifts,fakes,\
+total_steps,jumps,hands,holds,rolls,mines,lifts,fakes,stops_freezes,delays,warps,speeds,scrolls,\
 total_streams,16th_streams,20th_streams,24th_streams,32nd_streams,total_breaks,stream_percent,adj_stream_percent,max_nps,median_nps,matrix_rating,mono_total,\
 total_candles,left_foot_candles,right_foot_candles,candles_percent,\
 total_mono,left_face_mono,right_face_mono,mono_percent,\
@@ -1353,6 +1506,26 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
         chart.stats.mines,
         chart.stats.lifts,
         chart.stats.fakes,
+    );
+
+    let stops = chart_or_global(&chart.chart_stops, &simfile.normalized_stops);
+    let delays = chart_or_global(&chart.chart_delays, &simfile.normalized_delays);
+    let warps = chart_or_global(&chart.chart_warps, &simfile.normalized_warps);
+    let speeds = chart_or_global(&chart.chart_speeds, &simfile.normalized_speeds);
+    let scrolls = chart_or_global(&chart.chart_scrolls, &simfile.normalized_scrolls);
+
+    let stop_count = count_timing_segments(stops);
+    let delay_count = count_timing_segments(delays);
+    let warp_count = count_timing_segments(warps);
+    let speed_count = count_gimmick_speed_segments(speeds);
+    let scroll_count = count_gimmick_scroll_segments(scrolls);
+
+    print!("{},{},{},{},{},",
+        stop_count,
+        delay_count,
+        warp_count,
+        speed_count,
+        scroll_count,
     );
 
     let total_streams = chart.total_streams;
