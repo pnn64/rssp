@@ -212,6 +212,7 @@ Elapsed Time: 18.667896ms
 ## TODO
 - [x] Count Fakes and Lifts
 - [x] Properly parse Ivaltek (indented NOTES) from SHARPNELSTREAMZ v2
+- [ ] DWI parsing
 - [ ] Properly handle empty charts
 - [x] Fix parsing of multiple simfile authors with '&' (for instance Maxx & Zaia)
 - [x] Check that some special characters are parser correctly (CODE:Ø as opposed to CODE\:Ø)
