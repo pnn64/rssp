@@ -285,6 +285,7 @@ fn build_chart_summary(
         stats,
         stream_counts: metrics.stream_counts,
         total_streams: metrics.total_streams,
+        mines_nonfake: 0,
         total_measures: measure_densities.len(),
         detailed: metrics.detailed_breakdown,
         partial: metrics.partial_breakdown,
@@ -388,7 +389,7 @@ pub fn analyze(
     let bpm_values: Vec<f64> = global_bpm_map.iter().map(|&(_, bpm)| bpm).collect();
     let (median_bpm, average_bpm) = compute_bpm_stats(&bpm_values);
 
-    let chart_summaries: Vec<ChartSummary> = parsed_data
+    let mut chart_summaries: Vec<ChartSummary> = parsed_data
         .notes_list
         .into_iter()
         .filter_map(|entry| {
@@ -417,7 +418,7 @@ pub fn analyze(
     let global_warp_map = parse_timing_map(&normalized_global_warps);
 
     let total_length = chart_summaries
-        .iter()
+        .iter_mut()
         .map(|chart| {
             // Prefer chart-specific timing tags when available; otherwise, use song timing.
             let bpm_map = if let Some(ref chart_bpms) = chart.chart_bpms {
@@ -440,6 +441,19 @@ pub fn analyze(
             } else {
                 global_warp_map.clone()
             };
+
+            // Compute mines that are actually judgable (not inside warps or #FAKES).
+            let fakes_str = chart
+                .chart_fakes
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&normalized_global_fakes);
+            let fake_map = parse_timing_map(fakes_str);
+            chart.mines_nonfake = compute_mines_nonfake(
+                &chart.minimized_note_data,
+                &warp_map,
+                &fake_map,
+            );
 
             compute_total_chart_length(
                 &chart.minimized_note_data,

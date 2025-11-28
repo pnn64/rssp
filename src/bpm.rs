@@ -254,6 +254,102 @@ pub fn compute_total_chart_length(
     get_elapsed_time(target_beat, bpm_map, stop_map, delay_map, warp_map).floor() as i32
 }
 
+/// Computes the number of mines that are actually judgable, i.e. not inside
+/// warp ranges or #FAKES ranges. Uses the minimized chart data format
+/// produced by `minimize_chart_and_count`.
+pub fn compute_mines_nonfake(
+    minimized_note_data: &[u8],
+    warp_map: &[(f64, f64)],
+    fake_map: &[(f64, f64)],
+) -> u32 {
+    #[derive(Clone, Copy)]
+    struct RowInfo {
+        measure_idx: usize,
+        row_in_measure: usize,
+        is_mine: bool,
+    }
+
+    let mut rows: Vec<RowInfo> = Vec::new();
+    let mut rows_per_measure: Vec<usize> = Vec::new();
+    let mut current_rows: usize = 0;
+    let mut measure_idx: usize = 0;
+    let mut row_in_measure: usize = 0;
+
+    for line in minimized_note_data.split(|&b| b == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        if line[0] == b',' {
+            rows_per_measure.push(current_rows);
+            measure_idx += 1;
+            current_rows = 0;
+            row_in_measure = 0;
+            continue;
+        }
+        if line.len() < 4 {
+            continue;
+        }
+        let is_mine = line[..4]
+            .iter()
+            .any(|&b| b == b'M' || b == b'm');
+
+        rows.push(RowInfo {
+            measure_idx,
+            row_in_measure,
+            is_mine,
+        });
+        current_rows += 1;
+        row_in_measure += 1;
+    }
+    rows_per_measure.push(current_rows);
+
+    if rows.is_empty() {
+        return 0;
+    }
+
+    let mut beats: Vec<f64> = Vec::with_capacity(rows.len());
+    for info in &rows {
+        let total_rows = rows_per_measure
+            .get(info.measure_idx)
+            .copied()
+            .unwrap_or(0)
+            .max(1) as f64;
+        let row_index = info.row_in_measure as f64;
+        let beats_into_measure = 4.0 * (row_index / total_rows);
+        let beat = (info.measure_idx as f64) * 4.0 + beats_into_measure;
+        beats.push(beat);
+    }
+
+    #[inline]
+    fn is_active_at_beat(beat: f64, segments: &[(f64, f64)]) -> bool {
+        if segments.is_empty() {
+            return false;
+        }
+        let idx = segments.partition_point(|(seg_beat, _)| *seg_beat <= beat);
+        if idx == 0 {
+            return false;
+        }
+        let (start, len) = segments[idx - 1];
+        if !len.is_finite() || len <= 0.0 {
+            return false;
+        }
+        beat >= start && beat < start + len
+    }
+
+    let mut count: u32 = 0;
+    for (info, beat) in rows.iter().zip(beats.iter()) {
+        if !info.is_mine {
+            continue;
+        }
+        let b = *beat;
+        if !is_active_at_beat(b, warp_map) && !is_active_at_beat(b, fake_map) {
+            count = count.saturating_add(1);
+        }
+    }
+
+    count
+}
+
 pub fn compute_measure_nps_vec(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> Vec<f64> {
     measure_densities
         .iter()

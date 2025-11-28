@@ -179,6 +179,8 @@ pub struct ChartSummary {
     pub stream_counts:     StreamCounts,
     pub total_measures:    usize,
     pub total_streams:     u32,
+    /// Mines that are actually judgable (not inside warps or #FAKES).
+    pub mines_nonfake:     u32,
     pub detailed:          String,
     pub partial:           String,
     pub simple:            String,
