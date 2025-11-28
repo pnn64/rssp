@@ -68,6 +68,7 @@ pub struct ParsedChartEntry {
     pub chart_warps: Option<Vec<u8>>,
     pub chart_speeds: Option<Vec<u8>>,
     pub chart_scrolls: Option<Vec<u8>>,
+    pub chart_fakes: Option<Vec<u8>>,
 }
 
 /// A struct to hold the raw data parsed from a simfile's header tags.
@@ -86,6 +87,7 @@ pub struct ParsedSimfileData<'a> {
     pub warps: Option<&'a [u8]>,
     pub speeds: Option<&'a [u8]>,
     pub scrolls: Option<&'a [u8]>,
+    pub fakes: Option<&'a [u8]>,
     pub banner: Option<&'a [u8]>,
     pub background: Option<&'a [u8]>,
     pub music: Option<&'a [u8]>,
@@ -136,6 +138,8 @@ pub fn extract_sections<'a>(
             } else if current_slice.starts_with(b"#FREEZES:") {
                 // Older charts sometimes use #FREEZES instead of #STOPS.
                 result.stops = parse_tag(current_slice, b"#FREEZES:".len());
+            } else if current_slice.starts_with(b"#FAKES:") {
+                result.fakes = parse_tag(current_slice, b"#FAKES:".len());
             } else if current_slice.starts_with(b"#DELAYS:") {
                 result.delays = parse_tag(current_slice, b"#DELAYS:".len());
             } else if current_slice.starts_with(b"#WARPS:") {
@@ -179,6 +183,7 @@ pub fn extract_sections<'a>(
                 let chart_warps = parse_subtag(notedata_slice, b"#WARPS:");
                 let chart_speeds = parse_subtag(notedata_slice, b"#SPEEDS:");
                 let chart_scrolls = parse_subtag(notedata_slice, b"#SCROLLS:");
+                let chart_fakes = parse_subtag(notedata_slice, b"#FAKES:");
 
                 let concatenated =
                     [step_type, description, difficulty, meter, credit, notes].join(&b':');
@@ -190,6 +195,7 @@ pub fn extract_sections<'a>(
                     chart_warps,
                     chart_speeds,
                     chart_scrolls,
+                    chart_fakes,
                 });
 
                 i = notedata_end;
@@ -201,14 +207,17 @@ pub fn extract_sections<'a>(
                     .position(|&b| b == b';')
                     .map(|e| notes_start + e)
                     .unwrap_or(data.len());
+                let block = data[notes_start..notes_end].to_vec();
+                let chart_fakes = parse_subtag(&block, b"#FAKES:");
                 result.notes_list.push(ParsedChartEntry {
-                    notes: data[notes_start..notes_end].to_vec(),
+                    notes: block,
                     chart_bpms: None,
                     chart_stops: None,
                     chart_delays: None,
                     chart_warps: None,
                     chart_speeds: None,
                     chart_scrolls: None,
+                    chart_fakes,
                 });
                 i = notes_end + 1;
                 continue; // Skip the i += 1 at the end

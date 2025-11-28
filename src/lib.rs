@@ -178,6 +178,7 @@ fn build_chart_summary(
     chart_stops_opt: Option<Vec<u8>>,
     chart_speeds_opt: Option<Vec<u8>>,
     chart_scrolls_opt: Option<Vec<u8>>,
+    chart_fakes_opt: Option<Vec<u8>>,
     normalized_global_bpms: &str,
     extension: &str,
     options: &AnalysisOptions,
@@ -247,6 +248,13 @@ fn build_chart_summary(
             .map(normalize_float_digits)
             .filter(|s| !s.is_empty())
     });
+    let chart_fakes = chart_fakes_opt.and_then(|bytes| {
+        std::str::from_utf8(&bytes)
+            .ok()
+            .map(normalize_float_digits)
+            .filter(|s| !s.is_empty())
+    });
+
     let metrics =
         compute_derived_chart_metrics(&measure_densities, &bpm_map, &minimized_chart, &bpms_to_use);
 
@@ -308,6 +316,7 @@ fn build_chart_summary(
         chart_bpms,
         chart_delays,
         chart_warps,
+        chart_fakes,
     })
 }
 
@@ -368,6 +377,11 @@ pub fn analyze(
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
     let normalized_global_scrolls = normalize_float_digits(global_scrolls_raw);
+    let global_fakes_raw = parsed_data
+        .fakes
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .unwrap_or("");
+    let normalized_global_fakes = normalize_float_digits(global_fakes_raw);
 
     let global_bpm_map = parse_bpm_map(&normalized_global_bpms);
     let (min_bpm_i32, max_bpm_i32) = compute_bpm_range(&global_bpm_map);
@@ -386,6 +400,7 @@ pub fn analyze(
                 entry.chart_stops,
                 entry.chart_speeds,
                 entry.chart_scrolls,
+                entry.chart_fakes,
                 &normalized_global_bpms,
                 extension,
                 &options,
@@ -447,6 +462,7 @@ pub fn analyze(
         normalized_warps: normalized_global_warps,
         normalized_speeds: normalized_global_speeds,
         normalized_scrolls: normalized_global_scrolls,
+        normalized_fakes: normalized_global_fakes,
         banner_path: banner_path_str,
         background_path: background_path_str,
         music_path: music_path_str,

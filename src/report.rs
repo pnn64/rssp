@@ -209,6 +209,7 @@ pub struct ChartSummary {
     pub chart_bpms:        Option<String>,
     pub chart_delays:      Option<String>,
     pub chart_warps:       Option<String>,
+    pub chart_fakes:       Option<String>,
 }
 
 // Make the struct and its fields public
@@ -226,6 +227,7 @@ pub struct SimfileSummary {
     pub normalized_delays:    String,
     pub normalized_speeds:    String,
     pub normalized_scrolls:   String,
+    pub normalized_fakes:     String,
     pub banner_path:          String,
     pub background_path:      String,
     pub music_path:           String,
