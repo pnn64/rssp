@@ -1,0 +1,28 @@
+name: rssp Parity Test
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: self-hosted 
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        # This is critical: it fetches the rssp-tests submodule content
+        submodules: recursive
+        # Optional: verify LFS isn't needed (since you used Zstd, it shouldn't be)
+        lfs: false
+        
+    - name: Run Tests
+      # This builds the project and runs the hash parity checks
+      run: cargo test --release --verbose
