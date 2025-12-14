@@ -34,6 +34,13 @@ pub struct AnalysisOptions {
     pub custom_patterns: Vec<String>,
 }
 
+#[derive(Debug)]
+pub struct ChartHashInfo {
+    pub step_type: String,
+    pub difficulty: String,
+    pub hash: String,
+}
+
 /// Parses the minimized chart data string into a sequence of note bitmasks.
 fn generate_bitmasks(minimized_chart: &[u8]) -> Vec<u8> {
     minimized_chart
@@ -485,4 +492,55 @@ pub fn analyze(
         min_bpm: min_bpm_i32 as f64, max_bpm: max_bpm_i32 as f64,
         median_bpm, average_bpm, total_length, charts: chart_summaries, total_elapsed,
     })
+}
+
+pub fn compute_all_hashes(
+    simfile_data: &[u8],
+    extension: &str,
+) -> Result<Vec<ChartHashInfo>, String> {
+    // 1. Parse the file structure (fast, just byte slicing)
+    let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
+
+    // 2. Prepare Global BPMs
+    let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"")).unwrap_or("");
+    let normalized_global_bpms = normalize_float_digits(global_bpms_raw);
+
+    let mut results = Vec::new();
+
+    for entry in parsed_data.notes_list {
+        // 3. Split fields to get Metadata (StepType, Difficulty)
+        let (fields, chart_data) = split_notes_fields(&entry.notes);
+        if fields.len() < 5 {
+            continue;
+        }
+
+        let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_string();
+        let difficulty = std::str::from_utf8(fields[2]).unwrap_or("").trim().to_string();
+        
+        // Skip lights, etc.
+        if step_type == "lights-cabinet" {
+            continue;
+        }
+
+        // 4. Minimize Chart (Required for Hash consistency)
+        // This strips comments, whitespace, and empty measures.
+        let (mut minimized_chart, _, _) = minimize_chart_and_count(chart_data);
+        if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
+            minimized_chart.truncate(pos + 1);
+        }
+
+        // 5. Normalize BPMs (Required for Hash consistency)
+        let (bpms_to_use, _) = prepare_bpm_map(entry.chart_bpms, &normalized_global_bpms);
+
+        // 6. Compute SHA-1
+        let hash = compute_chart_hash(&minimized_chart, &bpms_to_use);
+
+        results.push(ChartHashInfo {
+            step_type,
+            difficulty,
+            hash,
+        });
+    }
+
+    Ok(results)
 }
