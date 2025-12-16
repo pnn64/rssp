@@ -41,6 +41,20 @@ pub struct ChartHashInfo {
     pub hash: String,
 }
 
+fn normalize_difficulty_label(raw: &str) -> String {
+    let lowered = raw.trim().to_ascii_lowercase();
+    match lowered.as_str() {
+        "" => String::new(),
+        "beginner" => "Beginner".to_string(),
+        "easy" | "basic" | "light" => "Easy".to_string(),
+        "medium" | "another" | "trick" | "standard" | "difficult" => "Medium".to_string(),
+        "hard" | "ssr" | "maniac" | "heavy" => "Hard".to_string(),
+        "challenge" | "expert" | "oni" | "smaniac" => "Challenge".to_string(),
+        "edit" => "Edit".to_string(),
+        _ => raw.trim().to_string(),
+    }
+}
+
 /// Parses the minimized chart data string into a sequence of note bitmasks.
 fn generate_bitmasks(minimized_chart: &[u8]) -> Vec<u8> {
     minimized_chart
@@ -204,7 +218,8 @@ fn build_chart_summary(
     }
 
     let description = std::str::from_utf8(fields[1]).unwrap_or("").trim().to_owned();
-    let difficulty_str = std::str::from_utf8(fields[2]).unwrap_or("").trim().to_owned();
+    let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim().to_owned();
+    let difficulty_str = normalize_difficulty_label(&difficulty_raw);
     let rating_str = std::str::from_utf8(fields[3]).unwrap_or("").trim().to_owned();
     let credit = if extension.eq_ignore_ascii_case("ssc") {
         std::str::from_utf8(fields[4]).unwrap_or("").trim().to_owned()
