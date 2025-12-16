@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use rssp::analyze;
 use rssp::graph::{generate_density_graph_png, ColorScheme};
 use rssp::matrix::get_difficulty;
-use rssp::report::{print_reports, OutputMode};
+use rssp::report::{print_reports, OutputMode, SimfileSummary};
 use rssp::AnalysisOptions;
 
 /// Finds the best simfile in a directory (prefers .ssc over .sm)
@@ -72,6 +72,22 @@ fn analyze_simfile(path: &Path, options: &AnalysisOptions) -> io::Result<rssp::r
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
+fn print_minimized_notes(simfile: &SimfileSummary) {
+    for chart in &simfile.charts {
+        let artists = if chart.step_artist_str.is_empty() {
+            String::new()
+        } else {
+            format!(" by {}", chart.step_artist_str.join(", "))
+        };
+
+        eprintln!(
+            "\n--- Debug: {} - {} {}{} ---",
+            simfile.title_str, chart.difficulty_str, chart.rating_str, artists
+        );
+        eprintln!("{}", String::from_utf8_lossy(&chart.minimized_note_data));
+    }
+}
+
 fn main() -> io::Result<()> {
     let args: Vec<String> = args().collect();
 
@@ -109,6 +125,7 @@ fn main() -> io::Result<()> {
         eprintln!("  --json          JSON output format");
         eprintln!("  --csv           CSV output format");
         eprintln!("  --strip-tags    Strip title tags from output");
+        eprintln!("  --debug         Print minimized chart note data to stderr");
         eprintln!("  --mono-threshold <value>  Set mono threshold (default: 6)");
         eprintln!("  --custom-pattern <pattern>  Count a custom LRUDN pattern (e.g. DULDUDLR)");
         eprintln!("\nFolder analysis:");
@@ -120,6 +137,7 @@ fn main() -> io::Result<()> {
     let simfile_path = &args[1];
 
     // --- Parse flags ---
+    let debug_output = args.iter().any(|a| a == "--debug");
     let generate_png = args.iter().any(|a| a == "--png");
     let generate_png_alt = args.iter().any(|a| a == "--png-alt");
 
@@ -221,6 +239,10 @@ fn main() -> io::Result<()> {
 
         // --- Print reports ---
         print_reports(&simfile, mode);
+        if debug_output {
+            // Debug output goes to stderr to avoid polluting structured stdout formats.
+            print_minimized_notes(&simfile);
+        }
 
         // --- Generate PNG graphs if requested ---
         if generate_png || generate_png_alt {

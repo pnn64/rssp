@@ -91,6 +91,7 @@ rssp <path/to/simfile_or_folder> [options]
 * `--png`: Generate a density graph PNG image for each chart (using the default color scheme). The filename will be `<chart_hash>.png`.
 * `--png-alt`: Generate a density graph PNG image for each chart (using the alternative color scheme). The filename will be `<chart_hash>-alt.png`.
 * `--strip-tags`: Clean common prefixes like `[TAG]` or `123- ` from the song title before displaying.
+* `--debug`: Print the minimized chart note data to stderr alongside the chosen report.
 * `--mono-threshold <N>`: Set the minimum number of consecutive steps required to count a segment as "mono" (default: 6). `<N>` must be a positive integer.
 
 **Examples:**
