@@ -270,10 +270,6 @@ pub fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<
         finalize_and_process_measure(&mut measure, &mut output, &mut stats, &mut measure_densities, &mut all_lines_buffer, &mut total_holds_started, &mut total_ends_seen);
     }
 
-    if output.ends_with(b",\n") {
-        output.truncate(output.len() - 2);
-    }
-
     if total_holds_started != total_ends_seen {
         stats = recalculate_stats_without_phantom_holds(&all_lines_buffer);
     }

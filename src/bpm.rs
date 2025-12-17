@@ -29,6 +29,110 @@ pub fn normalize_float_digits(param: &str) -> String {
         .join(",")
 }
 
+fn normalized_3dp_to_thousandths(s: &str) -> Option<i64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+
+    let (sign, body) = s.strip_prefix('-').map_or((1i64, s), |rest| (-1i64, rest));
+    let (int_part, frac_part) = body.split_once('.').unwrap_or((body, "0"));
+
+    if !int_part.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    if !frac_part.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+
+    let int_value: i64 = int_part.parse().ok()?;
+    let mut frac = frac_part.to_string();
+    if frac.len() > 3 {
+        frac.truncate(3);
+    } else {
+        while frac.len() < 3 {
+            frac.push('0');
+        }
+    }
+    let frac_value: i64 = frac.parse().ok()?;
+
+    Some(sign * (int_value * 1000 + frac_value))
+}
+
+#[derive(Clone)]
+struct NormalizedTimingEntry {
+    beat_thousandths: i64,
+    beat_str: String,
+    value_thousandths: i64,
+    value_str: String,
+    index: usize,
+}
+
+fn parse_and_normalize_timing_entry(entry: &str, index: usize) -> Option<NormalizedTimingEntry> {
+    let trimmed = entry.trim();
+    let (beat_raw, value_raw) = trimmed.split_once('=')?;
+    let beat_str = normalize_decimal(beat_raw)?;
+    let value_str = normalize_decimal(value_raw)?;
+    Some(NormalizedTimingEntry {
+        beat_thousandths: normalized_3dp_to_thousandths(&beat_str)?,
+        beat_str,
+        value_thousandths: normalized_3dp_to_thousandths(&value_str)?,
+        value_str,
+        index,
+    })
+}
+
+pub fn normalize_and_tidy_bpms(param: &str) -> String {
+    let mut entries: Vec<NormalizedTimingEntry> = param
+        .split(',')
+        .enumerate()
+        .filter_map(|(i, entry)| parse_and_normalize_timing_entry(entry, i))
+        .collect();
+
+    if entries.is_empty() {
+        return "0.000=60.000".to_string();
+    }
+
+    entries.sort_by(|a, b| a
+        .beat_thousandths
+        .cmp(&b.beat_thousandths)
+        .then_with(|| a.index.cmp(&b.index)));
+
+    let mut last_per_beat: Vec<NormalizedTimingEntry> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if let Some(last) = last_per_beat.last_mut() {
+            if last.beat_thousandths == entry.beat_thousandths {
+                *last = entry;
+                continue;
+            }
+        }
+        last_per_beat.push(entry);
+    }
+
+    if let Some(first) = last_per_beat.first_mut() {
+        if first.beat_thousandths != 0 {
+            first.beat_thousandths = 0;
+            first.beat_str = "0.000".to_string();
+        }
+    }
+
+    let mut tidied: Vec<NormalizedTimingEntry> = Vec::with_capacity(last_per_beat.len());
+    let mut last_value: Option<i64> = None;
+    for entry in last_per_beat {
+        if last_value == Some(entry.value_thousandths) {
+            continue;
+        }
+        last_value = Some(entry.value_thousandths);
+        tidied.push(entry);
+    }
+
+    tidied
+        .into_iter()
+        .map(|e| format!("{}={}", e.beat_str, e.value_str))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 pub fn parse_bpm_map(normalized_bpms: &str) -> Vec<(f64, f64)> {
     let mut bpms_vec: Vec<(f64, f64)> = normalized_bpms
         .split(',')
@@ -184,6 +288,18 @@ pub fn get_elapsed_time(
     }
 
     current_time
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_and_tidy_bpms_dedups_redundant_and_duplicate_entries() {
+        let raw = "0.000=180.000,0.000=180.000,128.000=89.800,128.000=89.800,130.000=90.600,130.000=90.600,131.500=88.500,131.500=88.500,132.000=180.000,132.000=180.000,260.000=85.300,260.000=85.300,262.000=95.000,262.000=95.000,263.500=95.000,263.500=95.000,264.000=180.000,264.000=180.000";
+        let expected = "0.000=180.000,128.000=89.800,130.000=90.600,131.500=88.500,132.000=180.000,260.000=85.300,262.000=95.000,264.000=180.000";
+        assert_eq!(normalize_and_tidy_bpms(raw), expected);
+    }
 }
 
 /// Computes the beat of the last playable object in the chart from minimized note data.

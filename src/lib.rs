@@ -89,7 +89,7 @@ fn prepare_bpm_map(
     } else {
         normalized_global_bpms.to_string()
     };
-    let bpm_map = parse_bpm_map(&bpms_to_use);
+    let bpm_map = parse_bpm_map(&normalize_and_tidy_bpms(&bpms_to_use));
     (bpms_to_use, bpm_map)
 }
 
@@ -406,7 +406,7 @@ pub fn analyze(
         .unwrap_or("");
     let normalized_global_fakes = normalize_float_digits(global_fakes_raw);
 
-    let global_bpm_map = parse_bpm_map(&normalized_global_bpms);
+    let global_bpm_map = parse_bpm_map(&normalize_and_tidy_bpms(&normalized_global_bpms));
     let (min_bpm_i32, max_bpm_i32) = compute_bpm_range(&global_bpm_map);
     let bpm_values: Vec<f64> = global_bpm_map.iter().map(|&(_, bpm)| bpm).collect();
     let (median_bpm, average_bpm) = compute_bpm_stats(&bpm_values);
