@@ -175,7 +175,9 @@ pub fn extract_sections<'a>(
                 let credit = parse_subtag(notedata_slice, b"#CREDIT:").unwrap_or_default();
                 let difficulty = parse_subtag(notedata_slice, b"#DIFFICULTY:").unwrap_or_default();
                 let meter = parse_subtag(notedata_slice, b"#METER:").unwrap_or_default();
-                let notes = parse_subtag(notedata_slice, b"#NOTES:").unwrap_or_default();
+                let notes = parse_subtag(notedata_slice, b"#NOTES:")
+                    .or_else(|| parse_subtag(notedata_slice, b"#NOTES2:"))
+                    .unwrap_or_default();
                 let chart_bpms = parse_subtag(notedata_slice, b"#BPMS:");
                 let chart_stops = parse_subtag(notedata_slice, b"#STOPS:")
                     .or_else(|| parse_subtag(notedata_slice, b"#FREEZES:"));
@@ -200,8 +202,15 @@ pub fn extract_sections<'a>(
 
                 i = notedata_end;
                 continue; // Skip the i += 1 at the end
-            } else if !is_ssc && current_slice.starts_with(b"#NOTES:") {
-                let notes_start = i + b"#NOTES:".len();
+            } else if !is_ssc
+                && (current_slice.starts_with(b"#NOTES:") || current_slice.starts_with(b"#NOTES2:"))
+            {
+                let notes_tag_len = if current_slice.starts_with(b"#NOTES2:") {
+                    b"#NOTES2:".len()
+                } else {
+                    b"#NOTES:".len()
+                };
+                let notes_start = i + notes_tag_len;
                 let notes_end = data[notes_start..]
                     .iter()
                     .position(|&b| b == b';')
