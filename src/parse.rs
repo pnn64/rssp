@@ -246,17 +246,41 @@ fn parse_tag(data: &[u8], tag_len: usize) -> Option<&[u8]> {
     let slice = data.get(tag_len..)?;
     let mut i = 0;
     while i < slice.len() {
-        if slice[i] == b';' {
-            // Count preceding backslashes to determine if this semicolon is escaped
-            let mut bs_count = 0;
-            let mut j = i;
-            while j > 0 && slice[j - 1] == b'\\' {
-                bs_count += 1;
-                j -= 1;
+        match slice[i] {
+            b';' => {
+                // Count preceding backslashes to determine if this semicolon is escaped
+                let mut bs_count = 0;
+                let mut j = i;
+                while j > 0 && slice[j - 1] == b'\\' {
+                    bs_count += 1;
+                    j -= 1;
+                }
+                if bs_count % 2 == 0 {
+                    return Some(&slice[..i]);
+                }
             }
-            if bs_count % 2 == 0 {
-                return Some(&slice[..i]);
+            // Fallback for malformed tags missing a terminating semicolon: if the next
+            // line starts a new tag (`#...:`), stop at this line break.
+            b'\n' | b'\r' => {
+                let mut j = i + 1;
+                // Handle CRLF.
+                if slice[i] == b'\r' && j < slice.len() && slice[j] == b'\n' {
+                    j += 1;
+                }
+
+                // Skip horizontal whitespace at the start of the next line.
+                while j < slice.len() && slice[j].is_ascii_whitespace()
+                    && slice[j] != b'\n'
+                    && slice[j] != b'\r'
+                {
+                    j += 1;
+                }
+
+                if j < slice.len() && slice[j] == b'#' {
+                    return Some(&slice[..i]);
+                }
             }
+            _ => {}
         }
         i += 1;
     }
