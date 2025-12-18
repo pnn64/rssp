@@ -61,10 +61,6 @@ pub fn minimize_measure<const LANES: usize>(measure: &mut Vec<[u8; LANES]>) {
         }
         measure.truncate(half_len);
     }
-
-    if !measure.is_empty() && measure.iter().all(is_all_zero) {
-        measure.truncate(1);
-    }
 }
 
 /// Counts basic notes and objects on a line, returning masks for further processing.
