@@ -219,7 +219,7 @@ Elapsed Time: 18.667896ms
 - [x] Fix parsing of multiple simfile authors with '&' (for instance Maxx & Zaia)
 - [x] Check that some special characters are parser correctly (CODE:Ø as opposed to CODE\:Ø)
 - [x] Fix parsing for "No Tech" in artist name
-- [ ] Doubles (8-panel) parsing
+- [x] Doubles (8-panel) parsing
 - [x] Custom patterns flag --custom-pattern DULDUDLR
 - [x] Proper parsing for Tech (port Step Parity from ITGMania)
 - [ ] Add many tests for edge case simfiles

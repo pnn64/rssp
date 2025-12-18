@@ -304,16 +304,18 @@ mod tests {
 
 /// Computes the beat of the last playable object in the chart from minimized note data.
 ///
-/// The minimized format produced by `minimize_chart_and_count` is:
-///   - 4-character note rows (columns 0-3) followed by '\n'
+/// The minimized format produced by `minimize_chart_and_count_with_lanes` is:
+///   - fixed-width note rows (per-chart lane count) followed by '\n'
 ///   - ",\n" as a measure separator
 /// Measures are assumed to be 4 beats long, matching StepMania's default behavior.
-fn compute_last_beat(minimized_note_data: &[u8]) -> f64 {
+fn compute_last_beat(minimized_note_data: &[u8], lanes: usize) -> f64 {
     let mut rows_per_measure: Vec<usize> = Vec::new();
     let mut current_rows: usize = 0;
 
     let mut last_measure_idx: Option<usize> = None;
     let mut last_row_in_measure: usize = 0;
+
+    let lanes = lanes.max(1);
 
     for line in minimized_note_data.split(|&b| b == b'\n') {
         if line.is_empty() {
@@ -325,8 +327,8 @@ fn compute_last_beat(minimized_note_data: &[u8]) -> f64 {
             continue;
         }
 
-        if line.len() >= 4 {
-            let has_object = line[..4]
+        if line.len() >= lanes {
+            let has_object = line[..lanes]
                 .iter()
                 .any(|&b| matches!(b, b'1' | b'2' | b'3' | b'4'));
             if has_object {
@@ -357,12 +359,13 @@ fn compute_last_beat(minimized_note_data: &[u8]) -> f64 {
 
 pub fn compute_total_chart_length(
     minimized_note_data: &[u8],
+    lanes: usize,
     bpm_map: &[(f64, f64)],
     stop_map: &[(f64, f64)],
     delay_map: &[(f64, f64)],
     warp_map: &[(f64, f64)],
 ) -> i32 {
-    let target_beat = compute_last_beat(minimized_note_data);
+    let target_beat = compute_last_beat(minimized_note_data, lanes);
     if target_beat <= 0.0 || bpm_map.is_empty() {
         return 0;
     }
@@ -375,6 +378,7 @@ pub fn compute_total_chart_length(
 /// produced by `minimize_chart_and_count`.
 pub fn compute_mines_nonfake(
     minimized_note_data: &[u8],
+    lanes: usize,
     warp_map: &[(f64, f64)],
     fake_map: &[(f64, f64)],
 ) -> u32 {
@@ -391,6 +395,8 @@ pub fn compute_mines_nonfake(
     let mut measure_idx: usize = 0;
     let mut row_in_measure: usize = 0;
 
+    let lanes = lanes.max(1);
+
     for line in minimized_note_data.split(|&b| b == b'\n') {
         if line.is_empty() {
             continue;
@@ -402,10 +408,10 @@ pub fn compute_mines_nonfake(
             row_in_measure = 0;
             continue;
         }
-        if line.len() < 4 {
+        if line.len() < lanes {
             continue;
         }
-        let is_mine = line[..4]
+        let is_mine = line[..lanes]
             .iter()
             .any(|&b| b == b'M' || b == b'm');
 

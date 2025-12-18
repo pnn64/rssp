@@ -55,6 +55,14 @@ fn normalize_difficulty_label(raw: &str) -> String {
     }
 }
 
+fn step_type_lanes(step_type: &str) -> usize {
+    let normalized = step_type.trim().to_ascii_lowercase().replace('_', "-");
+    match normalized.as_str() {
+        "dance-double" => 8,
+        _ => 4,
+    }
+}
+
 /// Parses the minimized chart data string into a sequence of note bitmasks.
 fn generate_bitmasks(minimized_chart: &[u8]) -> Vec<u8> {
     minimized_chart
@@ -228,7 +236,9 @@ fn build_chart_summary(
     };
     let (step_artist_str, tech_notation_str) = parse_step_artist_and_tech(&credit, &description);
 
-    let (mut minimized_chart, stats, measure_densities) = minimize_chart_and_count(chart_data);
+    let lanes = step_type_lanes(&step_type_str);
+    let (mut minimized_chart, stats, measure_densities) =
+        minimize_chart_and_count_with_lanes(chart_data, lanes);
     if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
         minimized_chart.truncate(pos + 1);
     }
@@ -280,19 +290,33 @@ fn build_chart_summary(
     let metrics =
         compute_derived_chart_metrics(&measure_densities, &bpm_map, &minimized_chart, &bpms_to_use);
 
-    let bitmasks = generate_bitmasks(&minimized_chart);
-    let (detected_patterns, (anchor_left, anchor_down, anchor_up, anchor_right)) =
-        compute_pattern_and_anchor_stats(&bitmasks);
-    let (facing_left, facing_right, mono_total, mono_percent, candle_total, candle_percent) =
-        compute_mono_and_candle_stats(&bitmasks, &stats, &detected_patterns, options);
-
-    let custom_patterns = if options.custom_patterns.is_empty() {
-        Vec::new()
+    let (detected_patterns, (anchor_left, anchor_down, anchor_up, anchor_right)) = if lanes == 4 {
+        let bitmasks = generate_bitmasks(&minimized_chart);
+        compute_pattern_and_anchor_stats(&bitmasks)
     } else {
-        detect_custom_patterns(&bitmasks, &options.custom_patterns)
+        (HashMap::new(), (0, 0, 0, 0))
     };
-    
-    let tech_counts = step_parity::analyze(&minimized_chart, &bpm_map, offset);
+
+    let (facing_left, facing_right, mono_total, mono_percent, candle_total, candle_percent) =
+        if lanes == 4 {
+            let bitmasks = generate_bitmasks(&minimized_chart);
+            compute_mono_and_candle_stats(&bitmasks, &stats, &detected_patterns, options)
+        } else {
+            (0, 0, 0, 0.0, 0, 0.0)
+        };
+
+    let custom_patterns = if lanes == 4 && !options.custom_patterns.is_empty() {
+        let bitmasks = generate_bitmasks(&minimized_chart);
+        detect_custom_patterns(&bitmasks, &options.custom_patterns)
+    } else {
+        Vec::new()
+    };
+
+    let tech_counts = if lanes == 4 {
+        step_parity::analyze(&minimized_chart, &bpm_map, offset)
+    } else {
+        step_parity::TechCounts::default()
+    };
 
     let elapsed_chart = chart_start_time.elapsed();
 
@@ -471,14 +495,17 @@ pub fn analyze(
                 .filter(|s| !s.is_empty())
                 .unwrap_or(&normalized_global_fakes);
             let fake_map = parse_timing_map(fakes_str);
+            let lanes = step_type_lanes(&chart.step_type_str);
             chart.mines_nonfake = compute_mines_nonfake(
                 &chart.minimized_note_data,
+                lanes,
                 &warp_map,
                 &fake_map,
             );
 
             compute_total_chart_length(
                 &chart.minimized_note_data,
+                lanes,
                 &bpm_map,
                 &stop_map,
                 &delay_map,
@@ -539,7 +566,8 @@ pub fn compute_all_hashes(
 
         // 4. Minimize Chart (Required for Hash consistency)
         // This strips comments, whitespace, and empty measures.
-        let (mut minimized_chart, _, _) = minimize_chart_and_count(chart_data);
+        let lanes = step_type_lanes(&step_type);
+        let (mut minimized_chart, _, _) = minimize_chart_and_count_with_lanes(chart_data, lanes);
         if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
             minimized_chart.truncate(pos + 1);
         }

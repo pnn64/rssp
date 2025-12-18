@@ -44,13 +44,13 @@ pub enum BreakdownMode {
 }
 
 #[inline]
-fn is_all_zero(line: &[u8; 4]) -> bool {
-    u32::from_ne_bytes(*line) == 0x30303030
+fn is_all_zero<const LANES: usize>(line: &[u8; LANES]) -> bool {
+    line.iter().all(|&b| b == b'0')
 }
 
 /// Minimizes measure lines if every other line is all-zero.
 #[inline]
-pub fn minimize_measure(measure: &mut Vec<[u8; 4]>) {
+pub fn minimize_measure<const LANES: usize>(measure: &mut Vec<[u8; LANES]>) {
     while measure.len() >= 2 && measure.len() % 2 == 0 {
         if measure.iter().skip(1).step_by(2).any(|line| !is_all_zero(line)) {
             break;
@@ -69,7 +69,10 @@ pub fn minimize_measure(measure: &mut Vec<[u8; 4]>) {
 
 /// Counts basic notes and objects on a line, returning masks for further processing.
 #[inline]
-fn count_line_objects(line: &[u8; 4], stats: &mut ArrowStats) -> (u8, u8, u8) {
+fn count_line_objects<const LANES: usize>(
+    line: &[u8; LANES],
+    stats: &mut ArrowStats,
+) -> (u8, u8, u8) {
     let mut note_mask = 0u8;
     let mut hold_start_mask = 0u8;
     let mut end_mask = 0u8;
@@ -86,12 +89,12 @@ fn count_line_objects(line: &[u8; 4], stats: &mut ArrowStats) -> (u8, u8, u8) {
                     hold_start_mask |= 1 << i;
                     stats.rolls += 1;
                 }
-                match i {
+                match i % 4 {
                     0 => stats.left += 1,
                     1 => stats.down += 1,
                     2 => stats.up += 1,
                     3 => stats.right += 1,
-                    _ => {}
+                    _ => unreachable!(),
                 }
             }
             b'3' => end_mask |= 1 << i,
@@ -105,8 +108,8 @@ fn count_line_objects(line: &[u8; 4], stats: &mut ArrowStats) -> (u8, u8, u8) {
 }
 
 #[inline]
-fn count_line(
-    line: &[u8; 4],
+fn count_line<const LANES: usize>(
+    line: &[u8; LANES],
     stats: &mut ArrowStats,
     holds_started: &mut u32,
     ends_seen: &mut u32,
@@ -146,8 +149,10 @@ fn count_line(
 }
 
 /// Recalculates chart stats after identifying and ignoring phantom (unclosed) holds.
-fn recalculate_stats_without_phantom_holds(all_lines_buffer: &[[u8; 4]]) -> ArrowStats {
-    let mut col_stacks: [Vec<usize>; 4] = Default::default();
+fn recalculate_stats_without_phantom_holds<const LANES: usize>(
+    all_lines_buffer: &[[u8; LANES]],
+) -> ArrowStats {
+    let mut col_stacks: [Vec<usize>; LANES] = std::array::from_fn(|_| Vec::new());
     let mut phantom_positions = HashSet::new();
 
     // Pass 1: Identify phantom holds by tracking hold starts ('2', '4') and ends ('3').
@@ -171,7 +176,7 @@ fn recalculate_stats_without_phantom_holds(all_lines_buffer: &[[u8; 4]]) -> Arro
     }
 
     // Pass 2: Build a "fixed" version of the lines, changing phantom hold starts to '0'.
-    let fixed_lines: Vec<[u8; 4]> = all_lines_buffer
+    let fixed_lines: Vec<[u8; LANES]> = all_lines_buffer
         .iter()
         .enumerate()
         .map(|(i, line)| {
@@ -197,12 +202,12 @@ fn recalculate_stats_without_phantom_holds(all_lines_buffer: &[[u8; 4]]) -> Arro
 }
 
 /// Helper to process a completed measure: minimize, count stats, and update buffers.
-fn finalize_and_process_measure(
-    measure: &mut Vec<[u8; 4]>,
+fn finalize_and_process_measure<const LANES: usize>(
+    measure: &mut Vec<[u8; LANES]>,
     output: &mut Vec<u8>,
     stats: &mut ArrowStats,
     measure_densities: &mut Vec<usize>,
-    all_lines_buffer: &mut Vec<[u8; 4]>,
+    all_lines_buffer: &mut Vec<[u8; LANES]>,
     total_holds_started: &mut u32,
     total_ends_seen: &mut u32,
 ) {
@@ -211,7 +216,7 @@ fn finalize_and_process_measure(
         return;
     }
     minimize_measure(measure);
-    output.reserve(measure.len() * 5);
+    output.reserve(measure.len() * (LANES + 1));
 
     let mut density = 0;
     for mline in measure.iter() {
@@ -226,7 +231,9 @@ fn finalize_and_process_measure(
     measure_densities.push(density);
 }
 
-pub fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<usize>) {
+fn minimize_chart_and_count_impl<const LANES: usize>(
+    notes_data: &[u8],
+) -> (Vec<u8>, ArrowStats, Vec<usize>) {
     let mut output = Vec::with_capacity(notes_data.len());
     let mut measure = Vec::with_capacity(64);
     let mut stats = ArrowStats::default();
@@ -249,17 +256,33 @@ pub fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<
 
         match line.get(0) {
             Some(b',') => {
-                finalize_and_process_measure(&mut measure, &mut output, &mut stats, &mut measure_densities, &mut all_lines_buffer, &mut total_holds_started, &mut total_ends_seen);
+                finalize_and_process_measure(
+                    &mut measure,
+                    &mut output,
+                    &mut stats,
+                    &mut measure_densities,
+                    &mut all_lines_buffer,
+                    &mut total_holds_started,
+                    &mut total_ends_seen,
+                );
                 output.extend_from_slice(b",\n");
             }
             Some(b';') => {
-                finalize_and_process_measure(&mut measure, &mut output, &mut stats, &mut measure_densities, &mut all_lines_buffer, &mut total_holds_started, &mut total_ends_seen);
+                finalize_and_process_measure(
+                    &mut measure,
+                    &mut output,
+                    &mut stats,
+                    &mut measure_densities,
+                    &mut all_lines_buffer,
+                    &mut total_holds_started,
+                    &mut total_ends_seen,
+                );
                 saw_semicolon = true;
                 break;
             }
-            Some(_) if line.len() >= 4 => {
-                let mut arr = [0u8; 4];
-                arr.copy_from_slice(&line[..4]);
+            Some(_) if line.len() >= LANES => {
+                let mut arr = [0u8; LANES];
+                arr.copy_from_slice(&line[..LANES]);
                 measure.push(arr);
             }
             _ => { /* Ignore short lines or other cases */ }
@@ -267,7 +290,15 @@ pub fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<
     }
 
     if !saw_semicolon && !measure.is_empty() {
-        finalize_and_process_measure(&mut measure, &mut output, &mut stats, &mut measure_densities, &mut all_lines_buffer, &mut total_holds_started, &mut total_ends_seen);
+        finalize_and_process_measure(
+            &mut measure,
+            &mut output,
+            &mut stats,
+            &mut measure_densities,
+            &mut all_lines_buffer,
+            &mut total_holds_started,
+            &mut total_ends_seen,
+        );
     }
 
     if total_holds_started != total_ends_seen {
@@ -275,6 +306,21 @@ pub fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<
     }
 
     (output, stats, measure_densities)
+}
+
+pub fn minimize_chart_and_count(notes_data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<usize>) {
+    minimize_chart_and_count_with_lanes(notes_data, 4)
+}
+
+pub fn minimize_chart_and_count_with_lanes(
+    notes_data: &[u8],
+    lanes: usize,
+) -> (Vec<u8>, ArrowStats, Vec<usize>) {
+    match lanes {
+        4 => minimize_chart_and_count_impl::<4>(notes_data),
+        8 => minimize_chart_and_count_impl::<8>(notes_data),
+        _ => minimize_chart_and_count_impl::<4>(notes_data),
+    }
 }
 
 #[inline]
