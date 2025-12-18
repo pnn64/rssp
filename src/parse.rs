@@ -307,7 +307,32 @@ fn parse_subtag(data: &[u8], tag: &[u8], allow_newlines: bool) -> Option<Vec<u8>
                             return Some(slice[..i].to_vec());
                         }
                     }
-                    b'\n' | b'\r' if !allow_newlines => return None,
+                    // Fallback for malformed subtags missing a terminating semicolon: if the next
+                    // line starts a new tag (`#...:`), stop at this line break.
+                    b'\n' | b'\r' => {
+                        let mut j = i + 1;
+                        // Handle CRLF.
+                        if slice[i] == b'\r' && j < slice.len() && slice[j] == b'\n' {
+                            j += 1;
+                        }
+
+                        // Skip horizontal whitespace at the start of the next line.
+                        while j < slice.len()
+                            && slice[j].is_ascii_whitespace()
+                            && slice[j] != b'\n'
+                            && slice[j] != b'\r'
+                        {
+                            j += 1;
+                        }
+
+                        if j < slice.len() && slice[j] == b'#' {
+                            return Some(slice[..i].to_vec());
+                        }
+
+                        if !allow_newlines {
+                            return None;
+                        }
+                    }
                     _ => {}
                 }
                 i += 1;
