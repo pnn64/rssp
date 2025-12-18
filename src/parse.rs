@@ -169,23 +169,25 @@ pub fn extract_sections<'a>(
                 }
 
                 let notedata_slice = &data[notedata_start..notedata_end];
-                let step_type = parse_subtag(notedata_slice, b"#STEPSTYPE:").unwrap_or_default();
+                let step_type =
+                    parse_subtag(notedata_slice, b"#STEPSTYPE:", false).unwrap_or_default();
                 let description =
-                    parse_subtag(notedata_slice, b"#DESCRIPTION:").unwrap_or_default();
-                let credit = parse_subtag(notedata_slice, b"#CREDIT:").unwrap_or_default();
-                let difficulty = parse_subtag(notedata_slice, b"#DIFFICULTY:").unwrap_or_default();
-                let meter = parse_subtag(notedata_slice, b"#METER:").unwrap_or_default();
-                let notes = parse_subtag(notedata_slice, b"#NOTES:")
-                    .or_else(|| parse_subtag(notedata_slice, b"#NOTES2:"))
+                    parse_subtag(notedata_slice, b"#DESCRIPTION:", false).unwrap_or_default();
+                let credit = parse_subtag(notedata_slice, b"#CREDIT:", false).unwrap_or_default();
+                let difficulty =
+                    parse_subtag(notedata_slice, b"#DIFFICULTY:", false).unwrap_or_default();
+                let meter = parse_subtag(notedata_slice, b"#METER:", false).unwrap_or_default();
+                let notes = parse_subtag(notedata_slice, b"#NOTES:", true)
+                    .or_else(|| parse_subtag(notedata_slice, b"#NOTES2:", true))
                     .unwrap_or_default();
-                let chart_bpms = parse_subtag(notedata_slice, b"#BPMS:");
-                let chart_stops = parse_subtag(notedata_slice, b"#STOPS:")
-                    .or_else(|| parse_subtag(notedata_slice, b"#FREEZES:"));
-                let chart_delays = parse_subtag(notedata_slice, b"#DELAYS:");
-                let chart_warps = parse_subtag(notedata_slice, b"#WARPS:");
-                let chart_speeds = parse_subtag(notedata_slice, b"#SPEEDS:");
-                let chart_scrolls = parse_subtag(notedata_slice, b"#SCROLLS:");
-                let chart_fakes = parse_subtag(notedata_slice, b"#FAKES:");
+                let chart_bpms = parse_subtag(notedata_slice, b"#BPMS:", true);
+                let chart_stops = parse_subtag(notedata_slice, b"#STOPS:", true)
+                    .or_else(|| parse_subtag(notedata_slice, b"#FREEZES:", true));
+                let chart_delays = parse_subtag(notedata_slice, b"#DELAYS:", true);
+                let chart_warps = parse_subtag(notedata_slice, b"#WARPS:", true);
+                let chart_speeds = parse_subtag(notedata_slice, b"#SPEEDS:", true);
+                let chart_scrolls = parse_subtag(notedata_slice, b"#SCROLLS:", true);
+                let chart_fakes = parse_subtag(notedata_slice, b"#FAKES:", true);
 
                 let concatenated =
                     [step_type, description, difficulty, meter, credit, notes].join(&b':');
@@ -217,7 +219,7 @@ pub fn extract_sections<'a>(
                     .map(|e| notes_start + e)
                     .unwrap_or(data.len());
                 let block = data[notes_start..notes_end].to_vec();
-                let chart_fakes = parse_subtag(&block, b"#FAKES:");
+                let chart_fakes = parse_subtag(&block, b"#FAKES:", true);
                 result.notes_list.push(ParsedChartEntry {
                     notes: block,
                     chart_bpms: None,
@@ -261,11 +263,33 @@ fn parse_tag(data: &[u8], tag_len: usize) -> Option<&[u8]> {
     None
 }
 
-fn parse_subtag(data: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
+fn parse_subtag(data: &[u8], tag: &[u8], allow_newlines: bool) -> Option<Vec<u8>> {
     data.windows(tag.len())
         .position(|w| w == tag)
-        .and_then(|pos| parse_tag(&data[pos + tag.len()..], 0))
-        .map(|content| content.to_vec())
+        .and_then(|pos| {
+            let slice = &data[pos + tag.len()..];
+            let mut i = 0;
+            while i < slice.len() {
+                match slice[i] {
+                    b';' => {
+                        // Count preceding backslashes to determine if this semicolon is escaped
+                        let mut bs_count = 0;
+                        let mut j = i;
+                        while j > 0 && slice[j - 1] == b'\\' {
+                            bs_count += 1;
+                            j -= 1;
+                        }
+                        if bs_count % 2 == 0 {
+                            return Some(slice[..i].to_vec());
+                        }
+                    }
+                    b'\n' | b'\r' if !allow_newlines => return None,
+                    _ => {}
+                }
+                i += 1;
+            }
+            None
+        })
 }
 
 pub fn split_notes_fields(notes_block: &[u8]) -> (Vec<&[u8]>, &[u8]) {
