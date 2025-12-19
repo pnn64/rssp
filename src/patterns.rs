@@ -248,9 +248,10 @@ pub fn detect_custom_patterns(bitmasks: &[u8], patterns: &[String]) -> Vec<Custo
 
 #[inline]
 fn count_anchors_for_bit(bitmasks: &[u8], bit_mask: u8) -> u32 {
-    bitmasks.iter()
-        .zip(&bitmasks[2..])
-        .zip(&bitmasks[4..])
+    bitmasks
+        .iter()
+        .zip(bitmasks.iter().skip(2))
+        .zip(bitmasks.iter().skip(4))
         .filter(|((a, b), c)| {
             (*a & bit_mask) != 0 && (*b & bit_mask) != 0 && (*c & bit_mask) != 0
         })
