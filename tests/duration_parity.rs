@@ -1,0 +1,487 @@
+use std::collections::HashMap;
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+
+use libtest_mimic::Arguments;
+use serde::Deserialize;
+use walkdir::WalkDir;
+
+use rssp::bpm::{
+    get_elapsed_time, normalize_and_tidy_bpms, normalize_float_digits, parse_bpm_map,
+    parse_timing_map,
+};
+use rssp::parse::{extract_sections, split_notes_fields};
+use rssp::stats::minimize_chart_and_count_with_lanes;
+
+#[derive(Debug, Deserialize)]
+struct GoldenChart {
+    difficulty: String,
+    #[serde(rename = "steps_type")]
+    step_type: String,
+    duration_seconds: f64,
+    #[serde(default)]
+    meter: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+struct ChartDuration {
+    step_type: String,
+    difficulty: String,
+    duration_seconds: f64,
+}
+
+#[derive(Debug, Clone)]
+struct TestCase {
+    name: String,
+    path: PathBuf,
+    extension: String,
+}
+
+#[derive(Debug, Clone)]
+struct Failure {
+    name: String,
+    message: String,
+}
+
+fn step_type_lanes(step_type: &str) -> usize {
+    let normalized = step_type.trim().to_ascii_lowercase().replace('_', "-");
+    match normalized.as_str() {
+        "dance-double" => 8,
+        _ => 4,
+    }
+}
+
+fn round_millis(value: f64) -> f64 {
+    (value * 1000.0).round() / 1000.0
+}
+
+fn normalize_chart_tag(tag: Option<Vec<u8>>) -> Option<String> {
+    tag.and_then(|bytes| std::str::from_utf8(&bytes).ok().map(normalize_float_digits))
+        .filter(|s| !s.is_empty())
+}
+
+fn compute_last_beat(minimized_note_data: &[u8], lanes: usize) -> f64 {
+    let mut rows_per_measure: Vec<usize> = Vec::new();
+    let mut current_rows: usize = 0;
+
+    let mut last_measure_idx: Option<usize> = None;
+    let mut last_row_in_measure: usize = 0;
+
+    let lanes = lanes.max(1);
+
+    for line in minimized_note_data.split(|&b| b == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        if line[0] == b',' {
+            rows_per_measure.push(current_rows);
+            current_rows = 0;
+            continue;
+        }
+
+        if line.len() >= lanes {
+            let has_object = line[..lanes]
+                .iter()
+                .any(|&b| matches!(b, b'1' | b'2' | b'3' | b'4'));
+            if has_object {
+                last_measure_idx = Some(rows_per_measure.len());
+                last_row_in_measure = current_rows;
+            }
+            current_rows += 1;
+        }
+    }
+
+    rows_per_measure.push(current_rows);
+
+    let Some(measure_idx) = last_measure_idx else {
+        return 0.0;
+    };
+
+    let total_rows_in_measure = rows_per_measure
+        .get(measure_idx)
+        .copied()
+        .unwrap_or(0)
+        .max(1) as f64;
+    let row_index = last_row_in_measure as f64;
+
+    let beats_into_measure = 4.0 * (row_index / total_rows_in_measure);
+    (measure_idx as f64) * 4.0 + beats_into_measure
+}
+
+fn compute_chart_durations(
+    simfile_data: &[u8],
+    extension: &str,
+) -> Result<Vec<ChartDuration>, String> {
+    let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
+
+    let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b""))
+        .unwrap_or("");
+    let normalized_global_bpms = normalize_float_digits(global_bpms_raw);
+    let global_bpm_map = parse_bpm_map(&normalize_and_tidy_bpms(&normalized_global_bpms));
+
+    let global_stops_raw = parsed_data
+        .stops
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .unwrap_or("");
+    let normalized_global_stops = normalize_float_digits(global_stops_raw);
+
+    let global_delays_raw = parsed_data
+        .delays
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .unwrap_or("");
+    let normalized_global_delays = normalize_float_digits(global_delays_raw);
+
+    let global_warps_raw = parsed_data
+        .warps
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .unwrap_or("");
+    let normalized_global_warps = normalize_float_digits(global_warps_raw);
+
+    let global_stop_map = parse_timing_map(&normalized_global_stops);
+    let global_delay_map = parse_timing_map(&normalized_global_delays);
+    let global_warp_map = parse_timing_map(&normalized_global_warps);
+
+    let mut results = Vec::new();
+
+    for entry in parsed_data.notes_list {
+        let (fields, chart_data) = split_notes_fields(&entry.notes);
+        if fields.len() < 5 {
+            continue;
+        }
+
+        let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_string();
+        if step_type == "lights-cabinet" {
+            continue;
+        }
+        let difficulty = std::str::from_utf8(fields[2]).unwrap_or("").trim().to_string();
+
+        let lanes = step_type_lanes(&step_type);
+        let (mut minimized_chart, _stats, _measure_densities) =
+            minimize_chart_and_count_with_lanes(chart_data, lanes);
+        if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
+            minimized_chart.truncate(pos + 1);
+        }
+
+        let chart_bpms = normalize_chart_tag(entry.chart_bpms);
+        let bpm_map = if let Some(ref chart_bpms) = chart_bpms {
+            parse_bpm_map(chart_bpms)
+        } else {
+            global_bpm_map.clone()
+        };
+
+        let chart_stops = normalize_chart_tag(entry.chart_stops);
+        let stop_map = if let Some(ref stops) = chart_stops {
+            parse_timing_map(stops)
+        } else {
+            global_stop_map.clone()
+        };
+
+        let chart_delays = normalize_chart_tag(entry.chart_delays);
+        let delay_map = if let Some(ref delays) = chart_delays {
+            parse_timing_map(delays)
+        } else {
+            global_delay_map.clone()
+        };
+
+        let chart_warps = normalize_chart_tag(entry.chart_warps);
+        let warp_map = if let Some(ref warps) = chart_warps {
+            parse_timing_map(warps)
+        } else {
+            global_warp_map.clone()
+        };
+
+        let target_beat = compute_last_beat(&minimized_chart, lanes);
+        let duration = if target_beat <= 0.0 || bpm_map.is_empty() {
+            0.0
+        } else {
+            get_elapsed_time(target_beat, &bpm_map, &stop_map, &delay_map, &warp_map)
+        };
+
+        results.push(ChartDuration {
+            step_type,
+            difficulty,
+            duration_seconds: round_millis(duration),
+        });
+    }
+
+    Ok(results)
+}
+
+fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
+    let compressed_bytes = fs::read(path)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+
+    let raw_bytes = zstd::decode_all(&compressed_bytes[..])
+        .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
+
+    let file_hash = format!("{:x}", md5::compute(&raw_bytes));
+    let subfolder = &file_hash[0..2];
+
+    let golden_path = baseline_dir
+        .join(subfolder)
+        .join(format!("{}.json.zst", file_hash));
+
+    if !golden_path.exists() {
+        return Err(format!(
+            "\n\nMISSING BASELINE\nFile: {}\nHash: {}\nExpected baseline: {}\n",
+            path.display(),
+            file_hash,
+            golden_path.display()
+        ));
+    }
+
+    let compressed_golden = fs::read(&golden_path)
+        .map_err(|e| format!("Failed to read baseline file: {}", e))?;
+
+    let json_bytes = zstd::decode_all(&compressed_golden[..])
+        .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
+
+    let golden_charts: Vec<GoldenChart> = serde_json::from_slice(&json_bytes)
+        .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
+
+    let rssp_charts = compute_chart_durations(&raw_bytes, extension)
+        .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
+
+    let mut golden_map: HashMap<(String, String), Vec<GoldenChart>> = HashMap::new();
+    for golden in golden_charts {
+        let step_type_lower = golden.step_type.to_ascii_lowercase();
+        if step_type_lower != "dance-single" && step_type_lower != "dance-double" {
+            continue;
+        }
+        let key = (step_type_lower, golden.difficulty.to_ascii_lowercase());
+        golden_map.entry(key).or_default().push(golden);
+    }
+
+    let mut rssp_map: HashMap<(String, String), Vec<ChartDuration>> = HashMap::new();
+    for chart in rssp_charts {
+        let step_type_lower = chart.step_type.to_ascii_lowercase();
+        if step_type_lower != "dance-single" && step_type_lower != "dance-double" {
+            continue;
+        }
+        let key = (step_type_lower, chart.difficulty.to_ascii_lowercase());
+        rssp_map.entry(key).or_default().push(chart);
+    }
+
+    let mut golden_entries: Vec<_> = golden_map.into_iter().collect();
+    golden_entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    println!("File: {}", path.display());
+
+    for ((step_type, difficulty), expected_entries) in golden_entries {
+        let Some(actual_entries) = rssp_map.remove(&(step_type.clone(), difficulty.clone())) else {
+            println!(
+                "  {} {}: baseline present, RSSP missing chart",
+                step_type, difficulty
+            );
+            return Err(format!(
+                "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
+                path.display(),
+                step_type,
+                difficulty
+            ));
+        };
+
+        let count = expected_entries.len().max(actual_entries.len());
+        for idx in 0..count {
+            let expected = expected_entries.get(idx);
+            let actual = actual_entries.get(idx);
+            let meter_label = expected
+                .and_then(|entry| entry.meter)
+                .map(|meter| meter.to_string())
+                .unwrap_or_else(|| (idx + 1).to_string());
+
+            let expected_val = expected.map(|e| round_millis(e.duration_seconds));
+            let actual_val = actual.map(|a| a.duration_seconds);
+            let matches = match (expected_val, actual_val) {
+                (Some(exp), Some(act)) => (exp - act).abs() <= 0.001,
+                _ => false,
+            };
+            let status = if matches { "....ok" } else { "....MISMATCH" };
+
+            println!(
+                "  {} {} [{}]: duration_seconds: {} -> {} {}",
+                step_type,
+                difficulty,
+                meter_label,
+                expected_val
+                    .map(|v| format!("{:.3}", v))
+                    .unwrap_or_else(|| "-".to_string()),
+                actual_val
+                    .map(|v| format!("{:.3}", v))
+                    .unwrap_or_else(|| "-".to_string()),
+                status
+            );
+        }
+
+        let matches = expected_entries.len() == actual_entries.len()
+            && expected_entries.iter().zip(&actual_entries).all(|(e, a)| {
+                let expected_val = round_millis(e.duration_seconds);
+                (expected_val - a.duration_seconds).abs() <= 0.001
+            });
+        if !matches {
+            let expected_values: Vec<f64> = expected_entries
+                .iter()
+                .map(|e| round_millis(e.duration_seconds))
+                .collect();
+            let actual_values: Vec<f64> = actual_entries
+                .iter()
+                .map(|a| a.duration_seconds)
+                .collect();
+            return Err(format!(
+                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP duration_seconds:   {:?}\nGolden duration_seconds: {:?}\n",
+                path.display(),
+                step_type,
+                difficulty,
+                actual_values,
+                expected_values
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn main() {
+    let args = Arguments::from_args();
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let packs_dir = manifest_dir.join("tests/data/packs");
+    let baseline_dir = manifest_dir.join("tests/data/baseline");
+
+    if !packs_dir.exists() {
+        println!("No tests/packs directory found.");
+        return;
+    }
+
+    let mut tests = Vec::new();
+
+    for entry in WalkDir::new(&packs_dir).into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if ext != "zst" {
+            continue;
+        }
+
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let inner_path = Path::new(stem);
+        let inner_extension = inner_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default();
+
+        if inner_extension != "sm" && inner_extension != "ssc" {
+            continue;
+        }
+
+        let test_name = path
+            .strip_prefix(&packs_dir)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string();
+
+        tests.push(TestCase {
+            name: test_name,
+            path: path.to_path_buf(),
+            extension: inner_extension,
+        });
+    }
+
+    tests.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let mut tests: Vec<_> = tests
+        .into_iter()
+        .filter(|t| match &args.filter {
+            None => true,
+            Some(filter) => {
+                if args.exact {
+                    &t.name == filter
+                } else {
+                    t.name.contains(filter)
+                }
+            }
+        })
+        .filter(|t| args.skip.iter().all(|skip| !t.name.contains(skip)))
+        .collect();
+
+    if args.ignored {
+        tests.clear();
+    }
+
+    if args.list {
+        for t in &tests {
+            println!("{}", t.name);
+        }
+        return;
+    }
+
+    println!("running {} tests", tests.len());
+
+    let mut num_passed = 0u64;
+    let mut num_failed = 0u64;
+    let mut failures: Vec<Failure> = Vec::new();
+
+    for test in tests {
+        let TestCase {
+            name,
+            path,
+            extension,
+        } = test;
+
+        let res = check_file(&path, &extension, &baseline_dir);
+        match res {
+            Ok(()) => {
+                println!("test {} ... ok", name);
+                num_passed += 1;
+            }
+            Err(msg) => {
+                println!("test {} ... FAILED", name);
+                failures.push(Failure {
+                    name,
+                    message: msg.trim().to_string(),
+                });
+                num_failed += 1;
+            }
+        }
+
+        let _ = io::stdout().flush();
+    }
+
+    println!();
+    if !failures.is_empty() {
+        println!("failures:");
+        for failure in &failures {
+            println!("    {}", failure.name);
+        }
+
+        for failure in &failures {
+            println!();
+            println!("---- {} ----", failure.name);
+            if !failure.message.is_empty() {
+                println!("{}", failure.message);
+            }
+            println!();
+            println!(
+                "rerun: cargo test --test duration_parity -- --exact {:?}",
+                failure.name
+            );
+        }
+        println!();
+    }
+
+    if num_failed == 0 {
+        println!("test result: ok. {} passed; 0 failed", num_passed);
+        return;
+    }
+
+    println!(
+        "test result: FAILED. {} passed; {} failed",
+        num_passed, num_failed
+    );
+    std::process::exit(101);
+}
