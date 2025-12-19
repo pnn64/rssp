@@ -21,9 +21,9 @@ fn main() {
 
     // 1. Setup paths
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    // Assuming the submodule is mounted at 'tests'
-    let packs_dir = manifest_dir.join("tests/packs");
-    let baseline_dir = resolve_baseline_dir(manifest_dir.join("tests/baseline"));
+    // Assuming the data submodule is mounted at 'tests/data'
+    let packs_dir = manifest_dir.join("tests/data/packs");
+    let baseline_dir = manifest_dir.join("tests/data/baseline");
 
     if !packs_dir.exists() {
         println!("No tests/packs directory found.");
@@ -180,14 +180,6 @@ struct TestCase {
 struct Failure {
     name: String,
     message: String,
-}
-
-fn resolve_baseline_dir(default_dir: PathBuf) -> PathBuf {
-    let nested = default_dir.join("baseline");
-    if nested.exists() {
-        return nested;
-    }
-    default_dir
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
