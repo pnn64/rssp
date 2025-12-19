@@ -32,6 +32,11 @@ name = "bpm_parity"
 path = "tests/bpm_parity.rs"
 harness = false
 
+[[test]]
+name = "metadata_parity"
+path = "tests/metadata_parity.rs"
+harness = false
+
 [[bench]]
 name = "hash_perf"
 harness = false
