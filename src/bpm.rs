@@ -290,18 +290,6 @@ pub fn get_elapsed_time(
     current_time
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn normalize_and_tidy_bpms_dedups_redundant_and_duplicate_entries() {
-        let raw = "0.000=180.000,0.000=180.000,128.000=89.800,128.000=89.800,130.000=90.600,130.000=90.600,131.500=88.500,131.500=88.500,132.000=180.000,132.000=180.000,260.000=85.300,260.000=85.300,262.000=95.000,262.000=95.000,263.500=95.000,263.500=95.000,264.000=180.000,264.000=180.000";
-        let expected = "0.000=180.000,128.000=89.800,130.000=90.600,131.500=88.500,132.000=180.000,260.000=85.300,262.000=95.000,264.000=180.000";
-        assert_eq!(normalize_and_tidy_bpms(raw), expected);
-    }
-}
-
 /// Computes the beat of the last playable object in the chart from minimized note data.
 ///
 /// The minimized format produced by `minimize_chart_and_count_with_lanes` is:
