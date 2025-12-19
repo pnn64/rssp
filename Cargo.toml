@@ -37,6 +37,11 @@ name = "metadata_parity"
 path = "tests/metadata_parity.rs"
 harness = false
 
+[[test]]
+name = "step_counts_parity"
+path = "tests/step_counts_parity.rs"
+harness = false
+
 [[bench]]
 name = "hash_perf"
 harness = false
