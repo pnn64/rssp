@@ -57,6 +57,11 @@ name = "tech_counts_parity"
 path = "tests/tech_counts_parity.rs"
 harness = false
 
+[[test]]
+name = "rssp_unique_parity"
+path = "tests/rssp_unique_parity.rs"
+harness = false
+
 [[bench]]
 name = "hash_perf"
 harness = false
