@@ -1,6 +1,6 @@
 [package]
 name = "rssp"
-version = "0.2.182"
+version = "0.2.183"
 edition = "2024"
 authors = ["Patrik Nilsson <perfecttaste@pm.me>"]
 description = "A high-performance simfile parser for StepMania."
@@ -20,10 +20,15 @@ walkdir = "2"
 md5 = "0.8.0"
 libtest-mimic = "0.8.1"
 zstd = "0.13.3"
+criterion = "0.5"
 
 [[test]]
 name = "hash_parity"
 path = "tests/hash_parity.rs"
+harness = false
+
+[[bench]]
+name = "hash_perf"
 harness = false
 
 [profile.bench]

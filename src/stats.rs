@@ -227,6 +227,64 @@ fn finalize_and_process_measure<const LANES: usize>(
     measure_densities.push(density);
 }
 
+fn finalize_measure_for_hash<const LANES: usize>(
+    measure: &mut Vec<[u8; LANES]>,
+    output: &mut Vec<u8>,
+) {
+    if measure.is_empty() {
+        return;
+    }
+    minimize_measure(measure);
+    output.reserve(measure.len() * (LANES + 1));
+    for mline in measure.iter() {
+        output.extend_from_slice(mline);
+        output.push(b'\n');
+    }
+    measure.clear();
+}
+
+fn minimize_chart_for_hash_impl<const LANES: usize>(notes_data: &[u8]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(notes_data.len());
+    let mut measure = Vec::with_capacity(64);
+    let mut saw_semicolon = false;
+
+    for line_raw in notes_data.split(|&b| b == b'\n') {
+        let mut start = 0usize;
+        while start < line_raw.len() && line_raw[start].is_ascii_whitespace() {
+            start += 1;
+        }
+        let line = &line_raw[start..];
+
+        if line.is_empty() || line.first() == Some(&b' ') || line.first() == Some(&b'/') {
+            continue;
+        }
+
+        match line.first() {
+            Some(b',') => {
+                finalize_measure_for_hash(&mut measure, &mut output);
+                output.extend_from_slice(b",\n");
+            }
+            Some(b';') => {
+                finalize_measure_for_hash(&mut measure, &mut output);
+                saw_semicolon = true;
+                break;
+            }
+            Some(_) if line.len() >= LANES => {
+                let mut arr = [0u8; LANES];
+                arr.copy_from_slice(&line[..LANES]);
+                measure.push(arr);
+            }
+            _ => {}
+        }
+    }
+
+    if !saw_semicolon && !measure.is_empty() {
+        finalize_measure_for_hash(&mut measure, &mut output);
+    }
+
+    output
+}
+
 fn minimize_chart_and_count_impl<const LANES: usize>(
     notes_data: &[u8],
 ) -> (Vec<u8>, ArrowStats, Vec<usize>) {
@@ -316,6 +374,14 @@ pub fn minimize_chart_and_count_with_lanes(
         4 => minimize_chart_and_count_impl::<4>(notes_data),
         8 => minimize_chart_and_count_impl::<8>(notes_data),
         _ => minimize_chart_and_count_impl::<4>(notes_data),
+    }
+}
+
+pub fn minimize_chart_for_hash(notes_data: &[u8], lanes: usize) -> Vec<u8> {
+    match lanes {
+        4 => minimize_chart_for_hash_impl::<4>(notes_data),
+        8 => minimize_chart_for_hash_impl::<8>(notes_data),
+        _ => minimize_chart_for_hash_impl::<4>(notes_data),
     }
 }
 

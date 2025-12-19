@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -567,16 +568,21 @@ pub fn compute_all_hashes(
         // 4. Minimize Chart (Required for Hash consistency)
         // This strips comments, whitespace, and empty measures.
         let lanes = step_type_lanes(&step_type);
-        let (mut minimized_chart, _, _) = minimize_chart_and_count_with_lanes(chart_data, lanes);
+        let mut minimized_chart = minimize_chart_for_hash(chart_data, lanes);
         if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
             minimized_chart.truncate(pos + 1);
         }
 
         // 5. Normalize BPMs (Required for Hash consistency)
-        let (bpms_to_use, _) = prepare_bpm_map(entry.chart_bpms, &normalized_global_bpms);
+        let bpms_to_use = if let Some(chart_bpms) = entry.chart_bpms {
+            let normalized = normalize_float_digits(std::str::from_utf8(&chart_bpms).unwrap_or(""));
+            Cow::Owned(normalized)
+        } else {
+            Cow::Borrowed(normalized_global_bpms.as_str())
+        };
 
         // 6. Compute SHA-1
-        let hash = compute_chart_hash(&minimized_chart, &bpms_to_use);
+        let hash = compute_chart_hash(&minimized_chart, bpms_to_use.as_ref());
 
         results.push(ChartHashInfo {
             step_type,
