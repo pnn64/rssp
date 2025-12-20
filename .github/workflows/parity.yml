@@ -2,6 +2,28 @@ name: rssp Parity Test
 
 on:
   workflow_dispatch:
+    inputs:
+      test_suite:
+        description: Select which test suite to run
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - "all alternative"
+          - hash_parity
+          - bpm_parity
+          - metadata_parity
+          - step_counts_parity
+          - duration_parity
+          - nps_parity
+          - tech_counts_parity
+          - rssp_unique_parity
+      pack_filter:
+        description: Comma-separated pack name filters (matches path under tests/data/packs); use "all" for everything
+        type: string
+        required: false
+        default: all
 
 env:
   CARGO_TERM_COLOR: always
@@ -23,4 +45,45 @@ jobs:
         lfs: false
         
     - name: Run Tests
-      run: cargo test --release --verbose
+      run: |
+        set -euo pipefail
+        pack_input="${{ inputs.pack_filter }}"
+        if [[ -z "$pack_input" || "$pack_input" == "all" ]]; then
+          pack_filters=("")
+        else
+          IFS=',' read -r -a pack_filters <<< "$pack_input"
+        fi
+
+        run_suite() {
+          local filter="$1"
+          local -a extra_args=()
+          if [[ -n "$filter" ]]; then
+            extra_args=(-- "$filter")
+          fi
+
+          case "${{ inputs.test_suite }}" in
+            all)
+              cargo test --release --verbose "${extra_args[@]}"
+              ;;
+            "all alternative")
+              cargo test --release --verbose --test rssp_unique_parity "${extra_args[@]}"
+              ;;
+            *)
+              cargo test --release --verbose --test "${{ inputs.test_suite }}" "${extra_args[@]}"
+              ;;
+          esac
+        }
+
+        ran_any=0
+        for raw_filter in "${pack_filters[@]}"; do
+          filter="$(echo "$raw_filter" | xargs)"
+          if [[ -n "$filter" ]]; then
+            echo "Running with pack filter: $filter"
+            run_suite "$filter"
+            ran_any=1
+          fi
+        done
+
+        if [[ "$ran_any" -eq 0 ]]; then
+          run_suite ""
+        fi
