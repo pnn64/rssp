@@ -61,7 +61,8 @@ fn compute_chart_bpms(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartB
         if step_type == "lights-cabinet" {
             continue;
         }
-        let difficulty = std::str::from_utf8(fields[2]).unwrap_or("").trim().to_string();
+        let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
+        let difficulty = rssp::normalize_difficulty_label(difficulty_raw);
 
         let bpms_to_use = if let Some(chart_bpms) = entry.chart_bpms {
             normalize_float_digits(std::str::from_utf8(&chart_bpms).unwrap_or(""))
@@ -124,7 +125,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         if step_type_lower != "dance-single" && step_type_lower != "dance-double" {
             continue;
         }
-        let key = (step_type_lower, golden.difficulty.to_ascii_lowercase());
+        let difficulty = rssp::normalize_difficulty_label(&golden.difficulty);
+        let key = (step_type_lower, difficulty.to_ascii_lowercase());
         golden_map.entry(key).or_default().push(golden);
     }
 

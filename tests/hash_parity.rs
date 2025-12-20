@@ -232,10 +232,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         if step_type_lower != "dance-single" && step_type_lower != "dance-double" {
             continue;
         }
-        let key = (
-            step_type_lower,
-            golden.difficulty.to_ascii_lowercase(),
-        );
+        let difficulty = rssp::normalize_difficulty_label(&golden.difficulty);
+        let key = (step_type_lower, difficulty.to_ascii_lowercase());
         golden_map
             .entry(key)
             .or_default()

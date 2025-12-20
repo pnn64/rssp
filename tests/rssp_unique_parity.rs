@@ -317,7 +317,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     let mut golden_map: HashMap<(String, String), Vec<ChartSnapshot>> = HashMap::new();
     for golden in golden_file.charts {
         let step_type = golden.chart_info.step_type.clone();
-        let difficulty = golden.chart_info.difficulty.clone();
+        let difficulty = rssp::normalize_difficulty_label(&golden.chart_info.difficulty);
         let step_type_lower = step_type.to_ascii_lowercase();
         if step_type_lower != "dance-single" && step_type_lower != "dance-double" {
             continue;

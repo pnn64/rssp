@@ -154,7 +154,8 @@ fn compute_chart_durations(
         if step_type == "lights-cabinet" {
             continue;
         }
-        let difficulty = std::str::from_utf8(fields[2]).unwrap_or("").trim().to_string();
+        let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
+        let difficulty = rssp::normalize_difficulty_label(difficulty_raw);
 
         let lanes = step_type_lanes(&step_type);
         let (mut minimized_chart, _stats, _measure_densities) =
@@ -249,7 +250,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         if step_type_lower != "dance-single" && step_type_lower != "dance-double" {
             continue;
         }
-        let key = (step_type_lower, golden.difficulty.to_ascii_lowercase());
+        let difficulty = rssp::normalize_difficulty_label(&golden.difficulty);
+        let key = (step_type_lower, difficulty.to_ascii_lowercase());
         golden_map.entry(key).or_default().push(golden);
     }
 

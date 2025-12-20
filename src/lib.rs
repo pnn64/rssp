@@ -42,7 +42,8 @@ pub struct ChartHashInfo {
     pub hash: String,
 }
 
-fn normalize_difficulty_label(raw: &str) -> String {
+/// Normalizes common difficulty labels to a canonical form (e.g. Expert -> Challenge).
+pub fn normalize_difficulty_label(raw: &str) -> String {
     let lowered = raw.trim().to_ascii_lowercase();
     match lowered.as_str() {
         "" => String::new(),
@@ -558,7 +559,8 @@ pub fn compute_all_hashes(
         }
 
         let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_string();
-        let difficulty = std::str::from_utf8(fields[2]).unwrap_or("").trim().to_string();
+        let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
+        let difficulty = normalize_difficulty_label(difficulty_raw);
         
         // Skip lights, etc.
         if step_type == "lights-cabinet" {
