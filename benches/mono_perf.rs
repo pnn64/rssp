@@ -1,9 +1,17 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::time::Duration;
 
+const FIXTURE: &str = include_str!("fixtures/variation.ssc");
 const MONO_THRESHOLD: usize = 6;
-const REPEATS: usize = 25_000;
-const BASE_PATTERN: &str = "1000\n0100\n0010\n0001\n";
+
+fn step_type_lanes(step_type: &str) -> usize {
+    let normalized = step_type.trim().to_ascii_lowercase().replace('_', "-");
+    if normalized == "dance-double" {
+        8
+    } else {
+        4
+    }
+}
 
 fn generate_bitmasks(minimized_chart: &[u8]) -> Vec<u8> {
     minimized_chart
@@ -25,11 +33,43 @@ fn generate_bitmasks(minimized_chart: &[u8]) -> Vec<u8> {
 }
 
 fn build_bitmasks() -> Vec<u8> {
-    let mut chart = Vec::with_capacity(BASE_PATTERN.len() * REPEATS);
-    for _ in 0..REPEATS {
-        chart.extend_from_slice(BASE_PATTERN.as_bytes());
+    let parsed = rssp::parse::extract_sections(FIXTURE.as_bytes(), "ssc")
+        .expect("fixture should parse");
+
+    let mut best_chart: Option<(usize, Vec<u8>)> = None;
+    for entry in parsed.notes_list {
+        let (fields, chart_data) = rssp::parse::split_notes_fields(&entry.notes);
+        if fields.len() < 5 {
+            continue;
+        }
+
+        let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim();
+        if step_type == "lights-cabinet" {
+            continue;
+        }
+
+        let lanes = step_type_lanes(step_type);
+        if lanes != 4 {
+            continue;
+        }
+
+        let (mut minimized_chart, stats, _measure_densities) =
+            rssp::stats::minimize_chart_and_count_with_lanes(chart_data, lanes);
+        if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
+            minimized_chart.truncate(pos + 1);
+        }
+
+        let total_steps = stats.total_steps as usize;
+        match best_chart {
+            Some((best_steps, _)) if best_steps >= total_steps => {}
+            _ => {
+                best_chart = Some((total_steps, minimized_chart));
+            }
+        }
     }
-    generate_bitmasks(&chart)
+
+    let (_, minimized_chart) = best_chart.expect("fixture should contain a 4-lane chart");
+    generate_bitmasks(&minimized_chart)
 }
 
 fn bench_mono_counts(c: &mut Criterion) {
