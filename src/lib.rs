@@ -44,16 +44,82 @@ pub struct ChartHashInfo {
 
 /// Normalizes common difficulty labels to a canonical form (e.g. Expert -> Challenge).
 pub fn normalize_difficulty_label(raw: &str) -> String {
+    old_style_difficulty_label(raw)
+        .map(str::to_string)
+        .unwrap_or_else(|| raw.trim().to_string())
+}
+
+fn canonical_difficulty_label(raw: &str) -> Option<&'static str> {
     let lowered = raw.trim().to_ascii_lowercase();
     match lowered.as_str() {
-        "" => String::new(),
-        "beginner" => "Beginner".to_string(),
-        "easy" | "basic" | "light" => "Easy".to_string(),
-        "medium" | "another" | "trick" | "standard" | "difficult" => "Medium".to_string(),
-        "hard" | "ssr" | "maniac" | "heavy" => "Hard".to_string(),
-        "challenge" | "expert" | "oni" | "smaniac" => "Challenge".to_string(),
-        "edit" => "Edit".to_string(),
-        _ => raw.trim().to_string(),
+        "beginner" => Some("Beginner"),
+        "easy" => Some("Easy"),
+        "medium" => Some("Medium"),
+        "hard" => Some("Hard"),
+        "challenge" => Some("Challenge"),
+        "edit" => Some("Edit"),
+        _ => None,
+    }
+}
+
+fn old_style_difficulty_label(raw: &str) -> Option<&'static str> {
+    let lowered = raw.trim().to_ascii_lowercase();
+    match lowered.as_str() {
+        "beginner" => Some("Beginner"),
+        "easy" | "basic" | "light" => Some("Easy"),
+        "medium" | "another" | "trick" | "standard" | "difficult" => Some("Medium"),
+        "hard" | "ssr" | "maniac" | "heavy" => Some("Hard"),
+        "challenge" | "expert" | "oni" | "smaniac" => Some("Challenge"),
+        "edit" => Some("Edit"),
+        _ => None,
+    }
+}
+
+fn parse_meter_for_difficulty(meter_str: &str, extension: &str) -> i32 {
+    let trimmed = meter_str.trim();
+    if extension.eq_ignore_ascii_case("sm") && trimmed.is_empty() {
+        return 1;
+    }
+    trimmed.parse::<i32>().unwrap_or(0)
+}
+
+fn resolve_difficulty_label(
+    raw_difficulty: &str,
+    description: &str,
+    meter_str: &str,
+    extension: &str,
+) -> String {
+    // Match ITGmania Steps::TidyUpData fallback when difficulty is invalid.
+    let mut difficulty = if extension.eq_ignore_ascii_case("sm") {
+        old_style_difficulty_label(raw_difficulty)
+    } else {
+        canonical_difficulty_label(raw_difficulty)
+    };
+
+    if extension.eq_ignore_ascii_case("sm") && difficulty == Some("Hard") {
+        let desc = description.trim();
+        if desc.eq_ignore_ascii_case("smaniac") || desc.eq_ignore_ascii_case("challenge") {
+            difficulty = Some("Challenge");
+        }
+    }
+
+    if difficulty.is_none() {
+        difficulty = canonical_difficulty_label(description);
+    }
+
+    if let Some(label) = difficulty {
+        return label.to_string();
+    }
+
+    let meter = parse_meter_for_difficulty(meter_str, extension);
+    if meter == 1 {
+        "Beginner".to_string()
+    } else if meter <= 3 {
+        "Easy".to_string()
+    } else if meter <= 6 {
+        "Medium".to_string()
+    } else {
+        "Hard".to_string()
     }
 }
 
@@ -228,9 +294,10 @@ fn build_chart_summary(
     }
 
     let description = std::str::from_utf8(fields[1]).unwrap_or("").trim().to_owned();
-    let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim().to_owned();
-    let difficulty_str = normalize_difficulty_label(&difficulty_raw);
-    let rating_str = std::str::from_utf8(fields[3]).unwrap_or("").trim().to_owned();
+    let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
+    let rating_raw = std::str::from_utf8(fields[3]).unwrap_or("").trim();
+    let difficulty_str = resolve_difficulty_label(difficulty_raw, &description, rating_raw, extension);
+    let rating_str = rating_raw.to_owned();
     let credit = if extension.eq_ignore_ascii_case("ssc") {
         std::str::from_utf8(fields[4]).unwrap_or("").trim().to_owned()
     } else {
@@ -559,9 +626,11 @@ pub fn compute_all_hashes(
         }
 
         let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_string();
+        let description = std::str::from_utf8(fields[1]).unwrap_or("").trim();
         let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
-        let difficulty = normalize_difficulty_label(difficulty_raw);
-        
+        let meter_raw = std::str::from_utf8(fields[3]).unwrap_or("").trim();
+        let difficulty = resolve_difficulty_label(difficulty_raw, description, meter_raw, extension);
+
         // Skip lights, etc.
         if step_type == "lights-cabinet" {
             continue;
