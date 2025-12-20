@@ -56,17 +56,6 @@ struct GoldenMonoCandleStats {
 struct PatternCounts {
     boxes: BoxesCounts,
     anchors: AnchorsCounts,
-    towers: TowersCounts,
-    triangles: TrianglesCounts,
-    staircases: StaircasesCounts,
-    sweeps: SweepsCounts,
-    candle_sweeps: CandleSweepsCounts,
-    copters: CoptersCounts,
-    spirals: SpiralsCounts,
-    turbo_candles: TurboCandlesCounts,
-    hip_breakers: HipBreakersCounts,
-    doritos: DoritosCounts,
-    luchis: LuchisCounts,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -88,118 +77,6 @@ struct AnchorsCounts {
     down_anchors: u32,
     up_anchors: u32,
     right_anchors: u32,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-struct TowersCounts {
-    total_towers: u32,
-    lr_towers: u32,
-    ud_towers: u32,
-    corner_towers: u32,
-    ld_towers: u32,
-    lu_towers: u32,
-    rd_towers: u32,
-    ru_towers: u32,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-struct TrianglesCounts {
-    total_triangles: u32,
-    ldl_triangles: u32,
-    lul_triangles: u32,
-    rdr_triangles: u32,
-    rur_triangles: u32,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-struct StaircasesCounts {
-    total_staircases: u32,
-    left_staircases: u32,
-    right_staircases: u32,
-    left_inv_staircases: u32,
-    right_inv_staircases: u32,
-    total_alt_staircases: u32,
-    left_alt_staircases: u32,
-    right_alt_staircases: u32,
-    left_inv_alt_staircases: u32,
-    right_inv_alt_staircases: u32,
-    total_double_staircases: u32,
-    left_double_staircases: u32,
-    right_double_staircases: u32,
-    left_inv_double_staircases: u32,
-    right_inv_double_staircases: u32,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-struct SweepsCounts {
-    total_sweeps: u32,
-    left_sweeps: u32,
-    right_sweeps: u32,
-    left_inv_sweeps: u32,
-    right_inv_sweeps: u32,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-struct CandleSweepsCounts {
-    total_candle_sweeps: u32,
-    left_candle_sweeps: u32,
-    right_candle_sweeps: u32,
-    left_inv_candle_sweeps: u32,
-    right_inv_candle_sweeps: u32,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-struct CoptersCounts {
-    total_copters: u32,
-    left_copters: u32,
-    right_copters: u32,
-    left_inv_copters: u32,
-    right_inv_copters: u32,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-struct SpiralsCounts {
-    total_spirals: u32,
-    left_spirals: u32,
-    right_spirals: u32,
-    left_inv_spirals: u32,
-    right_inv_spirals: u32,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-struct TurboCandlesCounts {
-    total_turbo_candles: u32,
-    left_turbo_candles: u32,
-    right_turbo_candles: u32,
-    left_inv_turbo_candles: u32,
-    right_inv_turbo_candles: u32,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-struct HipBreakersCounts {
-    total_hip_breakers: u32,
-    left_hip_breakers: u32,
-    right_hip_breakers: u32,
-    left_inv_hip_breakers: u32,
-    right_inv_hip_breakers: u32,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-struct DoritosCounts {
-    total_doritos: u32,
-    left_doritos: u32,
-    right_doritos: u32,
-    left_inv_doritos: u32,
-    right_inv_doritos: u32,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-struct LuchisCounts {
-    total_luchis: u32,
-    left_du_luchis: u32,
-    left_ud_luchis: u32,
-    right_du_luchis: u32,
-    right_ud_luchis: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -245,6 +122,52 @@ fn format_json_float(value: f64) -> String {
     format!("{:.2}", value)
 }
 
+fn format_candles(stats: Option<&MonoCandleStats>) -> String {
+    stats
+        .map(|s| {
+            format!(
+                "{} (L {} R {}) {}%",
+                s.total_candles, s.left_foot_candles, s.right_foot_candles, s.candles_percent
+            )
+        })
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_mono(stats: Option<&MonoCandleStats>) -> String {
+    stats
+        .map(|s| {
+            format!(
+                "{} (L {} R {}) {}%",
+                s.total_mono, s.left_face_mono, s.right_face_mono, s.mono_percent
+            )
+        })
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_boxes(patterns: Option<&PatternCounts>) -> String {
+    patterns
+        .map(|p| {
+            let b = &p.boxes;
+            format!(
+                "{} (LR {} UD {} LD {} LU {} RD {} RU {})",
+                b.total_boxes, b.lr_boxes, b.ud_boxes, b.ld_boxes, b.lu_boxes, b.rd_boxes, b.ru_boxes
+            )
+        })
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_anchors(patterns: Option<&PatternCounts>) -> String {
+    patterns
+        .map(|p| {
+            let a = &p.anchors;
+            format!(
+                "{} (L {} D {} U {} R {})",
+                a.total_anchors, a.left_anchors, a.down_anchors, a.up_anchors, a.right_anchors
+            )
+        })
+        .unwrap_or_else(|| "-".to_string())
+}
+
 fn count_pattern(map: &HashMap<PatternVariant, u32>, variant: PatternVariant) -> u32 {
     *map.get(&variant).unwrap_or(&0)
 }
@@ -268,210 +191,6 @@ fn compute_boxes(map: &HashMap<PatternVariant, u32>) -> BoxesCounts {
         lu_boxes: lu,
         rd_boxes: rd,
         ru_boxes: ru,
-    }
-}
-
-fn compute_towers(map: &HashMap<PatternVariant, u32>) -> TowersCounts {
-    let lr = count_pattern(map, PatternVariant::TowerLR);
-    let ud = count_pattern(map, PatternVariant::TowerUD);
-    let ld = count_pattern(map, PatternVariant::TowerCornerLD);
-    let lu = count_pattern(map, PatternVariant::TowerCornerLU);
-    let rd = count_pattern(map, PatternVariant::TowerCornerRD);
-    let ru = count_pattern(map, PatternVariant::TowerCornerRU);
-    let corner = ld + lu + rd + ru;
-    let total = lr + ud + corner;
-
-    TowersCounts {
-        total_towers: total,
-        lr_towers: lr,
-        ud_towers: ud,
-        corner_towers: corner,
-        ld_towers: ld,
-        lu_towers: lu,
-        rd_towers: rd,
-        ru_towers: ru,
-    }
-}
-
-fn compute_triangles(map: &HashMap<PatternVariant, u32>) -> TrianglesCounts {
-    let ldl = count_pattern(map, PatternVariant::TriangleLDL);
-    let lul = count_pattern(map, PatternVariant::TriangleLUL);
-    let rdr = count_pattern(map, PatternVariant::TriangleRDR);
-    let rur = count_pattern(map, PatternVariant::TriangleRUR);
-    let total = ldl + lul + rdr + rur;
-
-    TrianglesCounts {
-        total_triangles: total,
-        ldl_triangles: ldl,
-        lul_triangles: lul,
-        rdr_triangles: rdr,
-        rur_triangles: rur,
-    }
-}
-
-fn compute_staircases(map: &HashMap<PatternVariant, u32>) -> StaircasesCounts {
-    let left = count_pattern(map, PatternVariant::StaircaseLeft);
-    let right = count_pattern(map, PatternVariant::StaircaseRight);
-    let left_inv = count_pattern(map, PatternVariant::StaircaseInvLeft);
-    let right_inv = count_pattern(map, PatternVariant::StaircaseInvRight);
-    let total = left + right + left_inv + right_inv;
-
-    let alt_left = count_pattern(map, PatternVariant::AltStaircasesLeft);
-    let alt_right = count_pattern(map, PatternVariant::AltStaircasesRight);
-    let alt_left_inv = count_pattern(map, PatternVariant::AltStaircasesInvLeft);
-    let alt_right_inv = count_pattern(map, PatternVariant::AltStaircasesInvRight);
-    let total_alt = alt_left + alt_right + alt_left_inv + alt_right_inv;
-
-    let double_left = count_pattern(map, PatternVariant::DStaircaseLeft);
-    let double_right = count_pattern(map, PatternVariant::DStaircaseRight);
-    let double_left_inv = count_pattern(map, PatternVariant::DStaircaseInvLeft);
-    let double_right_inv = count_pattern(map, PatternVariant::DStaircaseInvRight);
-    let total_double = double_left + double_right + double_left_inv + double_right_inv;
-
-    StaircasesCounts {
-        total_staircases: total,
-        left_staircases: left,
-        right_staircases: right,
-        left_inv_staircases: left_inv,
-        right_inv_staircases: right_inv,
-        total_alt_staircases: total_alt,
-        left_alt_staircases: alt_left,
-        right_alt_staircases: alt_right,
-        left_inv_alt_staircases: alt_left_inv,
-        right_inv_alt_staircases: alt_right_inv,
-        total_double_staircases: total_double,
-        left_double_staircases: double_left,
-        right_double_staircases: double_right,
-        left_inv_double_staircases: double_left_inv,
-        right_inv_double_staircases: double_right_inv,
-    }
-}
-
-fn compute_sweeps(map: &HashMap<PatternVariant, u32>) -> SweepsCounts {
-    let left = count_pattern(map, PatternVariant::SweepLeft);
-    let right = count_pattern(map, PatternVariant::SweepRight);
-    let left_inv = count_pattern(map, PatternVariant::SweepInvLeft);
-    let right_inv = count_pattern(map, PatternVariant::SweepInvRight);
-    let total = left + right + left_inv + right_inv;
-
-    SweepsCounts {
-        total_sweeps: total,
-        left_sweeps: left,
-        right_sweeps: right,
-        left_inv_sweeps: left_inv,
-        right_inv_sweeps: right_inv,
-    }
-}
-
-fn compute_candle_sweeps(map: &HashMap<PatternVariant, u32>) -> CandleSweepsCounts {
-    let left = count_pattern(map, PatternVariant::SweepCandleLeft);
-    let right = count_pattern(map, PatternVariant::SweepCandleRight);
-    let left_inv = count_pattern(map, PatternVariant::SweepCandleInvLeft);
-    let right_inv = count_pattern(map, PatternVariant::SweepCandleInvRight);
-    let total = left + right + left_inv + right_inv;
-
-    CandleSweepsCounts {
-        total_candle_sweeps: total,
-        left_candle_sweeps: left,
-        right_candle_sweeps: right,
-        left_inv_candle_sweeps: left_inv,
-        right_inv_candle_sweeps: right_inv,
-    }
-}
-
-fn compute_copters(map: &HashMap<PatternVariant, u32>) -> CoptersCounts {
-    let left = count_pattern(map, PatternVariant::CopterLeft);
-    let right = count_pattern(map, PatternVariant::CopterRight);
-    let left_inv = count_pattern(map, PatternVariant::CopterInvLeft);
-    let right_inv = count_pattern(map, PatternVariant::CopterInvRight);
-    let total = left + right + left_inv + right_inv;
-
-    CoptersCounts {
-        total_copters: total,
-        left_copters: left,
-        right_copters: right,
-        left_inv_copters: left_inv,
-        right_inv_copters: right_inv,
-    }
-}
-
-fn compute_spirals(map: &HashMap<PatternVariant, u32>) -> SpiralsCounts {
-    let left = count_pattern(map, PatternVariant::SpiralLeft);
-    let right = count_pattern(map, PatternVariant::SpiralRight);
-    let left_inv = count_pattern(map, PatternVariant::SpiralInvLeft);
-    let right_inv = count_pattern(map, PatternVariant::SpiralInvRight);
-    let total = left + right + left_inv + right_inv;
-
-    SpiralsCounts {
-        total_spirals: total,
-        left_spirals: left,
-        right_spirals: right,
-        left_inv_spirals: left_inv,
-        right_inv_spirals: right_inv,
-    }
-}
-
-fn compute_turbo_candles(map: &HashMap<PatternVariant, u32>) -> TurboCandlesCounts {
-    let left = count_pattern(map, PatternVariant::TurboCandleLeft);
-    let right = count_pattern(map, PatternVariant::TurboCandleRight);
-    let left_inv = count_pattern(map, PatternVariant::TurboCandleInvLeft);
-    let right_inv = count_pattern(map, PatternVariant::TurboCandleInvRight);
-    let total = left + right + left_inv + right_inv;
-
-    TurboCandlesCounts {
-        total_turbo_candles: total,
-        left_turbo_candles: left,
-        right_turbo_candles: right,
-        left_inv_turbo_candles: left_inv,
-        right_inv_turbo_candles: right_inv,
-    }
-}
-
-fn compute_hip_breakers(map: &HashMap<PatternVariant, u32>) -> HipBreakersCounts {
-    let left = count_pattern(map, PatternVariant::HipBreakerLeft);
-    let right = count_pattern(map, PatternVariant::HipBreakerRight);
-    let left_inv = count_pattern(map, PatternVariant::HipBreakerInvLeft);
-    let right_inv = count_pattern(map, PatternVariant::HipBreakerInvRight);
-    let total = left + right + left_inv + right_inv;
-
-    HipBreakersCounts {
-        total_hip_breakers: total,
-        left_hip_breakers: left,
-        right_hip_breakers: right,
-        left_inv_hip_breakers: left_inv,
-        right_inv_hip_breakers: right_inv,
-    }
-}
-
-fn compute_doritos(map: &HashMap<PatternVariant, u32>) -> DoritosCounts {
-    let left = count_pattern(map, PatternVariant::DoritoLeft);
-    let right = count_pattern(map, PatternVariant::DoritoRight);
-    let left_inv = count_pattern(map, PatternVariant::DoritoInvLeft);
-    let right_inv = count_pattern(map, PatternVariant::DoritoInvRight);
-    let total = left + right + left_inv + right_inv;
-
-    DoritosCounts {
-        total_doritos: total,
-        left_doritos: left,
-        right_doritos: right,
-        left_inv_doritos: left_inv,
-        right_inv_doritos: right_inv,
-    }
-}
-
-fn compute_luchis(map: &HashMap<PatternVariant, u32>) -> LuchisCounts {
-    let left_du = count_pattern(map, PatternVariant::LuchiLeftDU);
-    let left_ud = count_pattern(map, PatternVariant::LuchiLeftUD);
-    let right_du = count_pattern(map, PatternVariant::LuchiRightDU);
-    let right_ud = count_pattern(map, PatternVariant::LuchiRightUD);
-    let total = left_du + left_ud + right_du + right_ud;
-
-    LuchisCounts {
-        total_luchis: total,
-        left_du_luchis: left_du,
-        left_ud_luchis: left_ud,
-        right_du_luchis: right_du,
-        right_ud_luchis: right_ud,
     }
 }
 
@@ -506,17 +225,6 @@ fn chart_values_from_summary(chart: &ChartSummary) -> ChartUniqueValues {
                 up_anchors: chart.anchor_up,
                 right_anchors: chart.anchor_right,
             },
-            towers: compute_towers(patterns),
-            triangles: compute_triangles(patterns),
-            staircases: compute_staircases(patterns),
-            sweeps: compute_sweeps(patterns),
-            candle_sweeps: compute_candle_sweeps(patterns),
-            copters: compute_copters(patterns),
-            spirals: compute_spirals(patterns),
-            turbo_candles: compute_turbo_candles(patterns),
-            hip_breakers: compute_hip_breakers(patterns),
-            doritos: compute_doritos(patterns),
-            luchis: compute_luchis(patterns),
         },
     }
 }
@@ -693,9 +401,17 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             let actual_simple = actual_values
                 .map(|v| v.breakdown.simple_breakdown.as_str())
                 .unwrap_or("-");
+            let expected_candles = format_candles(expected_values.map(|v| &v.mono_candle_stats));
+            let actual_candles = format_candles(actual_values.map(|v| &v.mono_candle_stats));
+            let expected_mono = format_mono(expected_values.map(|v| &v.mono_candle_stats));
+            let actual_mono = format_mono(actual_values.map(|v| &v.mono_candle_stats));
+            let expected_boxes = format_boxes(expected_values.map(|v| &v.pattern_counts));
+            let actual_boxes = format_boxes(actual_values.map(|v| &v.pattern_counts));
+            let expected_anchors = format_anchors(expected_values.map(|v| &v.pattern_counts));
+            let actual_anchors = format_anchors(actual_values.map(|v| &v.pattern_counts));
 
             println!(
-                "  {} {} [{}]: matrix_rating {} -> {} | detailed {} -> {} | partial {} -> {} | simple {} -> {} {}",
+                "  {} {} [{}]: matrix_rating {} -> {} | detailed {} -> {} | partial {} -> {} | simple {} -> {} | candles {} -> {} | mono {} -> {} | boxes {} -> {} | anchors {} -> {} {}",
                 step_type,
                 difficulty,
                 meter_label,
@@ -707,6 +423,14 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 actual_partial,
                 expected_simple,
                 actual_simple,
+                expected_candles,
+                actual_candles,
+                expected_mono,
+                actual_mono,
+                expected_boxes,
+                actual_boxes,
+                expected_anchors,
+                actual_anchors,
                 status
             );
         }
