@@ -42,10 +42,115 @@ pub fn compute_row_to_beat(minimized_note_data: &[u8]) -> Vec<f32> {
     row_to_beat
 }
 
+fn parse_optional_timing<T, F>(chart_val: Option<&str>, global_val: &str, parser: F) -> Vec<T>
+where
+    F: Fn(&str) -> Result<Vec<T>, &'static str>,
+{
+    let s = chart_val.filter(|s| !s.is_empty()).unwrap_or(global_val);
+    parser(s).unwrap_or_else(|_| vec![])
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SpeedUnit {
     Beats,
     Seconds,
+}
+
+#[derive(Debug, Clone)]
+pub struct TimingSegments {
+    pub beat0_offset_adjust: f32,
+    pub bpms: Vec<(f32, f32)>,
+    pub stops: Vec<(f32, f32)>,
+    pub delays: Vec<(f32, f32)>,
+    pub warps: Vec<(f32, f32)>,
+    pub speeds: Vec<(f32, f32, f32, SpeedUnit)>,
+    pub scrolls: Vec<(f32, f32)>,
+    pub fakes: Vec<(f32, f32)>,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn compute_timing_segments(
+    chart_bpms: Option<&str>,
+    global_bpms: &str,
+    chart_stops: Option<&str>,
+    global_stops: &str,
+    chart_delays: Option<&str>,
+    global_delays: &str,
+    chart_warps: Option<&str>,
+    global_warps: &str,
+    chart_speeds: Option<&str>,
+    global_speeds: &str,
+    chart_scrolls: Option<&str>,
+    global_scrolls: &str,
+    chart_fakes: Option<&str>,
+    global_fakes: &str,
+) -> TimingSegments {
+    let bpms_str = chart_bpms.filter(|s| !s.is_empty()).unwrap_or(global_bpms);
+    let normalized_bpms = normalize_float_digits(bpms_str);
+    let mut parsed_bpms: Vec<(f64, f64)> = parse_bpm_map(&normalized_bpms);
+
+    if parsed_bpms.is_empty() {
+        parsed_bpms.push((0.0, 120.0));
+    }
+
+    let raw_stops = parse_optional_timing(chart_stops, global_stops, parse_stops);
+    let (mut parsed_bpms, stops, extra_warps, beat0_offset_adjust) =
+        process_bpms_and_stops(&parsed_bpms, &raw_stops);
+
+    if parsed_bpms.is_empty() {
+        parsed_bpms.push((0.0, 120.0));
+    }
+
+    let delays = parse_optional_timing(chart_delays, global_delays, parse_delays);
+    let mut warps = parse_optional_timing(chart_warps, global_warps, parse_warps);
+    warps.extend(extra_warps);
+    let mut speeds = parse_optional_timing(chart_speeds, global_speeds, parse_speeds);
+    let mut scrolls = parse_optional_timing(chart_scrolls, global_scrolls, parse_scrolls);
+    let mut fakes = parse_optional_timing(chart_fakes, global_fakes, parse_fakes);
+
+    speeds.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
+    scrolls.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
+    warps.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
+    fakes.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
+
+    TimingSegments {
+        beat0_offset_adjust: beat0_offset_adjust as f32,
+        bpms: parsed_bpms
+            .iter()
+            .map(|(beat, bpm)| (*beat as f32, *bpm as f32))
+            .collect(),
+        stops: stops
+            .iter()
+            .map(|seg| (seg.beat as f32, seg.duration as f32))
+            .collect(),
+        delays: delays
+            .iter()
+            .map(|seg| (seg.beat as f32, seg.duration as f32))
+            .collect(),
+        warps: warps
+            .iter()
+            .map(|seg| (seg.beat as f32, seg.length as f32))
+            .collect(),
+        speeds: speeds
+            .iter()
+            .map(|seg| {
+                (
+                    seg.beat as f32,
+                    seg.ratio as f32,
+                    seg.delay as f32,
+                    seg.unit,
+                )
+            })
+            .collect(),
+        scrolls: scrolls
+            .iter()
+            .map(|seg| (seg.beat as f32, seg.ratio as f32))
+            .collect(),
+        fakes: fakes
+            .iter()
+            .map(|seg| (seg.beat as f32, seg.length as f32))
+            .collect(),
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -205,18 +310,6 @@ impl TimingData {
 
         if parsed_bpms.is_empty() {
             parsed_bpms.push((0.0, 120.0));
-        }
-
-        fn parse_optional_timing<T, F>(
-            chart_val: Option<&str>,
-            global_val: &str,
-            parser: F,
-        ) -> Vec<T>
-        where
-            F: Fn(&str) -> Result<Vec<T>, &'static str>,
-        {
-            let s = chart_val.filter(|s| !s.is_empty()).unwrap_or(global_val);
-            parser(s).unwrap_or_else(|_| vec![])
         }
 
         let raw_stops = parse_optional_timing(chart_stops, global_stops, parse_stops);

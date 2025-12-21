@@ -28,7 +28,7 @@ use crate::parse::*;
 use crate::patterns::*;
 use crate::stats::*;
 use crate::tech::parse_step_artist_and_tech;
-use crate::timing::{TimingData, compute_row_to_beat};
+use crate::timing::{TimingData, compute_row_to_beat, compute_timing_segments};
 
 /// Options for controlling simfile analysis.
 #[derive(Debug, Default, Clone)]
@@ -284,6 +284,12 @@ fn build_chart_summary(
     chart_tickcounts_opt: Option<Vec<u8>>,
     chart_combos_opt: Option<Vec<u8>>,
     normalized_global_bpms: &str,
+    normalized_global_stops: &str,
+    normalized_global_delays: &str,
+    normalized_global_warps: &str,
+    normalized_global_speeds: &str,
+    normalized_global_scrolls: &str,
+    normalized_global_fakes: &str,
     extension: &str,
     options: &AnalysisOptions,
 ) -> Option<ChartSummary> {
@@ -390,6 +396,22 @@ fn build_chart_summary(
             .filter(|s| !s.is_empty())
             .map(str::to_string)
     });
+    let timing_segments = compute_timing_segments(
+        chart_bpms.as_deref(),
+        normalized_global_bpms,
+        chart_stops.as_deref(),
+        normalized_global_stops,
+        chart_delays.as_deref(),
+        normalized_global_delays,
+        chart_warps.as_deref(),
+        normalized_global_warps,
+        chart_speeds.as_deref(),
+        normalized_global_speeds,
+        chart_scrolls.as_deref(),
+        normalized_global_scrolls,
+        chart_fakes.as_deref(),
+        normalized_global_fakes,
+    );
 
     let metrics =
         compute_derived_chart_metrics(&measure_densities, &bpm_map, &minimized_chart, &bpms_to_use);
@@ -457,6 +479,7 @@ fn build_chart_summary(
         measure_densities,
         measure_nps_vec: metrics.measure_nps_vec,
         row_to_beat,
+        timing_segments,
         minimized_note_data: minimized_chart,
         chart_stops,
         chart_speeds,
@@ -581,6 +604,12 @@ pub fn analyze(
                 entry.chart_tickcounts,
                 entry.chart_combos,
                 &normalized_global_bpms,
+                &normalized_global_stops,
+                &normalized_global_delays,
+                &normalized_global_warps,
+                &normalized_global_speeds,
+                &normalized_global_scrolls,
+                &normalized_global_fakes,
                 extension,
                 &options,
             )

@@ -8,7 +8,7 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use crate::patterns::{CustomPatternSummary, PatternVariant};
 use crate::stats::{ArrowStats, StreamCounts};
 use crate::step_parity::TechCounts;
-use crate::timing::{SpeedUnit, TimingData};
+use crate::timing::{SpeedUnit, TimingData, TimingSegments};
 
 #[inline(always)]
 fn compute_stream_percentages(
@@ -207,6 +207,7 @@ pub struct ChartSummary {
     pub measure_densities: Vec<usize>,
     pub measure_nps_vec:   Vec<f64>,
     pub row_to_beat:       Vec<f32>,
+    pub timing_segments:   TimingSegments,
     pub minimized_note_data: Vec<u8>,
     pub chart_stops:       Option<String>,
     pub chart_speeds:      Option<String>,
