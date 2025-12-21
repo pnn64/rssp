@@ -13,7 +13,7 @@ fn beat_to_note_row(beat: f64) -> i32 {
     (beat * ROWS_PER_BEAT as f64).round() as i32
 }
 
-pub fn compute_row_to_beat(minimized_note_data: &[u8]) -> Vec<f64> {
+pub fn compute_row_to_beat(minimized_note_data: &[u8]) -> Vec<f32> {
     let mut row_to_beat = Vec::new();
     let mut measure_index = 0usize;
 
@@ -30,9 +30,10 @@ pub fn compute_row_to_beat(minimized_note_data: &[u8]) -> Vec<f64> {
             continue;
         }
 
-        let rows = num_rows_in_measure as f64;
+        let rows = num_rows_in_measure as f32;
+        let measure_start = measure_index as f32 * 4.0;
         for row_in_measure in 0..num_rows_in_measure {
-            let beat = (measure_index as f64 * 4.0) + (row_in_measure as f64 / rows * 4.0);
+            let beat = measure_start + (row_in_measure as f32 / rows * 4.0);
             row_to_beat.push(beat);
         }
         measure_index += 1;

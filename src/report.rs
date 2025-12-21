@@ -206,7 +206,7 @@ pub struct ChartSummary {
     pub elapsed:           Duration,
     pub measure_densities: Vec<usize>,
     pub measure_nps_vec:   Vec<f64>,
-    pub row_to_beat:       Vec<f64>,
+    pub row_to_beat:       Vec<f32>,
     pub minimized_note_data: Vec<u8>,
     pub chart_stops:       Option<String>,
     pub chart_speeds:      Option<String>,
