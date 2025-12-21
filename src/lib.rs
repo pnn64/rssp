@@ -6,6 +6,7 @@ pub mod bpm;
 pub mod graph;
 pub mod hashing;
 pub mod matrix;
+pub mod notes;
 pub mod parse;
 pub mod patterns;
 pub mod report;
