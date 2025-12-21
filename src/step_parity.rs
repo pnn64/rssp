@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
+use crate::timing::TimingData;
+
 const NUM_TRACKS: usize = 4;
 const INVALID_COLUMN: isize = -1;
 const CLM_SECOND_INVALID: f32 = -1.0;
@@ -1660,6 +1662,15 @@ fn time_between_beats(start: f32, end: f32, bpm_map: &[(f64, f64)]) -> f64 {
     time
 }
 
+fn time_between_beats_with_timing(start: f32, end: f32, timing: &TimingData) -> f64 {
+    if end <= start {
+        return 0.0;
+    }
+    let start_time = timing.get_time_for_beat(start as f64);
+    let end_time = timing.get_time_for_beat(end as f64);
+    (end_time - start_time).max(0.0)
+}
+
 fn calculate_tech_counts_from_rows(
     rows: &[Row],
     layout: &StageLayout,
@@ -1675,6 +1686,145 @@ fn calculate_tech_counts_from_rows(
         let previous_row = &rows[i - 1];
         let mut elapsed_time = current_row.second - previous_row.second;
         let expected_time = time_between_beats(previous_row.beat, current_row.beat, bpm_map);
+        if expected_time.is_finite() {
+            let expected_time = expected_time as f32;
+            if expected_time > elapsed_time + TIME_EPSILON {
+                elapsed_time = expected_time;
+            }
+        }
+
+        if current_row.note_count == 1 && previous_row.note_count == 1 {
+            for &foot in &FEET {
+                let current_col = current_row.where_the_feet_are[foot.as_index()];
+                let previous_col = previous_row.where_the_feet_are[foot.as_index()];
+                if current_col == INVALID_COLUMN || previous_col == INVALID_COLUMN {
+                    continue;
+                }
+
+                if current_col == previous_col {
+                    if elapsed_time < JACK_CUTOFF {
+                        out.jacks += 1;
+                    }
+                } else if elapsed_time < DOUBLESTEP_CUTOFF {
+                    out.doublesteps += 1;
+                }
+            }
+        }
+
+        if current_row.note_count >= 2 {
+            if current_row.where_the_feet_are[Foot::LeftHeel.as_index()] != INVALID_COLUMN
+                && current_row.where_the_feet_are[Foot::LeftToe.as_index()] != INVALID_COLUMN
+            {
+                out.brackets += 1;
+            }
+            if current_row.where_the_feet_are[Foot::RightHeel.as_index()] != INVALID_COLUMN
+                && current_row.where_the_feet_are[Foot::RightToe.as_index()] != INVALID_COLUMN
+            {
+                out.brackets += 1;
+            }
+        }
+
+        for &c in &layout.up_arrows {
+            if is_footswitch(c, current_row, previous_row, elapsed_time) {
+                out.up_footswitches += 1;
+                out.footswitches += 1;
+            }
+        }
+        for &c in &layout.down_arrows {
+            if is_footswitch(c, current_row, previous_row, elapsed_time) {
+                out.down_footswitches += 1;
+                out.footswitches += 1;
+            }
+        }
+        for &c in &layout.side_arrows {
+            if is_footswitch(c, current_row, previous_row, elapsed_time) {
+                out.sideswitches += 1;
+            }
+        }
+
+        let left_heel = current_row.where_the_feet_are[Foot::LeftHeel.as_index()];
+        let left_toe = current_row.where_the_feet_are[Foot::LeftToe.as_index()];
+        let right_heel = current_row.where_the_feet_are[Foot::RightHeel.as_index()];
+        let right_toe = current_row.where_the_feet_are[Foot::RightToe.as_index()];
+
+        let prev_left_heel = previous_row.where_the_feet_are[Foot::LeftHeel.as_index()];
+        let prev_left_toe = previous_row.where_the_feet_are[Foot::LeftToe.as_index()];
+        let prev_right_heel = previous_row.where_the_feet_are[Foot::RightHeel.as_index()];
+        let prev_right_toe = previous_row.where_the_feet_are[Foot::RightToe.as_index()];
+
+        if right_heel != INVALID_COLUMN
+            && prev_left_heel != INVALID_COLUMN
+            && prev_right_heel == INVALID_COLUMN
+        {
+            let left_pos = layout.average_point(prev_left_heel, prev_left_toe);
+            let right_pos = layout.average_point(right_heel, right_toe);
+            if right_pos.x < left_pos.x {
+                if i > 1 {
+                    let prev_prev_row = &rows[i - 2];
+                    let prev_prev_right_heel =
+                        prev_prev_row.where_the_feet_are[Foot::RightHeel.as_index()];
+                    if prev_prev_right_heel != INVALID_COLUMN && prev_prev_right_heel != right_heel
+                    {
+                        let prev_prev_right_pos = layout.columns[prev_prev_right_heel as usize];
+                        if prev_prev_right_pos.x > left_pos.x {
+                            out.full_crossovers += 1;
+                        } else {
+                            out.half_crossovers += 1;
+                        }
+                        out.crossovers += 1;
+                    }
+                } else {
+                    out.half_crossovers += 1;
+                    out.crossovers += 1;
+                }
+            }
+        } else if left_heel != INVALID_COLUMN
+            && prev_right_heel != INVALID_COLUMN
+            && prev_left_heel == INVALID_COLUMN
+        {
+            let left_pos = layout.average_point(left_heel, left_toe);
+            let right_pos = layout.average_point(prev_right_heel, prev_right_toe);
+            if right_pos.x < left_pos.x {
+                if i > 1 {
+                    let prev_prev_row = &rows[i - 2];
+                    let prev_prev_left_heel =
+                        prev_prev_row.where_the_feet_are[Foot::LeftHeel.as_index()];
+                    if prev_prev_left_heel != INVALID_COLUMN && prev_prev_left_heel != left_heel {
+                        let prev_prev_left_pos = layout.columns[prev_prev_left_heel as usize];
+                        if right_pos.x > prev_prev_left_pos.x {
+                            out.full_crossovers += 1;
+                        } else {
+                            out.half_crossovers += 1;
+                        }
+                        out.crossovers += 1;
+                    }
+                } else {
+                    out.half_crossovers += 1;
+                    out.crossovers += 1;
+                }
+            }
+        }
+    }
+
+    out
+}
+
+fn calculate_tech_counts_from_rows_with_timing(
+    rows: &[Row],
+    layout: &StageLayout,
+    timing: &TimingData,
+) -> TechCounts {
+    let mut out = TechCounts::default();
+    if rows.len() < 2 {
+        return out;
+    }
+
+    for i in 1..rows.len() {
+        let current_row = &rows[i];
+        let previous_row = &rows[i - 1];
+        let mut elapsed_time = current_row.second - previous_row.second;
+        let expected_time =
+            time_between_beats_with_timing(previous_row.beat, current_row.beat, timing);
         if expected_time.is_finite() {
             let expected_time = expected_time as f32;
             if expected_time > elapsed_time + TIME_EPSILON {
@@ -1825,6 +1975,17 @@ pub fn analyze(minimized_note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) 
     calculate_tech_counts_from_rows(&generator.rows, &generator.layout, bpm_map)
 }
 
+pub fn analyze_with_timing(minimized_note_data: &[u8], timing: &TimingData) -> TechCounts {
+    let layout = StageLayout::new_dance_single();
+    let parsed_rows = parse_chart_rows_with_timing(minimized_note_data, timing);
+    let note_data = build_intermediate_notes(&parsed_rows);
+    let mut generator = StepParityGenerator::new(layout.clone());
+    if !generator.analyze_note_data(note_data, layout.column_count()) {
+        return TechCounts::default();
+    }
+    calculate_tech_counts_from_rows_with_timing(&generator.rows, &generator.layout, timing)
+}
+
 fn beat_to_time(beat: f64, bpm_map: &[(f64, f64)], offset: f64) -> f64 {
     time_between_beats(0.0, beat as f32, bpm_map) - offset
 }
@@ -1868,6 +2029,55 @@ fn parse_chart_rows(note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> Ve
             let note_row = measure_start_row + row_offset;
             let beat = note_row as f64 / 48.0;
             let second = beat_to_time(beat, bpm_map, offset);
+            let mut chars = [b'0'; NUM_TRACKS];
+            for (col, ch) in line.iter().take(NUM_TRACKS).enumerate() {
+                chars[col] = *ch;
+            }
+            rows.push(ParsedRow {
+                chars,
+                beat: beat as f32,
+                second: second as f32,
+            });
+        }
+
+        measure_start_row += 192;
+    }
+
+    rows
+}
+
+fn parse_chart_rows_with_timing(note_data: &[u8], timing: &TimingData) -> Vec<ParsedRow> {
+    let mut rows = Vec::new();
+    let mut measure_start_row: i32 = 0;
+
+    for measure in note_data.split(|&b| b == b',') {
+        let lines: Vec<&[u8]> = measure
+            .split(|&b| b == b'\n')
+            .filter_map(|line| {
+                let trimmed = if let Some(stripped) = line.strip_suffix(b"\r") {
+                    stripped
+                } else {
+                    line
+                };
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed)
+                }
+            })
+            .collect();
+        let num_rows = lines.len();
+        if num_rows == 0 {
+            measure_start_row += 192;
+            continue;
+        }
+
+        for (i, line) in lines.iter().enumerate() {
+            let fractional_row = (i as f64 * 192.0) / num_rows as f64;
+            let row_offset = fractional_row.round() as i32;
+            let note_row = measure_start_row + row_offset;
+            let beat = note_row as f64 / 48.0;
+            let second = timing.get_time_for_beat(beat);
             let mut chars = [b'0'; NUM_TRACKS];
             for (col, ch) in line.iter().take(NUM_TRACKS).enumerate() {
                 chars[col] = *ch;

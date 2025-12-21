@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::cmp::Ordering;
 use std::io::{self, Write};
 use std::time::Duration;
 
@@ -7,6 +8,7 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use crate::patterns::{CustomPatternSummary, PatternVariant};
 use crate::stats::{ArrowStats, StreamCounts};
 use crate::step_parity::TechCounts;
+use crate::timing::{SpeedUnit, TimingData};
 
 #[inline(always)]
 fn compute_stream_percentages(
@@ -212,6 +214,10 @@ pub struct ChartSummary {
     pub chart_delays:      Option<String>,
     pub chart_warps:       Option<String>,
     pub chart_fakes:       Option<String>,
+    pub chart_time_signatures: Option<String>,
+    pub chart_labels:      Option<String>,
+    pub chart_tickcounts:  Option<String>,
+    pub chart_combos:      Option<String>,
 }
 
 // Make the struct and its fields public
@@ -230,6 +236,10 @@ pub struct SimfileSummary {
     pub normalized_speeds:    String,
     pub normalized_scrolls:   String,
     pub normalized_fakes:     String,
+    pub normalized_time_signatures: String,
+    pub normalized_labels:    String,
+    pub normalized_tickcounts: String,
+    pub normalized_combos:    String,
     pub banner_path:          String,
     pub background_path:      String,
     pub music_path:           String,
@@ -284,6 +294,135 @@ fn chart_or_global<'a>(chart_value: &'a Option<String>, global_value: &'a str) -
     } else {
         None
     }
+}
+
+fn has_zero_beat(beat: f64) -> bool {
+    beat.abs() <= 1e-6
+}
+
+fn parse_time_signatures(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
+    let mut out = Vec::new();
+    let Some(s) = opt else {
+        out.push((0.0, 4, 4));
+        return out;
+    };
+
+    for segment in s.split(',') {
+        let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
+        let mut parts = segment.split('=');
+        let Some(beat_str) = parts.next() else { continue };
+        let Some(num_str) = parts.next() else { continue };
+        let Some(den_str) = parts.next() else { continue };
+        let Ok(beat) = beat_str.trim().parse::<f64>() else { continue };
+        let Ok(num) = num_str.trim().parse::<i32>() else { continue };
+        let Ok(den) = den_str.trim().parse::<i32>() else { continue };
+        out.push((beat, num, den));
+    }
+
+    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    if out.is_empty() {
+        out.push((0.0, 4, 4));
+    } else if !out.iter().any(|(beat, _, _)| has_zero_beat(*beat)) {
+        out.insert(0, (0.0, 4, 4));
+    }
+    out
+}
+
+fn parse_tickcounts(opt: Option<&str>) -> Vec<(f64, i32)> {
+    let mut out = Vec::new();
+    let Some(s) = opt else {
+        out.push((0.0, 4));
+        return out;
+    };
+
+    for segment in s.split(',') {
+        let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
+        let mut parts = segment.split('=');
+        let Some(beat_str) = parts.next() else { continue };
+        let Some(count_str) = parts.next() else { continue };
+        let Ok(beat) = beat_str.trim().parse::<f64>() else { continue };
+        let Ok(count) = count_str.trim().parse::<i32>() else { continue };
+        out.push((beat, count));
+    }
+
+    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    if out.is_empty() {
+        out.push((0.0, 4));
+    } else if !out.iter().any(|(beat, _)| has_zero_beat(*beat)) {
+        out.insert(0, (0.0, 4));
+    }
+    out
+}
+
+fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
+    let mut out = Vec::new();
+    let Some(s) = opt else {
+        out.push((0.0, 1, 1));
+        return out;
+    };
+
+    for segment in s.split(',') {
+        let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
+        let mut parts = segment.split('=');
+        let Some(beat_str) = parts.next() else { continue };
+        let Some(combo_str) = parts.next() else { continue };
+        let Some(miss_str) = parts.next() else { continue };
+        let Ok(beat) = beat_str.trim().parse::<f64>() else { continue };
+        let Ok(combo) = combo_str.trim().parse::<i32>() else { continue };
+        let Ok(miss) = miss_str.trim().parse::<i32>() else { continue };
+        out.push((beat, combo, miss));
+    }
+
+    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    if out.is_empty() {
+        out.push((0.0, 1, 1));
+    } else if !out.iter().any(|(beat, _, _)| has_zero_beat(*beat)) {
+        out.insert(0, (0.0, 1, 1));
+    }
+    out
+}
+
+fn parse_labels(opt: Option<&str>) -> Vec<(f64, String)> {
+    let mut out = Vec::new();
+    let Some(s) = opt else {
+        out.push((0.0, "Song Start".to_string()));
+        return out;
+    };
+
+    for segment in s.split(',') {
+        let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
+        let Some((beat_str, label_raw)) = segment.split_once('=') else {
+            continue;
+        };
+        let Ok(beat) = beat_str.trim().parse::<f64>() else {
+            continue;
+        };
+        let label = label_raw.trim().to_string();
+        if label.is_empty() {
+            continue;
+        }
+        out.push((beat, label));
+    }
+
+    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    if out.is_empty() {
+        out.push((0.0, "Song Start".to_string()));
+    } else if !out.iter().any(|(beat, _)| has_zero_beat(*beat)) {
+        out.insert(0, (0.0, "Song Start".to_string()));
+    }
+    out
 }
 
 fn count_timing_segments_from_str(s: &str) -> u32 {
@@ -945,6 +1084,111 @@ fn json_gimmicks(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
     JsonValue::Object(obj)
 }
 
+fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
+    let timing = TimingData::from_chart_data(
+        simfile.offset,
+        0.0,
+        chart.chart_bpms.as_deref(),
+        &simfile.normalized_bpms,
+        chart.chart_stops.as_deref(),
+        &simfile.normalized_stops,
+        chart.chart_delays.as_deref(),
+        &simfile.normalized_delays,
+        chart.chart_warps.as_deref(),
+        &simfile.normalized_warps,
+        chart.chart_speeds.as_deref(),
+        &simfile.normalized_speeds,
+        chart.chart_scrolls.as_deref(),
+        &simfile.normalized_scrolls,
+        chart.chart_fakes.as_deref(),
+        &simfile.normalized_fakes,
+    );
+
+    let bpms: Vec<JsonValue> = timing
+        .bpm_segments()
+        .into_iter()
+        .map(|(beat, bpm)| serde_json::json!([beat, bpm]))
+        .collect();
+    let stops: Vec<JsonValue> = timing
+        .stops()
+        .iter()
+        .map(|seg| serde_json::json!([seg.beat, seg.duration]))
+        .collect();
+    let delays: Vec<JsonValue> = timing
+        .delays()
+        .iter()
+        .map(|seg| serde_json::json!([seg.beat, seg.duration]))
+        .collect();
+    let warps: Vec<JsonValue> = timing
+        .warps()
+        .iter()
+        .map(|seg| serde_json::json!([seg.beat, seg.length]))
+        .collect();
+    let speeds: Vec<JsonValue> = timing
+        .speeds()
+        .iter()
+        .map(|seg| {
+            let unit = if seg.unit == SpeedUnit::Seconds { 1 } else { 0 };
+            serde_json::json!([seg.beat, seg.ratio, seg.delay, unit])
+        })
+        .collect();
+    let scrolls: Vec<JsonValue> = timing
+        .scrolls()
+        .iter()
+        .map(|seg| serde_json::json!([seg.beat, seg.ratio]))
+        .collect();
+    let fakes: Vec<JsonValue> = timing
+        .fakes()
+        .iter()
+        .map(|seg| serde_json::json!([seg.beat, seg.length]))
+        .collect();
+
+    let time_signatures = parse_time_signatures(chart_or_global(
+        &chart.chart_time_signatures,
+        &simfile.normalized_time_signatures,
+    ));
+    let labels = parse_labels(chart_or_global(
+        &chart.chart_labels,
+        &simfile.normalized_labels,
+    ));
+    let tickcounts = parse_tickcounts(chart_or_global(
+        &chart.chart_tickcounts,
+        &simfile.normalized_tickcounts,
+    ));
+    let combos = parse_combos(chart_or_global(
+        &chart.chart_combos,
+        &simfile.normalized_combos,
+    ));
+
+    serde_json::json!({
+        "beat0_offset_seconds": timing.beat0_offset_seconds(),
+        "beat0_group_offset_seconds": timing.beat0_group_offset_seconds(),
+        "bpms": bpms,
+        "stops": stops,
+        "delays": delays,
+        "time_signatures": time_signatures
+            .into_iter()
+            .map(|(beat, num, den)| serde_json::json!([beat, num, den]))
+            .collect::<Vec<_>>(),
+        "warps": warps,
+        "labels": labels
+            .into_iter()
+            .map(|(beat, label)| serde_json::json!([beat, label]))
+            .collect::<Vec<_>>(),
+        "tickcounts": tickcounts
+            .into_iter()
+            .map(|(beat, count)| serde_json::json!([beat, count]))
+            .collect::<Vec<_>>(),
+        "combos": combos
+            .into_iter()
+            .map(|(beat, combo, miss)| serde_json::json!([beat, combo, miss]))
+            .collect::<Vec<_>>(),
+        "speeds": speeds,
+        "scrolls": scrolls,
+        "fakes": fakes,
+    })
+}
+
 fn json_pattern_counts(chart: &ChartSummary) -> JsonValue {
     let mut obj = JsonMap::new();
 
@@ -1367,6 +1611,7 @@ pub fn print_json_all(simfile: &SimfileSummary) {
             chart_obj.insert("chart_info".to_string(), json_chart_info(chart));
             chart_obj.insert("arrow_stats".to_string(), json_arrow_stats(chart));
             chart_obj.insert("gimmicks".to_string(), json_gimmicks(chart, simfile));
+            chart_obj.insert("timing".to_string(), json_timing(chart, simfile));
             chart_obj.insert("stream_info".to_string(), json_stream_info(chart));
             chart_obj.insert("nps".to_string(), json_nps(chart));
             chart_obj.insert("breakdown".to_string(), json_breakdown(chart));

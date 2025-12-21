@@ -296,7 +296,7 @@ pub fn get_elapsed_time(
 ///   - fixed-width note rows (per-chart lane count) followed by '\n'
 ///   - ",\n" as a measure separator
 /// Measures are assumed to be 4 beats long, matching StepMania's default behavior.
-fn compute_last_beat(minimized_note_data: &[u8], lanes: usize) -> f64 {
+pub(crate) fn compute_last_beat(minimized_note_data: &[u8], lanes: usize) -> f64 {
     let mut rows_per_measure: Vec<usize> = Vec::new();
     let mut current_rows: usize = 0;
 

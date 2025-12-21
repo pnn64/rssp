@@ -69,6 +69,10 @@ pub struct ParsedChartEntry {
     pub chart_speeds: Option<Vec<u8>>,
     pub chart_scrolls: Option<Vec<u8>>,
     pub chart_fakes: Option<Vec<u8>>,
+    pub chart_time_signatures: Option<Vec<u8>>,
+    pub chart_labels: Option<Vec<u8>>,
+    pub chart_tickcounts: Option<Vec<u8>>,
+    pub chart_combos: Option<Vec<u8>>,
 }
 
 /// A struct to hold the raw data parsed from a simfile's header tags.
@@ -88,6 +92,10 @@ pub struct ParsedSimfileData<'a> {
     pub speeds: Option<&'a [u8]>,
     pub scrolls: Option<&'a [u8]>,
     pub fakes: Option<&'a [u8]>,
+    pub time_signatures: Option<&'a [u8]>,
+    pub labels: Option<&'a [u8]>,
+    pub tickcounts: Option<&'a [u8]>,
+    pub combos: Option<&'a [u8]>,
     pub banner: Option<&'a [u8]>,
     pub background: Option<&'a [u8]>,
     pub music: Option<&'a [u8]>,
@@ -148,6 +156,14 @@ pub fn extract_sections<'a>(
                 result.speeds = parse_tag(current_slice, b"#SPEEDS:".len());
             } else if current_slice.starts_with(b"#SCROLLS:") {
                 result.scrolls = parse_tag(current_slice, b"#SCROLLS:".len());
+            } else if current_slice.starts_with(b"#TIMESIGNATURES:") {
+                result.time_signatures = parse_tag(current_slice, b"#TIMESIGNATURES:".len());
+            } else if current_slice.starts_with(b"#LABELS:") {
+                result.labels = parse_tag(current_slice, b"#LABELS:".len());
+            } else if current_slice.starts_with(b"#TICKCOUNTS:") {
+                result.tickcounts = parse_tag(current_slice, b"#TICKCOUNTS:".len());
+            } else if current_slice.starts_with(b"#COMBOS:") {
+                result.combos = parse_tag(current_slice, b"#COMBOS:".len());
             } else if current_slice.starts_with(b"#BANNER:") {
                 result.banner = parse_tag(current_slice, b"#BANNER:".len());
             } else if current_slice.starts_with(b"#BACKGROUND:") {
@@ -188,6 +204,11 @@ pub fn extract_sections<'a>(
                 let chart_speeds = parse_subtag(notedata_slice, b"#SPEEDS:", true);
                 let chart_scrolls = parse_subtag(notedata_slice, b"#SCROLLS:", true);
                 let chart_fakes = parse_subtag(notedata_slice, b"#FAKES:", true);
+                let chart_time_signatures =
+                    parse_subtag(notedata_slice, b"#TIMESIGNATURES:", true);
+                let chart_labels = parse_subtag(notedata_slice, b"#LABELS:", true);
+                let chart_tickcounts = parse_subtag(notedata_slice, b"#TICKCOUNTS:", true);
+                let chart_combos = parse_subtag(notedata_slice, b"#COMBOS:", true);
 
                 let concatenated =
                     [step_type, description, difficulty, meter, credit, notes].join(&b':');
@@ -200,6 +221,10 @@ pub fn extract_sections<'a>(
                     chart_speeds,
                     chart_scrolls,
                     chart_fakes,
+                    chart_time_signatures,
+                    chart_labels,
+                    chart_tickcounts,
+                    chart_combos,
                 });
 
                 i = notedata_end;
@@ -229,6 +254,10 @@ pub fn extract_sections<'a>(
                     chart_speeds: None,
                     chart_scrolls: None,
                     chart_fakes,
+                    chart_time_signatures: None,
+                    chart_labels: None,
+                    chart_tickcounts: None,
+                    chart_combos: None,
                 });
                 i = notes_end + 1;
                 continue; // Skip the i += 1 at the end

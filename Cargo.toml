@@ -1,6 +1,6 @@
 [package]
 name = "rssp"
-version = "0.2.187"
+version = "0.2.188"
 edition = "2024"
 authors = ["Patrik Nilsson <perfecttaste@pm.me>"]
 description = "A high-performance simfile parser for StepMania."
@@ -55,6 +55,11 @@ harness = false
 [[test]]
 name = "tech_counts_parity"
 path = "tests/tech_counts_parity.rs"
+harness = false
+
+[[test]]
+name = "timing_parity"
+path = "tests/timing_parity.rs"
 harness = false
 
 [[test]]

@@ -12,6 +12,7 @@ pub mod report;
 pub mod stats;
 pub mod step_parity;
 pub mod tech;
+pub mod timing;
 
 pub const RSSP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -26,6 +27,7 @@ use crate::parse::*;
 use crate::patterns::*;
 use crate::stats::*;
 use crate::tech::parse_step_artist_and_tech;
+use crate::timing::TimingData;
 
 /// Options for controlling simfile analysis.
 #[derive(Debug, Default, Clone)]
@@ -276,10 +278,13 @@ fn build_chart_summary(
     chart_speeds_opt: Option<Vec<u8>>,
     chart_scrolls_opt: Option<Vec<u8>>,
     chart_fakes_opt: Option<Vec<u8>>,
+    chart_time_signatures_opt: Option<Vec<u8>>,
+    chart_labels_opt: Option<Vec<u8>>,
+    chart_tickcounts_opt: Option<Vec<u8>>,
+    chart_combos_opt: Option<Vec<u8>>,
     normalized_global_bpms: &str,
     extension: &str,
     options: &AnalysisOptions,
-    offset: f64,
 ) -> Option<ChartSummary> {
     let chart_start_time = Instant::now();
 
@@ -355,6 +360,34 @@ fn build_chart_summary(
             .map(normalize_float_digits)
             .filter(|s| !s.is_empty())
     });
+    let chart_time_signatures = chart_time_signatures_opt.and_then(|bytes| {
+        std::str::from_utf8(&bytes)
+            .ok()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    });
+    let chart_labels = chart_labels_opt.and_then(|bytes| {
+        std::str::from_utf8(&bytes)
+            .ok()
+            .map(|s| clean_tag(&unescape_tag(s)))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    });
+    let chart_tickcounts = chart_tickcounts_opt.and_then(|bytes| {
+        std::str::from_utf8(&bytes)
+            .ok()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    });
+    let chart_combos = chart_combos_opt.and_then(|bytes| {
+        std::str::from_utf8(&bytes)
+            .ok()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    });
 
     let metrics =
         compute_derived_chart_metrics(&measure_densities, &bpm_map, &minimized_chart, &bpms_to_use);
@@ -381,11 +414,7 @@ fn build_chart_summary(
         Vec::new()
     };
 
-    let tech_counts = if lanes == 4 {
-        step_parity::analyze(&minimized_chart, &bpm_map, offset)
-    } else {
-        step_parity::TechCounts::default()
-    };
+    let tech_counts = step_parity::TechCounts::default();
 
     let elapsed_chart = chart_start_time.elapsed();
 
@@ -433,6 +462,10 @@ fn build_chart_summary(
         chart_delays,
         chart_warps,
         chart_fakes,
+        chart_time_signatures,
+        chart_labels,
+        chart_tickcounts,
+        chart_combos,
     })
 }
 
@@ -498,6 +531,29 @@ pub fn analyze(
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
     let normalized_global_fakes = normalize_float_digits(global_fakes_raw);
+    let normalized_global_time_signatures = parsed_data
+        .time_signatures
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string();
+    let normalized_global_labels = parsed_data
+        .labels
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .map(|s| clean_tag(&unescape_tag(s)))
+        .unwrap_or_default();
+    let normalized_global_tickcounts = parsed_data
+        .tickcounts
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string();
+    let normalized_global_combos = parsed_data
+        .combos
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string();
 
     let global_bpm_map = parse_bpm_map(&normalize_and_tidy_bpms(&normalized_global_bpms));
     let (min_bpm_i32, max_bpm_i32) = compute_bpm_range(&global_bpm_map);
@@ -517,54 +573,49 @@ pub fn analyze(
                 entry.chart_speeds,
                 entry.chart_scrolls,
                 entry.chart_fakes,
+                entry.chart_time_signatures,
+                entry.chart_labels,
+                entry.chart_tickcounts,
+                entry.chart_combos,
                 &normalized_global_bpms,
                 extension,
                 &options,
-                offset,
             )
         })
         .collect();
 
-    // Song length should match ITGmania's Song::GetLastSecond semantics:
-    // take the maximum last note time across all charts, using chart-specific
-    // timing data when present, otherwise falling back to the song timing.
-    let global_stop_map = parse_timing_map(&normalized_global_stops);
-    let global_delay_map = parse_timing_map(&normalized_global_delays);
-    let global_warp_map = parse_timing_map(&normalized_global_warps);
-
     let total_length = chart_summaries
         .iter_mut()
         .map(|chart| {
-            // Prefer chart-specific timing tags when available; otherwise, use song timing.
-            let bpm_map = if let Some(ref chart_bpms) = chart.chart_bpms {
-                parse_bpm_map(chart_bpms)
-            } else {
-                global_bpm_map.clone()
-            };
-            let stop_map = if let Some(ref stops) = chart.chart_stops {
-                parse_timing_map(stops)
-            } else {
-                global_stop_map.clone()
-            };
-            let delay_map = if let Some(ref delays) = chart.chart_delays {
-                parse_timing_map(delays)
-            } else {
-                global_delay_map.clone()
-            };
-            let warp_map = if let Some(ref warps) = chart.chart_warps {
-                parse_timing_map(warps)
-            } else {
-                global_warp_map.clone()
-            };
-
-            // Compute mines that are actually judgable (not inside warps or #FAKES).
-            let fakes_str = chart
-                .chart_fakes
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .unwrap_or(&normalized_global_fakes);
-            let fake_map = parse_timing_map(fakes_str);
+            let timing = TimingData::from_chart_data(
+                offset,
+                0.0,
+                chart.chart_bpms.as_deref(),
+                &normalized_global_bpms,
+                chart.chart_stops.as_deref(),
+                &normalized_global_stops,
+                chart.chart_delays.as_deref(),
+                &normalized_global_delays,
+                chart.chart_warps.as_deref(),
+                &normalized_global_warps,
+                chart.chart_speeds.as_deref(),
+                &normalized_global_speeds,
+                chart.chart_scrolls.as_deref(),
+                &normalized_global_scrolls,
+                chart.chart_fakes.as_deref(),
+                &normalized_global_fakes,
+            );
             let lanes = step_type_lanes(&chart.step_type_str);
+
+            if lanes == 4 {
+                chart.tech_counts =
+                    step_parity::analyze_with_timing(&chart.minimized_note_data, &timing);
+            }
+
+            let warp_map: Vec<(f64, f64)> =
+                timing.warps().iter().map(|seg| (seg.beat, seg.length)).collect();
+            let fake_map: Vec<(f64, f64)> =
+                timing.fakes().iter().map(|seg| (seg.beat, seg.length)).collect();
             chart.mines_nonfake = compute_mines_nonfake(
                 &chart.minimized_note_data,
                 lanes,
@@ -572,14 +623,12 @@ pub fn analyze(
                 &fake_map,
             );
 
-            compute_total_chart_length(
-                &chart.minimized_note_data,
-                lanes,
-                &bpm_map,
-                &stop_map,
-                &delay_map,
-                &warp_map,
-            )
+            let last_beat = compute_last_beat(&chart.minimized_note_data, lanes);
+            if last_beat <= 0.0 {
+                0
+            } else {
+                timing.get_time_for_beat(last_beat).floor() as i32
+            }
         })
         .max()
         .unwrap_or(0);
@@ -595,6 +644,10 @@ pub fn analyze(
         normalized_speeds: normalized_global_speeds,
         normalized_scrolls: normalized_global_scrolls,
         normalized_fakes: normalized_global_fakes,
+        normalized_time_signatures: normalized_global_time_signatures,
+        normalized_labels: normalized_global_labels,
+        normalized_tickcounts: normalized_global_tickcounts,
+        normalized_combos: normalized_global_combos,
         banner_path: banner_path_str,
         background_path: background_path_str,
         music_path: music_path_str,
