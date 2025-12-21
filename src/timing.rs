@@ -13,6 +13,34 @@ fn beat_to_note_row(beat: f64) -> i32 {
     (beat * ROWS_PER_BEAT as f64).round() as i32
 }
 
+pub fn compute_row_to_beat(minimized_note_data: &[u8]) -> Vec<f64> {
+    let mut row_to_beat = Vec::new();
+    let mut measure_index = 0usize;
+
+    for measure_bytes in minimized_note_data.split(|&b| b == b',') {
+        let num_rows_in_measure = measure_bytes
+            .split(|&b| b == b'\n')
+            .filter(|line| {
+                let trimmed = line.strip_suffix(b"\r").unwrap_or(line);
+                !trimmed.is_empty()
+                    && !trimmed.iter().all(|c| c.is_ascii_whitespace())
+            })
+            .count();
+        if num_rows_in_measure == 0 {
+            continue;
+        }
+
+        let rows = num_rows_in_measure as f64;
+        for row_in_measure in 0..num_rows_in_measure {
+            let beat = (measure_index as f64 * 4.0) + (row_in_measure as f64 / rows * 4.0);
+            row_to_beat.push(beat);
+        }
+        measure_index += 1;
+    }
+
+    row_to_beat
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SpeedUnit {
     Beats,

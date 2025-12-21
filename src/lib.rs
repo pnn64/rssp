@@ -28,7 +28,7 @@ use crate::parse::*;
 use crate::patterns::*;
 use crate::stats::*;
 use crate::tech::parse_step_artist_and_tech;
-use crate::timing::TimingData;
+use crate::timing::{TimingData, compute_row_to_beat};
 
 /// Options for controlling simfile analysis.
 #[derive(Debug, Default, Clone)]
@@ -317,6 +317,7 @@ fn build_chart_summary(
     if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
         minimized_chart.truncate(pos + 1);
     }
+    let row_to_beat = compute_row_to_beat(&minimized_chart);
 
     let (bpms_to_use, bpm_map) = prepare_bpm_map(chart_bpms_opt.clone(), normalized_global_bpms);
     let chart_stops = chart_stops_opt.and_then(|bytes| {
@@ -455,6 +456,7 @@ fn build_chart_summary(
         elapsed: elapsed_chart,
         measure_densities,
         measure_nps_vec: metrics.measure_nps_vec,
+        row_to_beat,
         minimized_note_data: minimized_chart,
         chart_stops,
         chart_speeds,
