@@ -30,8 +30,40 @@ fn note_row_to_beat(row: i32) -> f64 {
 }
 
 #[inline(always)]
+#[must_use]
+fn lrint_ties_even_f64(v: f64) -> f64 {
+    if !v.is_finite() {
+        return 0.0;
+    }
+    if v.fract() == 0.0 {
+        return v;
+    }
+    let floor = v.floor();
+    let frac = v - floor;
+    if frac < 0.5 {
+        floor
+    } else if frac > 0.5 {
+        floor + 1.0
+    } else {
+        let f_even = ((floor as i64) & 1) == 0;
+        if f_even { floor } else { floor + 1.0 }
+    }
+}
+
+#[inline(always)]
 fn beat_to_note_row(beat: f64) -> i32 {
-    (beat * ROWS_PER_BEAT as f64).round() as i32
+    lrint_ties_even_f64(beat * ROWS_PER_BEAT as f64) as i32
+}
+
+#[inline(always)]
+fn quantize_beat_f32(beat: f32) -> f32 {
+    let row = beat_to_note_row(beat as f64);
+    note_row_to_beat(row) as f32
+}
+
+#[inline(always)]
+fn quantize_beat_f64_from_f32(beat: f64) -> f64 {
+    quantize_beat_f32(beat as f32) as f64
 }
 
 pub fn compute_row_to_beat(minimized_note_data: &[u8]) -> Vec<f32> {
@@ -123,12 +155,47 @@ pub fn compute_timing_segments(
         parsed_bpms.push((0.0, DEFAULT_BPM));
     }
 
-    let delays = parse_optional_timing(chart_delays, global_delays, parse_delays);
+    let delays: Vec<DelaySegment> = parse_optional_timing(chart_delays, global_delays, parse_delays)
+        .into_iter()
+        .map(|seg| DelaySegment {
+            beat: quantize_beat_f64_from_f32(seg.beat),
+            duration: seg.duration,
+        })
+        .collect();
     let mut warps = parse_optional_timing(chart_warps, global_warps, parse_warps);
     warps.extend(extra_warps);
-    let mut speeds = parse_optional_timing(chart_speeds, global_speeds, parse_speeds);
-    let mut scrolls = parse_optional_timing(chart_scrolls, global_scrolls, parse_scrolls);
-    let mut fakes = parse_optional_timing(chart_fakes, global_fakes, parse_fakes);
+    let mut warps: Vec<WarpSegment> = warps
+        .into_iter()
+        .map(|seg| WarpSegment {
+            beat: quantize_beat_f64_from_f32(seg.beat),
+            length: quantize_beat_f64_from_f32(seg.length),
+        })
+        .collect();
+    let mut speeds: Vec<SpeedSegment> =
+        parse_optional_timing(chart_speeds, global_speeds, parse_speeds)
+            .into_iter()
+            .map(|seg| SpeedSegment {
+                beat: quantize_beat_f64_from_f32(seg.beat),
+                ratio: seg.ratio,
+                delay: seg.delay,
+                unit: seg.unit,
+            })
+            .collect();
+    let mut scrolls: Vec<ScrollSegment> =
+        parse_optional_timing(chart_scrolls, global_scrolls, parse_scrolls)
+            .into_iter()
+            .map(|seg| ScrollSegment {
+                beat: quantize_beat_f64_from_f32(seg.beat),
+                ratio: seg.ratio,
+            })
+            .collect();
+    let mut fakes: Vec<FakeSegment> = parse_optional_timing(chart_fakes, global_fakes, parse_fakes)
+        .into_iter()
+        .map(|seg| FakeSegment {
+            beat: quantize_beat_f64_from_f32(seg.beat),
+            length: quantize_beat_f64_from_f32(seg.length),
+        })
+        .collect();
 
     speeds.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
     scrolls.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
@@ -368,12 +435,49 @@ impl TimingData {
             last_bpm = bpm;
         }
 
-        let delays = parse_optional_timing(chart_delays, global_delays, parse_delays);
+        let delays: Vec<DelaySegment> =
+            parse_optional_timing(chart_delays, global_delays, parse_delays)
+                .into_iter()
+                .map(|seg| DelaySegment {
+                    beat: quantize_beat_f64_from_f32(seg.beat),
+                    duration: seg.duration,
+                })
+                .collect();
         let mut warps = parse_optional_timing(chart_warps, global_warps, parse_warps);
         warps.extend(extra_warps);
-        let mut speeds = parse_optional_timing(chart_speeds, global_speeds, parse_speeds);
-        let mut scrolls = parse_optional_timing(chart_scrolls, global_scrolls, parse_scrolls);
-        let mut fakes = parse_optional_timing(chart_fakes, global_fakes, parse_fakes);
+        let mut warps: Vec<WarpSegment> = warps
+            .into_iter()
+            .map(|seg| WarpSegment {
+                beat: quantize_beat_f64_from_f32(seg.beat),
+                length: quantize_beat_f64_from_f32(seg.length),
+            })
+            .collect();
+        let mut speeds: Vec<SpeedSegment> =
+            parse_optional_timing(chart_speeds, global_speeds, parse_speeds)
+                .into_iter()
+                .map(|seg| SpeedSegment {
+                    beat: quantize_beat_f64_from_f32(seg.beat),
+                    ratio: seg.ratio,
+                    delay: seg.delay,
+                    unit: seg.unit,
+                })
+                .collect();
+        let mut scrolls: Vec<ScrollSegment> =
+            parse_optional_timing(chart_scrolls, global_scrolls, parse_scrolls)
+                .into_iter()
+                .map(|seg| ScrollSegment {
+                    beat: quantize_beat_f64_from_f32(seg.beat),
+                    ratio: seg.ratio,
+                })
+                .collect();
+        let mut fakes: Vec<FakeSegment> =
+            parse_optional_timing(chart_fakes, global_fakes, parse_fakes)
+                .into_iter()
+                .map(|seg| FakeSegment {
+                    beat: quantize_beat_f64_from_f32(seg.beat),
+                    length: quantize_beat_f64_from_f32(seg.length),
+                })
+                .collect();
 
         speeds.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
         scrolls.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
@@ -1082,7 +1186,7 @@ fn process_bpms_and_stops_sm(
 
     let mut out_bpms: Vec<(f32, f32)> = Vec::new();
     if bpm > 0.0 && bpm <= FAST_BPM_WARP_F32 {
-        out_bpms.push((0.0, bpm));
+        out_bpms.push((quantize_beat_f32(0.0), bpm));
     }
 
     let mut out_stops: Vec<StopSegment> = Vec::new();
@@ -1109,12 +1213,12 @@ fn process_bpms_and_stops_sm(
                     let warp_end = change_beat - (time_offset_sec * bpm / 60.0);
                     if warp_end > start {
                         out_warps.push(WarpSegment {
-                            beat: start as f64,
-                            length: (warp_end - start) as f64,
+                            beat: quantize_beat_f32(start) as f64,
+                            length: quantize_beat_f32(warp_end - start) as f64,
                         });
                     }
                     if bpm != prewarp_bpm {
-                        out_bpms.push((start, bpm));
+                        out_bpms.push((quantize_beat_f32(start), bpm));
                     }
                     warp_start = None;
                 }
@@ -1131,7 +1235,7 @@ fn process_bpms_and_stops_sm(
                 prewarp_bpm = bpm;
                 time_offset_sec = 0.0;
             } else if warp_start.is_none() {
-                out_bpms.push((change_beat, change_val));
+                out_bpms.push((quantize_beat_f32(change_beat), change_val));
             }
 
             bpm = change_val;
@@ -1143,7 +1247,7 @@ fn process_bpms_and_stops_sm(
                 time_offset_sec = change_val;
             } else if warp_start.is_none() {
                 out_stops.push(StopSegment {
-                    beat: change_beat as f64,
+                    beat: quantize_beat_f32(change_beat) as f64,
                     duration: change_val as f64,
                 });
             } else {
@@ -1153,12 +1257,12 @@ fn process_bpms_and_stops_sm(
                     if let Some(start) = warp_start {
                         if warp_end > start {
                             out_warps.push(WarpSegment {
-                                beat: start as f64,
-                                length: (warp_end - start) as f64,
+                                beat: quantize_beat_f32(start) as f64,
+                                length: quantize_beat_f32(warp_end - start) as f64,
                             });
                         }
                         out_stops.push(StopSegment {
-                            beat: change_beat as f64,
+                            beat: quantize_beat_f32(change_beat) as f64,
                             duration: time_offset_sec as f64,
                         });
 
@@ -1167,7 +1271,7 @@ fn process_bpms_and_stops_sm(
                             time_offset_sec = 0.0;
                         } else {
                             if bpm != prewarp_bpm {
-                                out_bpms.push((start, bpm));
+                                out_bpms.push((quantize_beat_f32(start), bpm));
                             }
                             warp_start = None;
                         }
@@ -1186,12 +1290,12 @@ fn process_bpms_and_stops_sm(
         };
         if warp_end > start {
             out_warps.push(WarpSegment {
-                beat: start as f64,
-                length: (warp_end - start) as f64,
+                beat: quantize_beat_f32(start) as f64,
+                length: quantize_beat_f32(warp_end - start) as f64,
             });
         }
         if bpm != prewarp_bpm {
-            out_bpms.push((start, bpm));
+            out_bpms.push((quantize_beat_f32(start), bpm));
         }
     }
 
@@ -1217,6 +1321,9 @@ fn process_bpms_and_stops_ssc(
         .filter(|(beat, bpm)| beat.is_finite() && bpm.is_finite() && *beat >= 0.0 && *bpm > 0.0)
         .collect();
     bpm_changes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    for (beat, _) in &mut bpm_changes {
+        *beat = quantize_beat_f64_from_f32(*beat);
+    }
 
     let mut out_stops: Vec<StopSegment> = stops
         .iter()
@@ -1226,6 +1333,9 @@ fn process_bpms_and_stops_ssc(
             duration: s.duration,
         })
         .collect();
+    for stop in &mut out_stops {
+        stop.beat = quantize_beat_f64_from_f32(stop.beat);
+    }
     out_stops.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
 
     let out_bpms = tidy_bpms(bpm_changes);
