@@ -66,6 +66,30 @@ fn quantize_beat_f64_from_f32(beat: f64) -> f64 {
     quantize_beat_f32(beat as f32) as f64
 }
 
+#[inline(always)]
+fn normalize_decimal_itg(value: f64) -> String {
+    let rounded = (value as f32 * 1000.0).round() / 1000.0;
+    format!("{:.3}", rounded)
+}
+
+#[inline(always)]
+fn quantize_beat_like_itg(beat: f64) -> f32 {
+    let beat_f = beat as f32;
+    let scaled = (beat_f * ROWS_PER_BEAT as f32) as f64;
+    let row = lrint_ties_even_f64(scaled) as i32;
+    row as f32 / ROWS_PER_BEAT as f32
+}
+
+pub fn format_bpm_segments_like_itg(bpms: &[(f64, f64)]) -> String {
+    bpms.iter()
+        .map(|(beat, bpm)| {
+            let beat = quantize_beat_like_itg(*beat) as f64;
+            format!("{}={}", normalize_decimal_itg(beat), normalize_decimal_itg(*bpm))
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 pub fn compute_row_to_beat(minimized_note_data: &[u8]) -> Vec<f32> {
     let mut row_to_beat = Vec::new();
     let mut measure_index = 0usize;

@@ -9,7 +9,7 @@ use walkdir::WalkDir;
 
 use rssp::bpm::normalize_float_digits;
 use rssp::parse::{extract_sections, split_notes_fields};
-use rssp::timing::{TimingData, TimingFormat};
+use rssp::timing::{format_bpm_segments_like_itg, TimingData, TimingFormat};
 
 #[derive(Debug, Deserialize)]
 struct GoldenChart {
@@ -154,13 +154,8 @@ fn compute_chart_bpms(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartB
             timing_format,
         );
 
-        let timing_bpms_raw = timing
-            .bpm_segments()
-            .iter()
-            .map(|(beat, bpm)| format!("{}={}", beat, bpm))
-            .collect::<Vec<_>>()
-            .join(",");
-        let timing_bpms = normalize_float_digits(&timing_bpms_raw);
+        let timing_bpms_list = timing.bpm_segments();
+        let timing_bpms = format_bpm_segments_like_itg(&timing_bpms_list);
 
         results.push(ChartBpmInfo {
             step_type,
