@@ -9,6 +9,7 @@ use crate::patterns::{CustomPatternSummary, PatternVariant};
 use crate::stats::{ArrowStats, StreamCounts};
 use crate::step_parity::TechCounts;
 use crate::timing::{
+    format_bpm_segments_like_itg,
     normalize_scrolls_like_itg,
     normalize_speeds_like_itg,
     SpeedUnit,
@@ -271,6 +272,7 @@ pub struct TimingSnapshot {
     pub beat0_offset_seconds: f64,
     pub beat0_group_offset_seconds: f64,
     pub bpms: Vec<(f64, f64)>,
+    pub bpms_formatted: String,
     pub stops: Vec<(f64, f64)>,
     pub delays: Vec<(f64, f64)>,
     pub time_signatures: Vec<(f64, i32, i32)>,
@@ -445,6 +447,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
     );
 
     let bpms = timing.bpm_segments();
+    let bpms_formatted = format_bpm_segments_like_itg(&bpms);
     let stops = timing
         .stops()
         .iter()
@@ -502,6 +505,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         beat0_offset_seconds: timing.beat0_offset_seconds(),
         beat0_group_offset_seconds: timing.beat0_group_offset_seconds(),
         bpms,
+        bpms_formatted,
         stops,
         delays,
         time_signatures,
@@ -1213,6 +1217,7 @@ fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
         beat0_offset_seconds,
         beat0_group_offset_seconds,
         bpms,
+        bpms_formatted,
         stops,
         delays,
         time_signatures,
@@ -1257,6 +1262,7 @@ fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
     serde_json::json!({
         "beat0_offset_seconds": beat0_offset_seconds,
         "beat0_group_offset_seconds": beat0_group_offset_seconds,
+        "bpms_formatted": bpms_formatted,
         "bpms": bpms,
         "stops": stops,
         "delays": delays,
