@@ -12,9 +12,9 @@ use crate::timing::{
     format_bpm_segments_like_itg,
     normalize_scrolls_like_itg,
     normalize_speeds_like_itg,
+    roundtrip_bpm_itg,
     steps_timing_allowed,
     SpeedUnit,
-    TimingData,
     TimingFormat,
     TimingSegments,
 };
@@ -435,99 +435,47 @@ fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
 
 pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> TimingSnapshot {
     let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
-
-    let chart_bpms_timing = if allow_steps_timing {
-        chart.chart_bpms.as_deref()
-    } else {
-        None
-    };
-    let chart_stops_timing = if allow_steps_timing {
-        chart.chart_stops.as_deref()
-    } else {
-        None
-    };
-    let chart_delays_timing = if allow_steps_timing {
-        chart.chart_delays.as_deref()
-    } else {
-        None
-    };
-    let chart_warps_timing = if allow_steps_timing {
-        chart.chart_warps.as_deref()
-    } else {
-        None
-    };
-    let chart_speeds_timing = if allow_steps_timing {
-        chart.chart_speeds.as_deref()
-    } else {
-        None
-    };
-    let chart_scrolls_timing = if allow_steps_timing {
-        chart.chart_scrolls.as_deref()
-    } else {
-        None
-    };
-    let chart_fakes_timing = if allow_steps_timing {
-        chart.chart_fakes.as_deref()
-    } else {
-        None
-    };
-
-    let timing = TimingData::from_chart_data(
-        simfile.offset,
-        0.0,
-        chart_bpms_timing,
-        &simfile.normalized_bpms,
-        chart_stops_timing,
-        &simfile.normalized_stops,
-        chart_delays_timing,
-        &simfile.normalized_delays,
-        chart_warps_timing,
-        &simfile.normalized_warps,
-        chart_speeds_timing,
-        &simfile.normalized_speeds,
-        chart_scrolls_timing,
-        &simfile.normalized_scrolls,
-        chart_fakes_timing,
-        &simfile.normalized_fakes,
-        simfile.timing_format,
-    );
-
-    let bpms = timing.bpm_segments();
+    let timing = &chart.timing_segments;
+    let bpms: Vec<(f64, f64)> = timing
+        .bpms
+        .iter()
+        .map(|(beat, bpm)| (*beat as f64, roundtrip_bpm_itg(*bpm as f64)))
+        .collect();
     let bpms_formatted = format_bpm_segments_like_itg(&bpms);
     let stops = timing
-        .stops()
+        .stops
         .iter()
-        .map(|seg| (seg.beat, seg.duration))
+        .map(|(beat, duration)| (*beat as f64, *duration as f64))
         .collect();
     let delays = timing
-        .delays()
+        .delays
         .iter()
-        .map(|seg| (seg.beat, seg.duration))
+        .map(|(beat, duration)| (*beat as f64, *duration as f64))
         .collect();
     let warps = timing
-        .warps()
+        .warps
         .iter()
-        .map(|seg| (seg.beat, seg.length))
+        .map(|(beat, length)| (*beat as f64, *length as f64))
         .collect();
     let speeds = timing
-        .speeds()
+        .speeds
         .iter()
-        .map(|seg| {
-            let unit = if seg.unit == SpeedUnit::Seconds { 1 } else { 0 };
-            (seg.beat, seg.ratio, seg.delay, unit)
+        .map(|(beat, ratio, delay, unit)| {
+            let unit = if *unit == SpeedUnit::Seconds { 1 } else { 0 };
+            (*beat as f64, *ratio as f64, *delay as f64, unit)
         })
         .collect();
     let speeds = normalize_speeds_like_itg(speeds);
     let scrolls = timing
-        .scrolls()
+        .scrolls
         .iter()
-        .map(|seg| (seg.beat, seg.ratio))
+        .map(|(beat, ratio)| (*beat as f64, *ratio as f64))
         .collect();
     let scrolls = normalize_scrolls_like_itg(scrolls);
     let fakes = timing
-        .fakes()
+        .fakes
         .iter()
-        .map(|seg| (seg.beat, seg.length))
+        .map(|(beat, length)| (*beat as f64, *length as f64))
         .collect();
 
     let time_signatures = parse_time_signatures(chart_or_global(
@@ -552,8 +500,8 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
     ));
 
     TimingSnapshot {
-        beat0_offset_seconds: timing.beat0_offset_seconds(),
-        beat0_group_offset_seconds: timing.beat0_group_offset_seconds(),
+        beat0_offset_seconds: simfile.offset + timing.beat0_offset_adjust as f64,
+        beat0_group_offset_seconds: 0.0,
         bpms,
         bpms_formatted,
         stops,

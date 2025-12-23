@@ -39,6 +39,24 @@ pub fn normalize_float_digits(param: &str) -> String {
         .join(",")
 }
 
+fn clean_entry(beat_bpm: &str) -> Option<String> {
+    let cleaned: String = beat_bpm.chars().filter(|c| !c.is_control()).collect();
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+pub fn clean_timing_map(param: &str) -> String {
+    param
+        .split(',')
+        .filter_map(clean_entry)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 pub fn normalize_chart_tag(tag: Option<Vec<u8>>) -> Option<String> {
     tag.and_then(|bytes| {
         std::str::from_utf8(&bytes)
@@ -54,6 +72,21 @@ fn normalize_tag_bytes(tag: Option<&[u8]>) -> String {
         .unwrap_or_default()
 }
 
+fn clean_tag_bytes(tag: Option<&[u8]>) -> String {
+    tag.and_then(|bytes| std::str::from_utf8(bytes).ok())
+        .map(clean_timing_map)
+        .unwrap_or_default()
+}
+
+fn clean_chart_tag(tag: Option<Vec<u8>>) -> Option<String> {
+    tag.and_then(|bytes| {
+        std::str::from_utf8(&bytes)
+            .ok()
+            .map(clean_timing_map)
+    })
+    .filter(|s| !s.is_empty())
+}
+
 #[derive(Debug, Clone)]
 pub struct ChartBpmSnapshot {
     pub step_type: String,
@@ -64,13 +97,14 @@ pub struct ChartBpmSnapshot {
 
 #[derive(Clone)]
 struct TimingGlobals {
-    bpms: String,
-    stops: String,
-    delays: String,
-    warps: String,
-    speeds: String,
-    scrolls: String,
-    fakes: String,
+    bpms_raw: String,
+    stops_raw: String,
+    delays_raw: String,
+    warps_raw: String,
+    speeds_raw: String,
+    scrolls_raw: String,
+    fakes_raw: String,
+    bpms_norm: String,
     song_offset: f64,
     timing_format: TimingFormat,
     allow_steps_timing: bool,
@@ -78,13 +112,14 @@ struct TimingGlobals {
 
 #[derive(Clone)]
 struct ChartTimingTags {
-    bpms: Option<String>,
-    stops: Option<String>,
-    delays: Option<String>,
-    warps: Option<String>,
-    speeds: Option<String>,
-    scrolls: Option<String>,
-    fakes: Option<String>,
+    bpms_raw: Option<String>,
+    stops_raw: Option<String>,
+    delays_raw: Option<String>,
+    warps_raw: Option<String>,
+    speeds_raw: Option<String>,
+    scrolls_raw: Option<String>,
+    fakes_raw: Option<String>,
+    bpms_norm: Option<String>,
 }
 
 fn timing_globals(parsed: &ParsedSimfileData<'_>, extension: &str) -> TimingGlobals {
@@ -93,13 +128,14 @@ fn timing_globals(parsed: &ParsedSimfileData<'_>, extension: &str) -> TimingGlob
         steps_timing_allowed(parse_version(parsed.version, timing_format), timing_format);
 
     TimingGlobals {
-        bpms: normalize_tag_bytes(parsed.bpms),
-        stops: normalize_tag_bytes(parsed.stops),
-        delays: normalize_tag_bytes(parsed.delays),
-        warps: normalize_tag_bytes(parsed.warps),
-        speeds: normalize_tag_bytes(parsed.speeds),
-        scrolls: normalize_tag_bytes(parsed.scrolls),
-        fakes: normalize_tag_bytes(parsed.fakes),
+        bpms_raw: clean_tag_bytes(parsed.bpms),
+        stops_raw: clean_tag_bytes(parsed.stops),
+        delays_raw: clean_tag_bytes(parsed.delays),
+        warps_raw: clean_tag_bytes(parsed.warps),
+        speeds_raw: clean_tag_bytes(parsed.speeds),
+        scrolls_raw: clean_tag_bytes(parsed.scrolls),
+        fakes_raw: clean_tag_bytes(parsed.fakes),
+        bpms_norm: normalize_tag_bytes(parsed.bpms),
         song_offset: parse_offset_seconds(parsed.offset),
         timing_format,
         allow_steps_timing,
@@ -108,13 +144,14 @@ fn timing_globals(parsed: &ParsedSimfileData<'_>, extension: &str) -> TimingGlob
 
 fn chart_timing_tags(entry: &ParsedChartEntry) -> ChartTimingTags {
     ChartTimingTags {
-        bpms: normalize_chart_tag(entry.chart_bpms.clone()),
-        stops: normalize_chart_tag(entry.chart_stops.clone()),
-        delays: normalize_chart_tag(entry.chart_delays.clone()),
-        warps: normalize_chart_tag(entry.chart_warps.clone()),
-        speeds: normalize_chart_tag(entry.chart_speeds.clone()),
-        scrolls: normalize_chart_tag(entry.chart_scrolls.clone()),
-        fakes: normalize_chart_tag(entry.chart_fakes.clone()),
+        bpms_raw: clean_chart_tag(entry.chart_bpms.clone()),
+        stops_raw: clean_chart_tag(entry.chart_stops.clone()),
+        delays_raw: clean_chart_tag(entry.chart_delays.clone()),
+        warps_raw: clean_chart_tag(entry.chart_warps.clone()),
+        speeds_raw: clean_chart_tag(entry.chart_speeds.clone()),
+        scrolls_raw: clean_chart_tag(entry.chart_scrolls.clone()),
+        fakes_raw: clean_chart_tag(entry.chart_fakes.clone()),
+        bpms_norm: normalize_chart_tag(entry.chart_bpms.clone()),
     }
 }
 
@@ -136,20 +173,20 @@ fn timing_data_for_chart(tags: &ChartTimingTags, globals: &TimingGlobals) -> Tim
     TimingData::from_chart_data(
         globals.song_offset,
         0.0,
-        if use_chart { tags.bpms.as_deref() } else { None },
-        &globals.bpms,
-        if use_chart { tags.stops.as_deref() } else { None },
-        &globals.stops,
-        if use_chart { tags.delays.as_deref() } else { None },
-        &globals.delays,
-        if use_chart { tags.warps.as_deref() } else { None },
-        &globals.warps,
-        if use_chart { tags.speeds.as_deref() } else { None },
-        &globals.speeds,
-        if use_chart { tags.scrolls.as_deref() } else { None },
-        &globals.scrolls,
-        if use_chart { tags.fakes.as_deref() } else { None },
-        &globals.fakes,
+        if use_chart { tags.bpms_raw.as_deref() } else { None },
+        &globals.bpms_raw,
+        if use_chart { tags.stops_raw.as_deref() } else { None },
+        &globals.stops_raw,
+        if use_chart { tags.delays_raw.as_deref() } else { None },
+        &globals.delays_raw,
+        if use_chart { tags.warps_raw.as_deref() } else { None },
+        &globals.warps_raw,
+        if use_chart { tags.speeds_raw.as_deref() } else { None },
+        &globals.speeds_raw,
+        if use_chart { tags.scrolls_raw.as_deref() } else { None },
+        &globals.scrolls_raw,
+        if use_chart { tags.fakes_raw.as_deref() } else { None },
+        &globals.fakes_raw,
         globals.timing_format,
     )
 }
@@ -158,8 +195,12 @@ fn chart_bpm_snapshot(entry: &ParsedChartEntry, globals: &TimingGlobals) -> Opti
     let (fields, _chart_data) = split_notes_fields(&entry.notes);
     let (step_type, difficulty) = chart_metadata(&fields)?;
     let tags = chart_timing_tags(entry);
-    let hash_bpms = tags.bpms.clone().unwrap_or_else(|| globals.bpms.clone());
-    let bpms_formatted = format_bpm_segments_like_itg(&timing_data_for_chart(&tags, globals).bpm_segments());
+    let hash_bpms = tags
+        .bpms_norm
+        .clone()
+        .unwrap_or_else(|| globals.bpms_norm.clone());
+    let bpms_formatted =
+        format_bpm_segments_like_itg(&timing_data_for_chart(&tags, globals).bpm_segments());
 
     Some(ChartBpmSnapshot {
         step_type,

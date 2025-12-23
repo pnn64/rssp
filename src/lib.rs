@@ -140,6 +140,27 @@ pub fn step_type_lanes(step_type: &str) -> usize {
     }
 }
 
+fn chart_timing_tag_pair(tag: Option<Vec<u8>>) -> (Option<String>, Option<String>) {
+    let Some(bytes) = tag else {
+        return (None, None);
+    };
+    let Ok(text) = std::str::from_utf8(&bytes) else {
+        return (None, None);
+    };
+    let raw = clean_timing_map(text);
+    let norm = normalize_float_digits(text);
+    let raw = if raw.is_empty() { None } else { Some(raw) };
+    let norm = if norm.is_empty() { None } else { Some(norm) };
+    (raw, norm)
+}
+
+fn chart_timing_tag_raw(tag: Option<Vec<u8>>) -> Option<String> {
+    let bytes = tag?;
+    let text = std::str::from_utf8(&bytes).ok()?;
+    let cleaned = clean_timing_map(text);
+    if cleaned.is_empty() { None } else { Some(cleaned) }
+}
+
 /// Parses the minimized chart data string into a sequence of note bitmasks.
 fn generate_bitmasks(minimized_chart: &[u8]) -> Vec<u8> {
     minimized_chart
@@ -275,13 +296,14 @@ fn build_chart_summary(
     chart_labels_opt: Option<Vec<u8>>,
     chart_tickcounts_opt: Option<Vec<u8>>,
     chart_combos_opt: Option<Vec<u8>>,
-    normalized_global_bpms: &str,
-    normalized_global_stops: &str,
-    normalized_global_delays: &str,
-    normalized_global_warps: &str,
-    normalized_global_speeds: &str,
-    normalized_global_scrolls: &str,
-    normalized_global_fakes: &str,
+    global_bpms_raw: &str,
+    global_stops_raw: &str,
+    global_delays_raw: &str,
+    global_warps_raw: &str,
+    global_speeds_raw: &str,
+    global_scrolls_raw: &str,
+    global_fakes_raw: &str,
+    global_bpms_norm: &str,
     extension: &str,
     timing_format: TimingFormat,
     allow_steps_timing: bool,
@@ -319,51 +341,16 @@ fn build_chart_summary(
     }
     let row_to_beat = compute_row_to_beat(&minimized_chart);
 
-    let chart_bpms = chart_bpms_opt.and_then(|bytes| {
-        std::str::from_utf8(&bytes)
-            .ok()
-            .map(normalize_float_digits)
-            .filter(|s| !s.is_empty())
-    });
-    let bpms_to_use = chart_bpms
+    let (chart_bpms, chart_bpms_norm) = chart_timing_tag_pair(chart_bpms_opt);
+    let bpms_to_use = chart_bpms_norm
         .clone()
-        .unwrap_or_else(|| normalized_global_bpms.to_string());
-    let chart_stops = chart_stops_opt.and_then(|bytes| {
-        std::str::from_utf8(&bytes)
-            .ok()
-            .map(normalize_float_digits)
-            .filter(|s| !s.is_empty())
-    });
-    let chart_speeds = chart_speeds_opt.and_then(|bytes| {
-        std::str::from_utf8(&bytes)
-            .ok()
-            .map(normalize_float_digits)
-            .filter(|s| !s.is_empty())
-    });
-    let chart_delays = chart_delays_opt.and_then(|bytes| {
-        std::str::from_utf8(&bytes)
-            .ok()
-            .map(normalize_float_digits)
-            .filter(|s| !s.is_empty())
-    });
-    let chart_scrolls = chart_scrolls_opt.and_then(|bytes| {
-        std::str::from_utf8(&bytes)
-            .ok()
-            .map(normalize_float_digits)
-            .filter(|s| !s.is_empty())
-    });
-    let chart_warps = chart_warps_opt.and_then(|bytes| {
-        std::str::from_utf8(&bytes)
-            .ok()
-            .map(normalize_float_digits)
-            .filter(|s| !s.is_empty())
-    });
-    let chart_fakes = chart_fakes_opt.and_then(|bytes| {
-        std::str::from_utf8(&bytes)
-            .ok()
-            .map(normalize_float_digits)
-            .filter(|s| !s.is_empty())
-    });
+        .unwrap_or_else(|| global_bpms_norm.to_string());
+    let chart_stops = chart_timing_tag_raw(chart_stops_opt);
+    let chart_speeds = chart_timing_tag_raw(chart_speeds_opt);
+    let chart_delays = chart_timing_tag_raw(chart_delays_opt);
+    let chart_scrolls = chart_timing_tag_raw(chart_scrolls_opt);
+    let chart_warps = chart_timing_tag_raw(chart_warps_opt);
+    let chart_fakes = chart_timing_tag_raw(chart_fakes_opt);
 
     let chart_bpms_timing = if allow_steps_timing { chart_bpms.as_deref() } else { None };
     let chart_stops_timing = if allow_steps_timing { chart_stops.as_deref() } else { None };
@@ -402,19 +389,19 @@ fn build_chart_summary(
     });
     let timing_segments = compute_timing_segments(
         chart_bpms_timing,
-        normalized_global_bpms,
+        global_bpms_raw,
         chart_stops_timing,
-        normalized_global_stops,
+        global_stops_raw,
         chart_delays_timing,
-        normalized_global_delays,
+        global_delays_raw,
         chart_warps_timing,
-        normalized_global_warps,
+        global_warps_raw,
         chart_speeds_timing,
-        normalized_global_speeds,
+        global_speeds_raw,
         chart_scrolls_timing,
-        normalized_global_scrolls,
+        global_scrolls_raw,
         chart_fakes_timing,
-        normalized_global_fakes,
+        global_fakes_raw,
         timing_format,
     );
 
@@ -540,36 +527,43 @@ pub fn analyze(
     let sample_length = parsed_data.sample_length.and_then(|b| std::str::from_utf8(b).ok()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"<invalid-bpms>")).unwrap_or("<invalid-bpms>");
     let normalized_global_bpms = normalize_float_digits(global_bpms_raw);
+    let cleaned_global_bpms = clean_timing_map(global_bpms_raw);
     let global_stops_raw = parsed_data
         .stops
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
     let normalized_global_stops = normalize_float_digits(global_stops_raw);
+    let cleaned_global_stops = clean_timing_map(global_stops_raw);
     let global_delays_raw = parsed_data
         .delays
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
     let normalized_global_delays = normalize_float_digits(global_delays_raw);
+    let cleaned_global_delays = clean_timing_map(global_delays_raw);
     let global_warps_raw = parsed_data
         .warps
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
     let normalized_global_warps = normalize_float_digits(global_warps_raw);
+    let cleaned_global_warps = clean_timing_map(global_warps_raw);
     let global_speeds_raw = parsed_data
         .speeds
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
     let normalized_global_speeds = normalize_float_digits(global_speeds_raw);
+    let cleaned_global_speeds = clean_timing_map(global_speeds_raw);
     let global_scrolls_raw = parsed_data
         .scrolls
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
     let normalized_global_scrolls = normalize_float_digits(global_scrolls_raw);
+    let cleaned_global_scrolls = clean_timing_map(global_scrolls_raw);
     let global_fakes_raw = parsed_data
         .fakes
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
     let normalized_global_fakes = normalize_float_digits(global_fakes_raw);
+    let cleaned_global_fakes = clean_timing_map(global_fakes_raw);
     let normalized_global_time_signatures = parsed_data
         .time_signatures
         .and_then(|b| std::str::from_utf8(b).ok())
@@ -597,19 +591,19 @@ pub fn analyze(
     let allow_steps_timing = steps_timing_allowed(ssc_version, timing_format);
     let global_timing_segments = compute_timing_segments(
         None,
-        &normalized_global_bpms,
+        &cleaned_global_bpms,
         None,
-        &normalized_global_stops,
+        &cleaned_global_stops,
         None,
-        &normalized_global_delays,
+        &cleaned_global_delays,
         None,
-        &normalized_global_warps,
+        &cleaned_global_warps,
         None,
-        &normalized_global_speeds,
+        &cleaned_global_speeds,
         None,
-        &normalized_global_scrolls,
+        &cleaned_global_scrolls,
         None,
-        &normalized_global_fakes,
+        &cleaned_global_fakes,
         timing_format,
     );
     let global_bpm_map: Vec<(f64, f64)> = global_timing_segments
@@ -638,13 +632,14 @@ pub fn analyze(
                 entry.chart_labels,
                 entry.chart_tickcounts,
                 entry.chart_combos,
+                &cleaned_global_bpms,
+                &cleaned_global_stops,
+                &cleaned_global_delays,
+                &cleaned_global_warps,
+                &cleaned_global_speeds,
+                &cleaned_global_scrolls,
+                &cleaned_global_fakes,
                 &normalized_global_bpms,
-                &normalized_global_stops,
-                &normalized_global_delays,
-                &normalized_global_warps,
-                &normalized_global_speeds,
-                &normalized_global_scrolls,
-                &normalized_global_fakes,
                 extension,
                 timing_format,
                 allow_steps_timing,
@@ -696,19 +691,19 @@ pub fn analyze(
                 offset,
                 0.0,
                 chart_bpms_timing,
-                &normalized_global_bpms,
+                &cleaned_global_bpms,
                 chart_stops_timing,
-                &normalized_global_stops,
+                &cleaned_global_stops,
                 chart_delays_timing,
-                &normalized_global_delays,
+                &cleaned_global_delays,
                 chart_warps_timing,
-                &normalized_global_warps,
+                &cleaned_global_warps,
                 chart_speeds_timing,
-                &normalized_global_speeds,
+                &cleaned_global_speeds,
                 chart_scrolls_timing,
-                &normalized_global_scrolls,
+                &cleaned_global_scrolls,
                 chart_fakes_timing,
-                &normalized_global_fakes,
+                &cleaned_global_fakes,
                 timing_format,
             );
             let lanes = step_type_lanes(&chart.step_type_str);

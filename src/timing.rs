@@ -1,4 +1,4 @@
-use crate::bpm::{normalize_float_digits, parse_bpm_map};
+use crate::bpm::{clean_timing_map, parse_bpm_map};
 use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +84,16 @@ fn normalize_decimal_itg(value: f64) -> String {
 }
 
 #[inline(always)]
+pub(crate) fn roundtrip_bpm_itg(bpm: f64) -> f64 {
+    let bpm_f = bpm as f32;
+    if !bpm_f.is_finite() {
+        return 0.0;
+    }
+    let bps = bpm_f / 60.0;
+    (bps * 60.0) as f64
+}
+
+#[inline(always)]
 pub fn round_millis(value: f64) -> f64 {
     (value * 1000.0).round() / 1000.0
 }
@@ -100,7 +110,8 @@ pub fn format_bpm_segments_like_itg(bpms: &[(f64, f64)]) -> String {
     bpms.iter()
         .map(|(beat, bpm)| {
             let beat = quantize_beat_like_itg(*beat) as f64;
-            format!("{}={}", normalize_decimal_itg(beat), normalize_decimal_itg(*bpm))
+            let bpm = roundtrip_bpm_itg(*bpm);
+            format!("{}={}", normalize_decimal_itg(beat), normalize_decimal_itg(bpm))
         })
         .collect::<Vec<_>>()
         .join(",")
@@ -165,7 +176,8 @@ where
     F: Fn(&str) -> Result<Vec<T>, &'static str>,
 {
     let s = chart_val.filter(|s| !s.is_empty()).unwrap_or(global_val);
-    parser(s).unwrap_or_else(|_| vec![])
+    let cleaned = clean_timing_map(s);
+    parser(&cleaned).unwrap_or_else(|_| vec![])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -205,8 +217,8 @@ pub fn compute_timing_segments(
     format: TimingFormat,
 ) -> TimingSegments {
     let bpms_str = chart_bpms.filter(|s| !s.is_empty()).unwrap_or(global_bpms);
-    let normalized_bpms = normalize_float_digits(bpms_str);
-    let mut parsed_bpms: Vec<(f64, f64)> = parse_bpm_map(&normalized_bpms);
+    let cleaned_bpms = clean_timing_map(bpms_str);
+    let mut parsed_bpms: Vec<(f64, f64)> = parse_bpm_map(&cleaned_bpms);
 
     if parsed_bpms.is_empty() {
         parsed_bpms.push((0.0, DEFAULT_BPM));
@@ -460,8 +472,8 @@ impl TimingData {
         format: TimingFormat,
     ) -> Self {
         let bpms_str = chart_bpms.filter(|s| !s.is_empty()).unwrap_or(global_bpms);
-        let normalized_bpms = normalize_float_digits(bpms_str);
-        let mut parsed_bpms: Vec<(f64, f64)> = parse_bpm_map(&normalized_bpms);
+        let cleaned_bpms = clean_timing_map(bpms_str);
+        let mut parsed_bpms: Vec<(f64, f64)> = parse_bpm_map(&cleaned_bpms);
 
         if parsed_bpms.is_empty() {
             parsed_bpms.push((0.0, DEFAULT_BPM));
