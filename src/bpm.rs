@@ -89,7 +89,8 @@ struct ChartTimingTags {
 
 fn timing_globals(parsed: &ParsedSimfileData<'_>, extension: &str) -> TimingGlobals {
     let timing_format = TimingFormat::from_extension(extension);
-    let allow_steps_timing = steps_timing_allowed(parse_version(parsed.version), timing_format);
+    let allow_steps_timing =
+        steps_timing_allowed(parse_version(parsed.version, timing_format), timing_format);
 
     TimingGlobals {
         bpms: normalize_tag_bytes(parsed.bpms),

@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::timing::STEPFILE_VERSION_NUMBER;
+use crate::timing::{TimingFormat, STEPFILE_VERSION_NUMBER};
 
 pub fn strip_title_tags(mut title: &str) -> String {
     loop {
@@ -68,11 +68,17 @@ pub fn parse_offset_seconds(parsed_offset: Option<&[u8]>) -> f64 {
         .unwrap_or(0.0)
 }
 
-pub fn parse_version(parsed_version: Option<&[u8]>) -> f32 {
+pub fn parse_version(parsed_version: Option<&[u8]>, timing_format: TimingFormat) -> f32 {
     parsed_version
         .and_then(|b| std::str::from_utf8(b).ok())
         .and_then(|s| s.parse::<f32>().ok())
-        .unwrap_or(STEPFILE_VERSION_NUMBER)
+        .unwrap_or_else(|| {
+            if timing_format == TimingFormat::Ssc {
+                0.0
+            } else {
+                STEPFILE_VERSION_NUMBER
+            }
+        })
 }
 
 /// Parsed note data for a single chart found in the simfile.
