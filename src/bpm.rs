@@ -29,6 +29,15 @@ pub fn normalize_float_digits(param: &str) -> String {
         .join(",")
 }
 
+pub fn normalize_chart_tag(tag: Option<Vec<u8>>) -> Option<String> {
+    tag.and_then(|bytes| {
+        std::str::from_utf8(&bytes)
+            .ok()
+            .map(normalize_float_digits)
+    })
+    .filter(|s| !s.is_empty())
+}
+
 fn normalized_3dp_to_thousandths(s: &str) -> Option<i64> {
     let s = s.trim();
     if s.is_empty() {
@@ -296,7 +305,7 @@ pub fn get_elapsed_time(
 ///   - fixed-width note rows (per-chart lane count) followed by '\n'
 ///   - ",\n" as a measure separator
 /// Measures are assumed to be 4 beats long, matching StepMania's default behavior.
-pub(crate) fn compute_last_beat(minimized_note_data: &[u8], lanes: usize) -> f64 {
+pub fn compute_last_beat(minimized_note_data: &[u8], lanes: usize) -> f64 {
     let mut rows_per_measure: Vec<usize> = Vec::new();
     let mut current_rows: usize = 0;
 

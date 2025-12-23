@@ -7,8 +7,8 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::bpm::normalize_float_digits;
-use rssp::parse::{extract_sections, split_notes_fields};
+use rssp::bpm::{normalize_chart_tag, normalize_float_digits};
+use rssp::parse::{extract_sections, parse_offset_seconds, split_notes_fields};
 use rssp::stats::minimize_chart_and_count_with_lanes;
 use rssp::step_parity;
 use rssp::timing::{TimingData, TimingFormat};
@@ -58,38 +58,13 @@ struct Failure {
     message: String,
 }
 
-fn step_type_lanes(step_type: &str) -> usize {
-    let normalized = step_type.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "dance-double" => 8,
-        _ => 4,
-    }
-}
-
-fn normalize_chart_tag(tag: Option<Vec<u8>>) -> Option<String> {
-    tag.and_then(|bytes| {
-        std::str::from_utf8(&bytes)
-            .ok()
-            .map(normalize_float_digits)
-    })
-    .filter(|s| !s.is_empty())
-}
-
-fn compute_offset_seconds(parsed_offset: Option<&[u8]>) -> f64 {
-    parsed_offset
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .and_then(|s| s.parse::<f64>().ok())
-        .map(|f| (f * 1000.0).trunc() / 1000.0)
-        .unwrap_or(0.0)
-}
-
 fn compute_chart_tech_counts(
     simfile_data: &[u8],
     extension: &str,
 ) -> Result<Vec<ChartTechCounts>, String> {
     let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
 
-    let offset = compute_offset_seconds(parsed_data.offset);
+    let offset = parse_offset_seconds(parsed_data.offset);
 
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b""))
         .unwrap_or("");
@@ -129,7 +104,7 @@ fn compute_chart_tech_counts(
         let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
         let difficulty = rssp::normalize_difficulty_label(difficulty_raw);
 
-        let lanes = step_type_lanes(&step_type);
+        let lanes = rssp::step_type_lanes(&step_type);
         let (mut minimized_chart, _stats, _measure_densities) =
             minimize_chart_and_count_with_lanes(chart_data, lanes);
         if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {

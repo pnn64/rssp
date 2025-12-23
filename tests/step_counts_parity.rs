@@ -56,14 +56,6 @@ struct Failure {
     message: String,
 }
 
-fn step_type_lanes(step_type: &str) -> usize {
-    let normalized = step_type.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "dance-double" => 8,
-        _ => 4,
-    }
-}
-
 fn format_count(value: Option<u32>) -> String {
     value
         .map(|v| v.to_string())
@@ -91,7 +83,7 @@ fn compute_chart_step_counts(
         let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
         let difficulty = rssp::normalize_difficulty_label(difficulty_raw);
 
-        let lanes = step_type_lanes(&step_type);
+        let lanes = rssp::step_type_lanes(&step_type);
         let (_minimized, stats, _measure_densities) =
             minimize_chart_and_count_with_lanes(chart_data, lanes);
 

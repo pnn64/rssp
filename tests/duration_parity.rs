@@ -7,10 +7,10 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::bpm::normalize_float_digits;
+use rssp::bpm::{compute_last_beat, normalize_chart_tag, normalize_float_digits};
 use rssp::parse::{extract_sections, split_notes_fields};
 use rssp::stats::minimize_chart_and_count_with_lanes;
-use rssp::timing::{TimingData, TimingFormat};
+use rssp::timing::{round_millis, TimingData, TimingFormat};
 
 #[derive(Debug, Deserialize)]
 struct GoldenChart {
@@ -40,71 +40,6 @@ struct TestCase {
 struct Failure {
     name: String,
     message: String,
-}
-
-fn step_type_lanes(step_type: &str) -> usize {
-    let normalized = step_type.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "dance-double" => 8,
-        _ => 4,
-    }
-}
-
-fn round_millis(value: f64) -> f64 {
-    (value * 1000.0).round() / 1000.0
-}
-
-fn normalize_chart_tag(tag: Option<Vec<u8>>) -> Option<String> {
-    tag.and_then(|bytes| std::str::from_utf8(&bytes).ok().map(normalize_float_digits))
-        .filter(|s| !s.is_empty())
-}
-
-fn compute_last_beat(minimized_note_data: &[u8], lanes: usize) -> f64 {
-    let mut rows_per_measure: Vec<usize> = Vec::new();
-    let mut current_rows: usize = 0;
-
-    let mut last_measure_idx: Option<usize> = None;
-    let mut last_row_in_measure: usize = 0;
-
-    let lanes = lanes.max(1);
-
-    for line in minimized_note_data.split(|&b| b == b'\n') {
-        if line.is_empty() {
-            continue;
-        }
-        if line[0] == b',' {
-            rows_per_measure.push(current_rows);
-            current_rows = 0;
-            continue;
-        }
-
-        if line.len() >= lanes {
-            let has_object = line[..lanes]
-                .iter()
-                .any(|&b| matches!(b, b'1' | b'2' | b'3' | b'4'));
-            if has_object {
-                last_measure_idx = Some(rows_per_measure.len());
-                last_row_in_measure = current_rows;
-            }
-            current_rows += 1;
-        }
-    }
-
-    rows_per_measure.push(current_rows);
-
-    let Some(measure_idx) = last_measure_idx else {
-        return 0.0;
-    };
-
-    let total_rows_in_measure = rows_per_measure
-        .get(measure_idx)
-        .copied()
-        .unwrap_or(0)
-        .max(1) as f64;
-    let row_index = last_row_in_measure as f64;
-
-    let beats_into_measure = 4.0 * (row_index / total_rows_in_measure);
-    (measure_idx as f64) * 4.0 + beats_into_measure
 }
 
 fn compute_chart_durations(
@@ -170,7 +105,7 @@ fn compute_chart_durations(
         let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
         let difficulty = rssp::normalize_difficulty_label(difficulty_raw);
 
-        let lanes = step_type_lanes(&step_type);
+        let lanes = rssp::step_type_lanes(&step_type);
         let (mut minimized_chart, _stats, _measure_densities) =
             minimize_chart_and_count_with_lanes(chart_data, lanes);
         if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {

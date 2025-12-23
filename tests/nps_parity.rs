@@ -7,7 +7,12 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::bpm::{compute_measure_nps_vec, get_nps_stats, normalize_float_digits};
+use rssp::bpm::{
+    compute_measure_nps_vec,
+    get_nps_stats,
+    normalize_chart_tag,
+    normalize_float_digits,
+};
 use rssp::parse::{extract_sections, split_notes_fields};
 use rssp::stats::minimize_chart_and_count_with_lanes;
 use rssp::timing::{TimingData, TimingFormat};
@@ -40,23 +45,6 @@ struct TestCase {
 struct Failure {
     name: String,
     message: String,
-}
-
-fn step_type_lanes(step_type: &str) -> usize {
-    let normalized = step_type.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "dance-double" => 8,
-        _ => 4,
-    }
-}
-
-fn normalize_chart_bpms(tag: Option<Vec<u8>>) -> Option<String> {
-    tag.and_then(|bytes| {
-        std::str::from_utf8(&bytes)
-            .ok()
-            .map(normalize_float_digits)
-    })
-    .filter(|s| !s.is_empty())
 }
 
 fn compute_chart_nps(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartNps>, String> {
@@ -100,11 +88,11 @@ fn compute_chart_nps(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartNp
         let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
         let difficulty = rssp::normalize_difficulty_label(difficulty_raw);
 
-        let lanes = step_type_lanes(&step_type);
+        let lanes = rssp::step_type_lanes(&step_type);
         let (_minimized, _stats, measure_densities) =
             minimize_chart_and_count_with_lanes(chart_data, lanes);
 
-        let chart_bpms = normalize_chart_bpms(entry.chart_bpms);
+        let chart_bpms = normalize_chart_tag(entry.chart_bpms);
         let chart_stops = entry.chart_stops.and_then(|bytes| {
             std::str::from_utf8(&bytes)
                 .ok()

@@ -58,6 +58,14 @@ pub fn unescape_tag(tag: &str) -> String {
     out
 }
 
+pub fn parse_offset_seconds(parsed_offset: Option<&[u8]>) -> f64 {
+    parsed_offset
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|f| (f * 1000.0).trunc() / 1000.0)
+        .unwrap_or(0.0)
+}
+
 /// Parsed note data for a single chart found in the simfile.
 #[derive(Default)]
 pub struct ParsedChartEntry {

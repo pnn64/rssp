@@ -8,7 +8,14 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use crate::patterns::{CustomPatternSummary, PatternVariant};
 use crate::stats::{ArrowStats, StreamCounts};
 use crate::step_parity::TechCounts;
-use crate::timing::{SpeedUnit, TimingData, TimingFormat, TimingSegments};
+use crate::timing::{
+    normalize_scrolls_like_itg,
+    normalize_speeds_like_itg,
+    SpeedUnit,
+    TimingData,
+    TimingFormat,
+    TimingSegments,
+};
 
 #[inline(always)]
 fn compute_stream_percentages(
@@ -259,6 +266,23 @@ pub struct SimfileSummary {
     pub total_elapsed:        Duration,
 }
 
+#[derive(Debug, Clone)]
+pub struct TimingSnapshot {
+    pub beat0_offset_seconds: f64,
+    pub beat0_group_offset_seconds: f64,
+    pub bpms: Vec<(f64, f64)>,
+    pub stops: Vec<(f64, f64)>,
+    pub delays: Vec<(f64, f64)>,
+    pub time_signatures: Vec<(f64, i32, i32)>,
+    pub warps: Vec<(f64, f64)>,
+    pub labels: Vec<(f64, String)>,
+    pub tickcounts: Vec<(f64, i32)>,
+    pub combos: Vec<(f64, i32, i32)>,
+    pub speeds: Vec<(f64, f64, f64, i32)>,
+    pub scrolls: Vec<(f64, f64)>,
+    pub fakes: Vec<(f64, f64)>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputMode {
     Full,
@@ -274,6 +298,11 @@ pub fn print_reports(simfile: &SimfileSummary, mode: OutputMode) {
         OutputMode::JSON   => print_json_all(simfile),
         OutputMode::CSV    => print_csv_all(simfile),
     }
+}
+
+#[inline(always)]
+pub fn format_json_float(value: f64) -> String {
+    format!("{:.2}", value)
 }
 
 fn format_duration(seconds: i32) -> String {
@@ -392,6 +421,98 @@ fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
         out.insert(0, (0.0, 1, 1));
     }
     out
+}
+
+pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> TimingSnapshot {
+    let timing = TimingData::from_chart_data(
+        simfile.offset,
+        0.0,
+        chart.chart_bpms.as_deref(),
+        &simfile.normalized_bpms,
+        chart.chart_stops.as_deref(),
+        &simfile.normalized_stops,
+        chart.chart_delays.as_deref(),
+        &simfile.normalized_delays,
+        chart.chart_warps.as_deref(),
+        &simfile.normalized_warps,
+        chart.chart_speeds.as_deref(),
+        &simfile.normalized_speeds,
+        chart.chart_scrolls.as_deref(),
+        &simfile.normalized_scrolls,
+        chart.chart_fakes.as_deref(),
+        &simfile.normalized_fakes,
+        simfile.timing_format,
+    );
+
+    let bpms = timing.bpm_segments();
+    let stops = timing
+        .stops()
+        .iter()
+        .map(|seg| (seg.beat, seg.duration))
+        .collect();
+    let delays = timing
+        .delays()
+        .iter()
+        .map(|seg| (seg.beat, seg.duration))
+        .collect();
+    let warps = timing
+        .warps()
+        .iter()
+        .map(|seg| (seg.beat, seg.length))
+        .collect();
+    let speeds = timing
+        .speeds()
+        .iter()
+        .map(|seg| {
+            let unit = if seg.unit == SpeedUnit::Seconds { 1 } else { 0 };
+            (seg.beat, seg.ratio, seg.delay, unit)
+        })
+        .collect();
+    let speeds = normalize_speeds_like_itg(speeds);
+    let scrolls = timing
+        .scrolls()
+        .iter()
+        .map(|seg| (seg.beat, seg.ratio))
+        .collect();
+    let scrolls = normalize_scrolls_like_itg(scrolls);
+    let fakes = timing
+        .fakes()
+        .iter()
+        .map(|seg| (seg.beat, seg.length))
+        .collect();
+
+    let time_signatures = parse_time_signatures(chart_or_global(
+        &chart.chart_time_signatures,
+        &simfile.normalized_time_signatures,
+    ));
+    let labels = parse_labels(chart_or_global(
+        &chart.chart_labels,
+        &simfile.normalized_labels,
+    ));
+    let tickcounts = parse_tickcounts(chart_or_global(
+        &chart.chart_tickcounts,
+        &simfile.normalized_tickcounts,
+    ));
+    let combos = parse_combos(chart_or_global(
+        &chart.chart_combos,
+        &simfile.normalized_combos,
+    ));
+
+    TimingSnapshot {
+        beat0_offset_seconds: timing.beat0_offset_seconds(),
+        beat0_group_offset_seconds: timing.beat0_group_offset_seconds(),
+        bpms,
+        stops,
+        delays,
+        time_signatures,
+        warps,
+        labels,
+        tickcounts,
+        combos,
+        speeds,
+        scrolls,
+        fakes,
+    }
 }
 
 fn parse_labels(opt: Option<&str>) -> Vec<(f64, String)> {
@@ -1088,85 +1209,54 @@ fn json_gimmicks(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
 }
 
 fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
-    let timing = TimingData::from_chart_data(
-        simfile.offset,
-        0.0,
-        chart.chart_bpms.as_deref(),
-        &simfile.normalized_bpms,
-        chart.chart_stops.as_deref(),
-        &simfile.normalized_stops,
-        chart.chart_delays.as_deref(),
-        &simfile.normalized_delays,
-        chart.chart_warps.as_deref(),
-        &simfile.normalized_warps,
-        chart.chart_speeds.as_deref(),
-        &simfile.normalized_speeds,
-        chart.chart_scrolls.as_deref(),
-        &simfile.normalized_scrolls,
-        chart.chart_fakes.as_deref(),
-        &simfile.normalized_fakes,
-        simfile.timing_format,
-    );
+    let TimingSnapshot {
+        beat0_offset_seconds,
+        beat0_group_offset_seconds,
+        bpms,
+        stops,
+        delays,
+        time_signatures,
+        warps,
+        labels,
+        tickcounts,
+        combos,
+        speeds,
+        scrolls,
+        fakes,
+    } = build_timing_snapshot(chart, simfile);
 
-    let bpms: Vec<JsonValue> = timing
-        .bpm_segments()
+    let bpms: Vec<JsonValue> = bpms
         .into_iter()
         .map(|(beat, bpm)| serde_json::json!([beat, bpm]))
         .collect();
-    let stops: Vec<JsonValue> = timing
-        .stops()
-        .iter()
-        .map(|seg| serde_json::json!([seg.beat, seg.duration]))
+    let stops: Vec<JsonValue> = stops
+        .into_iter()
+        .map(|(beat, duration)| serde_json::json!([beat, duration]))
         .collect();
-    let delays: Vec<JsonValue> = timing
-        .delays()
-        .iter()
-        .map(|seg| serde_json::json!([seg.beat, seg.duration]))
+    let delays: Vec<JsonValue> = delays
+        .into_iter()
+        .map(|(beat, duration)| serde_json::json!([beat, duration]))
         .collect();
-    let warps: Vec<JsonValue> = timing
-        .warps()
-        .iter()
-        .map(|seg| serde_json::json!([seg.beat, seg.length]))
+    let warps: Vec<JsonValue> = warps
+        .into_iter()
+        .map(|(beat, length)| serde_json::json!([beat, length]))
         .collect();
-    let speeds: Vec<JsonValue> = timing
-        .speeds()
-        .iter()
-        .map(|seg| {
-            let unit = if seg.unit == SpeedUnit::Seconds { 1 } else { 0 };
-            serde_json::json!([seg.beat, seg.ratio, seg.delay, unit])
-        })
+    let speeds: Vec<JsonValue> = speeds
+        .into_iter()
+        .map(|(beat, ratio, delay, unit)| serde_json::json!([beat, ratio, delay, unit]))
         .collect();
-    let scrolls: Vec<JsonValue> = timing
-        .scrolls()
-        .iter()
-        .map(|seg| serde_json::json!([seg.beat, seg.ratio]))
+    let scrolls: Vec<JsonValue> = scrolls
+        .into_iter()
+        .map(|(beat, ratio)| serde_json::json!([beat, ratio]))
         .collect();
-    let fakes: Vec<JsonValue> = timing
-        .fakes()
-        .iter()
-        .map(|seg| serde_json::json!([seg.beat, seg.length]))
+    let fakes: Vec<JsonValue> = fakes
+        .into_iter()
+        .map(|(beat, length)| serde_json::json!([beat, length]))
         .collect();
-
-    let time_signatures = parse_time_signatures(chart_or_global(
-        &chart.chart_time_signatures,
-        &simfile.normalized_time_signatures,
-    ));
-    let labels = parse_labels(chart_or_global(
-        &chart.chart_labels,
-        &simfile.normalized_labels,
-    ));
-    let tickcounts = parse_tickcounts(chart_or_global(
-        &chart.chart_tickcounts,
-        &simfile.normalized_tickcounts,
-    ));
-    let combos = parse_combos(chart_or_global(
-        &chart.chart_combos,
-        &simfile.normalized_combos,
-    ));
 
     serde_json::json!({
-        "beat0_offset_seconds": timing.beat0_offset_seconds(),
-        "beat0_group_offset_seconds": timing.beat0_group_offset_seconds(),
+        "beat0_offset_seconds": beat0_offset_seconds,
+        "beat0_group_offset_seconds": beat0_group_offset_seconds,
         "bpms": bpms,
         "stops": stops,
         "delays": delays,

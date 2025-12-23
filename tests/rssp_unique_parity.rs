@@ -8,7 +8,8 @@ use serde::Deserialize;
 use walkdir::WalkDir;
 
 use rssp::{analyze, AnalysisOptions, ChartSummary};
-use rssp::patterns::PatternVariant;
+use rssp::patterns::{count_pattern, compute_box_counts, BoxCounts, PatternVariant};
+use rssp::report::format_json_float;
 
 const DEFAULT_MONO_THRESHOLD: usize = 6;
 
@@ -118,10 +119,6 @@ struct Failure {
     message: String,
 }
 
-fn format_json_float(value: f64) -> String {
-    format!("{:.2}", value)
-}
-
 fn format_candles(stats: Option<&MonoCandleStats>) -> String {
     stats
         .map(|s| {
@@ -168,36 +165,11 @@ fn format_anchors(patterns: Option<&PatternCounts>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
-fn count_pattern(map: &HashMap<PatternVariant, u32>, variant: PatternVariant) -> u32 {
-    *map.get(&variant).unwrap_or(&0)
-}
-
-fn compute_boxes(map: &HashMap<PatternVariant, u32>) -> BoxesCounts {
-    let lr = count_pattern(map, PatternVariant::BoxLR);
-    let ud = count_pattern(map, PatternVariant::BoxUD);
-    let ld = count_pattern(map, PatternVariant::BoxCornerLD);
-    let lu = count_pattern(map, PatternVariant::BoxCornerLU);
-    let rd = count_pattern(map, PatternVariant::BoxCornerRD);
-    let ru = count_pattern(map, PatternVariant::BoxCornerRU);
-    let corner = ld + lu + rd + ru;
-    let total = lr + ud + corner;
-
-    BoxesCounts {
-        total_boxes: total,
-        lr_boxes: lr,
-        ud_boxes: ud,
-        corner_boxes: corner,
-        ld_boxes: ld,
-        lu_boxes: lu,
-        rd_boxes: rd,
-        ru_boxes: ru,
-    }
-}
-
 fn chart_values_from_summary(chart: &ChartSummary) -> ChartUniqueValues {
     let patterns = &chart.detected_patterns;
     let left_foot_candles = count_pattern(patterns, PatternVariant::CandleLeft);
     let right_foot_candles = count_pattern(patterns, PatternVariant::CandleRight);
+    let box_counts: BoxCounts = compute_box_counts(patterns);
 
     ChartUniqueValues {
         matrix_rating: format_json_float(chart.matrix_rating),
@@ -217,7 +189,16 @@ fn chart_values_from_summary(chart: &ChartSummary) -> ChartUniqueValues {
             mono_percent: format_json_float(chart.mono_percent),
         },
         pattern_counts: PatternCounts {
-            boxes: compute_boxes(patterns),
+            boxes: BoxesCounts {
+                total_boxes: box_counts.total_boxes,
+                lr_boxes: box_counts.lr_boxes,
+                ud_boxes: box_counts.ud_boxes,
+                corner_boxes: box_counts.corner_boxes,
+                ld_boxes: box_counts.ld_boxes,
+                lu_boxes: box_counts.lu_boxes,
+                rd_boxes: box_counts.rd_boxes,
+                ru_boxes: box_counts.ru_boxes,
+            },
             anchors: AnchorsCounts {
                 total_anchors: chart.anchor_left + chart.anchor_down + chart.anchor_up + chart.anchor_right,
                 left_anchors: chart.anchor_left,

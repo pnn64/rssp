@@ -440,3 +440,42 @@ pub fn count_facing_steps(bitmasks: &[u8], mono_threshold: usize) -> (u32, u32) 
     }
     (final_left, final_right)
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoxCounts {
+    pub total_boxes: u32,
+    pub lr_boxes: u32,
+    pub ud_boxes: u32,
+    pub corner_boxes: u32,
+    pub ld_boxes: u32,
+    pub lu_boxes: u32,
+    pub rd_boxes: u32,
+    pub ru_boxes: u32,
+}
+
+#[inline(always)]
+pub fn count_pattern(map: &HashMap<PatternVariant, u32>, variant: PatternVariant) -> u32 {
+    *map.get(&variant).unwrap_or(&0)
+}
+
+pub fn compute_box_counts(map: &HashMap<PatternVariant, u32>) -> BoxCounts {
+    let lr = count_pattern(map, PatternVariant::BoxLR);
+    let ud = count_pattern(map, PatternVariant::BoxUD);
+    let ld = count_pattern(map, PatternVariant::BoxCornerLD);
+    let lu = count_pattern(map, PatternVariant::BoxCornerLU);
+    let rd = count_pattern(map, PatternVariant::BoxCornerRD);
+    let ru = count_pattern(map, PatternVariant::BoxCornerRU);
+    let corner = ld + lu + rd + ru;
+    let total = lr + ud + corner;
+
+    BoxCounts {
+        total_boxes: total,
+        lr_boxes: lr,
+        ud_boxes: ud,
+        corner_boxes: corner,
+        ld_boxes: ld,
+        lu_boxes: lu,
+        rd_boxes: rd,
+        ru_boxes: ru,
+    }
+}
