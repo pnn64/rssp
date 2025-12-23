@@ -7,12 +7,10 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::bpm::{
-    get_elapsed_time, normalize_and_tidy_bpms, normalize_float_digits, parse_bpm_map,
-    parse_timing_map,
-};
+use rssp::bpm::normalize_float_digits;
 use rssp::parse::{extract_sections, split_notes_fields};
 use rssp::stats::minimize_chart_and_count_with_lanes;
+use rssp::timing::{TimingData, TimingFormat};
 
 #[derive(Debug, Deserialize)]
 struct GoldenChart {
@@ -118,7 +116,6 @@ fn compute_chart_durations(
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b""))
         .unwrap_or("");
     let normalized_global_bpms = normalize_float_digits(global_bpms_raw);
-    let global_bpm_map = parse_bpm_map(&normalize_and_tidy_bpms(&normalized_global_bpms));
 
     let global_stops_raw = parsed_data
         .stops
@@ -138,9 +135,25 @@ fn compute_chart_durations(
         .unwrap_or("");
     let normalized_global_warps = normalize_float_digits(global_warps_raw);
 
-    let global_stop_map = parse_timing_map(&normalized_global_stops);
-    let global_delay_map = parse_timing_map(&normalized_global_delays);
-    let global_warp_map = parse_timing_map(&normalized_global_warps);
+    let global_speeds_raw = parsed_data
+        .speeds
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .unwrap_or("");
+    let normalized_global_speeds = normalize_float_digits(global_speeds_raw);
+
+    let global_scrolls_raw = parsed_data
+        .scrolls
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .unwrap_or("");
+    let normalized_global_scrolls = normalize_float_digits(global_scrolls_raw);
+
+    let global_fakes_raw = parsed_data
+        .fakes
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .unwrap_or("");
+    let normalized_global_fakes = normalize_float_digits(global_fakes_raw);
+
+    let timing_format = TimingFormat::from_extension(extension);
 
     let mut results = Vec::new();
 
@@ -165,38 +178,39 @@ fn compute_chart_durations(
         }
 
         let chart_bpms = normalize_chart_tag(entry.chart_bpms);
-        let bpm_map = if let Some(ref chart_bpms) = chart_bpms {
-            parse_bpm_map(chart_bpms)
-        } else {
-            global_bpm_map.clone()
-        };
-
         let chart_stops = normalize_chart_tag(entry.chart_stops);
-        let stop_map = if let Some(ref stops) = chart_stops {
-            parse_timing_map(stops)
-        } else {
-            global_stop_map.clone()
-        };
 
         let chart_delays = normalize_chart_tag(entry.chart_delays);
-        let delay_map = if let Some(ref delays) = chart_delays {
-            parse_timing_map(delays)
-        } else {
-            global_delay_map.clone()
-        };
 
         let chart_warps = normalize_chart_tag(entry.chart_warps);
-        let warp_map = if let Some(ref warps) = chart_warps {
-            parse_timing_map(warps)
-        } else {
-            global_warp_map.clone()
-        };
+        let chart_speeds = normalize_chart_tag(entry.chart_speeds);
+        let chart_scrolls = normalize_chart_tag(entry.chart_scrolls);
+        let chart_fakes = normalize_chart_tag(entry.chart_fakes);
 
         let target_beat = compute_last_beat(&minimized_chart, lanes);
-        let duration = if target_beat <= 0.0 || bpm_map.is_empty() {
+        let duration = if target_beat <= 0.0 {
             0.0
         } else {
-            get_elapsed_time(target_beat, &bpm_map, &stop_map, &delay_map, &warp_map)
+            let timing = TimingData::from_chart_data(
+                0.0,
+                0.0,
+                chart_bpms.as_deref(),
+                &normalized_global_bpms,
+                chart_stops.as_deref(),
+                &normalized_global_stops,
+                chart_delays.as_deref(),
+                &normalized_global_delays,
+                chart_warps.as_deref(),
+                &normalized_global_warps,
+                chart_speeds.as_deref(),
+                &normalized_global_speeds,
+                chart_scrolls.as_deref(),
+                &normalized_global_scrolls,
+                chart_fakes.as_deref(),
+                &normalized_global_fakes,
+                timing_format,
+            );
+            timing.get_time_for_beat(target_beat)
         };
 
         results.push(ChartDuration {

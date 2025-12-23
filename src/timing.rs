@@ -1,6 +1,25 @@
 use crate::bpm::{normalize_float_digits, parse_bpm_map};
 use std::cmp::Ordering;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimingFormat {
+    Sm,
+    Ssc,
+}
+
+impl TimingFormat {
+    pub fn from_extension(extension: &str) -> Self {
+        if extension.eq_ignore_ascii_case("sm") {
+            Self::Sm
+        } else {
+            Self::Ssc
+        }
+    }
+}
+
+const DEFAULT_BPM: f64 = 60.0;
+const FAST_BPM_WARP: f64 = 9_999_999.0;
+
 pub const ROWS_PER_BEAT: i32 = 48;
 
 #[inline(always)]
@@ -84,21 +103,22 @@ pub fn compute_timing_segments(
     global_scrolls: &str,
     chart_fakes: Option<&str>,
     global_fakes: &str,
+    format: TimingFormat,
 ) -> TimingSegments {
     let bpms_str = chart_bpms.filter(|s| !s.is_empty()).unwrap_or(global_bpms);
     let normalized_bpms = normalize_float_digits(bpms_str);
     let mut parsed_bpms: Vec<(f64, f64)> = parse_bpm_map(&normalized_bpms);
 
     if parsed_bpms.is_empty() {
-        parsed_bpms.push((0.0, 120.0));
+        parsed_bpms.push((0.0, DEFAULT_BPM));
     }
 
     let raw_stops = parse_optional_timing(chart_stops, global_stops, parse_stops);
     let (mut parsed_bpms, stops, extra_warps, beat0_offset_adjust) =
-        process_bpms_and_stops(&parsed_bpms, &raw_stops);
+        process_bpms_and_stops(format, &parsed_bpms, &raw_stops);
 
     if parsed_bpms.is_empty() {
-        parsed_bpms.push((0.0, 120.0));
+        parsed_bpms.push((0.0, DEFAULT_BPM));
     }
 
     let delays = parse_optional_timing(chart_delays, global_delays, parse_delays);
@@ -303,22 +323,23 @@ impl TimingData {
         global_scrolls: &str,
         chart_fakes: Option<&str>,
         global_fakes: &str,
+        format: TimingFormat,
     ) -> Self {
         let bpms_str = chart_bpms.filter(|s| !s.is_empty()).unwrap_or(global_bpms);
         let normalized_bpms = normalize_float_digits(bpms_str);
         let mut parsed_bpms: Vec<(f64, f64)> = parse_bpm_map(&normalized_bpms);
 
         if parsed_bpms.is_empty() {
-            parsed_bpms.push((0.0, 120.0));
+            parsed_bpms.push((0.0, DEFAULT_BPM));
         }
 
         let raw_stops = parse_optional_timing(chart_stops, global_stops, parse_stops);
 
         let (mut parsed_bpms, stops, extra_warps, beat0_offset_adjust) =
-            process_bpms_and_stops(&parsed_bpms, &raw_stops);
+            process_bpms_and_stops(format, &parsed_bpms, &raw_stops);
 
         if parsed_bpms.is_empty() {
-            parsed_bpms.push((0.0, 120.0));
+            parsed_bpms.push((0.0, DEFAULT_BPM));
         }
 
         let song_offset_sec = song_offset_sec + beat0_offset_adjust;
@@ -533,7 +554,7 @@ impl TimingData {
     pub fn get_bpm_for_beat(&self, target_beat: f64) -> f64 {
         let points = &self.beat_to_time;
         if points.is_empty() {
-            return 120.0;
+            return DEFAULT_BPM;
         }
         let point_idx = self.get_bpm_point_index_for_beat(target_beat);
         points[point_idx].bpm
@@ -556,7 +577,7 @@ impl TimingData {
             max_bpm = max_bpm.min(cap_value);
         }
 
-        if max_bpm > 0.0 { max_bpm } else { 120.0 }
+        if max_bpm > 0.0 { max_bpm } else { DEFAULT_BPM }
     }
 
     pub fn get_displayed_beat(&self, beat: f64) -> f64 {
@@ -965,14 +986,73 @@ fn parse_scrolls(s: &str) -> Result<Vec<ScrollSegment>, &'static str> {
 }
 
 fn process_bpms_and_stops(
+    format: TimingFormat,
     bpms: &[(f64, f64)],
     stops: &[StopSegment],
 ) -> (Vec<(f64, f64)>, Vec<StopSegment>, Vec<WarpSegment>, f64) {
-    let mut bpm_changes: Vec<(f64, f64)> = bpms.to_vec();
-    bpm_changes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Less));
+    match format {
+        TimingFormat::Sm => process_bpms_and_stops_sm(bpms, stops),
+        TimingFormat::Ssc => process_bpms_and_stops_ssc(bpms, stops),
+    }
+}
 
-    let mut stop_changes: Vec<(f64, f64)> = stops.iter().map(|s| (s.beat, s.duration)).collect();
-    stop_changes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Less));
+fn tidy_bpms(mut bpms: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
+    if bpms.is_empty() {
+        return vec![(0.0, DEFAULT_BPM)];
+    }
+
+    bpms.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+
+    let mut last_per_beat: Vec<(f64, f64)> = Vec::with_capacity(bpms.len());
+    for (beat, bpm) in bpms {
+        if let Some(last) = last_per_beat.last_mut() {
+            if beat == last.0 {
+                *last = (beat, bpm);
+                continue;
+            }
+        }
+        last_per_beat.push((beat, bpm));
+    }
+
+    if let Some(first) = last_per_beat.first_mut() {
+        if first.0 != 0.0 {
+            first.0 = 0.0;
+        }
+    }
+
+    let mut tidied: Vec<(f64, f64)> = Vec::with_capacity(last_per_beat.len());
+    let mut last_value: Option<f64> = None;
+    for (beat, bpm) in last_per_beat {
+        if last_value == Some(bpm) {
+            continue;
+        }
+        last_value = Some(bpm);
+        tidied.push((beat, bpm));
+    }
+
+    if tidied.is_empty() {
+        tidied.push((0.0, DEFAULT_BPM));
+    }
+    tidied
+}
+
+fn process_bpms_and_stops_sm(
+    bpms: &[(f64, f64)],
+    stops: &[StopSegment],
+) -> (Vec<(f64, f64)>, Vec<StopSegment>, Vec<WarpSegment>, f64) {
+    let mut bpm_changes: Vec<(f64, f64)> = bpms
+        .iter()
+        .copied()
+        .filter(|(beat, bpm)| beat.is_finite() && bpm.is_finite() && *bpm != 0.0)
+        .collect();
+    bpm_changes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+
+    let mut stop_changes: Vec<(f64, f64)> = stops
+        .iter()
+        .filter(|s| s.beat.is_finite() && s.duration.is_finite() && s.duration != 0.0)
+        .map(|s| (s.beat, s.duration))
+        .collect();
+    stop_changes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
 
     let mut beat0_offset_sec = 0.0_f64;
     let mut stop_idx = 0usize;
@@ -983,7 +1063,6 @@ fn process_bpms_and_stops(
 
     let mut bpm_idx = 0usize;
     let mut bpm = 0.0_f64;
-
     while bpm_idx < bpm_changes.len() && bpm_changes[bpm_idx].0 <= 0.0 {
         bpm = bpm_changes[bpm_idx].1;
         bpm_idx += 1;
@@ -991,7 +1070,7 @@ fn process_bpms_and_stops(
 
     if bpm == 0.0 {
         if bpm_idx == bpm_changes.len() {
-            bpm = 60.0;
+            bpm = DEFAULT_BPM;
         } else {
             bpm = bpm_changes[bpm_idx].1;
             bpm_idx += 1;
@@ -999,7 +1078,7 @@ fn process_bpms_and_stops(
     }
 
     let mut out_bpms: Vec<(f64, f64)> = Vec::new();
-    if bpm > 0.0 {
+    if bpm > 0.0 && bpm <= FAST_BPM_WARP {
         out_bpms.push((0.0, bpm));
     }
 
@@ -1008,130 +1087,102 @@ fn process_bpms_and_stops(
 
     let mut prev_beat = 0.0_f64;
     let mut warp_start: Option<f64> = None;
-    let mut prewarp_bpm: f64 = bpm;
+    let mut prewarp_bpm: f64 = 0.0;
     let mut time_offset_sec = 0.0_f64;
 
     while bpm_idx < bpm_changes.len() || stop_idx < stop_changes.len() {
-        let next_bpm_beat = bpm_changes.get(bpm_idx).map(|e| e.0);
-        let next_stop_beat = stop_changes.get(stop_idx).map(|e| e.0);
-
-        let use_bpm = match (next_bpm_beat, next_stop_beat) {
-            (Some(b), Some(s)) => b <= s,
-            (Some(_), None) => true,
-            (None, Some(_)) => false,
-            (None, None) => false,
+        let change_is_bpm = stop_idx == stop_changes.len()
+            || (bpm_idx < bpm_changes.len() && bpm_changes[bpm_idx].0 <= stop_changes[stop_idx].0);
+        let (change_beat, change_val) = if change_is_bpm {
+            bpm_changes[bpm_idx]
+        } else {
+            stop_changes[stop_idx]
         };
 
-        if use_bpm {
-            let (change_beat, new_bpm) = bpm_changes[bpm_idx];
-
-            time_offset_sec += (change_beat - prev_beat) * 60.0 / bpm.max(f64::EPSILON);
-            if let Some(start) = warp_start
-                && bpm > 0.0
-                && time_offset_sec > 0.0
-            {
-                let warp_end = change_beat - (time_offset_sec * bpm / 60.0);
-                if warp_end > start {
-                    out_warps.push(WarpSegment {
-                        beat: start,
-                        length: warp_end - start,
-                    });
-                }
-                if bpm != prewarp_bpm {
-                    out_bpms.push((start, bpm));
-                }
-                warp_start = None;
-            }
-
-            prev_beat = change_beat;
-
-            if warp_start.is_none() && new_bpm < 0.0 {
-                warp_start = Some(change_beat);
-                prewarp_bpm = bpm;
-                time_offset_sec = 0.0;
-            } else if warp_start.is_none() {
-                out_bpms.push((change_beat, new_bpm));
-            }
-
-            bpm = new_bpm;
-            bpm_idx += 1;
-        } else {
-            let (change_beat, stop_secs) = stop_changes[stop_idx];
-
-            time_offset_sec += (change_beat - prev_beat) * 60.0 / bpm.max(f64::EPSILON);
-            if let Some(start) = warp_start
-                && bpm > 0.0
-                && time_offset_sec > 0.0
-            {
-                let warp_end = change_beat - (time_offset_sec * bpm / 60.0);
-                if warp_end > start {
-                    out_warps.push(WarpSegment {
-                        beat: start,
-                        length: warp_end - start,
-                    });
-                }
-                if bpm != prewarp_bpm {
-                    out_bpms.push((start, bpm));
-                }
-                warp_start = None;
-            }
-
-            prev_beat = change_beat;
-
-            if warp_start.is_none() && stop_secs < 0.0 {
-                warp_start = Some(change_beat);
-                prewarp_bpm = bpm;
-                time_offset_sec = stop_secs;
-            } else if warp_start.is_none() {
-                out_stops.push(StopSegment {
-                    beat: change_beat,
-                    duration: stop_secs,
-                });
-            } else {
-                time_offset_sec += stop_secs;
-                if stop_secs > 0.0
-                    && time_offset_sec > 0.0
-                    && let Some(start) = warp_start
-                {
-                    let warp_end = change_beat;
+        if bpm <= FAST_BPM_WARP {
+            time_offset_sec += (change_beat - prev_beat) * 60.0 / bpm;
+            if let Some(start) = warp_start {
+                if bpm > 0.0 && time_offset_sec > 0.0 {
+                    let warp_end = change_beat - (time_offset_sec * bpm / 60.0);
                     if warp_end > start {
                         out_warps.push(WarpSegment {
                             beat: start,
                             length: warp_end - start,
                         });
                     }
-                    out_stops.push(StopSegment {
-                        beat: change_beat,
-                        duration: time_offset_sec,
-                    });
+                    if bpm != prewarp_bpm {
+                        out_bpms.push((start, bpm));
+                    }
+                    warp_start = None;
+                }
+            }
+        }
 
-                    if bpm < 0.0 {
-                        warp_start = Some(change_beat);
-                        prewarp_bpm = bpm;
-                        time_offset_sec = 0.0;
-                    } else {
-                        if bpm != prewarp_bpm {
-                            out_bpms.push((start, bpm));
+        prev_beat = change_beat;
+
+        if change_is_bpm {
+            if warp_start.is_none() && (change_val < 0.0 || change_val > FAST_BPM_WARP) {
+                warp_start = Some(change_beat);
+                prewarp_bpm = bpm;
+                time_offset_sec = 0.0;
+            } else if warp_start.is_none() {
+                out_bpms.push((change_beat, change_val));
+            }
+
+            bpm = change_val;
+            bpm_idx += 1;
+        } else {
+            if warp_start.is_none() && change_val < 0.0 {
+                warp_start = Some(change_beat);
+                prewarp_bpm = bpm;
+                time_offset_sec = change_val;
+            } else if warp_start.is_none() {
+                out_stops.push(StopSegment {
+                    beat: change_beat,
+                    duration: change_val,
+                });
+            } else {
+                time_offset_sec += change_val;
+                if change_val > 0.0 && time_offset_sec > 0.0 {
+                    let warp_end = change_beat;
+                    if let Some(start) = warp_start {
+                        if warp_end > start {
+                            out_warps.push(WarpSegment {
+                                beat: start,
+                                length: warp_end - start,
+                            });
                         }
-                        warp_start = None;
+                        out_stops.push(StopSegment {
+                            beat: change_beat,
+                            duration: time_offset_sec,
+                        });
+
+                        if bpm < 0.0 || bpm > FAST_BPM_WARP {
+                            warp_start = Some(change_beat);
+                            time_offset_sec = 0.0;
+                        } else {
+                            if bpm != prewarp_bpm {
+                                out_bpms.push((start, bpm));
+                            }
+                            warp_start = None;
+                        }
                     }
                 }
             }
-
             stop_idx += 1;
         }
     }
 
     if let Some(start) = warp_start {
-        let warp_end_beat = if bpm < 0.0 {
+        let warp_end = if bpm < 0.0 || bpm > FAST_BPM_WARP {
             99_999_999.0
         } else {
             prev_beat - (time_offset_sec * bpm / 60.0)
         };
-        if warp_end_beat > start {
+        if warp_end > start {
             out_warps.push(WarpSegment {
                 beat: start,
-                length: warp_end_beat - start,
+                length: warp_end - start,
             });
         }
         if bpm != prewarp_bpm {
@@ -1139,9 +1190,35 @@ fn process_bpms_and_stops(
         }
     }
 
-    out_bpms.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Less));
+    let out_bpms = tidy_bpms(out_bpms);
     out_stops.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
     out_warps.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
 
     (out_bpms, out_stops, out_warps, beat0_offset_sec)
+}
+
+fn process_bpms_and_stops_ssc(
+    bpms: &[(f64, f64)],
+    stops: &[StopSegment],
+) -> (Vec<(f64, f64)>, Vec<StopSegment>, Vec<WarpSegment>, f64) {
+    let mut bpm_changes: Vec<(f64, f64)> = bpms
+        .iter()
+        .copied()
+        .filter(|(beat, bpm)| beat.is_finite() && bpm.is_finite() && *beat >= 0.0 && *bpm > 0.0)
+        .collect();
+    bpm_changes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+
+    let mut out_stops: Vec<StopSegment> = stops
+        .iter()
+        .filter(|s| s.beat.is_finite() && s.duration.is_finite() && s.beat >= 0.0 && s.duration > 0.0)
+        .map(|s| StopSegment {
+            beat: s.beat,
+            duration: s.duration,
+        })
+        .collect();
+    out_stops.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
+
+    let out_bpms = tidy_bpms(bpm_changes);
+
+    (out_bpms, out_stops, Vec::new(), 0.0)
 }

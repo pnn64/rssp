@@ -258,6 +258,7 @@ fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> Timi
         &simfile.normalized_scrolls,
         chart.chart_fakes.as_deref(),
         &simfile.normalized_fakes,
+        simfile.timing_format,
     );
 
     let time_signatures = parse_time_signatures(chart_or_global(

@@ -1635,7 +1635,7 @@ fn time_between_beats(start: f32, end: f32, bpm_map: &[(f64, f64)]) -> f64 {
         return 0.0;
     }
 
-    let mut bpm = if bpm_map.is_empty() { 120.0 } else { bpm_map[0].1 };
+    let mut bpm = if bpm_map.is_empty() { 60.0 } else { bpm_map[0].1 };
     for &(beat, value) in bpm_map {
         if beat <= start as f64 {
             bpm = value;

@@ -8,7 +8,7 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use crate::patterns::{CustomPatternSummary, PatternVariant};
 use crate::stats::{ArrowStats, StreamCounts};
 use crate::step_parity::TechCounts;
-use crate::timing::{SpeedUnit, TimingData, TimingSegments};
+use crate::timing::{SpeedUnit, TimingData, TimingFormat, TimingSegments};
 
 #[inline(always)]
 fn compute_stream_percentages(
@@ -242,6 +242,7 @@ pub struct SimfileSummary {
     pub normalized_labels:    String,
     pub normalized_tickcounts: String,
     pub normalized_combos:    String,
+    pub timing_format:        TimingFormat,
     pub banner_path:          String,
     pub background_path:      String,
     pub music_path:           String,
@@ -1104,6 +1105,7 @@ fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
         &simfile.normalized_scrolls,
         chart.chart_fakes.as_deref(),
         &simfile.normalized_fakes,
+        simfile.timing_format,
     );
 
     let bpms: Vec<JsonValue> = timing

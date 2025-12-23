@@ -244,7 +244,7 @@ pub fn get_elapsed_time(
 
     let mut current_time = 0.0;
     let mut current_beat = 0.0;
-    let mut current_bpm = if !bpm_map.is_empty() && bpm_map[0].0 <= 0.0 { bpm_map[0].1 } else { 120.0 };
+    let mut current_bpm = if !bpm_map.is_empty() && bpm_map[0].0 <= 0.0 { bpm_map[0].1 } else { 60.0 };
     let mut warp_end_beat = 0.0;
 
     for (event_beat, priority, value) in events {

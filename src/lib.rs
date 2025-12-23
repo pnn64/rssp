@@ -28,7 +28,7 @@ use crate::parse::*;
 use crate::patterns::*;
 use crate::stats::*;
 use crate::tech::parse_step_artist_and_tech;
-use crate::timing::{TimingData, compute_row_to_beat, compute_timing_segments};
+use crate::timing::{TimingData, TimingFormat, compute_row_to_beat, compute_timing_segments};
 
 /// Options for controlling simfile analysis.
 #[derive(Debug, Default, Clone)]
@@ -158,20 +158,6 @@ fn generate_bitmasks(minimized_chart: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// Determines the correct BPM map to use (chart-specific or global) and parses it.
-fn prepare_bpm_map(
-    chart_bpms_opt: Option<Vec<u8>>,
-    normalized_global_bpms: &str,
-) -> (String, Vec<(f64, f64)>) {
-    let bpms_to_use = if let Some(chart_bpms) = chart_bpms_opt {
-        normalize_float_digits(std::str::from_utf8(&chart_bpms).unwrap_or(""))
-    } else {
-        normalized_global_bpms.to_string()
-    };
-    let bpm_map = parse_bpm_map(&normalize_and_tidy_bpms(&bpms_to_use));
-    (bpms_to_use, bpm_map)
-}
-
 /// Detects predefined patterns and counts anchors from note bitmasks.
 fn compute_pattern_and_anchor_stats(
     bitmasks: &[u8],
@@ -291,6 +277,7 @@ fn build_chart_summary(
     normalized_global_scrolls: &str,
     normalized_global_fakes: &str,
     extension: &str,
+    timing_format: TimingFormat,
     options: &AnalysisOptions,
 ) -> Option<ChartSummary> {
     let chart_start_time = Instant::now();
@@ -325,7 +312,15 @@ fn build_chart_summary(
     }
     let row_to_beat = compute_row_to_beat(&minimized_chart);
 
-    let (bpms_to_use, bpm_map) = prepare_bpm_map(chart_bpms_opt.clone(), normalized_global_bpms);
+    let chart_bpms = chart_bpms_opt.and_then(|bytes| {
+        std::str::from_utf8(&bytes)
+            .ok()
+            .map(normalize_float_digits)
+            .filter(|s| !s.is_empty())
+    });
+    let bpms_to_use = chart_bpms
+        .clone()
+        .unwrap_or_else(|| normalized_global_bpms.to_string());
     let chart_stops = chart_stops_opt.and_then(|bytes| {
         std::str::from_utf8(&bytes)
             .ok()
@@ -345,12 +340,6 @@ fn build_chart_summary(
             .filter(|s| !s.is_empty())
     });
     let chart_scrolls = chart_scrolls_opt.and_then(|bytes| {
-        std::str::from_utf8(&bytes)
-            .ok()
-            .map(normalize_float_digits)
-            .filter(|s| !s.is_empty())
-    });
-    let chart_bpms = chart_bpms_opt.and_then(|bytes| {
         std::str::from_utf8(&bytes)
             .ok()
             .map(normalize_float_digits)
@@ -411,7 +400,14 @@ fn build_chart_summary(
         normalized_global_scrolls,
         chart_fakes.as_deref(),
         normalized_global_fakes,
+        timing_format,
     );
+
+    let bpm_map: Vec<(f64, f64)> = timing_segments
+        .bpms
+        .iter()
+        .map(|(beat, bpm)| (*beat as f64, *bpm as f64))
+        .collect();
 
     let metrics =
         compute_derived_chart_metrics(&measure_densities, &bpm_map, &minimized_chart, &bpms_to_use);
@@ -581,7 +577,29 @@ pub fn analyze(
         .unwrap_or("")
         .to_string();
 
-    let global_bpm_map = parse_bpm_map(&normalize_and_tidy_bpms(&normalized_global_bpms));
+    let timing_format = TimingFormat::from_extension(extension);
+    let global_timing_segments = compute_timing_segments(
+        None,
+        &normalized_global_bpms,
+        None,
+        &normalized_global_stops,
+        None,
+        &normalized_global_delays,
+        None,
+        &normalized_global_warps,
+        None,
+        &normalized_global_speeds,
+        None,
+        &normalized_global_scrolls,
+        None,
+        &normalized_global_fakes,
+        timing_format,
+    );
+    let global_bpm_map: Vec<(f64, f64)> = global_timing_segments
+        .bpms
+        .iter()
+        .map(|(beat, bpm)| (*beat as f64, *bpm as f64))
+        .collect();
     let (min_bpm_i32, max_bpm_i32) = compute_bpm_range(&global_bpm_map);
     let bpm_values: Vec<f64> = global_bpm_map.iter().map(|&(_, bpm)| bpm).collect();
     let (median_bpm, average_bpm) = compute_bpm_stats(&bpm_values);
@@ -611,6 +629,7 @@ pub fn analyze(
                 &normalized_global_scrolls,
                 &normalized_global_fakes,
                 extension,
+                timing_format,
                 &options,
             )
         })
@@ -636,6 +655,7 @@ pub fn analyze(
                 &normalized_global_scrolls,
                 chart.chart_fakes.as_deref(),
                 &normalized_global_fakes,
+                timing_format,
             );
             let lanes = step_type_lanes(&chart.step_type_str);
 
@@ -680,6 +700,7 @@ pub fn analyze(
         normalized_labels: normalized_global_labels,
         normalized_tickcounts: normalized_global_tickcounts,
         normalized_combos: normalized_global_combos,
+        timing_format,
         banner_path: banner_path_str,
         background_path: background_path_str,
         music_path: music_path_str,

@@ -7,8 +7,9 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::bpm::{normalize_and_tidy_bpms, normalize_float_digits};
+use rssp::bpm::normalize_float_digits;
 use rssp::parse::{extract_sections, split_notes_fields};
+use rssp::timing::{TimingData, TimingFormat};
 
 #[derive(Debug, Deserialize)]
 struct GoldenChart {
@@ -48,6 +49,25 @@ fn compute_chart_bpms(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartB
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b""))
         .unwrap_or("");
     let normalized_global_bpms = normalize_float_digits(global_bpms_raw);
+    let global_stops_raw = std::str::from_utf8(parsed_data.stops.unwrap_or(b""))
+        .unwrap_or("");
+    let normalized_global_stops = normalize_float_digits(global_stops_raw);
+    let global_delays_raw = std::str::from_utf8(parsed_data.delays.unwrap_or(b""))
+        .unwrap_or("");
+    let normalized_global_delays = normalize_float_digits(global_delays_raw);
+    let global_warps_raw = std::str::from_utf8(parsed_data.warps.unwrap_or(b""))
+        .unwrap_or("");
+    let normalized_global_warps = normalize_float_digits(global_warps_raw);
+    let global_speeds_raw = std::str::from_utf8(parsed_data.speeds.unwrap_or(b""))
+        .unwrap_or("");
+    let normalized_global_speeds = normalize_float_digits(global_speeds_raw);
+    let global_scrolls_raw = std::str::from_utf8(parsed_data.scrolls.unwrap_or(b""))
+        .unwrap_or("");
+    let normalized_global_scrolls = normalize_float_digits(global_scrolls_raw);
+    let global_fakes_raw = std::str::from_utf8(parsed_data.fakes.unwrap_or(b""))
+        .unwrap_or("");
+    let normalized_global_fakes = normalize_float_digits(global_fakes_raw);
+    let timing_format = TimingFormat::from_extension(extension);
 
     let mut results = Vec::new();
 
@@ -64,14 +84,83 @@ fn compute_chart_bpms(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartB
         let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
         let difficulty = rssp::normalize_difficulty_label(difficulty_raw);
 
-        let bpms_to_use = if let Some(chart_bpms) = entry.chart_bpms {
-            normalize_float_digits(std::str::from_utf8(&chart_bpms).unwrap_or(""))
+        let chart_bpms = entry.chart_bpms.and_then(|bytes| {
+            std::str::from_utf8(&bytes)
+                .ok()
+                .map(normalize_float_digits)
+                .filter(|s| !s.is_empty())
+        });
+        let bpms_to_use = if let Some(ref chart_bpms) = chart_bpms {
+            chart_bpms.clone()
         } else {
             normalized_global_bpms.clone()
         };
 
         let hash_bpms = bpms_to_use.clone();
-        let timing_bpms = normalize_and_tidy_bpms(&bpms_to_use);
+        let chart_stops = entry.chart_stops.and_then(|bytes| {
+            std::str::from_utf8(&bytes)
+                .ok()
+                .map(normalize_float_digits)
+                .filter(|s| !s.is_empty())
+        });
+        let chart_delays = entry.chart_delays.and_then(|bytes| {
+            std::str::from_utf8(&bytes)
+                .ok()
+                .map(normalize_float_digits)
+                .filter(|s| !s.is_empty())
+        });
+        let chart_warps = entry.chart_warps.and_then(|bytes| {
+            std::str::from_utf8(&bytes)
+                .ok()
+                .map(normalize_float_digits)
+                .filter(|s| !s.is_empty())
+        });
+        let chart_speeds = entry.chart_speeds.and_then(|bytes| {
+            std::str::from_utf8(&bytes)
+                .ok()
+                .map(normalize_float_digits)
+                .filter(|s| !s.is_empty())
+        });
+        let chart_scrolls = entry.chart_scrolls.and_then(|bytes| {
+            std::str::from_utf8(&bytes)
+                .ok()
+                .map(normalize_float_digits)
+                .filter(|s| !s.is_empty())
+        });
+        let chart_fakes = entry.chart_fakes.and_then(|bytes| {
+            std::str::from_utf8(&bytes)
+                .ok()
+                .map(normalize_float_digits)
+                .filter(|s| !s.is_empty())
+        });
+
+        let timing = TimingData::from_chart_data(
+            0.0,
+            0.0,
+            chart_bpms.as_deref(),
+            &normalized_global_bpms,
+            chart_stops.as_deref(),
+            &normalized_global_stops,
+            chart_delays.as_deref(),
+            &normalized_global_delays,
+            chart_warps.as_deref(),
+            &normalized_global_warps,
+            chart_speeds.as_deref(),
+            &normalized_global_speeds,
+            chart_scrolls.as_deref(),
+            &normalized_global_scrolls,
+            chart_fakes.as_deref(),
+            &normalized_global_fakes,
+            timing_format,
+        );
+
+        let timing_bpms_raw = timing
+            .bpm_segments()
+            .iter()
+            .map(|(beat, bpm)| format!("{}={}", beat, bpm))
+            .collect::<Vec<_>>()
+            .join(",");
+        let timing_bpms = normalize_float_digits(&timing_bpms_raw);
 
         results.push(ChartBpmInfo {
             step_type,

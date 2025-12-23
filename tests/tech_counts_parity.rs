@@ -7,10 +7,11 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::bpm::{normalize_and_tidy_bpms, normalize_float_digits, parse_bpm_map};
+use rssp::bpm::normalize_float_digits;
 use rssp::parse::{extract_sections, split_notes_fields};
 use rssp::stats::minimize_chart_and_count_with_lanes;
 use rssp::step_parity;
+use rssp::timing::{TimingData, TimingFormat};
 
 #[derive(Debug, Deserialize)]
 struct GoldenTechCounts {
@@ -93,6 +94,25 @@ fn compute_chart_tech_counts(
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b""))
         .unwrap_or("");
     let normalized_global_bpms = normalize_float_digits(global_bpms_raw);
+    let global_stops_raw = std::str::from_utf8(parsed_data.stops.unwrap_or(b""))
+        .unwrap_or("");
+    let normalized_global_stops = normalize_float_digits(global_stops_raw);
+    let global_delays_raw = std::str::from_utf8(parsed_data.delays.unwrap_or(b""))
+        .unwrap_or("");
+    let normalized_global_delays = normalize_float_digits(global_delays_raw);
+    let global_warps_raw = std::str::from_utf8(parsed_data.warps.unwrap_or(b""))
+        .unwrap_or("");
+    let normalized_global_warps = normalize_float_digits(global_warps_raw);
+    let global_speeds_raw = std::str::from_utf8(parsed_data.speeds.unwrap_or(b""))
+        .unwrap_or("");
+    let normalized_global_speeds = normalize_float_digits(global_speeds_raw);
+    let global_scrolls_raw = std::str::from_utf8(parsed_data.scrolls.unwrap_or(b""))
+        .unwrap_or("");
+    let normalized_global_scrolls = normalize_float_digits(global_scrolls_raw);
+    let global_fakes_raw = std::str::from_utf8(parsed_data.fakes.unwrap_or(b""))
+        .unwrap_or("");
+    let normalized_global_fakes = normalize_float_digits(global_fakes_raw);
+    let timing_format = TimingFormat::from_extension(extension);
 
     let mut results = Vec::new();
 
@@ -117,13 +137,33 @@ fn compute_chart_tech_counts(
         }
 
         let tech_counts = if lanes == 4 {
-            let bpms_to_use = if let Some(chart_bpms) = normalize_chart_tag(entry.chart_bpms) {
-                chart_bpms
-            } else {
-                normalized_global_bpms.clone()
-            };
-            let bpm_map = parse_bpm_map(&normalize_and_tidy_bpms(&bpms_to_use));
-            step_parity::analyze(&minimized_chart, &bpm_map, offset)
+            let chart_bpms = normalize_chart_tag(entry.chart_bpms);
+            let chart_stops = normalize_chart_tag(entry.chart_stops);
+            let chart_delays = normalize_chart_tag(entry.chart_delays);
+            let chart_warps = normalize_chart_tag(entry.chart_warps);
+            let chart_speeds = normalize_chart_tag(entry.chart_speeds);
+            let chart_scrolls = normalize_chart_tag(entry.chart_scrolls);
+            let chart_fakes = normalize_chart_tag(entry.chart_fakes);
+            let timing = TimingData::from_chart_data(
+                offset,
+                0.0,
+                chart_bpms.as_deref(),
+                &normalized_global_bpms,
+                chart_stops.as_deref(),
+                &normalized_global_stops,
+                chart_delays.as_deref(),
+                &normalized_global_delays,
+                chart_warps.as_deref(),
+                &normalized_global_warps,
+                chart_speeds.as_deref(),
+                &normalized_global_speeds,
+                chart_scrolls.as_deref(),
+                &normalized_global_scrolls,
+                chart_fakes.as_deref(),
+                &normalized_global_fakes,
+                timing_format,
+            );
+            step_parity::analyze_with_timing(&minimized_chart, &timing)
         } else {
             step_parity::TechCounts::default()
         };
