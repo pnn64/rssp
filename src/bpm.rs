@@ -1,11 +1,12 @@
 use crate::parse::{
     extract_sections,
     parse_offset_seconds,
+    parse_version,
     split_notes_fields,
     ParsedChartEntry,
     ParsedSimfileData,
 };
-use crate::timing::{format_bpm_segments_like_itg, TimingData, TimingFormat};
+use crate::timing::{format_bpm_segments_like_itg, steps_timing_allowed, TimingData, TimingFormat};
 
 fn normalize_decimal(s: &str) -> Option<String> {
     let cleaned: String = s.chars().filter(|c| !c.is_control()).collect();
@@ -72,6 +73,7 @@ struct TimingGlobals {
     fakes: String,
     song_offset: f64,
     timing_format: TimingFormat,
+    allow_steps_timing: bool,
 }
 
 #[derive(Clone)]
@@ -86,6 +88,9 @@ struct ChartTimingTags {
 }
 
 fn timing_globals(parsed: &ParsedSimfileData<'_>, extension: &str) -> TimingGlobals {
+    let timing_format = TimingFormat::from_extension(extension);
+    let allow_steps_timing = steps_timing_allowed(parse_version(parsed.version), timing_format);
+
     TimingGlobals {
         bpms: normalize_tag_bytes(parsed.bpms),
         stops: normalize_tag_bytes(parsed.stops),
@@ -95,7 +100,8 @@ fn timing_globals(parsed: &ParsedSimfileData<'_>, extension: &str) -> TimingGlob
         scrolls: normalize_tag_bytes(parsed.scrolls),
         fakes: normalize_tag_bytes(parsed.fakes),
         song_offset: parse_offset_seconds(parsed.offset),
-        timing_format: TimingFormat::from_extension(extension),
+        timing_format,
+        allow_steps_timing,
     }
 }
 
@@ -125,22 +131,23 @@ fn chart_metadata(fields: &[&[u8]]) -> Option<(String, String)> {
 }
 
 fn timing_data_for_chart(tags: &ChartTimingTags, globals: &TimingGlobals) -> TimingData {
+    let use_chart = globals.allow_steps_timing;
     TimingData::from_chart_data(
         globals.song_offset,
         0.0,
-        tags.bpms.as_deref(),
+        if use_chart { tags.bpms.as_deref() } else { None },
         &globals.bpms,
-        tags.stops.as_deref(),
+        if use_chart { tags.stops.as_deref() } else { None },
         &globals.stops,
-        tags.delays.as_deref(),
+        if use_chart { tags.delays.as_deref() } else { None },
         &globals.delays,
-        tags.warps.as_deref(),
+        if use_chart { tags.warps.as_deref() } else { None },
         &globals.warps,
-        tags.speeds.as_deref(),
+        if use_chart { tags.speeds.as_deref() } else { None },
         &globals.speeds,
-        tags.scrolls.as_deref(),
+        if use_chart { tags.scrolls.as_deref() } else { None },
         &globals.scrolls,
-        tags.fakes.as_deref(),
+        if use_chart { tags.fakes.as_deref() } else { None },
         &globals.fakes,
         globals.timing_format,
     )

@@ -1,5 +1,7 @@
 use std::io;
 
+use crate::timing::STEPFILE_VERSION_NUMBER;
+
 pub fn strip_title_tags(mut title: &str) -> String {
     loop {
         let original = title;
@@ -66,6 +68,13 @@ pub fn parse_offset_seconds(parsed_offset: Option<&[u8]>) -> f64 {
         .unwrap_or(0.0)
 }
 
+pub fn parse_version(parsed_version: Option<&[u8]>) -> f32 {
+    parsed_version
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(STEPFILE_VERSION_NUMBER)
+}
+
 /// Parsed note data for a single chart found in the simfile.
 #[derive(Default)]
 pub struct ParsedChartEntry {
@@ -92,6 +101,7 @@ pub struct ParsedSimfileData<'a> {
     pub title_translit: Option<&'a [u8]>,
     pub subtitle_translit: Option<&'a [u8]>,
     pub artist_translit: Option<&'a [u8]>,
+    pub version: Option<&'a [u8]>,
     pub offset: Option<&'a [u8]>,
     pub bpms: Option<&'a [u8]>,
     pub stops: Option<&'a [u8]>,
@@ -145,6 +155,8 @@ pub fn extract_sections<'a>(
                 result.subtitle_translit = parse_tag(current_slice, b"#SUBTITLETRANSLIT:".len());
             } else if current_slice.starts_with(b"#ARTISTTRANSLIT:") {
                 result.artist_translit = parse_tag(current_slice, b"#ARTISTTRANSLIT:".len());
+            } else if current_slice.starts_with(b"#VERSION:") {
+                result.version = parse_tag(current_slice, b"#VERSION:".len());
             } else if current_slice.starts_with(b"#OFFSET:") {
                 result.offset = parse_tag(current_slice, b"#OFFSET:".len());
             } else if current_slice.starts_with(b"#BPMS:") {

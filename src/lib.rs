@@ -28,7 +28,13 @@ use crate::parse::*;
 use crate::patterns::*;
 use crate::stats::*;
 use crate::tech::parse_step_artist_and_tech;
-use crate::timing::{TimingData, TimingFormat, compute_row_to_beat, compute_timing_segments};
+use crate::timing::{
+    compute_row_to_beat,
+    compute_timing_segments,
+    steps_timing_allowed,
+    TimingData,
+    TimingFormat,
+};
 
 /// Options for controlling simfile analysis.
 #[derive(Debug, Default, Clone)]
@@ -278,6 +284,7 @@ fn build_chart_summary(
     normalized_global_fakes: &str,
     extension: &str,
     timing_format: TimingFormat,
+    allow_steps_timing: bool,
     options: &AnalysisOptions,
 ) -> Option<ChartSummary> {
     let chart_start_time = Instant::now();
@@ -357,6 +364,14 @@ fn build_chart_summary(
             .map(normalize_float_digits)
             .filter(|s| !s.is_empty())
     });
+
+    let chart_bpms_timing = if allow_steps_timing { chart_bpms.as_deref() } else { None };
+    let chart_stops_timing = if allow_steps_timing { chart_stops.as_deref() } else { None };
+    let chart_delays_timing = if allow_steps_timing { chart_delays.as_deref() } else { None };
+    let chart_warps_timing = if allow_steps_timing { chart_warps.as_deref() } else { None };
+    let chart_speeds_timing = if allow_steps_timing { chart_speeds.as_deref() } else { None };
+    let chart_scrolls_timing = if allow_steps_timing { chart_scrolls.as_deref() } else { None };
+    let chart_fakes_timing = if allow_steps_timing { chart_fakes.as_deref() } else { None };
     let chart_time_signatures = chart_time_signatures_opt.and_then(|bytes| {
         std::str::from_utf8(&bytes)
             .ok()
@@ -386,19 +401,19 @@ fn build_chart_summary(
             .map(str::to_string)
     });
     let timing_segments = compute_timing_segments(
-        chart_bpms.as_deref(),
+        chart_bpms_timing,
         normalized_global_bpms,
-        chart_stops.as_deref(),
+        chart_stops_timing,
         normalized_global_stops,
-        chart_delays.as_deref(),
+        chart_delays_timing,
         normalized_global_delays,
-        chart_warps.as_deref(),
+        chart_warps_timing,
         normalized_global_warps,
-        chart_speeds.as_deref(),
+        chart_speeds_timing,
         normalized_global_speeds,
-        chart_scrolls.as_deref(),
+        chart_scrolls_timing,
         normalized_global_scrolls,
-        chart_fakes.as_deref(),
+        chart_fakes_timing,
         normalized_global_fakes,
         timing_format,
     );
@@ -519,6 +534,7 @@ pub fn analyze(
     let music_path_str = parsed_data.music.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
     let display_bpm_str = parsed_data.display_bpm.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
     let offset = parse_offset_seconds(parsed_data.offset);
+    let ssc_version = parse_version(parsed_data.version);
     let sample_start = parsed_data.sample_start.and_then(|b| std::str::from_utf8(b).ok()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
     let sample_length = parsed_data.sample_length.and_then(|b| std::str::from_utf8(b).ok()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"<invalid-bpms>")).unwrap_or("<invalid-bpms>");
@@ -578,6 +594,7 @@ pub fn analyze(
         .to_string();
 
     let timing_format = TimingFormat::from_extension(extension);
+    let allow_steps_timing = steps_timing_allowed(ssc_version, timing_format);
     let global_timing_segments = compute_timing_segments(
         None,
         &normalized_global_bpms,
@@ -630,6 +647,7 @@ pub fn analyze(
                 &normalized_global_fakes,
                 extension,
                 timing_format,
+                allow_steps_timing,
                 &options,
             )
         })
@@ -638,22 +656,58 @@ pub fn analyze(
     let total_length = chart_summaries
         .iter_mut()
         .map(|chart| {
+            let chart_bpms_timing = if allow_steps_timing {
+                chart.chart_bpms.as_deref()
+            } else {
+                None
+            };
+            let chart_stops_timing = if allow_steps_timing {
+                chart.chart_stops.as_deref()
+            } else {
+                None
+            };
+            let chart_delays_timing = if allow_steps_timing {
+                chart.chart_delays.as_deref()
+            } else {
+                None
+            };
+            let chart_warps_timing = if allow_steps_timing {
+                chart.chart_warps.as_deref()
+            } else {
+                None
+            };
+            let chart_speeds_timing = if allow_steps_timing {
+                chart.chart_speeds.as_deref()
+            } else {
+                None
+            };
+            let chart_scrolls_timing = if allow_steps_timing {
+                chart.chart_scrolls.as_deref()
+            } else {
+                None
+            };
+            let chart_fakes_timing = if allow_steps_timing {
+                chart.chart_fakes.as_deref()
+            } else {
+                None
+            };
+
             let timing = TimingData::from_chart_data(
                 offset,
                 0.0,
-                chart.chart_bpms.as_deref(),
+                chart_bpms_timing,
                 &normalized_global_bpms,
-                chart.chart_stops.as_deref(),
+                chart_stops_timing,
                 &normalized_global_stops,
-                chart.chart_delays.as_deref(),
+                chart_delays_timing,
                 &normalized_global_delays,
-                chart.chart_warps.as_deref(),
+                chart_warps_timing,
                 &normalized_global_warps,
-                chart.chart_speeds.as_deref(),
+                chart_speeds_timing,
                 &normalized_global_speeds,
-                chart.chart_scrolls.as_deref(),
+                chart_scrolls_timing,
                 &normalized_global_scrolls,
-                chart.chart_fakes.as_deref(),
+                chart_fakes_timing,
                 &normalized_global_fakes,
                 timing_format,
             );
@@ -700,6 +754,7 @@ pub fn analyze(
         normalized_labels: normalized_global_labels,
         normalized_tickcounts: normalized_global_tickcounts,
         normalized_combos: normalized_global_combos,
+        ssc_version,
         timing_format,
         banner_path: banner_path_str,
         background_path: background_path_str,

@@ -12,6 +12,7 @@ use crate::timing::{
     format_bpm_segments_like_itg,
     normalize_scrolls_like_itg,
     normalize_speeds_like_itg,
+    steps_timing_allowed,
     SpeedUnit,
     TimingData,
     TimingFormat,
@@ -250,6 +251,7 @@ pub struct SimfileSummary {
     pub normalized_labels:    String,
     pub normalized_tickcounts: String,
     pub normalized_combos:    String,
+    pub ssc_version:          f32,
     pub timing_format:        TimingFormat,
     pub banner_path:          String,
     pub background_path:      String,
@@ -317,10 +319,16 @@ fn count(map: &HashMap<PatternVariant, u32>, variant: PatternVariant) -> u32 {
     *map.get(&variant).unwrap_or(&0)
 }
 
-fn chart_or_global<'a>(chart_value: &'a Option<String>, global_value: &'a str) -> Option<&'a str> {
-    if let Some(s) = chart_value {
-        if !s.is_empty() {
-            return Some(s.as_str());
+fn chart_or_global<'a>(
+    allow_chart: bool,
+    chart_value: &'a Option<String>,
+    global_value: &'a str,
+) -> Option<&'a str> {
+    if allow_chart {
+        if let Some(s) = chart_value {
+            if !s.is_empty() {
+                return Some(s.as_str());
+            }
         }
     }
     if !global_value.is_empty() {
@@ -426,22 +434,60 @@ fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
 }
 
 pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> TimingSnapshot {
+    let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
+
+    let chart_bpms_timing = if allow_steps_timing {
+        chart.chart_bpms.as_deref()
+    } else {
+        None
+    };
+    let chart_stops_timing = if allow_steps_timing {
+        chart.chart_stops.as_deref()
+    } else {
+        None
+    };
+    let chart_delays_timing = if allow_steps_timing {
+        chart.chart_delays.as_deref()
+    } else {
+        None
+    };
+    let chart_warps_timing = if allow_steps_timing {
+        chart.chart_warps.as_deref()
+    } else {
+        None
+    };
+    let chart_speeds_timing = if allow_steps_timing {
+        chart.chart_speeds.as_deref()
+    } else {
+        None
+    };
+    let chart_scrolls_timing = if allow_steps_timing {
+        chart.chart_scrolls.as_deref()
+    } else {
+        None
+    };
+    let chart_fakes_timing = if allow_steps_timing {
+        chart.chart_fakes.as_deref()
+    } else {
+        None
+    };
+
     let timing = TimingData::from_chart_data(
         simfile.offset,
         0.0,
-        chart.chart_bpms.as_deref(),
+        chart_bpms_timing,
         &simfile.normalized_bpms,
-        chart.chart_stops.as_deref(),
+        chart_stops_timing,
         &simfile.normalized_stops,
-        chart.chart_delays.as_deref(),
+        chart_delays_timing,
         &simfile.normalized_delays,
-        chart.chart_warps.as_deref(),
+        chart_warps_timing,
         &simfile.normalized_warps,
-        chart.chart_speeds.as_deref(),
+        chart_speeds_timing,
         &simfile.normalized_speeds,
-        chart.chart_scrolls.as_deref(),
+        chart_scrolls_timing,
         &simfile.normalized_scrolls,
-        chart.chart_fakes.as_deref(),
+        chart_fakes_timing,
         &simfile.normalized_fakes,
         simfile.timing_format,
     );
@@ -485,18 +531,22 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         .collect();
 
     let time_signatures = parse_time_signatures(chart_or_global(
+        allow_steps_timing,
         &chart.chart_time_signatures,
         &simfile.normalized_time_signatures,
     ));
     let labels = parse_labels(chart_or_global(
+        allow_steps_timing,
         &chart.chart_labels,
         &simfile.normalized_labels,
     ));
     let tickcounts = parse_tickcounts(chart_or_global(
+        allow_steps_timing,
         &chart.chart_tickcounts,
         &simfile.normalized_tickcounts,
     ));
     let combos = parse_combos(chart_or_global(
+        allow_steps_timing,
         &chart.chart_combos,
         &simfile.normalized_combos,
     ));
@@ -618,11 +668,12 @@ fn count_gimmick_scroll_segments(opt: Option<&str>) -> u32 {
 fn print_gimmicks(chart: &ChartSummary, simfile: &SimfileSummary) {
     let has_lifts = chart.stats.lifts > 0;
     let has_fakes = chart.stats.fakes > 0;
-    let stops = chart_or_global(&chart.chart_stops, &simfile.normalized_stops);
-    let delays = chart_or_global(&chart.chart_delays, &simfile.normalized_delays);
-    let warps = chart_or_global(&chart.chart_warps, &simfile.normalized_warps);
-    let speeds = chart_or_global(&chart.chart_speeds, &simfile.normalized_speeds);
-    let scrolls = chart_or_global(&chart.chart_scrolls, &simfile.normalized_scrolls);
+    let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
+    let stops = chart_or_global(allow_steps_timing, &chart.chart_stops, &simfile.normalized_stops);
+    let delays = chart_or_global(allow_steps_timing, &chart.chart_delays, &simfile.normalized_delays);
+    let warps = chart_or_global(allow_steps_timing, &chart.chart_warps, &simfile.normalized_warps);
+    let speeds = chart_or_global(allow_steps_timing, &chart.chart_speeds, &simfile.normalized_speeds);
+    let scrolls = chart_or_global(allow_steps_timing, &chart.chart_scrolls, &simfile.normalized_scrolls);
 
     let stop_count = count_timing_segments(stops);
     let delay_count = count_timing_segments(delays);
@@ -1187,11 +1238,12 @@ fn json_mono_candle_stats(chart: &ChartSummary) -> JsonValue {
 fn json_gimmicks(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
     let lifts = chart.stats.lifts;
     let fakes = chart.stats.fakes;
-    let stops = chart_or_global(&chart.chart_stops, &simfile.normalized_stops);
-    let delays = chart_or_global(&chart.chart_delays, &simfile.normalized_delays);
-    let warps = chart_or_global(&chart.chart_warps, &simfile.normalized_warps);
-    let speeds = chart_or_global(&chart.chart_speeds, &simfile.normalized_speeds);
-    let scrolls = chart_or_global(&chart.chart_scrolls, &simfile.normalized_scrolls);
+    let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
+    let stops = chart_or_global(allow_steps_timing, &chart.chart_stops, &simfile.normalized_stops);
+    let delays = chart_or_global(allow_steps_timing, &chart.chart_delays, &simfile.normalized_delays);
+    let warps = chart_or_global(allow_steps_timing, &chart.chart_warps, &simfile.normalized_warps);
+    let speeds = chart_or_global(allow_steps_timing, &chart.chart_speeds, &simfile.normalized_speeds);
+    let scrolls = chart_or_global(allow_steps_timing, &chart.chart_scrolls, &simfile.normalized_scrolls);
 
     let stop_count = count_timing_segments(stops);
     let delay_count = count_timing_segments(delays);
@@ -1857,11 +1909,12 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
         chart.stats.fakes,
     );
 
-    let stops = chart_or_global(&chart.chart_stops, &simfile.normalized_stops);
-    let delays = chart_or_global(&chart.chart_delays, &simfile.normalized_delays);
-    let warps = chart_or_global(&chart.chart_warps, &simfile.normalized_warps);
-    let speeds = chart_or_global(&chart.chart_speeds, &simfile.normalized_speeds);
-    let scrolls = chart_or_global(&chart.chart_scrolls, &simfile.normalized_scrolls);
+    let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
+    let stops = chart_or_global(allow_steps_timing, &chart.chart_stops, &simfile.normalized_stops);
+    let delays = chart_or_global(allow_steps_timing, &chart.chart_delays, &simfile.normalized_delays);
+    let warps = chart_or_global(allow_steps_timing, &chart.chart_warps, &simfile.normalized_warps);
+    let speeds = chart_or_global(allow_steps_timing, &chart.chart_speeds, &simfile.normalized_speeds);
+    let scrolls = chart_or_global(allow_steps_timing, &chart.chart_scrolls, &simfile.normalized_scrolls);
 
     let stop_count = count_timing_segments(stops);
     let delay_count = count_timing_segments(delays);

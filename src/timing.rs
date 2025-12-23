@@ -17,12 +17,23 @@ impl TimingFormat {
     }
 }
 
+pub const STEPFILE_VERSION_NUMBER: f32 = 0.83;
+pub const VERSION_SPLIT_TIMING: f32 = 0.7;
+
 const DEFAULT_BPM: f64 = 60.0;
 const FAST_BPM_WARP: f64 = 9_999_999.0;
 const DEFAULT_BPM_F32: f32 = 60.0;
 const FAST_BPM_WARP_F32: f32 = 9_999_999.0;
 
 pub const ROWS_PER_BEAT: i32 = 48;
+
+#[inline(always)]
+pub fn steps_timing_allowed(version: f32, format: TimingFormat) -> bool {
+    match format {
+        TimingFormat::Sm => true,
+        TimingFormat::Ssc => version >= VERSION_SPLIT_TIMING,
+    }
+}
 
 #[inline(always)]
 fn note_row_to_beat(row: i32) -> f64 {
