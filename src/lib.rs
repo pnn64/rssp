@@ -533,6 +533,7 @@ pub fn analyze(
     let background_path_str = parsed_data.background.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
     let music_path_str = parsed_data.music.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
     let display_bpm_str = parsed_data.display_bpm.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let timing_format = TimingFormat::from_extension(extension);
     let offset = parse_offset_seconds(parsed_data.offset);
     let ssc_version = parse_version(parsed_data.version, timing_format);
     let sample_start = parsed_data.sample_start.and_then(|b| std::str::from_utf8(b).ok()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
@@ -593,7 +594,6 @@ pub fn analyze(
         .unwrap_or("")
         .to_string();
 
-    let timing_format = TimingFormat::from_extension(extension);
     let allow_steps_timing = steps_timing_allowed(ssc_version, timing_format);
     let global_timing_segments = compute_timing_segments(
         None,
