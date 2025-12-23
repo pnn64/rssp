@@ -7,8 +7,7 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::{analyze, AnalysisOptions};
-use rssp::report::build_timing_snapshot;
+use rssp::bpm::chart_bpm_snapshots;
 
 #[derive(Debug, Deserialize)]
 struct GoldenChart {
@@ -43,29 +42,18 @@ struct Failure {
 }
 
 fn compute_chart_bpms(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartBpmInfo>, String> {
-    let simfile = analyze(simfile_data, extension, AnalysisOptions::default())
+    let snapshots = chart_bpm_snapshots(simfile_data, extension)
         .map_err(|e| e.to_string())?;
 
-    let mut results = Vec::new();
-
-    for chart in &simfile.charts {
-        let step_type = chart.step_type_str.clone();
-        let difficulty = rssp::normalize_difficulty_label(&chart.difficulty_str);
-        let hash_bpms = chart
-            .chart_bpms
-            .clone()
-            .unwrap_or_else(|| simfile.normalized_bpms.clone());
-        let timing_bpms = build_timing_snapshot(chart, &simfile).bpms_formatted;
-
-        results.push(ChartBpmInfo {
-            step_type,
-            difficulty,
-            hash_bpms,
-            bpms: timing_bpms,
-        });
-    }
-
-    Ok(results)
+    Ok(snapshots
+        .into_iter()
+        .map(|chart| ChartBpmInfo {
+            step_type: chart.step_type,
+            difficulty: chart.difficulty,
+            hash_bpms: chart.hash_bpms,
+            bpms: chart.bpms_formatted,
+        })
+        .collect())
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {

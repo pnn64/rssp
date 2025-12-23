@@ -1,3 +1,12 @@
+use crate::parse::{
+    extract_sections,
+    parse_offset_seconds,
+    split_notes_fields,
+    ParsedChartEntry,
+    ParsedSimfileData,
+};
+use crate::timing::{format_bpm_segments_like_itg, TimingData, TimingFormat};
+
 fn normalize_decimal(s: &str) -> Option<String> {
     let cleaned: String = s.chars().filter(|c| !c.is_control()).collect();
     let value: f64 = cleaned.trim().parse().ok()?;
@@ -36,6 +45,133 @@ pub fn normalize_chart_tag(tag: Option<Vec<u8>>) -> Option<String> {
             .map(normalize_float_digits)
     })
     .filter(|s| !s.is_empty())
+}
+
+fn normalize_tag_bytes(tag: Option<&[u8]>) -> String {
+    tag.and_then(|bytes| std::str::from_utf8(bytes).ok())
+        .map(normalize_float_digits)
+        .unwrap_or_default()
+}
+
+#[derive(Debug, Clone)]
+pub struct ChartBpmSnapshot {
+    pub step_type: String,
+    pub difficulty: String,
+    pub hash_bpms: String,
+    pub bpms_formatted: String,
+}
+
+#[derive(Clone)]
+struct TimingGlobals {
+    bpms: String,
+    stops: String,
+    delays: String,
+    warps: String,
+    speeds: String,
+    scrolls: String,
+    fakes: String,
+    song_offset: f64,
+    timing_format: TimingFormat,
+}
+
+#[derive(Clone)]
+struct ChartTimingTags {
+    bpms: Option<String>,
+    stops: Option<String>,
+    delays: Option<String>,
+    warps: Option<String>,
+    speeds: Option<String>,
+    scrolls: Option<String>,
+    fakes: Option<String>,
+}
+
+fn timing_globals(parsed: &ParsedSimfileData<'_>, extension: &str) -> TimingGlobals {
+    TimingGlobals {
+        bpms: normalize_tag_bytes(parsed.bpms),
+        stops: normalize_tag_bytes(parsed.stops),
+        delays: normalize_tag_bytes(parsed.delays),
+        warps: normalize_tag_bytes(parsed.warps),
+        speeds: normalize_tag_bytes(parsed.speeds),
+        scrolls: normalize_tag_bytes(parsed.scrolls),
+        fakes: normalize_tag_bytes(parsed.fakes),
+        song_offset: parse_offset_seconds(parsed.offset),
+        timing_format: TimingFormat::from_extension(extension),
+    }
+}
+
+fn chart_timing_tags(entry: &ParsedChartEntry) -> ChartTimingTags {
+    ChartTimingTags {
+        bpms: normalize_chart_tag(entry.chart_bpms.clone()),
+        stops: normalize_chart_tag(entry.chart_stops.clone()),
+        delays: normalize_chart_tag(entry.chart_delays.clone()),
+        warps: normalize_chart_tag(entry.chart_warps.clone()),
+        speeds: normalize_chart_tag(entry.chart_speeds.clone()),
+        scrolls: normalize_chart_tag(entry.chart_scrolls.clone()),
+        fakes: normalize_chart_tag(entry.chart_fakes.clone()),
+    }
+}
+
+fn chart_metadata(fields: &[&[u8]]) -> Option<(String, String)> {
+    if fields.len() < 5 {
+        return None;
+    }
+    let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_string();
+    if step_type == "lights-cabinet" {
+        return None;
+    }
+    let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
+    let difficulty = crate::normalize_difficulty_label(difficulty_raw);
+    Some((step_type, difficulty))
+}
+
+fn timing_data_for_chart(tags: &ChartTimingTags, globals: &TimingGlobals) -> TimingData {
+    TimingData::from_chart_data(
+        globals.song_offset,
+        0.0,
+        tags.bpms.as_deref(),
+        &globals.bpms,
+        tags.stops.as_deref(),
+        &globals.stops,
+        tags.delays.as_deref(),
+        &globals.delays,
+        tags.warps.as_deref(),
+        &globals.warps,
+        tags.speeds.as_deref(),
+        &globals.speeds,
+        tags.scrolls.as_deref(),
+        &globals.scrolls,
+        tags.fakes.as_deref(),
+        &globals.fakes,
+        globals.timing_format,
+    )
+}
+
+fn chart_bpm_snapshot(entry: &ParsedChartEntry, globals: &TimingGlobals) -> Option<ChartBpmSnapshot> {
+    let (fields, _chart_data) = split_notes_fields(&entry.notes);
+    let (step_type, difficulty) = chart_metadata(&fields)?;
+    let tags = chart_timing_tags(entry);
+    let hash_bpms = tags.bpms.clone().unwrap_or_else(|| globals.bpms.clone());
+    let bpms_formatted = format_bpm_segments_like_itg(&timing_data_for_chart(&tags, globals).bpm_segments());
+
+    Some(ChartBpmSnapshot {
+        step_type,
+        difficulty,
+        hash_bpms,
+        bpms_formatted,
+    })
+}
+
+pub fn chart_bpm_snapshots(
+    simfile_data: &[u8],
+    extension: &str,
+) -> Result<Vec<ChartBpmSnapshot>, String> {
+    let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
+    let globals = timing_globals(&parsed_data, extension);
+    Ok(parsed_data
+        .notes_list
+        .iter()
+        .filter_map(|entry| chart_bpm_snapshot(entry, &globals))
+        .collect())
 }
 
 fn normalized_3dp_to_thousandths(s: &str) -> Option<i64> {
