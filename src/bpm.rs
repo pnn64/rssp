@@ -155,16 +155,23 @@ fn chart_timing_tags(entry: &ParsedChartEntry) -> ChartTimingTags {
     }
 }
 
-fn chart_metadata(fields: &[&[u8]]) -> Option<(String, String)> {
-    if fields.len() < 5 {
+fn chart_metadata(fields: &[&[u8]], timing_format: TimingFormat) -> Option<(String, String)> {
+    if fields.len() < 4 {
         return None;
     }
     let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_string();
     if step_type == "lights-cabinet" {
         return None;
     }
+    let description = std::str::from_utf8(fields[1]).unwrap_or("").trim();
     let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
-    let difficulty = crate::normalize_difficulty_label(difficulty_raw);
+    let meter_raw = std::str::from_utf8(fields[3]).unwrap_or("").trim();
+    let extension = if timing_format == TimingFormat::Sm {
+        "sm"
+    } else {
+        "ssc"
+    };
+    let difficulty = crate::resolve_difficulty_label(difficulty_raw, description, meter_raw, extension);
     Some((step_type, difficulty))
 }
 
@@ -193,7 +200,7 @@ fn timing_data_for_chart(tags: &ChartTimingTags, globals: &TimingGlobals) -> Tim
 
 fn chart_bpm_snapshot(entry: &ParsedChartEntry, globals: &TimingGlobals) -> Option<ChartBpmSnapshot> {
     let (fields, _chart_data) = split_notes_fields(&entry.notes);
-    let (step_type, difficulty) = chart_metadata(&fields)?;
+    let (step_type, difficulty) = chart_metadata(&fields, globals.timing_format)?;
     let tags = chart_timing_tags(entry);
     let hash_bpms = tags
         .bpms_norm

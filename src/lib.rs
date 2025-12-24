@@ -92,7 +92,7 @@ fn parse_meter_for_difficulty(meter_str: &str, extension: &str) -> i32 {
     trimmed.parse::<i32>().unwrap_or(0)
 }
 
-fn resolve_difficulty_label(
+pub(crate) fn resolve_difficulty_label(
     raw_difficulty: &str,
     description: &str,
     meter_str: &str,
