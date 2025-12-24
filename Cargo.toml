@@ -75,5 +75,9 @@ harness = false
 name = "mono_perf"
 harness = false
 
+[[bench]]
+name = "bpm_perf"
+harness = false
+
 [profile.bench]
 debug = true
