@@ -107,14 +107,18 @@ fn quantize_beat_like_itg(beat: f64) -> f32 {
 }
 
 pub fn format_bpm_segments_like_itg(bpms: &[(f64, f64)]) -> String {
-    bpms.iter()
-        .map(|(beat, bpm)| {
-            let beat = quantize_beat_like_itg(*beat) as f64;
-            let bpm = roundtrip_bpm_itg(*bpm);
-            format!("{}={}", normalize_decimal_itg(beat), normalize_decimal_itg(bpm))
-        })
-        .collect::<Vec<_>>()
-        .join(",")
+    let mut out = String::new();
+    for (idx, (beat, bpm)) in bpms.iter().enumerate() {
+        if idx > 0 {
+            out.push(',');
+        }
+        let beat = quantize_beat_like_itg(*beat) as f64;
+        let bpm = roundtrip_bpm_itg(*bpm);
+        out.push_str(&normalize_decimal_itg(beat));
+        out.push('=');
+        out.push_str(&normalize_decimal_itg(bpm));
+    }
+    out
 }
 
 #[inline(always)]

@@ -9,8 +9,13 @@ use crate::parse::{
 use crate::timing::{format_bpm_segments_like_itg, steps_timing_allowed, TimingData, TimingFormat};
 
 fn normalize_decimal(s: &str) -> Option<String> {
-    let cleaned: String = s.chars().filter(|c| !c.is_control()).collect();
-    let value: f64 = cleaned.trim().parse().ok()?;
+    let value: f64 = if s.chars().any(|c| c.is_control()) {
+        let mut cleaned = String::with_capacity(s.len());
+        cleaned.extend(s.chars().filter(|c| !c.is_control()));
+        cleaned.trim().parse().ok()?
+    } else {
+        s.trim().parse().ok()?
+    };
 
     let mult = 1000.0;
     let temp = value * mult + 0.5;
@@ -30,31 +35,48 @@ fn normalize_entry(beat_bpm: &str) -> String {
 }
 
 pub fn normalize_float_digits(param: &str) -> String {
-    param
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(normalize_entry)
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-fn clean_entry(beat_bpm: &str) -> Option<String> {
-    let cleaned: String = beat_bpm.chars().filter(|c| !c.is_control()).collect();
-    let trimmed = cleaned.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
+    let mut out = String::with_capacity(param.len());
+    for entry in param.split(',') {
+        let trimmed = entry.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let normalized = normalize_entry(trimmed);
+        if !out.is_empty() {
+            out.push(',');
+        }
+        out.push_str(&normalized);
     }
+    out
 }
 
 pub fn clean_timing_map(param: &str) -> String {
-    param
-        .split(',')
-        .filter_map(clean_entry)
-        .collect::<Vec<_>>()
-        .join(",")
+    let mut out = String::with_capacity(param.len());
+    let mut scratch = String::new();
+
+    for entry in param.split(',') {
+        if entry.is_empty() {
+            continue;
+        }
+
+        let trimmed = if entry.chars().any(|c| c.is_control()) {
+            scratch.clear();
+            scratch.extend(entry.chars().filter(|c| !c.is_control()));
+            scratch.trim()
+        } else {
+            entry.trim()
+        };
+
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(',');
+        }
+        out.push_str(trimmed);
+    }
+
+    out
 }
 
 pub fn normalize_chart_tag(tag: Option<Vec<u8>>) -> Option<String> {
@@ -239,23 +261,26 @@ fn normalized_3dp_to_thousandths(s: &str) -> Option<i64> {
     let (sign, body) = s.strip_prefix('-').map_or((1i64, s), |rest| (-1i64, rest));
     let (int_part, frac_part) = body.split_once('.').unwrap_or((body, "0"));
 
-    if !int_part.chars().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    if !frac_part.chars().all(|c| c.is_ascii_digit()) {
+    if int_part.is_empty() || !int_part.as_bytes().iter().all(|b| b.is_ascii_digit()) {
         return None;
     }
 
     let int_value: i64 = int_part.parse().ok()?;
-    let mut frac = frac_part.to_string();
-    if frac.len() > 3 {
-        frac.truncate(3);
-    } else {
-        while frac.len() < 3 {
-            frac.push('0');
+    let mut frac_value: i64 = 0;
+    let mut frac_digits = 0usize;
+    for &b in frac_part.as_bytes() {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        if frac_digits < 3 {
+            frac_value = frac_value * 10 + (b - b'0') as i64;
+            frac_digits += 1;
         }
     }
-    let frac_value: i64 = frac.parse().ok()?;
+    while frac_digits < 3 {
+        frac_value *= 10;
+        frac_digits += 1;
+    }
 
     Some(sign * (int_value * 1000 + frac_value))
 }
@@ -284,11 +309,14 @@ fn parse_and_normalize_timing_entry(entry: &str, index: usize) -> Option<Normali
 }
 
 pub fn normalize_and_tidy_bpms(param: &str) -> String {
-    let mut entries: Vec<NormalizedTimingEntry> = param
-        .split(',')
-        .enumerate()
-        .filter_map(|(i, entry)| parse_and_normalize_timing_entry(entry, i))
-        .collect();
+    let mut entries: Vec<NormalizedTimingEntry> = Vec::with_capacity(
+        param.as_bytes().iter().filter(|&&b| b == b',').count() + 1,
+    );
+    for (i, entry) in param.split(',').enumerate() {
+        if let Some(parsed) = parse_and_normalize_timing_entry(entry, i) {
+            entries.push(parsed);
+        }
+    }
 
     if entries.is_empty() {
         return "0.000=60.000".to_string();
@@ -327,24 +355,36 @@ pub fn normalize_and_tidy_bpms(param: &str) -> String {
         tidied.push(entry);
     }
 
-    tidied
-        .into_iter()
-        .map(|e| format!("{}={}", e.beat_str, e.value_str))
-        .collect::<Vec<_>>()
-        .join(",")
+    let mut out = String::new();
+    for entry in tidied {
+        if !out.is_empty() {
+            out.push(',');
+        }
+        out.push_str(&entry.beat_str);
+        out.push('=');
+        out.push_str(&entry.value_str);
+    }
+    out
 }
 
 pub fn parse_bpm_map(normalized_bpms: &str) -> Vec<(f64, f64)> {
-    let mut bpms_vec: Vec<(f64, f64)> = normalized_bpms
-        .split(',')
-        .filter_map(|chunk| {
-            chunk.trim().split_once('=').and_then(|(left, right)| {
-                let beat = left.trim().parse::<f64>().ok()?;
-                let bpm = right.trim().parse::<f64>().ok()?;
-                Some((beat, bpm))
-            })
-        })
-        .collect();
+    let mut bpms_vec: Vec<(f64, f64)> = Vec::with_capacity(
+        normalized_bpms.as_bytes().iter().filter(|&&b| b == b',').count() + 1,
+    );
+    for chunk in normalized_bpms.split(',') {
+        let chunk = chunk.trim();
+        if chunk.is_empty() {
+            continue;
+        }
+        let Some((left, right)) = chunk.split_once('=') else {
+            continue;
+        };
+        let beat = left.trim().parse::<f64>().ok();
+        let bpm = right.trim().parse::<f64>().ok();
+        if let (Some(beat), Some(bpm)) = (beat, bpm) {
+            bpms_vec.push((beat, bpm));
+        }
+    }
 
     bpms_vec.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     bpms_vec
@@ -396,21 +436,26 @@ pub fn compute_bpm_range(bpm_map: &[(f64, f64)]) -> (i32, i32) {
         return (0, 0);
     }
 
-    let (mut min_bpm, mut max_bpm, count) = bpm_map.iter()
-        .map(|&(_, bpm)| bpm)
-        .filter(|&bpm| is_display_bpm(bpm))
-        .fold((f64::MAX, f64::MIN, 0), |(min, max, count), bpm| {
-            (min.min(bpm), max.max(bpm), count + 1)
-        });
+    let mut min_bpm = f64::MAX;
+    let mut max_bpm = f64::MIN;
+    let mut count = 0;
+
+    for &(_, bpm) in bpm_map {
+        if is_display_bpm(bpm) {
+            min_bpm = min_bpm.min(bpm);
+            max_bpm = max_bpm.max(bpm);
+            count += 1;
+        }
+    }
 
     if count == 0 {
         // Fallback: if all BPMs were filtered out (e.g., gimmicks only), include everything.
-        let (fmin, fmax) = bpm_map.iter().map(|&(_, bpm)| bpm).fold(
-            (f64::MAX, f64::MIN),
-            |(min, max), bpm| (min.min(bpm), max.max(bpm)),
-        );
-        min_bpm = fmin;
-        max_bpm = fmax;
+        min_bpm = f64::MAX;
+        max_bpm = f64::MIN;
+        for &(_, bpm) in bpm_map {
+            min_bpm = min_bpm.min(bpm);
+            max_bpm = max_bpm.max(bpm);
+        }
     }
 
     (min_bpm.round() as i32, max_bpm.round() as i32)
@@ -430,6 +475,41 @@ pub fn get_elapsed_time(
     delay_map: &[(f64, f64)],
     warp_map: &[(f64, f64)],
 ) -> f64 {
+    if stop_map.is_empty() && delay_map.is_empty() && warp_map.is_empty() {
+        if bpm_map.is_empty() {
+            return 0.0;
+        }
+
+        let mut current_time = 0.0;
+        let mut current_beat = 0.0;
+        let mut current_bpm = if bpm_map[0].0 <= 0.0 { bpm_map[0].1 } else { 60.0 };
+
+        let mut idx = 0usize;
+        while idx < bpm_map.len() && bpm_map[idx].0 <= 0.0 {
+            current_bpm = bpm_map[idx].1;
+            idx += 1;
+        }
+
+        while idx < bpm_map.len() {
+            let (beat, bpm) = bpm_map[idx];
+            if beat > target_beat {
+                break;
+            }
+            if beat > current_beat && current_bpm > 0.0 {
+                current_time += (beat - current_beat) * (60.0 / current_bpm);
+            }
+            current_beat = beat;
+            current_bpm = bpm;
+            idx += 1;
+        }
+
+        if target_beat > current_beat && current_bpm > 0.0 {
+            current_time += (target_beat - current_beat) * (60.0 / current_bpm);
+        }
+
+        return current_time;
+    }
+
     // Event priority: 0=BPM, 1=Stop/Delay, 2=Warp
     let mut events = Vec::with_capacity(bpm_map.len() + stop_map.len() + delay_map.len() + warp_map.len());
     for &(b, v) in bpm_map { events.push((b, 0, v)); }
@@ -662,24 +742,23 @@ pub fn compute_mines_nonfake(
 }
 
 pub fn compute_measure_nps_vec(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> Vec<f64> {
-    measure_densities
-        .iter()
-        .enumerate()
-        .map(|(i, &density)| {
-            let measure_start_beat = i as f64 * 4.0;
-            let curr_bpm = get_current_bpm(measure_start_beat, bpm_map);
-            
-            // For NPS calculation, if the BPM is a gimmick (too high),
-            // it implies the measure passes instantly (warp), so effective NPS
-            // for a human reading it is treated as 0/unplayable, matching Simply Love.
-            if !is_display_bpm(curr_bpm) {
-                0.0
-            } else {
-                // NPS = density / (4 * 60 / BPM) = density * BPM / 240
-                density as f64 * curr_bpm / 240.0
-            }
-        })
-        .collect()
+    let mut out = Vec::with_capacity(measure_densities.len());
+    for (i, &density) in measure_densities.iter().enumerate() {
+        let measure_start_beat = i as f64 * 4.0;
+        let curr_bpm = get_current_bpm(measure_start_beat, bpm_map);
+
+        // For NPS calculation, if the BPM is a gimmick (too high),
+        // it implies the measure passes instantly (warp), so effective NPS
+        // for a human reading it is treated as 0/unplayable, matching Simply Love.
+        let nps = if !is_display_bpm(curr_bpm) {
+            0.0
+        } else {
+            // NPS = density / (4 * 60 / BPM) = density * BPM / 240
+            density as f64 * curr_bpm / 240.0
+        };
+        out.push(nps);
+    }
+    out
 }
 
 /// Computes median of a pre-sorted slice of f64.
@@ -721,11 +800,16 @@ pub fn compute_bpm_stats(bpm_values: &[f64]) -> (f64, f64) {
     }
 
     // Filter out gimmick BPMs for stats
-    let mut sorted: Vec<f64> = bpm_values.iter().copied().filter(|&b| is_display_bpm(b)).collect();
+    let mut sorted: Vec<f64> = Vec::with_capacity(bpm_values.len());
+    for &bpm in bpm_values {
+        if is_display_bpm(bpm) {
+            sorted.push(bpm);
+        }
+    }
 
     // Fallback if everything was filtered
     if sorted.is_empty() {
-        sorted = bpm_values.to_vec();
+        sorted.extend_from_slice(bpm_values);
     }
 
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
