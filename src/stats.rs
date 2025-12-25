@@ -177,6 +177,7 @@ fn count_line<const LANES: usize>(
 
     // Phase 2: Handle step counting and state updates.
     let notes_on_line = note_mask.count_ones();
+    let active_holds = stats.holding;
     if notes_on_line == 0 {
         stats.holding = (stats.holding - end_mask.count_ones() as i32).max(0);
         return false; // No steps on this line.
@@ -186,12 +187,7 @@ fn count_line<const LANES: usize>(
     if notes_on_line >= 2 {
         stats.jumps += 1;
     }
-    if notes_on_line >= 3 {
-        stats.hands += 1;
-    }
-
-    // Hands can also be formed by stepping while holding other notes.
-    if (stats.holding == 1 && notes_on_line >= 2) || (stats.holding >= 2 && notes_on_line >= 1) {
+    if (notes_on_line as i32 + active_holds) >= 3 {
         stats.hands += 1;
     }
 
@@ -311,14 +307,10 @@ fn compute_timing_aware_stats_impl<const LANES: usize>(
                 if notes_on_line >= 2 {
                     stats.jumps += 1;
                 }
-                if notes_on_line >= 3 {
-                    stats.hands += 1;
-                }
-                if (active_holds == 1 && notes_on_line >= 2)
-                    || (active_holds >= 2 && notes_on_line >= 1)
-                {
-                    stats.hands += 1;
-                }
+            }
+
+            if (notes_on_line as i32 + active_holds) >= 3 {
+                stats.hands += 1;
             }
         } else {
             for &ch in line.iter() {
