@@ -256,10 +256,14 @@ fn compute_timing_aware_stats_impl<const LANES: usize>(
             .unwrap_or(true);
 
         let mut notes_on_line = 0u32;
+        let mut has_note = false;
         let mut hold_starts: Vec<usize> = Vec::new();
 
         if judgable {
             for (col, &ch) in line.iter().enumerate() {
+                if ch != b'0' {
+                    has_note = true;
+                }
                 let mut is_arrow = false;
                 match ch {
                     b'1' => {
@@ -309,7 +313,7 @@ fn compute_timing_aware_stats_impl<const LANES: usize>(
                 }
             }
 
-            if (notes_on_line as i32 + active_holds) >= 3 {
+            if has_note && (notes_on_line as i32 + active_holds) >= 3 {
                 stats.hands += 1;
             }
         } else {
