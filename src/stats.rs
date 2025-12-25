@@ -261,7 +261,10 @@ fn compute_timing_aware_stats_impl<const LANES: usize>(
 
         if judgable {
             for (col, &ch) in line.iter().enumerate() {
-                if ch != b'0' {
+                if matches!(
+                    ch,
+                    b'1' | b'2' | b'4' | b'M' | b'm' | b'L' | b'l' | b'F' | b'f'
+                ) {
                     has_note = true;
                 }
                 let mut is_arrow = false;
