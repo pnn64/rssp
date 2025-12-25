@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use crate::patterns::{CustomPatternSummary, PatternVariant};
-use crate::stats::{ArrowStats, StreamCounts};
+use crate::stats::{ArrowStats, StreamCounts, RADAR_CATEGORY_COUNT};
 use crate::step_parity::TechCounts;
 use crate::timing::{
     format_bpm_segments_like_itg,
@@ -229,6 +229,7 @@ pub struct ChartSummary {
     pub chart_labels:      Option<String>,
     pub chart_tickcounts:  Option<String>,
     pub chart_combos:      Option<String>,
+    pub cached_radar_values: Option<[f32; RADAR_CATEGORY_COUNT]>,
 }
 
 // Make the struct and its fields public

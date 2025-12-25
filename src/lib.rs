@@ -173,6 +173,90 @@ fn chart_timing_tag_raw(tag: Option<Vec<u8>>) -> Option<String> {
     if cleaned.is_empty() { None } else { Some(cleaned) }
 }
 
+const RADAR_CATEGORY_NOTES: usize = 5;
+const RADAR_CATEGORY_JUMPS: usize = 7;
+const RADAR_CATEGORY_HOLDS: usize = 8;
+const RADAR_CATEGORY_MINES: usize = 9;
+const RADAR_CATEGORY_HANDS: usize = 10;
+const RADAR_CATEGORY_ROLLS: usize = 11;
+const RADAR_CATEGORY_LIFTS: usize = 12;
+const RADAR_CATEGORY_FAKES: usize = 13;
+
+fn parse_radar_values_bytes(
+    raw: Option<&[u8]>,
+    split_players: bool,
+) -> Option<[f32; RADAR_CATEGORY_COUNT]> {
+    let bytes = raw?;
+    let text = std::str::from_utf8(bytes).ok()?;
+    parse_radar_values_str(text, split_players)
+}
+
+fn parse_radar_values_str(
+    raw: &str,
+    split_players: bool,
+) -> Option<[f32; RADAR_CATEGORY_COUNT]> {
+    let cleaned = clean_timing_map(raw);
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    let mut values = Vec::new();
+    for part in cleaned.split(',') {
+        if part.is_empty() {
+            continue;
+        }
+        let Ok(value) = part.trim().parse::<f32>() else {
+            continue;
+        };
+        values.push(value);
+    }
+
+    let slice = if split_players {
+        let per_player = values.len() / 2;
+        if per_player < RADAR_CATEGORY_COUNT {
+            return None;
+        }
+        &values[..per_player]
+    } else {
+        if values.len() < RADAR_CATEGORY_COUNT {
+            return None;
+        }
+        &values[..]
+    };
+
+    let mut out = [0.0f32; RADAR_CATEGORY_COUNT];
+    out.copy_from_slice(&slice[..RADAR_CATEGORY_COUNT]);
+    if out
+        .iter()
+        .skip(RADAR_CATEGORY_NOTES)
+        .any(|v| !v.is_finite() || *v < 0.0)
+    {
+        return None;
+    }
+
+    Some(out)
+}
+
+#[inline]
+fn radar_count(value: f32) -> u32 {
+    if value.is_finite() && value > 0.0 {
+        value as u32
+    } else {
+        0
+    }
+}
+
+fn apply_cached_radar_values(stats: &mut ArrowStats, radar: &[f32; RADAR_CATEGORY_COUNT]) {
+    stats.total_arrows = radar_count(radar[RADAR_CATEGORY_NOTES]);
+    stats.holds = radar_count(radar[RADAR_CATEGORY_HOLDS]);
+    stats.mines = radar_count(radar[RADAR_CATEGORY_MINES]);
+    stats.rolls = radar_count(radar[RADAR_CATEGORY_ROLLS]);
+    stats.lifts = radar_count(radar[RADAR_CATEGORY_LIFTS]);
+    stats.fakes = radar_count(radar[RADAR_CATEGORY_FAKES]);
+    stats.jumps = radar_count(radar[RADAR_CATEGORY_JUMPS]);
+    stats.hands = radar_count(radar[RADAR_CATEGORY_HANDS]);
+}
+
 /// Parses the minimized chart data string into a sequence of note bitmasks.
 fn generate_bitmasks(minimized_chart: &[u8]) -> Vec<u8> {
     minimized_chart
@@ -308,6 +392,7 @@ fn build_chart_summary(
     chart_labels_opt: Option<Vec<u8>>,
     chart_tickcounts_opt: Option<Vec<u8>>,
     chart_combos_opt: Option<Vec<u8>>,
+    chart_radar_values_opt: Option<Vec<u8>>,
     global_bpms_raw: &str,
     global_stops_raw: &str,
     global_delays_raw: &str,
@@ -399,6 +484,11 @@ fn build_chart_summary(
             .filter(|s| !s.is_empty())
             .map(str::to_string)
     });
+    let cached_radar_values = if extension.eq_ignore_ascii_case("sm") {
+        parse_radar_values_bytes(fields.get(4).copied(), false)
+    } else {
+        parse_radar_values_bytes(chart_radar_values_opt.as_deref(), true)
+    };
     let chart_has_timing = allow_steps_timing
         && (chart_bpms.is_some()
             || chart_stops.is_some()
@@ -517,6 +607,7 @@ fn build_chart_summary(
         chart_labels,
         chart_tickcounts,
         chart_combos,
+        cached_radar_values,
     })
 }
 
@@ -659,6 +750,7 @@ pub fn analyze(
                 entry.chart_labels,
                 entry.chart_tickcounts,
                 entry.chart_combos,
+                entry.chart_radar_values,
                 &cleaned_global_bpms,
                 &cleaned_global_stops,
                 &cleaned_global_delays,
@@ -766,6 +858,9 @@ pub fn analyze(
             chart.stats.total_steps = total_steps;
             chart.stats.holding = holding;
             chart.mines_nonfake = chart.stats.mines;
+            if let Some(radar) = chart.cached_radar_values.as_ref() {
+                apply_cached_radar_values(&mut chart.stats, radar);
+            }
 
             let last_beat = compute_last_beat(&chart.minimized_note_data, lanes);
             if last_beat <= 0.0 {

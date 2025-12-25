@@ -96,6 +96,7 @@ pub struct ParsedChartEntry {
     pub chart_labels: Option<Vec<u8>>,
     pub chart_tickcounts: Option<Vec<u8>>,
     pub chart_combos: Option<Vec<u8>>,
+    pub chart_radar_values: Option<Vec<u8>>,
 }
 
 /// A struct to hold the raw data parsed from a simfile's header tags.
@@ -235,6 +236,7 @@ pub fn extract_sections<'a>(
                 let chart_labels = parse_subtag(notedata_slice, b"#LABELS:", true);
                 let chart_tickcounts = parse_subtag(notedata_slice, b"#TICKCOUNTS:", true);
                 let chart_combos = parse_subtag(notedata_slice, b"#COMBOS:", true);
+                let chart_radar_values = parse_subtag(notedata_slice, b"#RADARVALUES:", true);
 
                 let concatenated =
                     [step_type, description, difficulty, meter, credit, notes].join(&b':');
@@ -251,6 +253,7 @@ pub fn extract_sections<'a>(
                     chart_labels,
                     chart_tickcounts,
                     chart_combos,
+                    chart_radar_values,
                 });
 
                 i = notedata_end;
@@ -284,6 +287,7 @@ pub fn extract_sections<'a>(
                     chart_labels: None,
                     chart_tickcounts: None,
                     chart_combos: None,
+                    chart_radar_values: None,
                 });
                 i = notes_end + 1;
                 continue; // Skip the i += 1 at the end

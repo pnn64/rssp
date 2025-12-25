@@ -18,6 +18,8 @@ pub struct ArrowStats {
     pub holding: i32,
 }
 
+pub const RADAR_CATEGORY_COUNT: usize = 14;
+
 #[derive(Debug, Default)]
 pub struct StreamCounts {
     pub run16_streams: u32,

@@ -21,7 +21,6 @@ pub const STEPFILE_VERSION_NUMBER: f32 = 0.83;
 pub const VERSION_SPLIT_TIMING: f32 = 0.7;
 
 const DEFAULT_BPM: f64 = 60.0;
-const FAST_BPM_WARP: f64 = 9_999_999.0;
 const DEFAULT_BPM_F32: f32 = 60.0;
 const FAST_BPM_WARP_F32: f32 = 9_999_999.0;
 
