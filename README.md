@@ -1,6 +1,6 @@
 # rssp - Rust Stepmania Simfile Parser
 
-A command-line tool written in Rust for parsing, analyzing, and reporting statistics on StepMania simfiles (`.sm`, `.ssc`). It focuses on detailed analysis of 4-panel dance game charts (like DDR/ITG). It also powers the simfile parser in the [DeadSync](https://github.com/pnn64/deadsync) game engine, where it's included as a Git submodule.
+A command-line tool written in Rust for parsing, analyzing, and reporting statistics on StepMania simfiles (`.sm`, `.ssc`). It focuses on detailed analysis of 4-panel (or 8-panel) dance game charts (like DDR/ITG). It also powers the simfile parser in the [DeadSync](https://github.com/pnn64/deadsync) game engine, where it's included as a Git submodule.
 
 ## Inspiration
 
@@ -222,7 +222,7 @@ Elapsed Time: 18.667896ms
 - [x] Doubles (8-panel) parsing
 - [x] Custom patterns flag --custom-pattern DULDUDLR
 - [x] Proper parsing for Tech (port Step Parity from ITGMania)
-- [ ] Add many tests for edge case simfiles
+- [x] Add many tests for edge case simfiles
 - [x] Add "matrix rating" (calculate estimated rating based on rating matrix sheet)
 
 ## Contributing
