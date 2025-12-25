@@ -1,4 +1,4 @@
-use crate::timing::{compute_row_to_beat, TimingData};
+use crate::timing::{beat_to_note_row, TimingData};
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ArrowStats {
@@ -105,6 +105,38 @@ fn collect_minimized_rows<const LANES: usize>(minimized_note_data: &[u8]) -> Vec
         rows.push(arr);
     }
     rows
+}
+
+fn compute_row_to_note_row<const LANES: usize>(minimized_note_data: &[u8]) -> Vec<i32> {
+    let mut row_to_note_row = Vec::new();
+    let mut measure_index = 0i32;
+
+    for measure_bytes in minimized_note_data.split(|&b| b == b',') {
+        let mut num_rows = 0usize;
+        for line in measure_bytes.split(|&b| b == b'\n') {
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            if line.is_empty() {
+                continue;
+            }
+            if line.len() < LANES || line[0] == b',' {
+                continue;
+            }
+            num_rows += 1;
+        }
+
+        if num_rows > 0 {
+            let rows_f = num_rows as f64;
+            let measure_start = measure_index as f64 * 4.0;
+            for row_in_measure in 0..num_rows {
+                let beat = measure_start + (row_in_measure as f64 / rows_f * 4.0);
+                row_to_note_row.push(beat_to_note_row(beat));
+            }
+        }
+
+        measure_index += 1;
+    }
+
+    row_to_note_row
 }
 
 /// Minimizes measure lines if every other line is all-zero.
@@ -238,22 +270,21 @@ fn compute_timing_aware_stats_impl<const LANES: usize>(
         return ArrowStats::default();
     }
 
-    let row_to_beat = compute_row_to_beat(minimized_note_data);
+    let row_to_note_row = compute_row_to_note_row::<LANES>(minimized_note_data);
     let hold_ends = match_hold_ends(&rows);
     let rows = strip_phantom_holds(&rows, &hold_ends);
 
     let mut stats = ArrowStats::default();
     let mut active_hold_ends: Vec<usize> = Vec::new();
+    debug_assert_eq!(row_to_note_row.len(), rows.len());
 
     for (row_idx, line) in rows.iter().enumerate() {
         if !active_hold_ends.is_empty() {
             active_hold_ends.retain(|&end_row| end_row >= row_idx);
         }
         let active_holds = active_hold_ends.len() as i32;
-        let judgable = row_to_beat
-            .get(row_idx)
-            .map(|beat| timing.is_judgable_at_beat(*beat as f64))
-            .unwrap_or(true);
+        let note_row = row_to_note_row.get(row_idx).copied().unwrap_or(0);
+        let judgable = !timing.is_fake_at_row(note_row);
 
         let mut notes_on_line = 0u32;
         let mut has_note = false;

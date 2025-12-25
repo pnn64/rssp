@@ -36,7 +36,7 @@ pub fn steps_timing_allowed(version: f32, format: TimingFormat) -> bool {
 }
 
 #[inline(always)]
-fn note_row_to_beat(row: i32) -> f64 {
+pub(crate) fn note_row_to_beat(row: i32) -> f64 {
     row as f64 / ROWS_PER_BEAT as f64
 }
 
@@ -62,7 +62,7 @@ fn lrint_ties_even_f64(v: f64) -> f64 {
 }
 
 #[inline(always)]
-fn beat_to_note_row(beat: f64) -> i32 {
+pub(crate) fn beat_to_note_row(beat: f64) -> i32 {
     lrint_ties_even_f64(beat * ROWS_PER_BEAT as f64) as i32
 }
 
@@ -689,6 +689,11 @@ impl TimingData {
         }
         let seg = self.fakes[idx - 1];
         beat >= seg.beat && beat < seg.beat + seg.length
+    }
+
+    #[inline(always)]
+    pub fn is_fake_at_row(&self, row: i32) -> bool {
+        self.is_fake_at_beat(note_row_to_beat(row))
     }
 
     #[inline(always)]
