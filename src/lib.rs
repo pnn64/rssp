@@ -727,9 +727,10 @@ pub fn analyze(
                 if chart_has_timing {
                     ("", "", "", "", "", "", "")
                 } else {
-                    (&cleaned_global_bpms, &cleaned_global_stops, &cleaned_global_delays,
-                        &cleaned_global_warps, &cleaned_global_speeds, &cleaned_global_scrolls,
-                        &cleaned_global_fakes)
+                    (cleaned_global_bpms.as_str(), cleaned_global_stops.as_str(),
+                        cleaned_global_delays.as_str(), cleaned_global_warps.as_str(),
+                        cleaned_global_speeds.as_str(), cleaned_global_scrolls.as_str(),
+                        cleaned_global_fakes.as_str())
                 };
 
             let timing = TimingData::from_chart_data(
