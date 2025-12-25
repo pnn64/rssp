@@ -125,11 +125,12 @@ fn compute_row_to_note_row<const LANES: usize>(minimized_note_data: &[u8]) -> Ve
         }
 
         if num_rows > 0 {
-            let rows_f = num_rows as f64;
-            let measure_start = measure_index as f64 * 4.0;
+            let rows_f = num_rows as f32;
+            let measure_f = measure_index as f32;
             for row_in_measure in 0..num_rows {
-                let beat = measure_start + (row_in_measure as f64 / rows_f * 4.0);
-                row_to_note_row.push(beat_to_note_row(beat));
+                let percent = row_in_measure as f32 / rows_f;
+                let beat = (measure_f + percent) * 4.0;
+                row_to_note_row.push(beat_to_note_row(beat as f64));
             }
         }
 
@@ -284,7 +285,7 @@ fn compute_timing_aware_stats_impl<const LANES: usize>(
         }
         let active_holds = active_hold_ends.len() as i32;
         let note_row = row_to_note_row.get(row_idx).copied().unwrap_or(0);
-        let judgable = !timing.is_fake_at_row(note_row);
+        let judgable = timing.is_judgable_at_row(note_row);
 
         let mut notes_on_line = 0u32;
         let mut has_note = false;
