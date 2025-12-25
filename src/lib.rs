@@ -399,21 +399,36 @@ fn build_chart_summary(
             .filter(|s| !s.is_empty())
             .map(str::to_string)
     });
+    let chart_has_timing = allow_steps_timing
+        && (chart_bpms.is_some()
+            || chart_stops.is_some()
+            || chart_delays.is_some()
+            || chart_warps.is_some()
+            || chart_speeds.is_some()
+            || chart_scrolls.is_some()
+            || chart_fakes.is_some());
+    let (timing_bpms_global, timing_stops_global, timing_delays_global, timing_warps_global,
+        timing_speeds_global, timing_scrolls_global, timing_fakes_global) = if chart_has_timing {
+        ("", "", "", "", "", "", "")
+    } else {
+        (global_bpms_raw, global_stops_raw, global_delays_raw, global_warps_raw,
+            global_speeds_raw, global_scrolls_raw, global_fakes_raw)
+    };
     let timing_segments = compute_timing_segments(
         chart_bpms_timing,
-        global_bpms_raw,
+        timing_bpms_global,
         chart_stops_timing,
-        global_stops_raw,
+        timing_stops_global,
         chart_delays_timing,
-        global_delays_raw,
+        timing_delays_global,
         chart_warps_timing,
-        global_warps_raw,
+        timing_warps_global,
         chart_speeds_timing,
-        global_speeds_raw,
+        timing_speeds_global,
         chart_scrolls_timing,
-        global_scrolls_raw,
+        timing_scrolls_global,
         chart_fakes_timing,
-        global_fakes_raw,
+        timing_fakes_global,
         timing_format,
     );
 
@@ -699,23 +714,41 @@ pub fn analyze(
                 None
             };
 
+            let chart_has_timing = allow_steps_timing
+                && (chart.chart_bpms.is_some()
+                    || chart.chart_stops.is_some()
+                    || chart.chart_delays.is_some()
+                    || chart.chart_warps.is_some()
+                    || chart.chart_speeds.is_some()
+                    || chart.chart_scrolls.is_some()
+                    || chart.chart_fakes.is_some());
+            let (timing_bpms_global, timing_stops_global, timing_delays_global, timing_warps_global,
+                timing_speeds_global, timing_scrolls_global, timing_fakes_global) =
+                if chart_has_timing {
+                    ("", "", "", "", "", "", "")
+                } else {
+                    (&cleaned_global_bpms, &cleaned_global_stops, &cleaned_global_delays,
+                        &cleaned_global_warps, &cleaned_global_speeds, &cleaned_global_scrolls,
+                        &cleaned_global_fakes)
+                };
+
             let timing = TimingData::from_chart_data(
                 offset,
                 0.0,
                 chart_bpms_timing,
-                &cleaned_global_bpms,
+                timing_bpms_global,
                 chart_stops_timing,
-                &cleaned_global_stops,
+                timing_stops_global,
                 chart_delays_timing,
-                &cleaned_global_delays,
+                timing_delays_global,
                 chart_warps_timing,
-                &cleaned_global_warps,
+                timing_warps_global,
                 chart_speeds_timing,
-                &cleaned_global_speeds,
+                timing_speeds_global,
                 chart_scrolls_timing,
-                &cleaned_global_scrolls,
+                timing_scrolls_global,
                 chart_fakes_timing,
-                &cleaned_global_fakes,
+                timing_fakes_global,
                 timing_format,
             );
             let lanes = step_type_lanes(&chart.step_type_str);
