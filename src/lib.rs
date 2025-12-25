@@ -504,24 +504,28 @@ fn build_chart_summary(
     let metrics =
         compute_derived_chart_metrics(&measure_densities, &bpm_map, &minimized_chart, &bpms_to_use);
 
-    let (detected_patterns, (anchor_left, anchor_down, anchor_up, anchor_right)) = if lanes == 4 {
-        let bitmasks = generate_bitmasks(&minimized_chart);
-        compute_pattern_and_anchor_stats(&bitmasks)
+    let bitmasks = if lanes == 4 {
+        Some(generate_bitmasks(&minimized_chart))
     } else {
-        (HashMap::new(), (0, 0, 0, 0))
+        None
     };
 
+    let (detected_patterns, (anchor_left, anchor_down, anchor_up, anchor_right)) =
+        if let Some(bitmasks) = bitmasks.as_ref() {
+            compute_pattern_and_anchor_stats(bitmasks)
+        } else {
+            (HashMap::new(), (0, 0, 0, 0))
+        };
+
     let (facing_left, facing_right, mono_total, mono_percent, candle_total, candle_percent) =
-        if lanes == 4 {
-            let bitmasks = generate_bitmasks(&minimized_chart);
-            compute_mono_and_candle_stats(&bitmasks, &stats, &detected_patterns, options)
+        if let Some(bitmasks) = bitmasks.as_ref() {
+            compute_mono_and_candle_stats(bitmasks, &stats, &detected_patterns, options)
         } else {
             (0, 0, 0, 0.0, 0, 0.0)
         };
 
     let custom_patterns = if lanes == 4 && !options.custom_patterns.is_empty() {
-        let bitmasks = generate_bitmasks(&minimized_chart);
-        detect_custom_patterns(&bitmasks, &options.custom_patterns)
+        detect_custom_patterns(bitmasks.as_ref().unwrap(), &options.custom_patterns)
     } else {
         Vec::new()
     };
