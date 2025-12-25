@@ -159,15 +159,13 @@ pub fn compute_row_to_beat(minimized_note_data: &[u8]) -> Vec<f32> {
                     && !trimmed.iter().all(|c| c.is_ascii_whitespace())
             })
             .count();
-        if num_rows_in_measure == 0 {
-            continue;
-        }
-
-        let rows = num_rows_in_measure as f32;
-        let measure_start = measure_index as f32 * 4.0;
-        for row_in_measure in 0..num_rows_in_measure {
-            let beat = measure_start + (row_in_measure as f32 / rows * 4.0);
-            row_to_beat.push(beat);
+        if num_rows_in_measure > 0 {
+            let rows = num_rows_in_measure as f32;
+            let measure_start = measure_index as f32 * 4.0;
+            for row_in_measure in 0..num_rows_in_measure {
+                let beat = measure_start + (row_in_measure as f32 / rows * 4.0);
+                row_to_beat.push(beat);
+            }
         }
         measure_index += 1;
     }
