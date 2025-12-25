@@ -79,5 +79,9 @@ harness = false
 name = "bpm_perf"
 harness = false
 
+[[bench]]
+name = "step_counts_perf"
+harness = false
+
 [profile.bench]
 debug = true
