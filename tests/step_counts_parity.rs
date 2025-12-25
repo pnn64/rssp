@@ -7,8 +7,7 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::parse::{extract_sections, split_notes_fields};
-use rssp::stats::minimize_chart_and_count_with_lanes;
+use rssp::{AnalysisOptions, analyze};
 
 #[derive(Debug, Deserialize)]
 struct GoldenChart {
@@ -66,42 +65,24 @@ fn compute_chart_step_counts(
     simfile_data: &[u8],
     extension: &str,
 ) -> Result<Vec<ChartStepCounts>, String> {
-    let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
-
+    let summary = analyze(simfile_data, extension, AnalysisOptions::default())
+        .map_err(|e| e.to_string())?;
     let mut results = Vec::new();
-
-    for entry in parsed_data.notes_list {
-        let (fields, chart_data) = split_notes_fields(&entry.notes);
-        if fields.len() < 5 {
-            continue;
-        }
-
-        let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_string();
-        if step_type == "lights-cabinet" {
-            continue;
-        }
-        let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
-        let difficulty = rssp::normalize_difficulty_label(difficulty_raw);
-
-        let lanes = rssp::step_type_lanes(&step_type);
-        let (_minimized, stats, _measure_densities) =
-            minimize_chart_and_count_with_lanes(chart_data, lanes);
-
+    for chart in summary.charts {
         results.push(ChartStepCounts {
-            step_type,
-            difficulty,
-            holds: stats.holds,
-            mines: stats.mines,
-            rolls: stats.rolls,
-            notes: stats.total_arrows, // Baseline "notes" counts total arrows (taps/holds/rolls).
-            lifts: stats.lifts,
-            fakes: stats.fakes,
-            jumps: stats.jumps,
-            hands: stats.hands,
-            total_steps: stats.total_steps,
+            step_type: chart.step_type_str,
+            difficulty: chart.difficulty_str,
+            holds: chart.stats.holds,
+            mines: chart.stats.mines,
+            rolls: chart.stats.rolls,
+            notes: chart.stats.total_arrows,
+            lifts: chart.stats.lifts,
+            fakes: chart.stats.fakes,
+            jumps: chart.stats.jumps,
+            hands: chart.stats.hands,
+            total_steps: chart.stats.total_steps,
         });
     }
-
     Ok(results)
 }
 

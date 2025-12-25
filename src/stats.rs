@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use crate::timing::{compute_row_to_beat, TimingData};
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ArrowStats {
@@ -46,6 +46,65 @@ pub enum BreakdownMode {
 #[inline]
 fn is_all_zero<const LANES: usize>(line: &[u8; LANES]) -> bool {
     line.iter().all(|&b| b == b'0')
+}
+
+fn match_hold_ends<const LANES: usize>(
+    lines: &[[u8; LANES]],
+) -> Vec<[Option<usize>; LANES]> {
+    let mut stacks: [Vec<usize>; LANES] = std::array::from_fn(|_| Vec::new());
+    let mut hold_ends = vec![[None; LANES]; lines.len()];
+
+    for (row_idx, line) in lines.iter().enumerate() {
+        for (col, &ch) in line.iter().enumerate() {
+            match ch {
+                b'2' | b'4' => stacks[col].push(row_idx),
+                b'3' => {
+                    if let Some(start_idx) = stacks[col].pop() {
+                        hold_ends[start_idx][col] = Some(row_idx);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    hold_ends
+}
+
+fn strip_phantom_holds<const LANES: usize>(
+    lines: &[[u8; LANES]],
+    hold_ends: &[[Option<usize>; LANES]],
+) -> Vec<[u8; LANES]> {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(row_idx, line)| {
+            let mut new_line = *line;
+            for (col, byte) in new_line.iter_mut().enumerate() {
+                if hold_ends[row_idx][col].is_none() && matches!(*byte, b'2' | b'4') {
+                    *byte = b'0';
+                }
+            }
+            new_line
+        })
+        .collect()
+}
+
+fn collect_minimized_rows<const LANES: usize>(minimized_note_data: &[u8]) -> Vec<[u8; LANES]> {
+    let mut rows = Vec::new();
+    for line in minimized_note_data.split(|&b| b == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if line.is_empty() {
+            continue;
+        }
+        if line[0] == b',' || line.len() < LANES {
+            continue;
+        }
+        let mut arr = [0u8; LANES];
+        arr.copy_from_slice(&line[..LANES]);
+        rows.push(arr);
+    }
+    rows
 }
 
 /// Minimizes measure lines if every other line is all-zero.
@@ -148,43 +207,8 @@ fn count_line<const LANES: usize>(
 fn recalculate_stats_without_phantom_holds<const LANES: usize>(
     all_lines_buffer: &[[u8; LANES]],
 ) -> ArrowStats {
-    let mut col_stacks: [Vec<usize>; LANES] = std::array::from_fn(|_| Vec::new());
-    let mut phantom_positions = HashSet::new();
-
-    // Pass 1: Identify phantom holds by tracking hold starts ('2', '4') and ends ('3').
-    for (line_idx, line) in all_lines_buffer.iter().enumerate() {
-        for (col, &ch) in line.iter().enumerate() {
-            match ch {
-                b'2' | b'4' => col_stacks[col].push(line_idx),
-                b'3' => {
-                    let _ = col_stacks[col].pop();
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // Any remaining items in stacks are unclosed holds.
-    for (col, stack) in col_stacks.iter().enumerate() {
-        for &start_idx in stack {
-            phantom_positions.insert((start_idx, col));
-        }
-    }
-
-    // Pass 2: Build a "fixed" version of the lines, changing phantom hold starts to '0'.
-    let fixed_lines: Vec<[u8; LANES]> = all_lines_buffer
-        .iter()
-        .enumerate()
-        .map(|(i, line)| {
-            let mut new_line = *line;
-            for (col, byte) in new_line.iter_mut().enumerate() {
-                if phantom_positions.contains(&(i, col)) && matches!(*byte, b'2' | b'4') {
-                    *byte = b'0';
-                }
-            }
-            new_line
-        })
-        .collect();
+    let hold_ends = match_hold_ends(all_lines_buffer);
+    let fixed_lines = strip_phantom_holds(all_lines_buffer, &hold_ends);
 
     // Pass 3: Recalculate stats using the fixed lines.
     let mut new_stats = ArrowStats::default();
@@ -195,6 +219,121 @@ fn recalculate_stats_without_phantom_holds<const LANES: usize>(
     }
 
     new_stats
+}
+
+pub fn compute_timing_aware_stats(
+    minimized_note_data: &[u8],
+    lanes: usize,
+    timing: &TimingData,
+) -> ArrowStats {
+    match lanes {
+        4 => compute_timing_aware_stats_impl::<4>(minimized_note_data, timing),
+        8 => compute_timing_aware_stats_impl::<8>(minimized_note_data, timing),
+        _ => compute_timing_aware_stats_impl::<4>(minimized_note_data, timing),
+    }
+}
+
+fn compute_timing_aware_stats_impl<const LANES: usize>(
+    minimized_note_data: &[u8],
+    timing: &TimingData,
+) -> ArrowStats {
+    let rows = collect_minimized_rows::<LANES>(minimized_note_data);
+    if rows.is_empty() {
+        return ArrowStats::default();
+    }
+
+    let row_to_beat = compute_row_to_beat(minimized_note_data);
+    let hold_ends = match_hold_ends(&rows);
+    let rows = strip_phantom_holds(&rows, &hold_ends);
+
+    let mut stats = ArrowStats::default();
+    let mut active_hold_ends: Vec<usize> = Vec::new();
+
+    for (row_idx, line) in rows.iter().enumerate() {
+        if !active_hold_ends.is_empty() {
+            active_hold_ends.retain(|&end_row| end_row >= row_idx);
+        }
+        let active_holds = active_hold_ends.len() as i32;
+        let judgable = row_to_beat
+            .get(row_idx)
+            .map(|beat| timing.is_judgable_at_beat(*beat as f64))
+            .unwrap_or(true);
+
+        let mut notes_on_line = 0u32;
+        let mut hold_starts: Vec<usize> = Vec::new();
+
+        if judgable {
+            for (col, &ch) in line.iter().enumerate() {
+                let mut is_arrow = false;
+                match ch {
+                    b'1' => {
+                        is_arrow = true;
+                    }
+                    b'2' | b'4' => {
+                        if let Some(end_row) = hold_ends[row_idx][col] {
+                            is_arrow = true;
+                            hold_starts.push(end_row);
+                            if ch == b'2' {
+                                stats.holds += 1;
+                            } else {
+                                stats.rolls += 1;
+                            }
+                        }
+                    }
+                    b'L' | b'l' => {
+                        is_arrow = true;
+                        stats.lifts += 1;
+                    }
+                    b'M' | b'm' => {
+                        stats.mines += 1;
+                    }
+                    b'F' | b'f' => {
+                        stats.fakes += 1;
+                    }
+                    _ => {}
+                }
+
+                if is_arrow {
+                    stats.total_arrows += 1;
+                    notes_on_line += 1;
+                    match col % 4 {
+                        0 => stats.left += 1,
+                        1 => stats.down += 1,
+                        2 => stats.up += 1,
+                        3 => stats.right += 1,
+                        _ => unreachable!(),
+                    }
+                }
+            }
+
+            if notes_on_line > 0 {
+                stats.total_steps += 1;
+                if notes_on_line >= 2 {
+                    stats.jumps += 1;
+                }
+                if notes_on_line >= 3 {
+                    stats.hands += 1;
+                }
+                if (active_holds == 1 && notes_on_line >= 2)
+                    || (active_holds >= 2 && notes_on_line >= 1)
+                {
+                    stats.hands += 1;
+                }
+            }
+        } else {
+            for &ch in line.iter() {
+                if ch != b'0' {
+                    stats.fakes += 1;
+                }
+            }
+        }
+
+        if !hold_starts.is_empty() {
+            active_hold_ends.extend(hold_starts);
+        }
+    }
+
+    stats
 }
 
 /// Helper to process a completed measure: minimize, count stats, and update buffers.

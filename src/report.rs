@@ -613,9 +613,15 @@ fn count_gimmick_scroll_segments(opt: Option<&str>) -> u32 {
         .count() as u32
 }
 
+#[inline]
+fn chart_mine_fake_counts(chart: &ChartSummary) -> (u32, u32) {
+    (chart.stats.mines, chart.stats.fakes)
+}
+
 fn print_gimmicks(chart: &ChartSummary, simfile: &SimfileSummary) {
     let has_lifts = chart.stats.lifts > 0;
-    let has_fakes = chart.stats.fakes > 0;
+    let (_, fakes) = chart_mine_fake_counts(chart);
+    let has_fakes = fakes > 0;
     let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
     let stops = chart_or_global(allow_steps_timing, &chart.chart_stops, &simfile.normalized_stops);
     let delays = chart_or_global(allow_steps_timing, &chart.chart_delays, &simfile.normalized_delays);
@@ -645,7 +651,7 @@ fn print_gimmicks(chart: &ChartSummary, simfile: &SimfileSummary) {
         println!("Lifts: {}", chart.stats.lifts);
     }
     if has_fakes {
-        println!("Fakes: {}", chart.stats.fakes);
+        println!("Fakes: {}", fakes);
     }
     if stop_count > 0 {
         println!("Stops/Freezes: {}", stop_count);
@@ -718,7 +724,8 @@ fn print_pretty_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
     println!("Hands: {}", chart.stats.hands);
     println!("Holds: {}", chart.stats.holds);
     println!("Rolls: {}", chart.stats.rolls);
-    println!("Mines: {}", chart.stats.mines);
+    let (mines_judgable, _) = chart_mine_fake_counts(chart);
+    println!("Mines: {}", mines_judgable);
 
     print_gimmicks(chart, simfile);
 
@@ -840,7 +847,8 @@ fn print_full_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
     println!("Hands: {}", chart.stats.hands);
     println!("Holds: {}", chart.stats.holds);
     println!("Rolls: {}", chart.stats.rolls);
-    println!("Mines: {}", chart.stats.mines);
+    let (mines_judgable, _) = chart_mine_fake_counts(chart);
+    println!("Mines: {}", mines_judgable);
 
     print_gimmicks(chart, simfile);
 
@@ -1115,6 +1123,7 @@ fn json_chart_info(chart: &ChartSummary) -> JsonValue {
 }
 
 fn json_arrow_stats(chart: &ChartSummary) -> JsonValue {
+    let (mines_judgable, _) = chart_mine_fake_counts(chart);
     serde_json::json!({
         "total_arrows": chart.stats.total_arrows,
         "left_arrows": chart.stats.left,
@@ -1126,7 +1135,7 @@ fn json_arrow_stats(chart: &ChartSummary) -> JsonValue {
         "hands": chart.stats.hands,
         "holds": chart.stats.holds,
         "rolls": chart.stats.rolls,
-        "mines": chart.stats.mines,
+        "mines": mines_judgable,
     })
 }
 
@@ -1185,7 +1194,7 @@ fn json_mono_candle_stats(chart: &ChartSummary) -> JsonValue {
 
 fn json_gimmicks(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
     let lifts = chart.stats.lifts;
-    let fakes = chart.stats.fakes;
+    let (_, fakes) = chart_mine_fake_counts(chart);
     let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
     let stops = chart_or_global(allow_steps_timing, &chart.chart_stops, &simfile.normalized_stops);
     let delays = chart_or_global(allow_steps_timing, &chart.chart_delays, &simfile.normalized_delays);
@@ -1846,15 +1855,17 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
         chart.stats.right,
     );
 
+    let (mines_judgable, fakes) = chart_mine_fake_counts(chart);
+
     print!("{},{},{},{},{},{},{},{},",
         chart.stats.total_steps,
         chart.stats.jumps,
         chart.stats.hands,
         chart.stats.holds,
         chart.stats.rolls,
-        chart.stats.mines,
+        mines_judgable,
         chart.stats.lifts,
-        chart.stats.fakes,
+        fakes,
     );
 
     let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);

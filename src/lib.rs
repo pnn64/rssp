@@ -713,16 +713,13 @@ pub fn analyze(
                     step_parity::analyze_with_timing(&chart.minimized_note_data, &timing);
             }
 
-            let warp_map: Vec<(f64, f64)> =
-                timing.warps().iter().map(|seg| (seg.beat, seg.length)).collect();
-            let fake_map: Vec<(f64, f64)> =
-                timing.fakes().iter().map(|seg| (seg.beat, seg.length)).collect();
-            chart.mines_nonfake = compute_mines_nonfake(
-                &chart.minimized_note_data,
-                lanes,
-                &warp_map,
-                &fake_map,
-            );
+            let timing_stats = compute_timing_aware_stats(&chart.minimized_note_data, lanes, &timing);
+            let total_steps = chart.stats.total_steps;
+            let holding = chart.stats.holding;
+            chart.stats = timing_stats;
+            chart.stats.total_steps = total_steps;
+            chart.stats.holding = holding;
+            chart.mines_nonfake = chart.stats.mines;
 
             let last_beat = compute_last_beat(&chart.minimized_note_data, lanes);
             if last_beat <= 0.0 {
