@@ -322,7 +322,7 @@ fn compute_timing_aware_stats_impl<const LANES: usize>(
             }
         } else {
             for &ch in line.iter() {
-                if ch != b'0' {
+                if matches!(ch, b'1' | b'2' | b'4' | b'L' | b'l' | b'M' | b'm' | b'F' | b'f') {
                     stats.fakes += 1;
                 }
             }
