@@ -528,7 +528,10 @@ fn minimize_chart_and_count_impl<const LANES: usize>(
     }
 
     if total_holds_started != total_ends_seen {
-        stats = recalculate_stats_without_phantom_holds(&all_lines_buffer);
+        let raw_total_steps = stats.total_steps;
+        let mut cleaned = recalculate_stats_without_phantom_holds(&all_lines_buffer);
+        cleaned.total_steps = raw_total_steps;
+        stats = cleaned;
     }
 
     (output, stats, measure_densities)
