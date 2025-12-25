@@ -65,7 +65,11 @@ fn compute_chart_step_counts(
     simfile_data: &[u8],
     extension: &str,
 ) -> Result<Vec<ChartStepCounts>, String> {
-    let summary = analyze(simfile_data, extension, AnalysisOptions::default())
+    let options = AnalysisOptions {
+        compute_tech_counts: false,
+        ..AnalysisOptions::default()
+    };
+    let summary = analyze(simfile_data, extension, options)
         .map_err(|e| e.to_string())?;
     let mut results = Vec::new();
     for chart in summary.charts {

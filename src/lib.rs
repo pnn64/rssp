@@ -37,11 +37,23 @@ use crate::timing::{
 };
 
 /// Options for controlling simfile analysis.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct AnalysisOptions {
     pub strip_tags: bool,
     pub mono_threshold: usize,
     pub custom_patterns: Vec<String>,
+    pub compute_tech_counts: bool,
+}
+
+impl Default for AnalysisOptions {
+    fn default() -> Self {
+        Self {
+            strip_tags: false,
+            mono_threshold: 0,
+            custom_patterns: Vec::new(),
+            compute_tech_counts: true,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -708,7 +720,7 @@ pub fn analyze(
             );
             let lanes = step_type_lanes(&chart.step_type_str);
 
-            if lanes == 4 {
+            if options.compute_tech_counts && lanes == 4 {
                 chart.tech_counts =
                     step_parity::analyze_with_timing(&chart.minimized_note_data, &timing);
             }

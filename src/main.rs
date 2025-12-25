@@ -126,6 +126,7 @@ fn main() -> io::Result<()> {
         eprintln!("  --csv           CSV output format");
         eprintln!("  --strip-tags    Strip title tags from output");
         eprintln!("  --debug         Print minimized chart note data to stderr");
+        eprintln!("  --skip-tech     Skip tech count analysis");
         eprintln!("  --mono-threshold <value>  Set mono threshold (default: 6)");
         eprintln!("  --custom-pattern <pattern>  Count a custom LRUDN pattern (e.g. DULDUDLR)");
         eprintln!("\nFolder analysis:");
@@ -140,6 +141,7 @@ fn main() -> io::Result<()> {
     let debug_output = args.iter().any(|a| a == "--debug");
     let generate_png = args.iter().any(|a| a == "--png");
     let generate_png_alt = args.iter().any(|a| a == "--png-alt");
+    let skip_tech = args.iter().any(|a| a == "--skip-tech");
 
     let mut mono_threshold = 6;
     if let Some(pos) = args.iter().position(|arg| arg == "--mono-threshold") {
@@ -187,6 +189,7 @@ fn main() -> io::Result<()> {
         strip_tags: args.iter().any(|a| a == "--strip-tags"),
         mono_threshold,
         custom_patterns,
+        compute_tech_counts: !skip_tech,
     };
 
     // --- Determine output mode ---

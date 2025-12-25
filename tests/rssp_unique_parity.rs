@@ -236,6 +236,7 @@ fn compute_chart_values(
         strip_tags: false,
         mono_threshold: DEFAULT_MONO_THRESHOLD,
         custom_patterns: Vec::new(),
+        compute_tech_counts: true,
     };
 
     let summary = analyze(simfile_data, extension, options).map_err(|e| e.to_string())?;
