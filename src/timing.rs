@@ -359,12 +359,6 @@ pub struct FakeSegment {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct RowRange {
-    start: i32,
-    end: i32,
-}
-
-#[derive(Debug, Clone, Copy)]
 struct SpeedRuntime {
     start_time: f64,
     end_time: f64,
@@ -450,11 +444,11 @@ pub struct TimingData {
     delays: Vec<DelaySegment>,
     delay_rows: Vec<i32>,
     warps: Vec<WarpSegment>,
-    warp_rows: Vec<RowRange>,
+    warp_start_rows: Vec<i32>,
     speeds: Vec<SpeedSegment>,
     scrolls: Vec<ScrollSegment>,
     fakes: Vec<FakeSegment>,
-    fake_rows: Vec<RowRange>,
+    fake_start_rows: Vec<i32>,
     speed_runtime: Vec<SpeedRuntime>,
     scroll_prefix: Vec<ScrollPrefix>,
     global_offset_sec: f64,
@@ -574,8 +568,8 @@ impl TimingData {
 
         let stop_rows = build_stop_rows(&stops);
         let delay_rows = build_delay_rows(&delays);
-        let warp_rows = build_warp_rows(&warps);
-        let fake_rows = build_fake_rows(&fakes);
+        let warp_start_rows = build_warp_start_rows(&warps);
+        let fake_start_rows = build_fake_start_rows(&fakes);
 
         let mut timing = Self {
             beat_to_time,
@@ -584,11 +578,11 @@ impl TimingData {
             delays,
             delay_rows,
             warps,
-            warp_rows,
+            warp_start_rows,
             speeds,
             scrolls,
             fakes,
-            fake_rows,
+            fake_start_rows,
             speed_runtime: Vec::new(),
             scroll_prefix: Vec::new(),
             global_offset_sec,
@@ -698,22 +692,40 @@ impl TimingData {
 
     #[inline(always)]
     pub fn is_fake_at_beat(&self, beat: f64) -> bool {
-        self.is_fake_at_row(beat_to_note_row(beat))
+        self.is_fake_at_row(beat_to_note_row_f32(beat))
     }
 
     #[inline(always)]
     pub fn is_fake_at_row(&self, row: i32) -> bool {
-        row_in_ranges(&self.fake_rows, row)
+        let Some(idx) = segment_index_at_row(&self.fake_start_rows, row) else {
+            return false;
+        };
+        let seg = self.fakes[idx];
+        if !seg.length.is_finite() {
+            return false;
+        }
+        let beat_row = note_row_to_beat(row) as f32;
+        let seg_beat = seg.beat as f32;
+        beat_row >= seg_beat && beat_row < (seg_beat + seg.length as f32)
     }
 
     #[inline(always)]
     pub fn is_warp_at_beat(&self, beat: f64) -> bool {
-        self.is_warp_at_row(beat_to_note_row(beat))
+        self.is_warp_at_row(beat_to_note_row_f32(beat))
     }
 
     #[inline(always)]
     pub fn is_warp_at_row(&self, row: i32) -> bool {
-        if !row_in_ranges(&self.warp_rows, row) {
+        let Some(idx) = segment_index_at_row(&self.warp_start_rows, row) else {
+            return false;
+        };
+        let seg = self.warps[idx];
+        if !(seg.length.is_finite() && seg.length > 0.0) {
+            return false;
+        }
+        let beat_row = note_row_to_beat(row) as f32;
+        let seg_beat = seg.beat as f32;
+        if !(seg_beat <= beat_row && beat_row < (seg_beat + seg.length as f32)) {
             return false;
         }
         if self.stop_rows.is_empty() && self.delay_rows.is_empty() {
@@ -732,7 +744,7 @@ impl TimingData {
 
     #[inline(always)]
     pub fn is_judgable_at_beat(&self, beat: f64) -> bool {
-        self.is_judgable_at_row(beat_to_note_row(beat))
+        self.is_judgable_at_row(beat_to_note_row_f32(beat))
     }
 
     pub fn get_beat_info_from_time(&self, target_time_sec: f64) -> BeatInfo {
@@ -1446,16 +1458,12 @@ fn process_bpms_and_stops_ssc(
 }
 
 #[inline]
-fn row_in_ranges(ranges: &[RowRange], row: i32) -> bool {
-    if ranges.is_empty() {
-        return false;
+fn segment_index_at_row(rows: &[i32], row: i32) -> Option<usize> {
+    if rows.is_empty() {
+        return None;
     }
-    let idx = ranges.partition_point(|seg| seg.start <= row);
-    if idx == 0 {
-        return false;
-    }
-    let seg = ranges[idx - 1];
-    row >= seg.start && row < seg.end
+    let idx = rows.partition_point(|seg_row| *seg_row <= row);
+    if idx == 0 { None } else { Some(idx - 1) }
 }
 
 #[inline]
@@ -1463,11 +1471,16 @@ fn has_row(rows: &[i32], row: i32) -> bool {
     rows.binary_search(&row).is_ok()
 }
 
+#[inline]
+fn beat_to_note_row_f32(beat: f64) -> i32 {
+    beat_to_note_row(beat as f32 as f64)
+}
+
 fn build_stop_rows(stops: &[StopSegment]) -> Vec<i32> {
     let mut rows = Vec::with_capacity(stops.len());
     for seg in stops {
         if seg.duration.is_finite() && seg.duration > 0.0 {
-            rows.push(beat_to_note_row(seg.beat));
+            rows.push(beat_to_note_row_f32(seg.beat));
         }
     }
     rows.sort_unstable();
@@ -1479,7 +1492,7 @@ fn build_delay_rows(delays: &[DelaySegment]) -> Vec<i32> {
     let mut rows = Vec::with_capacity(delays.len());
     for seg in delays {
         if seg.duration.is_finite() && seg.duration > 0.0 {
-            rows.push(beat_to_note_row(seg.beat));
+            rows.push(beat_to_note_row_f32(seg.beat));
         }
     }
     rows.sort_unstable();
@@ -1487,40 +1500,20 @@ fn build_delay_rows(delays: &[DelaySegment]) -> Vec<i32> {
     rows
 }
 
-fn build_warp_rows(warps: &[WarpSegment]) -> Vec<RowRange> {
+fn build_warp_start_rows(warps: &[WarpSegment]) -> Vec<i32> {
     let mut rows = Vec::with_capacity(warps.len());
     for seg in warps {
-        if !(seg.length.is_finite() && seg.length > 0.0) {
-            continue;
-        }
-        let start = beat_to_note_row(seg.beat);
-        let len = beat_to_note_row(seg.length);
-        if len > 0 {
-            rows.push(RowRange {
-                start,
-                end: start.saturating_add(len),
-            });
-        }
+        rows.push(beat_to_note_row_f32(seg.beat));
     }
-    rows.sort_by(|a, b| a.start.cmp(&b.start));
+    rows.sort_unstable();
     rows
 }
 
-fn build_fake_rows(fakes: &[FakeSegment]) -> Vec<RowRange> {
+fn build_fake_start_rows(fakes: &[FakeSegment]) -> Vec<i32> {
     let mut rows = Vec::with_capacity(fakes.len());
     for seg in fakes {
-        if !(seg.length.is_finite() && seg.length > 0.0) {
-            continue;
-        }
-        let start = beat_to_note_row(seg.beat);
-        let len = beat_to_note_row(seg.length);
-        if len > 0 {
-            rows.push(RowRange {
-                start,
-                end: start.saturating_add(len),
-            });
-        }
+        rows.push(beat_to_note_row_f32(seg.beat));
     }
-    rows.sort_by(|a, b| a.start.cmp(&b.start));
+    rows.sort_unstable();
     rows
 }

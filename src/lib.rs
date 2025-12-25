@@ -174,13 +174,6 @@ fn chart_timing_tag_raw(tag: Option<Vec<u8>>) -> Option<String> {
 }
 
 const RADAR_CATEGORY_NOTES: usize = 5;
-const RADAR_CATEGORY_JUMPS: usize = 7;
-const RADAR_CATEGORY_HOLDS: usize = 8;
-const RADAR_CATEGORY_MINES: usize = 9;
-const RADAR_CATEGORY_HANDS: usize = 10;
-const RADAR_CATEGORY_ROLLS: usize = 11;
-const RADAR_CATEGORY_LIFTS: usize = 12;
-const RADAR_CATEGORY_FAKES: usize = 13;
 
 fn parse_radar_values_bytes(
     raw: Option<&[u8]>,
@@ -235,26 +228,6 @@ fn parse_radar_values_str(
     }
 
     Some(out)
-}
-
-#[inline]
-fn radar_count(value: f32) -> u32 {
-    if value.is_finite() && value > 0.0 {
-        value as u32
-    } else {
-        0
-    }
-}
-
-fn apply_cached_radar_values(stats: &mut ArrowStats, radar: &[f32; RADAR_CATEGORY_COUNT]) {
-    stats.total_arrows = radar_count(radar[RADAR_CATEGORY_NOTES]);
-    stats.holds = radar_count(radar[RADAR_CATEGORY_HOLDS]);
-    stats.mines = radar_count(radar[RADAR_CATEGORY_MINES]);
-    stats.rolls = radar_count(radar[RADAR_CATEGORY_ROLLS]);
-    stats.lifts = radar_count(radar[RADAR_CATEGORY_LIFTS]);
-    stats.fakes = radar_count(radar[RADAR_CATEGORY_FAKES]);
-    stats.jumps = radar_count(radar[RADAR_CATEGORY_JUMPS]);
-    stats.hands = radar_count(radar[RADAR_CATEGORY_HANDS]);
 }
 
 /// Parses the minimized chart data string into a sequence of note bitmasks.
@@ -858,9 +831,6 @@ pub fn analyze(
             chart.stats.total_steps = total_steps;
             chart.stats.holding = holding;
             chart.mines_nonfake = chart.stats.mines;
-            if let Some(radar) = chart.cached_radar_values.as_ref() {
-                apply_cached_radar_values(&mut chart.stats, radar);
-            }
 
             let last_beat = compute_last_beat(&chart.minimized_note_data, lanes);
             if last_beat <= 0.0 {
