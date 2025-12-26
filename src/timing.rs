@@ -104,10 +104,8 @@ fn round_sig_figs_itg(value: f64) -> f64 {
         return value;
     }
     let value = value as f32 as f64;
-    let abs = value.abs();
-    let exp = abs.log10().floor() as i32;
-    let scale = 10_f64.powi(6 - 1 - exp);
-    lrint_ties_even_f64(value * scale) / scale
+    let formatted = format!("{:.5e}", value);
+    formatted.parse::<f64>().unwrap_or(value)
 }
 
 #[inline(always)]
