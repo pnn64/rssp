@@ -64,7 +64,7 @@ pub fn parse_offset_seconds(parsed_offset: Option<&[u8]>) -> f64 {
     parsed_offset
         .and_then(|b| std::str::from_utf8(b).ok())
         .and_then(|s| s.parse::<f64>().ok())
-        .map(|f| (f * 1000.0).trunc() / 1000.0)
+        .map(|f| f as f32 as f64)
         .unwrap_or(0.0)
 }
 
