@@ -382,6 +382,8 @@ pub fn parse_bpm_map(normalized_bpms: &str) -> Vec<(f64, f64)> {
         let beat = left.trim().parse::<f64>().ok();
         let bpm = right.trim().parse::<f64>().ok();
         if let (Some(beat), Some(bpm)) = (beat, bpm) {
+            let beat = beat as f32 as f64;
+            let bpm = bpm as f32 as f64;
             bpms_vec.push((beat, bpm));
         }
     }

@@ -1133,6 +1133,8 @@ fn parse_fakes(s: &str) -> Result<Vec<FakeSegment>, &'static str> {
             continue;
         };
         if beat.is_finite() && len.is_finite() && len > 0.0 {
+            let beat = beat as f32 as f64;
+            let len = len as f32 as f64;
             out.push(FakeSegment { beat, length: len });
         }
     }
@@ -1153,6 +1155,8 @@ fn parse_stops(s: &str) -> Result<Vec<StopSegment>, &'static str> {
             let duration = duration_str
                 .parse::<f64>()
                 .map_err(|_| "Invalid duration")?;
+            let beat = beat as f32 as f64;
+            let duration = duration as f32 as f64;
             Ok(StopSegment { beat, duration })
         })
         .collect();
@@ -1193,6 +1197,9 @@ fn parse_speeds(s: &str) -> Result<Vec<SpeedSegment>, &'static str> {
             let beat = parts[0].parse::<f64>().map_err(|_| "Invalid beat")?;
             let ratio = parts[1].parse::<f64>().map_err(|_| "Invalid ratio")?;
             let delay = parts[2].parse::<f64>().map_err(|_| "Invalid delay")?;
+            let beat = beat as f32 as f64;
+            let ratio = ratio as f32 as f64;
+            let delay = delay as f32 as f64;
             let unit = if parts.len() > 3 && parts[3] == "1" {
                 SpeedUnit::Seconds
             } else {
@@ -1214,6 +1221,8 @@ fn parse_scrolls(s: &str) -> Result<Vec<ScrollSegment>, &'static str> {
             let mut parts = pair.split('=');
             let beat = parts.next()?.trim().parse::<f64>().ok()?;
             let ratio = parts.next()?.trim().parse::<f64>().ok()?;
+            let beat = beat as f32 as f64;
+            let ratio = ratio as f32 as f64;
             Some(ScrollSegment { beat, ratio })
         })
         .collect())
