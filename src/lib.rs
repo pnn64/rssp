@@ -1142,6 +1142,7 @@ pub fn compute_chart_peak_nps(
     let timing_format = TimingFormat::from_extension(extension);
     let ssc_version = parse_version(parsed_data.version, timing_format);
     let allow_steps_timing = steps_timing_allowed(ssc_version, timing_format);
+    let song_offset = parse_offset_seconds(parsed_data.offset);
 
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"")).unwrap_or("");
     let cleaned_global_bpms = clean_timing_map(global_bpms_raw);
@@ -1230,6 +1231,11 @@ pub fn compute_chart_peak_nps(
         } else {
             None
         };
+        let chart_offset = if allow_steps_timing && entry.chart_offset.is_some() {
+            parse_offset_seconds(entry.chart_offset.as_deref())
+        } else {
+            song_offset
+        };
 
         let chart_has_timing = allow_steps_timing
             && (chart_bpms.is_some()
@@ -1256,7 +1262,7 @@ pub fn compute_chart_peak_nps(
             };
 
         let timing = TimingData::from_chart_data(
-            0.0,
+            chart_offset,
             0.0,
             chart_bpms.as_deref(),
             timing_bpms_global,
