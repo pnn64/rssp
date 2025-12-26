@@ -2,7 +2,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use std::hint::black_box;
 use std::time::Duration;
 
-const FIXTURE: &str = include_str!("fixtures/watch_yo_step.ssc");
+const FIXTURE: &str = include_str!("fixtures/variation.ssc");
 const EXTENSION: &str = "ssc";
 
 #[derive(Clone)]
