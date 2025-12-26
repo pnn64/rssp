@@ -451,6 +451,7 @@ pub struct TimingData {
     fake_start_rows: Vec<i32>,
     speed_runtime: Vec<SpeedRuntime>,
     scroll_prefix: Vec<ScrollPrefix>,
+    beat0_offset_sec: f64,
     global_offset_sec: f64,
     max_bpm: f64,
 }
@@ -494,6 +495,7 @@ impl TimingData {
         }
 
         let song_offset_sec = song_offset_sec + beat0_offset_adjust;
+        let beat0_offset_sec = song_offset_sec;
 
         let mut beat_to_time = Vec::with_capacity(parsed_bpms.len());
         let mut current_time = 0.0;
@@ -585,6 +587,7 @@ impl TimingData {
             fake_start_rows,
             speed_runtime: Vec::new(),
             scroll_prefix: Vec::new(),
+            beat0_offset_sec,
             global_offset_sec,
             max_bpm,
         };
@@ -645,7 +648,7 @@ impl TimingData {
 
     #[inline(always)]
     pub fn beat0_offset_seconds(&self) -> f64 {
-        self.beat_to_time.first().map_or(0.0, |p| p.time_sec)
+        self.beat0_offset_sec
     }
 
     #[inline(always)]

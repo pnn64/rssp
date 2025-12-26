@@ -635,7 +635,9 @@ pub fn compute_last_beat(minimized_note_data: &[u8], lanes: usize) -> f64 {
     let row_index = last_row_in_measure as f64;
 
     let beats_into_measure = 4.0 * (row_index / total_rows_in_measure);
-    (measure_idx as f64) * 4.0 + beats_into_measure
+    let beat = (measure_idx as f64) * 4.0 + beats_into_measure;
+    let row = crate::timing::beat_to_note_row(beat);
+    crate::timing::note_row_to_beat(row)
 }
 
 pub fn compute_total_chart_length(
