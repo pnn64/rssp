@@ -625,6 +625,62 @@ pub fn minimize_chart_and_count_with_lanes(
     }
 }
 
+fn measure_densities_impl<const LANES: usize>(notes_data: &[u8]) -> Vec<usize> {
+    let mut densities = Vec::new();
+    let mut density = 0usize;
+    let mut saw_semicolon = false;
+    let mut measure_has_rows = false;
+
+    for line_raw in notes_data.split(|&b| b == b'\n') {
+        let mut start = 0usize;
+        while start < line_raw.len() && line_raw[start].is_ascii_whitespace() {
+            start += 1;
+        }
+        let line = &line_raw[start..];
+
+        if line.is_empty() || line.first() == Some(&b'/') {
+            continue;
+        }
+
+        match line.first() {
+            Some(b',') => {
+                densities.push(density);
+                density = 0;
+                measure_has_rows = false;
+            }
+            Some(b';') => {
+                densities.push(density);
+                saw_semicolon = true;
+                break;
+            }
+            Some(_) if line.len() >= LANES => {
+                measure_has_rows = true;
+                if line[..LANES]
+                    .iter()
+                    .any(|&b| matches!(b, b'1' | b'2' | b'4'))
+                {
+                    density += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if !saw_semicolon && measure_has_rows {
+        densities.push(density);
+    }
+
+    densities
+}
+
+pub fn measure_densities(notes_data: &[u8], lanes: usize) -> Vec<usize> {
+    match lanes {
+        4 => measure_densities_impl::<4>(notes_data),
+        8 => measure_densities_impl::<8>(notes_data),
+        _ => measure_densities_impl::<4>(notes_data),
+    }
+}
+
 pub fn minimize_chart_for_hash(notes_data: &[u8], lanes: usize) -> Vec<u8> {
     match lanes {
         4 => minimize_chart_for_hash_impl::<4>(notes_data),

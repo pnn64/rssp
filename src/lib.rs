@@ -1195,8 +1195,7 @@ pub fn compute_chart_peak_nps(
         let difficulty = resolve_difficulty_label(difficulty_raw, description, meter_raw, extension);
 
         let lanes = step_type_lanes(&step_type);
-        let (_minimized, _stats, measure_densities) =
-            minimize_chart_and_count_with_lanes(chart_data, lanes);
+        let measure_densities = stats::measure_densities(chart_data, lanes);
 
         let chart_bpms = if allow_steps_timing {
             chart_timing_tag_raw(entry.chart_bpms)

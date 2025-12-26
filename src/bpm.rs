@@ -994,20 +994,31 @@ pub fn compute_mines_nonfake(
 
 pub fn compute_measure_nps_vec(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> Vec<f64> {
     let mut out = Vec::with_capacity(measure_densities.len());
-    for (i, &density) in measure_densities.iter().enumerate() {
-        let measure_start_beat = i as f64 * 4.0;
-        let curr_bpm = get_current_bpm(measure_start_beat, bpm_map);
+    if measure_densities.is_empty() {
+        return out;
+    }
+
+    let mut bpm_idx = 0usize;
+    let mut curr_bpm = bpm_map.get(0).map(|&(_, bpm)| bpm).unwrap_or(0.0);
+    let mut measure_start_beat = 0.0_f64;
+
+    for &density in measure_densities {
+        while bpm_idx + 1 < bpm_map.len() && bpm_map[bpm_idx + 1].0 <= measure_start_beat {
+            bpm_idx += 1;
+            curr_bpm = bpm_map[bpm_idx].1;
+        }
 
         // For NPS calculation, if the BPM is a gimmick (too high),
         // it implies the measure passes instantly (warp), so effective NPS
         // for a human reading it is treated as 0/unplayable, matching Simply Love.
-        let nps = if !is_display_bpm(curr_bpm) {
+        let nps = if density == 0 || !is_display_bpm(curr_bpm) {
             0.0
         } else {
             // NPS = density / (4 * 60 / BPM) = density * BPM / 240
             density as f64 * curr_bpm / 240.0
         };
         out.push(nps);
+        measure_start_beat += 4.0;
     }
     out
 }
@@ -1018,16 +1029,24 @@ pub fn compute_measure_nps_vec_with_timing(
     timing: &TimingData,
 ) -> Vec<f64> {
     let mut out = Vec::with_capacity(measure_densities.len());
-    for (i, &density) in measure_densities.iter().enumerate() {
+    if measure_densities.is_empty() {
+        return out;
+    }
+
+    let mut cursor = timing.time_cursor_f32();
+    let mut start_beat = 0.0_f64;
+    let mut end_beat = 4.0_f64;
+
+    for &density in measure_densities {
         if density == 0 {
             out.push(0.0);
+            start_beat = end_beat;
+            end_beat += 4.0;
             continue;
         }
 
-        let start_beat = i as f64 * 4.0;
-        let end_beat = (i as f64 + 1.0) * 4.0;
-        let start_time = timing.get_time_for_beat_f32(start_beat);
-        let end_time = timing.get_time_for_beat_f32(end_beat);
+        let start_time = timing.time_for_beat_f32_from(start_beat, &mut cursor);
+        let end_time = timing.time_for_beat_f32_from(end_beat, &mut cursor);
         let duration = end_time - start_time;
 
         if duration <= 0.12 {
@@ -1035,6 +1054,9 @@ pub fn compute_measure_nps_vec_with_timing(
         } else {
             out.push(density as f64 / duration);
         }
+
+        start_beat = end_beat;
+        end_beat += 4.0;
     }
     out
 }
@@ -1057,9 +1079,30 @@ fn median(arr: &[f64]) -> f64 {
     if arr.is_empty() {
         return 0.0;
     }
-    let mut sorted = arr.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    median_of_sorted(&sorted)
+    if arr.iter().all(|v| v.is_finite()) {
+        let mut data = arr.to_vec();
+        let len = data.len();
+        let mid = len / 2;
+        let mid_val = {
+            let (_, mid_val, _) = data.select_nth_unstable_by(mid, |a, b| {
+                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            *mid_val
+        };
+        if len % 2 == 1 {
+            mid_val
+        } else {
+            let lower_max = data[..mid]
+                .iter()
+                .copied()
+                .fold(f64::MIN, f64::max);
+            (lower_max + mid_val) / 2.0
+        }
+    } else {
+        let mut sorted = arr.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        median_of_sorted(&sorted)
+    }
 }
 
 pub fn get_nps_stats(measure_nps_vec: &[f64]) -> (f64, f64) {

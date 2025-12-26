@@ -475,6 +475,11 @@ impl Default for GetBeatStartsF32 {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TimingCursorF32 {
+    start: GetBeatStartsF32,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct GetBeatArgs {
     pub elapsed_time: f64,
@@ -851,6 +856,26 @@ impl TimingData {
         start.last_time as f64 - self.global_offset_sec
     }
 
+    pub(crate) fn time_cursor_f32(&self) -> TimingCursorF32 {
+        let mut start = GetBeatStartsF32::default();
+        start.last_time =
+            (-self.beat0_offset_seconds() - self.beat0_group_offset_seconds()) as f32;
+        TimingCursorF32 { start }
+    }
+
+    pub(crate) fn time_for_beat_f32_from(
+        &self,
+        target_beat: f64,
+        cursor: &mut TimingCursorF32,
+    ) -> f64 {
+        self.get_elapsed_time_internal_f32(
+            &mut cursor.start,
+            target_beat as f32,
+            u32::MAX as usize,
+        );
+        cursor.start.last_time as f64 - self.global_offset_sec
+    }
+
     pub fn get_bpm_for_beat(&self, target_beat: f64) -> f64 {
         let points = &self.beat_to_time;
         if points.is_empty() {
@@ -1003,6 +1028,11 @@ impl TimingData {
             };
             start.last_time += time_to_next_event;
 
+            if event_type == TimingEvent::Marker {
+                start.last_row = event_row;
+                return;
+            }
+
             match event_type {
                 TimingEvent::WarpDest => start.is_warping = false,
                 TimingEvent::Bpm => {
@@ -1020,7 +1050,6 @@ impl TimingData {
                     start.delay_idx += 1;
                     curr_segment += 1;
                 }
-                TimingEvent::Marker => return,
                 TimingEvent::Warp => {
                     start.is_warping = true;
                     let warp = warps[start.warp_idx];
@@ -1174,6 +1203,11 @@ impl TimingData {
             };
             start.last_time += time_to_next_event;
 
+            if event_type == TimingEvent::Marker {
+                start.last_row = event_row;
+                return;
+            }
+
             match event_type {
                 TimingEvent::WarpDest => start.is_warping = false,
                 TimingEvent::Bpm => {
@@ -1191,7 +1225,6 @@ impl TimingData {
                     start.delay_idx += 1;
                     curr_segment += 1;
                 }
-                TimingEvent::Marker => return,
                 TimingEvent::Warp => {
                     start.is_warping = true;
                     let warp = warps[start.warp_idx];
