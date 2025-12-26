@@ -94,7 +94,20 @@ pub(crate) fn roundtrip_bpm_itg(bpm: f64) -> f64 {
 
 #[inline(always)]
 pub fn round_millis(value: f64) -> f64 {
-    (value * 1000.0).round() / 1000.0
+    round_sig_figs_itg(value)
+}
+
+#[inline(always)]
+fn round_sig_figs_itg(value: f64) -> f64 {
+    // Match itgmania-reference-harness default stream formatting: 6 significant digits.
+    if !value.is_finite() || value == 0.0 {
+        return value;
+    }
+    let value = value as f32 as f64;
+    let abs = value.abs();
+    let exp = abs.log10().floor() as i32;
+    let scale = 10_f64.powi(6 - 1 - exp);
+    lrint_ties_even_f64(value * scale) / scale
 }
 
 #[inline(always)]
