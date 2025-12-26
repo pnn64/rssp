@@ -585,6 +585,7 @@ pub fn compute_last_beat(minimized_note_data: &[u8], lanes: usize) -> f64 {
     let mut last_row_in_measure: usize = 0;
 
     let lanes = lanes.max(1);
+    let mut hold_stacks: Vec<Vec<usize>> = vec![Vec::new(); lanes];
 
     for line in minimized_note_data.split(|&b| b == b'\n') {
         if line.is_empty() {
@@ -597,10 +598,21 @@ pub fn compute_last_beat(minimized_note_data: &[u8], lanes: usize) -> f64 {
         }
 
         if line.len() >= lanes {
-            let has_object = line[..lanes]
-                .iter()
-                .any(|&b| matches!(b, b'1' | b'2' | b'3' | b'4'));
-            if has_object {
+            let mut has_note = false;
+            let mut matched_tail = false;
+            for (col, &ch) in line[..lanes].iter().enumerate() {
+                match ch {
+                    b'1' | b'M' | b'K' | b'L' | b'F' => has_note = true,
+                    b'2' | b'4' => hold_stacks[col].push(current_rows),
+                    b'3' => {
+                        if hold_stacks[col].pop().is_some() {
+                            matched_tail = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if has_note || matched_tail {
                 last_measure_idx = Some(rows_per_measure.len());
                 last_row_in_measure = current_rows;
             }
