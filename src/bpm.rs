@@ -573,45 +573,130 @@ pub fn get_elapsed_time(
     current_time
 }
 
-/// Computes the beat of the last playable object in the chart from minimized note data.
-///
-/// The minimized format produced by `minimize_chart_and_count_with_lanes` is:
-///   - fixed-width note rows (per-chart lane count) followed by '\n'
-///   - ",\n" as a measure separator
-/// Measures are assumed to be 4 beats long, matching StepMania's default behavior.
-pub fn compute_last_beat(minimized_note_data: &[u8], lanes: usize) -> f64 {
+#[inline(always)]
+fn trim_cr(line: &[u8]) -> &[u8] {
+    if line.last() == Some(&b'\r') {
+        &line[..line.len() - 1]
+    } else {
+        line
+    }
+}
+
+fn match_hold_ends<const LANES: usize>(
+    lines: &[[u8; LANES]],
+) -> Vec<[Option<usize>; LANES]> {
+    let mut stacks: [Vec<usize>; LANES] = std::array::from_fn(|_| Vec::new());
+    let mut hold_ends = vec![[None; LANES]; lines.len()];
+
+    for (row_idx, line) in lines.iter().enumerate() {
+        for (col, &ch) in line.iter().enumerate() {
+            match ch {
+                b'2' | b'4' => stacks[col].push(row_idx),
+                b'3' => {
+                    if let Some(start_idx) = stacks[col].pop() {
+                        hold_ends[start_idx][col] = Some(row_idx);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    hold_ends
+}
+
+fn compute_last_beat_impl<const LANES: usize>(minimized_note_data: &[u8]) -> f64 {
     let mut rows_per_measure: Vec<usize> = Vec::new();
     let mut current_rows: usize = 0;
+    let mut lines: Vec<[u8; LANES]> = Vec::new();
+    let mut saw_terminator = false;
 
-    let mut last_measure_idx: Option<usize> = None;
-    let mut last_row_in_measure: usize = 0;
-
-    let lanes = lanes.max(1);
-
-    for line in minimized_note_data.split(|&b| b == b'\n') {
+    for line_raw in minimized_note_data.split(|&b| b == b'\n') {
+        let line = trim_cr(line_raw);
         if line.is_empty() {
             continue;
         }
-        if line[0] == b',' {
-            rows_per_measure.push(current_rows);
-            current_rows = 0;
-            continue;
+        match line[0] {
+            b',' => {
+                rows_per_measure.push(current_rows);
+                current_rows = 0;
+                continue;
+            }
+            b';' => {
+                rows_per_measure.push(current_rows);
+                saw_terminator = true;
+                break;
+            }
+            _ => {}
         }
 
-        if line.len() >= lanes {
-            let has_object = line[..lanes]
-                .iter()
-                .any(|&b| matches!(b, b'1' | b'2' | b'3' | b'4' | b'M' | b'K' | b'L' | b'F'));
-            if has_object {
-                last_measure_idx = Some(rows_per_measure.len());
-                last_row_in_measure = current_rows;
-            }
+        if line.len() >= LANES {
+            let mut row = [0u8; LANES];
+            row.copy_from_slice(&line[..LANES]);
+            lines.push(row);
             current_rows += 1;
         }
     }
 
-    // Push the final measure's row count.
-    rows_per_measure.push(current_rows);
+    if !saw_terminator {
+        rows_per_measure.push(current_rows);
+    }
+
+    if lines.is_empty() {
+        return 0.0;
+    }
+
+    let hold_ends = match_hold_ends(&lines);
+    let mut tail_mask = vec![0u8; lines.len()];
+    for ends in &hold_ends {
+        for (col, end_row) in ends.iter().enumerate() {
+            if let Some(end_idx) = *end_row {
+                if let Some(mask) = tail_mask.get_mut(end_idx) {
+                    *mask |= 1 << col;
+                }
+            }
+        }
+    }
+
+    let mut last_measure_idx: Option<usize> = None;
+    let mut last_row_in_measure: usize = 0;
+    let mut row_idx = 0usize;
+
+    for (measure_idx, &rows_in_measure) in rows_per_measure.iter().enumerate() {
+        for row_in_measure in 0..rows_in_measure {
+            if row_idx >= lines.len() {
+                break;
+            }
+            let line = &lines[row_idx];
+            let mut has_object = false;
+            for (col, &ch) in line.iter().enumerate() {
+                match ch {
+                    b'1' | b'M' | b'K' | b'L' | b'F' => {
+                        has_object = true;
+                        break;
+                    }
+                    b'2' | b'4' => {
+                        if hold_ends[row_idx][col].is_some() {
+                            has_object = true;
+                            break;
+                        }
+                    }
+                    b'3' => {
+                        if (tail_mask[row_idx] & (1 << col)) != 0 {
+                            has_object = true;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if has_object {
+                last_measure_idx = Some(measure_idx);
+                last_row_in_measure = row_in_measure;
+            }
+            row_idx += 1;
+        }
+    }
 
     let Some(measure_idx) = last_measure_idx else {
         return 0.0;
@@ -628,6 +713,20 @@ pub fn compute_last_beat(minimized_note_data: &[u8], lanes: usize) -> f64 {
     let beat = (measure_idx as f64) * 4.0 + beats_into_measure;
     let row = crate::timing::beat_to_note_row(beat);
     crate::timing::note_row_to_beat(row)
+}
+
+/// Computes the beat of the last playable object in the chart from minimized note data.
+///
+/// The minimized format produced by `minimize_chart_and_count_with_lanes` is:
+///   - fixed-width note rows (per-chart lane count) followed by '\n'
+///   - ",\n" as a measure separator
+/// Measures are assumed to be 4 beats long, matching StepMania's default behavior.
+pub fn compute_last_beat(minimized_note_data: &[u8], lanes: usize) -> f64 {
+    match lanes {
+        4 => compute_last_beat_impl::<4>(minimized_note_data),
+        8 => compute_last_beat_impl::<8>(minimized_note_data),
+        _ => compute_last_beat_impl::<4>(minimized_note_data),
+    }
 }
 
 pub fn compute_total_chart_length(

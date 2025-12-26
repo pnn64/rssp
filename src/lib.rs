@@ -1111,7 +1111,7 @@ pub fn compute_chart_durations(
                 timing_fakes_global,
                 timing_format,
             );
-            timing.get_time_for_beat(target_beat)
+            timing.get_time_for_beat_f32(target_beat)
                 - offsets.global_offset_seconds
                 - offsets.group_offset_seconds
         };

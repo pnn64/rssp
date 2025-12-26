@@ -40,6 +40,11 @@ pub(crate) fn note_row_to_beat(row: i32) -> f64 {
 }
 
 #[inline(always)]
+fn note_row_to_beat_f32(row: i32) -> f32 {
+    row as f32 / ROWS_PER_BEAT as f32
+}
+
+#[inline(always)]
 #[must_use]
 fn lrint_ties_even_f64(v: f64) -> f64 {
     if !v.is_finite() {
@@ -61,14 +66,40 @@ fn lrint_ties_even_f64(v: f64) -> f64 {
 }
 
 #[inline(always)]
+#[must_use]
+fn lrint_ties_even_f32(v: f32) -> i32 {
+    if !v.is_finite() {
+        return 0;
+    }
+    if v.fract() == 0.0 {
+        return v as i32;
+    }
+    let floor = v.floor();
+    let frac = v - floor;
+    if frac < 0.5 {
+        floor as i32
+    } else if frac > 0.5 {
+        floor as i32 + 1
+    } else {
+        let floor_i = floor as i32;
+        if (floor_i & 1) == 0 { floor_i } else { floor_i + 1 }
+    }
+}
+
+#[inline(always)]
 pub(crate) fn beat_to_note_row(beat: f64) -> i32 {
     lrint_ties_even_f64(beat * ROWS_PER_BEAT as f64) as i32
 }
 
 #[inline(always)]
+fn beat_to_note_row_f32_exact(beat: f32) -> i32 {
+    lrint_ties_even_f32(beat * ROWS_PER_BEAT as f32)
+}
+
+#[inline(always)]
 fn quantize_beat_f32(beat: f32) -> f32 {
-    let row = beat_to_note_row(beat as f64);
-    note_row_to_beat(row) as f32
+    let row = beat_to_note_row_f32_exact(beat);
+    note_row_to_beat_f32(row)
 }
 
 #[inline(always)]
@@ -403,6 +434,33 @@ struct GetBeatStarts {
 }
 
 impl Default for GetBeatStarts {
+    fn default() -> Self {
+        Self {
+            bpm_idx: 0,
+            stop_idx: 0,
+            delay_idx: 0,
+            warp_idx: 0,
+            last_row: 0,
+            last_time: 0.0,
+            warp_destination: 0.0,
+            is_warping: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GetBeatStartsF32 {
+    bpm_idx: usize,
+    stop_idx: usize,
+    delay_idx: usize,
+    warp_idx: usize,
+    last_row: i32,
+    last_time: f32,
+    warp_destination: f32,
+    is_warping: bool,
+}
+
+impl Default for GetBeatStartsF32 {
     fn default() -> Self {
         Self {
             bpm_idx: 0,
@@ -785,6 +843,14 @@ impl TimingData {
         self.get_time_for_beat_internal(target_beat) - self.global_offset_sec
     }
 
+    pub(crate) fn get_time_for_beat_f32(&self, target_beat: f64) -> f64 {
+        let mut start = GetBeatStartsF32::default();
+        start.last_time =
+            (-self.beat0_offset_seconds() - self.beat0_group_offset_seconds()) as f32;
+        self.get_elapsed_time_internal_f32(&mut start, target_beat as f32, u32::MAX as usize);
+        start.last_time as f64 - self.global_offset_sec
+    }
+
     pub fn get_bpm_for_beat(&self, target_beat: f64) -> f64 {
         let points = &self.beat_to_time;
         if points.is_empty() {
@@ -792,6 +858,19 @@ impl TimingData {
         }
         let point_idx = self.get_bpm_point_index_for_beat(target_beat);
         points[point_idx].bpm
+    }
+
+    fn get_bpm_for_row_f32(&self, row: i32) -> f32 {
+        let points = &self.beat_to_time;
+        if points.is_empty() {
+            return DEFAULT_BPM_F32;
+        }
+        let pos = points.partition_point(|p| beat_to_note_row_f32_exact(p.beat as f32) <= row);
+        if pos == 0 {
+            points[0].bpm as f32
+        } else {
+            points[pos - 1].bpm as f32
+        }
     }
 
     pub fn get_capped_max_bpm(&self, cap: Option<f64>) -> f64 {
@@ -883,6 +962,79 @@ impl TimingData {
         let mut start = *starts;
         self.get_elapsed_time_internal_mut(&mut start, beat, u32::MAX as usize);
         start.last_time
+    }
+
+    fn get_elapsed_time_internal_f32(
+        &self,
+        start: &mut GetBeatStartsF32,
+        beat: f32,
+        max_segment: usize,
+    ) {
+        let bpms = &self.beat_to_time;
+        let warps = &self.warps;
+        let stops = &self.stops;
+        let delays = &self.delays;
+
+        let mut curr_segment = start.bpm_idx + start.warp_idx + start.stop_idx + start.delay_idx;
+        let find_marker = beat < f32::MAX;
+        let mut bps = self.get_bpm_for_row_f32(start.last_row) / 60.0;
+
+        while curr_segment < max_segment {
+            let mut event_row = i32::MAX;
+            let mut event_type = TimingEvent::NotFound;
+            find_event_f32(
+                &mut event_row,
+                &mut event_type,
+                *start,
+                beat,
+                find_marker,
+                bpms,
+                warps,
+                stops,
+                delays,
+            );
+            if event_type == TimingEvent::NotFound {
+                break;
+            }
+            let time_to_next_event = if start.is_warping {
+                0.0
+            } else {
+                note_row_to_beat_f32(event_row - start.last_row) / bps
+            };
+            start.last_time += time_to_next_event;
+
+            match event_type {
+                TimingEvent::WarpDest => start.is_warping = false,
+                TimingEvent::Bpm => {
+                    bps = bpms[start.bpm_idx].bpm as f32 / 60.0;
+                    start.bpm_idx += 1;
+                    curr_segment += 1;
+                }
+                TimingEvent::Stop | TimingEvent::StopDelay => {
+                    start.last_time += stops[start.stop_idx].duration as f32;
+                    start.stop_idx += 1;
+                    curr_segment += 1;
+                }
+                TimingEvent::Delay => {
+                    start.last_time += delays[start.delay_idx].duration as f32;
+                    start.delay_idx += 1;
+                    curr_segment += 1;
+                }
+                TimingEvent::Marker => return,
+                TimingEvent::Warp => {
+                    start.is_warping = true;
+                    let warp = warps[start.warp_idx];
+                    let warp_sum = warp.length as f32 + warp.beat as f32;
+                    if warp_sum > start.warp_destination {
+                        start.warp_destination = warp_sum;
+                    }
+                    start.warp_idx += 1;
+                    curr_segment += 1;
+                }
+                _ => {}
+            }
+            start.last_row = event_row;
+        }
     }
 
     fn get_beat_internal(
@@ -1104,6 +1256,56 @@ fn find_event(
     }
     if start.warp_idx < warps.len() && beat_to_note_row(warps[start.warp_idx].beat) < *event_row {
         *event_row = beat_to_note_row(warps[start.warp_idx].beat);
+        *event_type = TimingEvent::Warp;
+    }
+}
+
+fn find_event_f32(
+    event_row: &mut i32,
+    event_type: &mut TimingEvent,
+    start: GetBeatStartsF32,
+    beat: f32,
+    find_marker: bool,
+    bpms: &[BeatTimePoint],
+    warps: &[WarpSegment],
+    stops: &[StopSegment],
+    delays: &[DelaySegment],
+) {
+    if start.is_warping && beat_to_note_row_f32_exact(start.warp_destination) < *event_row {
+        *event_row = beat_to_note_row_f32_exact(start.warp_destination);
+        *event_type = TimingEvent::WarpDest;
+    }
+    if start.bpm_idx < bpms.len()
+        && beat_to_note_row_f32_exact(bpms[start.bpm_idx].beat as f32) < *event_row
+    {
+        *event_row = beat_to_note_row_f32_exact(bpms[start.bpm_idx].beat as f32);
+        *event_type = TimingEvent::Bpm;
+    }
+    if start.delay_idx < delays.len()
+        && beat_to_note_row_f32_exact(delays[start.delay_idx].beat as f32) < *event_row
+    {
+        *event_row = beat_to_note_row_f32_exact(delays[start.delay_idx].beat as f32);
+        *event_type = TimingEvent::Delay;
+    }
+    if find_marker && beat_to_note_row_f32_exact(beat) < *event_row {
+        *event_row = beat_to_note_row_f32_exact(beat);
+        *event_type = TimingEvent::Marker;
+    }
+    if start.stop_idx < stops.len()
+        && beat_to_note_row_f32_exact(stops[start.stop_idx].beat as f32) < *event_row
+    {
+        let tmp_row = *event_row;
+        *event_row = beat_to_note_row_f32_exact(stops[start.stop_idx].beat as f32);
+        *event_type = if tmp_row == *event_row {
+            TimingEvent::StopDelay
+        } else {
+            TimingEvent::Stop
+        };
+    }
+    if start.warp_idx < warps.len()
+        && beat_to_note_row_f32_exact(warps[start.warp_idx].beat as f32) < *event_row
+    {
+        *event_row = beat_to_note_row_f32_exact(warps[start.warp_idx].beat as f32);
         *event_type = TimingEvent::Warp;
     }
 }
@@ -1496,7 +1698,7 @@ fn has_row(rows: &[i32], row: i32) -> bool {
 
 #[inline]
 fn beat_to_note_row_f32(beat: f64) -> i32 {
-    beat_to_note_row(beat as f32 as f64)
+    beat_to_note_row_f32_exact(beat as f32)
 }
 
 fn build_stop_rows(stops: &[StopSegment]) -> Vec<i32> {
