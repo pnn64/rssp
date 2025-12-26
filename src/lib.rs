@@ -1089,32 +1089,28 @@ pub fn compute_chart_durations(
             };
 
         let target_beat = compute_last_beat(&minimized_chart, lanes);
-        let duration = if target_beat <= 0.0 {
-            0.0
-        } else {
-            let timing = TimingData::from_chart_data(
-                chart_offset,
-                0.0,
-                chart_bpms.as_deref(),
-                timing_bpms_global,
-                chart_stops.as_deref(),
-                timing_stops_global,
-                chart_delays.as_deref(),
-                timing_delays_global,
-                chart_warps.as_deref(),
-                timing_warps_global,
-                chart_speeds.as_deref(),
-                timing_speeds_global,
-                chart_scrolls.as_deref(),
-                timing_scrolls_global,
-                chart_fakes.as_deref(),
-                timing_fakes_global,
-                timing_format,
-            );
-            timing.get_time_for_beat_f32(target_beat)
-                - offsets.global_offset_seconds
-                - offsets.group_offset_seconds
-        };
+        let timing = TimingData::from_chart_data(
+            chart_offset,
+            0.0,
+            chart_bpms.as_deref(),
+            timing_bpms_global,
+            chart_stops.as_deref(),
+            timing_stops_global,
+            chart_delays.as_deref(),
+            timing_delays_global,
+            chart_warps.as_deref(),
+            timing_warps_global,
+            chart_speeds.as_deref(),
+            timing_speeds_global,
+            chart_scrolls.as_deref(),
+            timing_scrolls_global,
+            chart_fakes.as_deref(),
+            timing_fakes_global,
+            timing_format,
+        );
+        let duration = timing.get_time_for_beat_f32(target_beat)
+            - offsets.global_offset_seconds
+            - offsets.group_offset_seconds;
 
         results.push(ChartDuration {
             step_type,
