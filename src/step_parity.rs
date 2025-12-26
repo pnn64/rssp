@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
-use crate::timing::TimingData;
+use crate::timing::{beat_to_note_row, note_row_to_beat, TimingData};
 
 const NUM_TRACKS: usize = 4;
 const INVALID_COLUMN: isize = -1;
@@ -1662,19 +1662,10 @@ fn time_between_beats(start: f32, end: f32, bpm_map: &[(f64, f64)]) -> f64 {
     time
 }
 
-fn time_between_beats_with_timing(start: f32, end: f32, timing: &TimingData) -> f64 {
-    if end <= start {
-        return 0.0;
-    }
-    let start_time = timing.get_time_for_beat(start as f64);
-    let end_time = timing.get_time_for_beat(end as f64);
-    (end_time - start_time).max(0.0)
-}
-
 fn calculate_tech_counts_from_rows(
     rows: &[Row],
     layout: &StageLayout,
-    bpm_map: &[(f64, f64)],
+    _bpm_map: &[(f64, f64)],
 ) -> TechCounts {
     let mut out = TechCounts::default();
     if rows.len() < 2 {
@@ -1684,14 +1675,7 @@ fn calculate_tech_counts_from_rows(
     for i in 1..rows.len() {
         let current_row = &rows[i];
         let previous_row = &rows[i - 1];
-        let mut elapsed_time = current_row.second - previous_row.second;
-        let expected_time = time_between_beats(previous_row.beat, current_row.beat, bpm_map);
-        if expected_time.is_finite() {
-            let expected_time = expected_time as f32;
-            if expected_time > elapsed_time + TIME_EPSILON {
-                elapsed_time = expected_time;
-            }
-        }
+        let elapsed_time = current_row.second - previous_row.second;
 
         if current_row.note_count == 1 && previous_row.note_count == 1 {
             for &foot in &FEET {
@@ -1812,7 +1796,7 @@ fn calculate_tech_counts_from_rows(
 fn calculate_tech_counts_from_rows_with_timing(
     rows: &[Row],
     layout: &StageLayout,
-    timing: &TimingData,
+    _timing: &TimingData,
 ) -> TechCounts {
     let mut out = TechCounts::default();
     if rows.len() < 2 {
@@ -1822,15 +1806,7 @@ fn calculate_tech_counts_from_rows_with_timing(
     for i in 1..rows.len() {
         let current_row = &rows[i];
         let previous_row = &rows[i - 1];
-        let mut elapsed_time = current_row.second - previous_row.second;
-        let expected_time =
-            time_between_beats_with_timing(previous_row.beat, current_row.beat, timing);
-        if expected_time.is_finite() {
-            let expected_time = expected_time as f32;
-            if expected_time > elapsed_time + TIME_EPSILON {
-                elapsed_time = expected_time;
-            }
-        }
+        let elapsed_time = current_row.second - previous_row.second;
 
         if current_row.note_count == 1 && previous_row.note_count == 1 {
             for &foot in &FEET {
@@ -1962,7 +1938,6 @@ const JACK_CUTOFF: f32 = 0.176;
 const FOOTSWITCH_CUTOFF: f32 = 0.3;
 const DOUBLESTEP_CUTOFF: f32 = 0.235;
 const TIE_BREAKER_EPSILON: f32 = 1e-2;
-const TIME_EPSILON: f32 = 1e-6;
 
 pub fn analyze(minimized_note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> TechCounts {
     let layout = StageLayout::new_dance_single();
@@ -1993,23 +1968,41 @@ fn beat_to_time(beat: f64, bpm_map: &[(f64, f64)], offset: f64) -> f64 {
 #[derive(Clone, Copy)]
 struct ParsedRow {
     chars: [u8; NUM_TRACKS],
+    row: i32,
     beat: f32,
     second: f32,
 }
 
+fn trim_ascii_whitespace(mut line: &[u8]) -> &[u8] {
+    while let Some((&first, rest)) = line.split_first() {
+        if first.is_ascii_whitespace() {
+            line = rest;
+        } else {
+            break;
+        }
+    }
+    while let Some((&last, rest)) = line.split_last() {
+        if last.is_ascii_whitespace() {
+            line = rest;
+        } else {
+            break;
+        }
+    }
+    line
+}
+
 fn parse_chart_rows(note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> Vec<ParsedRow> {
     let mut rows = Vec::new();
-    let mut measure_start_row: i32 = 0;
+    let mut measure_index = 0usize;
 
     for measure in note_data.split(|&b| b == b',') {
+        if measure.is_empty() {
+            continue;
+        }
         let lines: Vec<&[u8]> = measure
             .split(|&b| b == b'\n')
             .filter_map(|line| {
-                let trimmed = if let Some(stripped) = line.strip_suffix(b"\r") {
-                    stripped
-                } else {
-                    line
-                };
+                let trimmed = trim_ascii_whitespace(line);
                 if trimmed.is_empty() {
                     None
                 } else {
@@ -2019,15 +2012,15 @@ fn parse_chart_rows(note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> Ve
             .collect();
         let num_rows = lines.len();
         if num_rows == 0 {
-            measure_start_row += 192;
+            measure_index += 1;
             continue;
         }
 
         for (i, line) in lines.iter().enumerate() {
-            let fractional_row = (i as f64 * 192.0) / num_rows as f64;
-            let row_offset = fractional_row.round() as i32;
-            let note_row = measure_start_row + row_offset;
-            let beat = note_row as f64 / 48.0;
+            let percent = i as f64 / num_rows as f64;
+            let beat = (measure_index as f64 + percent) * 4.0;
+            let note_row = beat_to_note_row(beat);
+            let beat = note_row_to_beat(note_row);
             let second = beat_to_time(beat, bpm_map, offset);
             let mut chars = [b'0'; NUM_TRACKS];
             for (col, ch) in line.iter().take(NUM_TRACKS).enumerate() {
@@ -2035,12 +2028,13 @@ fn parse_chart_rows(note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> Ve
             }
             rows.push(ParsedRow {
                 chars,
+                row: note_row,
                 beat: beat as f32,
                 second: second as f32,
             });
         }
 
-        measure_start_row += 192;
+        measure_index += 1;
     }
 
     rows
@@ -2048,17 +2042,16 @@ fn parse_chart_rows(note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> Ve
 
 fn parse_chart_rows_with_timing(note_data: &[u8], timing: &TimingData) -> Vec<ParsedRow> {
     let mut rows = Vec::new();
-    let mut measure_start_row: i32 = 0;
+    let mut measure_index = 0usize;
 
     for measure in note_data.split(|&b| b == b',') {
+        if measure.is_empty() {
+            continue;
+        }
         let lines: Vec<&[u8]> = measure
             .split(|&b| b == b'\n')
             .filter_map(|line| {
-                let trimmed = if let Some(stripped) = line.strip_suffix(b"\r") {
-                    stripped
-                } else {
-                    line
-                };
+                let trimmed = trim_ascii_whitespace(line);
                 if trimmed.is_empty() {
                     None
                 } else {
@@ -2068,15 +2061,15 @@ fn parse_chart_rows_with_timing(note_data: &[u8], timing: &TimingData) -> Vec<Pa
             .collect();
         let num_rows = lines.len();
         if num_rows == 0 {
-            measure_start_row += 192;
+            measure_index += 1;
             continue;
         }
 
         for (i, line) in lines.iter().enumerate() {
-            let fractional_row = (i as f64 * 192.0) / num_rows as f64;
-            let row_offset = fractional_row.round() as i32;
-            let note_row = measure_start_row + row_offset;
-            let beat = note_row as f64 / 48.0;
+            let percent = i as f64 / num_rows as f64;
+            let beat = (measure_index as f64 + percent) * 4.0;
+            let note_row = beat_to_note_row(beat);
+            let beat = note_row_to_beat(note_row);
             let second = timing.get_time_for_beat(beat);
             let mut chars = [b'0'; NUM_TRACKS];
             for (col, ch) in line.iter().take(NUM_TRACKS).enumerate() {
@@ -2084,12 +2077,13 @@ fn parse_chart_rows_with_timing(note_data: &[u8], timing: &TimingData) -> Vec<Pa
             }
             rows.push(ParsedRow {
                 chars,
+                row: note_row,
                 beat: beat as f32,
                 second: second as f32,
             });
         }
 
-        measure_start_row += 192;
+        measure_index += 1;
     }
 
     rows
@@ -2126,8 +2120,9 @@ fn build_intermediate_notes(rows: &[ParsedRow]) -> Vec<IntermediateNoteData> {
                 b'1' => TapNoteType::Tap,
                 b'2' | b'4' => TapNoteType::HoldHead,
                 b'3' => TapNoteType::HoldTail,
-                b'M' | b'm' => TapNoteType::Mine,
-                b'F' | b'f' => TapNoteType::Fake,
+                b'M' => TapNoteType::Mine,
+                b'K' | b'L' => TapNoteType::Tap,
+                b'F' => TapNoteType::Fake,
                 _ => TapNoteType::Empty,
             };
 
@@ -2138,10 +2133,10 @@ fn build_intermediate_notes(rows: &[ParsedRow]) -> Vec<IntermediateNoteData> {
             let mut note = IntermediateNoteData::default();
             note.note_type = note_type;
             note.col = col;
-            note.row = row_idx;
+            note.row = row.row as usize;
             note.beat = row.beat;
             note.second = row.second;
-            note.fake = matches!(ch, b'F' | b'f');
+            note.fake = note_type == TapNoteType::Fake;
             note.subtype = match ch {
                 b'4' => TapNoteSubType::Roll,
                 b'2' => TapNoteSubType::Hold,
@@ -2155,7 +2150,5 @@ fn build_intermediate_notes(rows: &[ParsedRow]) -> Vec<IntermediateNoteData> {
             notes.push(note);
         }
     }
-
-    notes.sort_by(|a, b| a.second.partial_cmp(&b.second).unwrap());
     notes
 }
