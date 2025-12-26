@@ -1,4 +1,4 @@
-use crate::bpm::{clean_timing_map, parse_bpm_map};
+use crate::bpm::{clean_timing_map, parse_beat_or_row, parse_bpm_map};
 use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1328,14 +1328,13 @@ fn parse_fakes(s: &str) -> Result<Vec<FakeSegment>, &'static str> {
         let Some((beat_str, len_str)) = part.split_once('=') else {
             continue;
         };
-        let Some(beat) = parse_f64_fast(beat_str) else {
+        let Some(beat) = parse_beat_or_row(beat_str) else {
             continue;
         };
         let Some(len) = parse_f64_fast(len_str) else {
             continue;
         };
         if beat.is_finite() && len.is_finite() && len > 0.0 {
-            let beat = beat as f32 as f64;
             let len = len as f32 as f64;
             out.push(FakeSegment { beat, length: len });
         }
@@ -1353,11 +1352,10 @@ fn parse_stops(s: &str) -> Result<Vec<StopSegment>, &'static str> {
             let mut parts = pair.split('=');
             let beat_str = parts.next().ok_or("Missing beat")?.trim();
             let duration_str = parts.next().ok_or("Missing duration")?.trim();
-            let beat = beat_str.parse::<f64>().map_err(|_| "Invalid beat")?;
+            let beat = parse_beat_or_row(beat_str).ok_or("Invalid beat")?;
             let duration = duration_str
                 .parse::<f64>()
                 .map_err(|_| "Invalid duration")?;
-            let beat = beat as f32 as f64;
             let duration = duration as f32 as f64;
             Ok(StopSegment { beat, duration })
         })
@@ -1396,10 +1394,9 @@ fn parse_speeds(s: &str) -> Result<Vec<SpeedSegment>, &'static str> {
             if parts.len() < 3 {
                 return Err("Invalid speed format");
             }
-            let beat = parts[0].parse::<f64>().map_err(|_| "Invalid beat")?;
+            let beat = parse_beat_or_row(parts[0]).ok_or("Invalid beat")?;
             let ratio = parts[1].parse::<f64>().map_err(|_| "Invalid ratio")?;
             let delay = parts[2].parse::<f64>().map_err(|_| "Invalid delay")?;
-            let beat = beat as f32 as f64;
             let ratio = ratio as f32 as f64;
             let delay = delay as f32 as f64;
             let unit = if parts.len() > 3 && parts[3] == "1" {
@@ -1421,9 +1418,8 @@ fn parse_scrolls(s: &str) -> Result<Vec<ScrollSegment>, &'static str> {
     Ok(s.split(',')
         .filter_map(|pair| {
             let mut parts = pair.split('=');
-            let beat = parts.next()?.trim().parse::<f64>().ok()?;
+            let beat = parse_beat_or_row(parts.next()?.trim())?;
             let ratio = parts.next()?.trim().parse::<f64>().ok()?;
-            let beat = beat as f32 as f64;
             let ratio = ratio as f32 as f64;
             Some(ScrollSegment { beat, ratio })
         })

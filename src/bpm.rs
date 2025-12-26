@@ -6,7 +6,13 @@ use crate::parse::{
     ParsedChartEntry,
     ParsedSimfileData,
 };
-use crate::timing::{format_bpm_segments_like_itg, steps_timing_allowed, TimingData, TimingFormat};
+use crate::timing::{
+    format_bpm_segments_like_itg,
+    steps_timing_allowed,
+    TimingData,
+    TimingFormat,
+    ROWS_PER_BEAT,
+};
 
 fn normalize_decimal(s: &str) -> Option<String> {
     let value: f64 = if s.chars().any(|c| c.is_control()) {
@@ -32,6 +38,22 @@ fn normalize_entry(beat_bpm: &str) -> String {
         }
     }
     trimmed.to_string()
+}
+
+pub(crate) fn parse_beat_or_row(raw: &str) -> Option<f64> {
+    let mut trimmed = raw.trim();
+    let mut is_row = false;
+    if let Some(stripped) = trimmed.strip_suffix('r').or_else(|| trimmed.strip_suffix('R')) {
+        trimmed = stripped.trim_end();
+        is_row = true;
+    }
+    let value = trimmed.parse::<f64>().ok()?;
+    let value_f32 = value as f32;
+    if is_row {
+        Some((value_f32 / ROWS_PER_BEAT as f32) as f64)
+    } else {
+        Some(value_f32 as f64)
+    }
 }
 
 pub fn normalize_float_digits(param: &str) -> String {
@@ -379,10 +401,9 @@ pub fn parse_bpm_map(normalized_bpms: &str) -> Vec<(f64, f64)> {
         let Some((left, right)) = chunk.split_once('=') else {
             continue;
         };
-        let beat = left.trim().parse::<f64>().ok();
+        let beat = parse_beat_or_row(left.trim());
         let bpm = right.trim().parse::<f64>().ok();
         if let (Some(beat), Some(bpm)) = (beat, bpm) {
-            let beat = beat as f32 as f64;
             let bpm = bpm as f32 as f64;
             bpms_vec.push((beat, bpm));
         }
