@@ -7,10 +7,8 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::bpm::{clean_timing_map, compute_last_beat};
-use rssp::parse::{extract_sections, parse_offset_seconds, parse_version, split_notes_fields};
-use rssp::stats::minimize_chart_and_count_with_lanes;
-use rssp::timing::{round_millis, steps_timing_allowed, TimingData, TimingFormat};
+use rssp::timing::round_millis;
+use rssp::{compute_chart_durations, ChartDuration, TimingOffsets};
 
 #[derive(Debug, Deserialize)]
 struct GoldenChart {
@@ -20,13 +18,6 @@ struct GoldenChart {
     duration_seconds: f64,
     #[serde(default)]
     meter: Option<u32>,
-}
-
-#[derive(Debug, Clone)]
-struct ChartDuration {
-    step_type: String,
-    difficulty: String,
-    duration_seconds: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -40,173 +31,6 @@ struct TestCase {
 struct Failure {
     name: String,
     message: String,
-}
-
-fn compute_chart_durations(
-    simfile_data: &[u8],
-    extension: &str,
-) -> Result<Vec<ChartDuration>, String> {
-    let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
-
-    let timing_format = TimingFormat::from_extension(extension);
-    let ssc_version = parse_version(parsed_data.version, timing_format);
-    let allow_steps_timing = steps_timing_allowed(ssc_version, timing_format);
-    let song_offset = parse_offset_seconds(parsed_data.offset);
-
-    let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"")).unwrap_or("");
-    let cleaned_global_bpms = clean_timing_map(global_bpms_raw);
-    let global_stops_raw = parsed_data
-        .stops
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .unwrap_or("");
-    let cleaned_global_stops = clean_timing_map(global_stops_raw);
-    let global_delays_raw = parsed_data
-        .delays
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .unwrap_or("");
-    let cleaned_global_delays = clean_timing_map(global_delays_raw);
-    let global_warps_raw = parsed_data
-        .warps
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .unwrap_or("");
-    let cleaned_global_warps = clean_timing_map(global_warps_raw);
-    let global_speeds_raw = parsed_data
-        .speeds
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .unwrap_or("");
-    let cleaned_global_speeds = clean_timing_map(global_speeds_raw);
-    let global_scrolls_raw = parsed_data
-        .scrolls
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .unwrap_or("");
-    let cleaned_global_scrolls = clean_timing_map(global_scrolls_raw);
-    let global_fakes_raw = parsed_data
-        .fakes
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .unwrap_or("");
-    let cleaned_global_fakes = clean_timing_map(global_fakes_raw);
-
-    fn clean_chart_tag(tag: Option<Vec<u8>>) -> Option<String> {
-        tag.and_then(|bytes| std::str::from_utf8(&bytes).ok().map(clean_timing_map))
-            .filter(|s| !s.is_empty())
-    }
-
-    let mut results = Vec::new();
-
-    for entry in parsed_data.notes_list {
-        let (fields, chart_data) = split_notes_fields(&entry.notes);
-        if fields.len() < 5 {
-            continue;
-        }
-
-        let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_string();
-        if step_type == "lights-cabinet" {
-            continue;
-        }
-        let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
-        let difficulty = rssp::normalize_difficulty_label(difficulty_raw);
-
-        let lanes = rssp::step_type_lanes(&step_type);
-        let (mut minimized_chart, _stats, _measure_densities) =
-            minimize_chart_and_count_with_lanes(chart_data, lanes);
-        if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
-            minimized_chart.truncate(pos + 1);
-        }
-
-        let chart_bpms = if allow_steps_timing {
-            clean_chart_tag(entry.chart_bpms)
-        } else {
-            None
-        };
-        let chart_stops = if allow_steps_timing {
-            clean_chart_tag(entry.chart_stops)
-        } else {
-            None
-        };
-        let chart_delays = if allow_steps_timing {
-            clean_chart_tag(entry.chart_delays)
-        } else {
-            None
-        };
-        let chart_warps = if allow_steps_timing {
-            clean_chart_tag(entry.chart_warps)
-        } else {
-            None
-        };
-        let chart_speeds = if allow_steps_timing {
-            clean_chart_tag(entry.chart_speeds)
-        } else {
-            None
-        };
-        let chart_scrolls = if allow_steps_timing {
-            clean_chart_tag(entry.chart_scrolls)
-        } else {
-            None
-        };
-        let chart_fakes = if allow_steps_timing {
-            clean_chart_tag(entry.chart_fakes)
-        } else {
-            None
-        };
-
-        let chart_has_timing = allow_steps_timing
-            && (chart_bpms.is_some()
-                || chart_stops.is_some()
-                || chart_delays.is_some()
-                || chart_warps.is_some()
-                || chart_speeds.is_some()
-                || chart_scrolls.is_some()
-                || chart_fakes.is_some());
-        let (timing_bpms_global, timing_stops_global, timing_delays_global, timing_warps_global,
-            timing_speeds_global, timing_scrolls_global, timing_fakes_global) =
-            if chart_has_timing {
-                ("", "", "", "", "", "", "")
-            } else {
-                (
-                    cleaned_global_bpms.as_str(),
-                    cleaned_global_stops.as_str(),
-                    cleaned_global_delays.as_str(),
-                    cleaned_global_warps.as_str(),
-                    cleaned_global_speeds.as_str(),
-                    cleaned_global_scrolls.as_str(),
-                    cleaned_global_fakes.as_str(),
-                )
-            };
-
-        let target_beat = compute_last_beat(&minimized_chart, lanes);
-        let duration = if target_beat <= 0.0 {
-            0.0
-        } else {
-            let timing = TimingData::from_chart_data(
-                song_offset,
-                0.0,
-                chart_bpms.as_deref(),
-                timing_bpms_global,
-                chart_stops.as_deref(),
-                timing_stops_global,
-                chart_delays.as_deref(),
-                timing_delays_global,
-                chart_warps.as_deref(),
-                timing_warps_global,
-                chart_speeds.as_deref(),
-                timing_speeds_global,
-                chart_scrolls.as_deref(),
-                timing_scrolls_global,
-                chart_fakes.as_deref(),
-                timing_fakes_global,
-                timing_format,
-            );
-            timing.get_time_for_beat(target_beat)
-        };
-
-        results.push(ChartDuration {
-            step_type,
-            difficulty,
-            duration_seconds: round_millis(duration),
-        });
-    }
-
-    Ok(results)
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
@@ -241,7 +65,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     let golden_charts: Vec<GoldenChart> = serde_json::from_slice(&json_bytes)
         .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
 
-    let rssp_charts = compute_chart_durations(&raw_bytes, extension)
+    let rssp_charts = compute_chart_durations(&raw_bytes, extension, TimingOffsets::default())
         .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
 
     let mut golden_map: HashMap<(String, String), Vec<GoldenChart>> = HashMap::new();
