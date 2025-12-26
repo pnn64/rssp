@@ -906,7 +906,6 @@ impl TimingData {
         if elapsed_is_max {
             elapsed_time = f32::INFINITY;
         }
-        let beat_marker = (beat as f32) as f64;
         while curr_segment < max_segment {
             let mut event_row = i32::MAX;
             let mut event_type = TimingEvent::NotFound;
@@ -914,7 +913,7 @@ impl TimingData {
                 &mut event_row,
                 &mut event_type,
                 start,
-                beat_marker,
+                0.0,
                 false,
                 bpms,
                 warps,
