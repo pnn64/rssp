@@ -111,37 +111,34 @@ fn compute_chart_tech_counts(
             minimized_chart.truncate(pos + 1);
         }
 
-        let tech_counts = if lanes == 4 {
-            let chart_bpms = normalize_chart_tag(entry.chart_bpms);
-            let chart_stops = normalize_chart_tag(entry.chart_stops);
-            let chart_delays = normalize_chart_tag(entry.chart_delays);
-            let chart_warps = normalize_chart_tag(entry.chart_warps);
-            let chart_speeds = normalize_chart_tag(entry.chart_speeds);
-            let chart_scrolls = normalize_chart_tag(entry.chart_scrolls);
-            let chart_fakes = normalize_chart_tag(entry.chart_fakes);
-            let timing = TimingData::from_chart_data(
-                offset,
-                0.0,
-                chart_bpms.as_deref(),
-                &normalized_global_bpms,
-                chart_stops.as_deref(),
-                &normalized_global_stops,
-                chart_delays.as_deref(),
-                &normalized_global_delays,
-                chart_warps.as_deref(),
-                &normalized_global_warps,
-                chart_speeds.as_deref(),
-                &normalized_global_speeds,
-                chart_scrolls.as_deref(),
-                &normalized_global_scrolls,
-                chart_fakes.as_deref(),
-                &normalized_global_fakes,
-                timing_format,
-            );
-            step_parity::analyze_with_timing(&minimized_chart, &timing)
-        } else {
-            step_parity::TechCounts::default()
-        };
+        let chart_bpms = normalize_chart_tag(entry.chart_bpms);
+        let chart_stops = normalize_chart_tag(entry.chart_stops);
+        let chart_delays = normalize_chart_tag(entry.chart_delays);
+        let chart_warps = normalize_chart_tag(entry.chart_warps);
+        let chart_speeds = normalize_chart_tag(entry.chart_speeds);
+        let chart_scrolls = normalize_chart_tag(entry.chart_scrolls);
+        let chart_fakes = normalize_chart_tag(entry.chart_fakes);
+        let timing = TimingData::from_chart_data(
+            offset,
+            0.0,
+            chart_bpms.as_deref(),
+            &normalized_global_bpms,
+            chart_stops.as_deref(),
+            &normalized_global_stops,
+            chart_delays.as_deref(),
+            &normalized_global_delays,
+            chart_warps.as_deref(),
+            &normalized_global_warps,
+            chart_speeds.as_deref(),
+            &normalized_global_speeds,
+            chart_scrolls.as_deref(),
+            &normalized_global_scrolls,
+            chart_fakes.as_deref(),
+            &normalized_global_fakes,
+            timing_format,
+        );
+        let tech_counts =
+            step_parity::analyze_timing_lanes(&minimized_chart, &timing, lanes);
 
         results.push(ChartTechCounts {
             step_type,

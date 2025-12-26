@@ -860,9 +860,9 @@ pub fn analyze(
             chart.max_nps = max_nps;
             chart.median_nps = median_nps;
 
-            if options.compute_tech_counts && lanes == 4 {
+            if options.compute_tech_counts {
                 chart.tech_counts =
-                    step_parity::analyze_with_timing(&chart.minimized_note_data, &timing);
+                    step_parity::analyze_timing_lanes(&chart.minimized_note_data, &timing, lanes);
             }
 
             let timing_stats = compute_timing_aware_stats(&chart.minimized_note_data, lanes, &timing);

@@ -3,7 +3,6 @@ use std::rc::Rc;
 
 use crate::timing::{beat_to_note_row_f32_exact, TimingData, ROWS_PER_BEAT};
 
-const NUM_TRACKS: usize = 4;
 const INVALID_COLUMN: isize = -1;
 const CLM_SECOND_INVALID: f32 = -1.0;
 const MAX_NOTE_ROW: i32 = 1 << 30;
@@ -91,6 +90,24 @@ impl StageLayout {
             up_arrows: vec![2],
             down_arrows: vec![1],
             side_arrows: vec![0, 3],
+        }
+    }
+
+    fn new_dance_double() -> Self {
+        Self {
+            columns: vec![
+                StagePoint { x: 0.0, y: 1.0 },
+                StagePoint { x: 1.0, y: 0.0 },
+                StagePoint { x: 1.0, y: 2.0 },
+                StagePoint { x: 2.0, y: 1.0 },
+                StagePoint { x: 3.0, y: 1.0 },
+                StagePoint { x: 4.0, y: 0.0 },
+                StagePoint { x: 4.0, y: 2.0 },
+                StagePoint { x: 5.0, y: 1.0 },
+            ],
+            up_arrows: vec![2, 6],
+            down_arrows: vec![1, 5],
+            side_arrows: vec![0, 3, 4, 7],
         }
     }
 
@@ -1632,6 +1649,14 @@ pub struct TechCounts {
     pub doublesteps: u32,
 }
 
+fn layout_for_lanes(lanes: usize) -> Option<StageLayout> {
+    match lanes {
+        4 => Some(StageLayout::new_dance_single()),
+        8 => Some(StageLayout::new_dance_double()),
+        _ => None,
+    }
+}
+
 fn time_between_beats(start: f32, end: f32, bpm_map: &[(f64, f64)]) -> f64 {
     if end <= start {
         return 0.0;
@@ -1942,8 +1967,19 @@ const DOUBLESTEP_CUTOFF: f32 = 0.235;
 const TIE_BREAKER_EPSILON: f32 = 1e-2;
 
 pub fn analyze(minimized_note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> TechCounts {
-    let layout = StageLayout::new_dance_single();
-    let parsed_rows = parse_chart_rows(minimized_note_data, bpm_map, offset);
+    analyze_lanes(minimized_note_data, bpm_map, offset, 4)
+}
+
+pub fn analyze_lanes(
+    minimized_note_data: &[u8],
+    bpm_map: &[(f64, f64)],
+    offset: f64,
+    lanes: usize,
+) -> TechCounts {
+    let Some(layout) = layout_for_lanes(lanes) else {
+        return TechCounts::default();
+    };
+    let parsed_rows = parse_chart_rows(minimized_note_data, bpm_map, offset, layout.column_count());
     let note_data = build_intermediate_notes(&parsed_rows);
     let mut generator = StepParityGenerator::new(layout.clone());
     if !generator.analyze_note_data(note_data, layout.column_count()) {
@@ -1953,9 +1989,20 @@ pub fn analyze(minimized_note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) 
 }
 
 pub fn analyze_with_timing(minimized_note_data: &[u8], timing: &TimingData) -> TechCounts {
-    let layout = StageLayout::new_dance_single();
-    let parsed_rows = parse_chart_rows_with_timing(minimized_note_data, timing);
-    let note_data = build_intermediate_notes(&parsed_rows);
+    analyze_timing_lanes(minimized_note_data, timing, 4)
+}
+
+pub fn analyze_timing_lanes(
+    minimized_note_data: &[u8],
+    timing: &TimingData,
+    lanes: usize,
+) -> TechCounts {
+    let Some(layout) = layout_for_lanes(lanes) else {
+        return TechCounts::default();
+    };
+    let parsed_rows =
+        parse_chart_rows_with_timing(minimized_note_data, timing, layout.column_count());
+    let note_data = build_intermediate_notes_with_timing(&parsed_rows, timing);
     let mut generator = StepParityGenerator::new(layout.clone());
     if !generator.analyze_note_data(note_data, layout.column_count()) {
         return TechCounts::default();
@@ -1967,9 +2014,9 @@ fn beat_to_time(beat: f64, bpm_map: &[(f64, f64)], offset: f64) -> f64 {
     time_between_beats(0.0, beat as f32, bpm_map) - offset
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct ParsedRow {
-    chars: [u8; NUM_TRACKS],
+    chars: Vec<u8>,
     row: i32,
     beat: f32,
     second: f32,
@@ -1993,9 +2040,17 @@ fn trim_ascii_whitespace(mut line: &[u8]) -> &[u8] {
     line
 }
 
-fn parse_chart_rows(note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> Vec<ParsedRow> {
+fn parse_chart_rows(
+    note_data: &[u8],
+    bpm_map: &[(f64, f64)],
+    offset: f64,
+    column_count: usize,
+) -> Vec<ParsedRow> {
     let mut rows = Vec::new();
     let mut measure_index = 0usize;
+    if column_count == 0 {
+        return rows;
+    }
 
     for measure in note_data.split(|&b| b == b',') {
         if measure.is_empty() {
@@ -2024,8 +2079,8 @@ fn parse_chart_rows(note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> Ve
             let note_row = beat_to_note_row_f32_exact(beat);
             let beat = note_row as f32 / ROWS_PER_BEAT as f32;
             let second = beat_to_time(beat as f64, bpm_map, offset);
-            let mut chars = [b'0'; NUM_TRACKS];
-            for (col, ch) in line.iter().take(NUM_TRACKS).enumerate() {
+            let mut chars = vec![b'0'; column_count];
+            for (col, ch) in line.iter().take(column_count).enumerate() {
                 chars[col] = *ch;
             }
             rows.push(ParsedRow {
@@ -2042,9 +2097,16 @@ fn parse_chart_rows(note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> Ve
     rows
 }
 
-fn parse_chart_rows_with_timing(note_data: &[u8], timing: &TimingData) -> Vec<ParsedRow> {
+fn parse_chart_rows_with_timing(
+    note_data: &[u8],
+    timing: &TimingData,
+    column_count: usize,
+) -> Vec<ParsedRow> {
     let mut rows = Vec::new();
     let mut measure_index = 0usize;
+    if column_count == 0 {
+        return rows;
+    }
 
     for measure in note_data.split(|&b| b == b',') {
         if measure.is_empty() {
@@ -2073,8 +2135,8 @@ fn parse_chart_rows_with_timing(note_data: &[u8], timing: &TimingData) -> Vec<Pa
             let note_row = beat_to_note_row_f32_exact(beat);
             let beat = note_row as f32 / ROWS_PER_BEAT as f32;
             let second = timing.get_time_for_beat_f32(beat as f64);
-            let mut chars = [b'0'; NUM_TRACKS];
-            for (col, ch) in line.iter().take(NUM_TRACKS).enumerate() {
+            let mut chars = vec![b'0'; column_count];
+            for (col, ch) in line.iter().take(column_count).enumerate() {
                 chars[col] = *ch;
             }
             rows.push(ParsedRow {
@@ -2092,11 +2154,15 @@ fn parse_chart_rows_with_timing(note_data: &[u8], timing: &TimingData) -> Vec<Pa
 }
 
 fn build_intermediate_notes(rows: &[ParsedRow]) -> Vec<IntermediateNoteData> {
-    let mut hold_starts: [Option<(usize, f32)>; NUM_TRACKS] = [None; NUM_TRACKS];
+    let column_count = rows.first().map(|row| row.chars.len()).unwrap_or(0);
+    if column_count == 0 {
+        return Vec::new();
+    }
+    let mut hold_starts = vec![None; column_count];
     let mut hold_lengths: HashMap<(usize, usize), f32> = HashMap::new();
 
     for (row_idx, row) in rows.iter().enumerate() {
-        for col in 0..NUM_TRACKS {
+        for col in 0..column_count {
             match row.chars[col] {
                 b'2' | b'4' => {
                     hold_starts[col] = Some((row_idx, row.beat));
@@ -2115,7 +2181,7 @@ fn build_intermediate_notes(rows: &[ParsedRow]) -> Vec<IntermediateNoteData> {
 
     let mut notes = Vec::new();
     for (row_idx, row) in rows.iter().enumerate() {
-        for col in 0..NUM_TRACKS {
+        for col in 0..column_count {
             let ch = row.chars[col];
             let note_type = match ch {
                 b'0' => TapNoteType::Empty,
@@ -2139,6 +2205,81 @@ fn build_intermediate_notes(rows: &[ParsedRow]) -> Vec<IntermediateNoteData> {
             note.beat = row.beat;
             note.second = row.second;
             note.fake = note_type == TapNoteType::Fake;
+            note.subtype = match ch {
+                b'4' => TapNoteSubType::Roll,
+                b'2' => TapNoteSubType::Hold,
+                _ => TapNoteSubType::Invalid,
+            };
+
+            if note_type == TapNoteType::HoldHead {
+                note.hold_length = hold_lengths
+                    .get(&(row_idx, col))
+                    .copied()
+                    .unwrap_or(MISSING_HOLD_LENGTH_BEATS);
+            }
+
+            notes.push(note);
+        }
+    }
+    notes
+}
+
+fn build_intermediate_notes_with_timing(
+    rows: &[ParsedRow],
+    timing: &TimingData,
+) -> Vec<IntermediateNoteData> {
+    let column_count = rows.first().map(|row| row.chars.len()).unwrap_or(0);
+    if column_count == 0 {
+        return Vec::new();
+    }
+    let mut hold_starts = vec![None; column_count];
+    let mut hold_lengths: HashMap<(usize, usize), f32> = HashMap::new();
+
+    for (row_idx, row) in rows.iter().enumerate() {
+        for col in 0..column_count {
+            match row.chars[col] {
+                b'2' | b'4' => {
+                    hold_starts[col] = Some((row_idx, row.beat));
+                }
+                b'3' => {
+                    if let Some((start_idx, start_beat)) = hold_starts[col] {
+                        let length = row.beat - start_beat;
+                        hold_lengths.insert((start_idx, col), length);
+                        hold_starts[col] = None;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut notes = Vec::new();
+    for (row_idx, row) in rows.iter().enumerate() {
+        let row_fake = timing.is_fake_at_row(row.row);
+        for col in 0..column_count {
+            let ch = row.chars[col];
+            let note_type = match ch {
+                b'0' => TapNoteType::Empty,
+                b'1' => TapNoteType::Tap,
+                b'2' | b'4' => TapNoteType::HoldHead,
+                b'3' => TapNoteType::HoldTail,
+                b'M' => TapNoteType::Mine,
+                b'K' | b'L' => TapNoteType::Tap,
+                b'F' => TapNoteType::Fake,
+                _ => TapNoteType::Empty,
+            };
+
+            if matches!(note_type, TapNoteType::Empty | TapNoteType::HoldTail) {
+                continue;
+            }
+
+            let mut note = IntermediateNoteData::default();
+            note.note_type = note_type;
+            note.col = col;
+            note.row = row.row as usize;
+            note.beat = row.beat;
+            note.second = row.second;
+            note.fake = note_type == TapNoteType::Fake || row_fake;
             note.subtype = match ch {
                 b'4' => TapNoteSubType::Roll,
                 b'2' => TapNoteSubType::Hold,
