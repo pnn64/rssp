@@ -87,8 +87,7 @@ fn compute_chart_durations(
     let cleaned_global_fakes = clean_timing_map(global_fakes_raw);
 
     fn clean_chart_tag(tag: Option<Vec<u8>>) -> Option<String> {
-        tag.and_then(|bytes| std::str::from_utf8(&bytes).ok())
-            .map(clean_timing_map)
+        tag.and_then(|bytes| std::str::from_utf8(&bytes).ok().map(clean_timing_map))
             .filter(|s| !s.is_empty())
     }
 
