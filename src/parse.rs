@@ -92,6 +92,7 @@ pub struct ParsedChartEntry {
     pub chart_speeds: Option<Vec<u8>>,
     pub chart_scrolls: Option<Vec<u8>>,
     pub chart_fakes: Option<Vec<u8>>,
+    pub chart_offset: Option<Vec<u8>>,
     pub chart_time_signatures: Option<Vec<u8>>,
     pub chart_labels: Option<Vec<u8>>,
     pub chart_tickcounts: Option<Vec<u8>>,
@@ -231,6 +232,7 @@ pub fn extract_sections<'a>(
                 let chart_speeds = parse_subtag(notedata_slice, b"#SPEEDS:", true);
                 let chart_scrolls = parse_subtag(notedata_slice, b"#SCROLLS:", true);
                 let chart_fakes = parse_subtag(notedata_slice, b"#FAKES:", true);
+                let chart_offset = parse_subtag(notedata_slice, b"#OFFSET:", true);
                 let chart_time_signatures =
                     parse_subtag(notedata_slice, b"#TIMESIGNATURES:", true);
                 let chart_labels = parse_subtag(notedata_slice, b"#LABELS:", true);
@@ -249,6 +251,7 @@ pub fn extract_sections<'a>(
                     chart_speeds,
                     chart_scrolls,
                     chart_fakes,
+                    chart_offset,
                     chart_time_signatures,
                     chart_labels,
                     chart_tickcounts,
@@ -283,6 +286,7 @@ pub fn extract_sections<'a>(
                     chart_speeds: None,
                     chart_scrolls: None,
                     chart_fakes,
+                    chart_offset: None,
                     chart_time_signatures: None,
                     chart_labels: None,
                     chart_tickcounts: None,

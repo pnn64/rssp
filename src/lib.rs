@@ -31,6 +31,7 @@ use crate::tech::parse_step_artist_and_tech;
 use crate::timing::{
     compute_row_to_beat,
     compute_timing_segments,
+    round_millis,
     steps_timing_allowed,
     TimingData,
     TimingFormat,
