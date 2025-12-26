@@ -1,11 +1,13 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
-use crate::timing::{beat_to_note_row, note_row_to_beat, TimingData};
+use crate::timing::{beat_to_note_row_f32_exact, TimingData, ROWS_PER_BEAT};
 
 const NUM_TRACKS: usize = 4;
 const INVALID_COLUMN: isize = -1;
 const CLM_SECOND_INVALID: f32 = -1.0;
+const MAX_NOTE_ROW: i32 = 1 << 30;
+const MISSING_HOLD_LENGTH_BEATS: f32 = MAX_NOTE_ROW as f32 / ROWS_PER_BEAT as f32;
 
 // Weights and thresholds from ITGmania source
 const DOUBLESTEP_WEIGHT: f32 = 850.0;
@@ -2017,11 +2019,11 @@ fn parse_chart_rows(note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> Ve
         }
 
         for (i, line) in lines.iter().enumerate() {
-            let percent = i as f64 / num_rows as f64;
-            let beat = (measure_index as f64 + percent) * 4.0;
-            let note_row = beat_to_note_row(beat);
-            let beat = note_row_to_beat(note_row);
-            let second = beat_to_time(beat, bpm_map, offset);
+            let percent = i as f32 / num_rows as f32;
+            let beat = (measure_index as f32 + percent) * 4.0;
+            let note_row = beat_to_note_row_f32_exact(beat);
+            let beat = note_row as f32 / ROWS_PER_BEAT as f32;
+            let second = beat_to_time(beat as f64, bpm_map, offset);
             let mut chars = [b'0'; NUM_TRACKS];
             for (col, ch) in line.iter().take(NUM_TRACKS).enumerate() {
                 chars[col] = *ch;
@@ -2029,7 +2031,7 @@ fn parse_chart_rows(note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> Ve
             rows.push(ParsedRow {
                 chars,
                 row: note_row,
-                beat: beat as f32,
+                beat,
                 second: second as f32,
             });
         }
@@ -2066,11 +2068,11 @@ fn parse_chart_rows_with_timing(note_data: &[u8], timing: &TimingData) -> Vec<Pa
         }
 
         for (i, line) in lines.iter().enumerate() {
-            let percent = i as f64 / num_rows as f64;
-            let beat = (measure_index as f64 + percent) * 4.0;
-            let note_row = beat_to_note_row(beat);
-            let beat = note_row_to_beat(note_row);
-            let second = timing.get_time_for_beat(beat);
+            let percent = i as f32 / num_rows as f32;
+            let beat = (measure_index as f32 + percent) * 4.0;
+            let note_row = beat_to_note_row_f32_exact(beat);
+            let beat = note_row as f32 / ROWS_PER_BEAT as f32;
+            let second = timing.get_time_for_beat_f32(beat as f64);
             let mut chars = [b'0'; NUM_TRACKS];
             for (col, ch) in line.iter().take(NUM_TRACKS).enumerate() {
                 chars[col] = *ch;
@@ -2078,7 +2080,7 @@ fn parse_chart_rows_with_timing(note_data: &[u8], timing: &TimingData) -> Vec<Pa
             rows.push(ParsedRow {
                 chars,
                 row: note_row,
-                beat: beat as f32,
+                beat,
                 second: second as f32,
             });
         }
@@ -2144,7 +2146,10 @@ fn build_intermediate_notes(rows: &[ParsedRow]) -> Vec<IntermediateNoteData> {
             };
 
             if note_type == TapNoteType::HoldHead {
-                note.hold_length = hold_lengths.get(&(row_idx, col)).copied().unwrap_or(0.0);
+                note.hold_length = hold_lengths
+                    .get(&(row_idx, col))
+                    .copied()
+                    .unwrap_or(MISSING_HOLD_LENGTH_BEATS);
             }
 
             notes.push(note);

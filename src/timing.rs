@@ -92,7 +92,7 @@ pub(crate) fn beat_to_note_row(beat: f64) -> i32 {
 }
 
 #[inline(always)]
-fn beat_to_note_row_f32_exact(beat: f32) -> i32 {
+pub(crate) fn beat_to_note_row_f32_exact(beat: f32) -> i32 {
     lrint_ties_even_f32(beat * ROWS_PER_BEAT as f32)
 }
 
