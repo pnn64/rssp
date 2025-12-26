@@ -87,5 +87,9 @@ harness = false
 name = "duration_perf"
 harness = false
 
+[[bench]]
+name = "nps_perf"
+harness = false
+
 [profile.bench]
 debug = true
