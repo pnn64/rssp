@@ -1019,11 +1019,7 @@ pub fn compute_chart_durations(
         let difficulty = resolve_difficulty_label(difficulty_raw, description, meter_raw, extension);
 
         let lanes = step_type_lanes(&step_type);
-        let (mut minimized_chart, _stats, _measure_densities) =
-            minimize_chart_and_count_with_lanes(chart_data, lanes);
-        if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
-            minimized_chart.truncate(pos + 1);
-        }
+        let target_beat = compute_last_beat_from_chart_data(chart_data, lanes);
 
         let chart_offset = if allow_steps_timing && entry.chart_offset.is_some() {
             parse_offset_seconds(entry.chart_offset.as_deref())
@@ -1090,7 +1086,6 @@ pub fn compute_chart_durations(
                 )
             };
 
-        let target_beat = compute_last_beat(&minimized_chart, lanes);
         let timing = TimingData::from_chart_data(
             chart_offset,
             0.0,

@@ -715,6 +715,125 @@ fn compute_last_beat_impl<const LANES: usize>(minimized_note_data: &[u8]) -> f64
     crate::timing::note_row_to_beat(row)
 }
 
+fn update_last_object_for_measure<const LANES: usize>(
+    measure: &mut Vec<[u8; LANES]>,
+    measure_idx: usize,
+    hold_depths: &mut [u32; LANES],
+    last_measure_idx: &mut Option<usize>,
+    last_row_in_measure: &mut usize,
+    last_rows_in_measure: &mut usize,
+) {
+    if measure.is_empty() {
+        return;
+    }
+    crate::stats::minimize_measure(measure);
+    let rows_in_measure = measure.len();
+
+    for (row_idx, row) in measure.iter().enumerate() {
+        let mut has_object = false;
+        for (col, &ch) in row.iter().enumerate() {
+            match ch {
+                b'1' | b'M' | b'K' | b'L' | b'F' => {
+                    has_object = true;
+                }
+                b'2' | b'4' => {
+                    hold_depths[col] = hold_depths[col].saturating_add(1);
+                }
+                b'3' => {
+                    if hold_depths[col] > 0 {
+                        hold_depths[col] -= 1;
+                        has_object = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if has_object {
+            *last_measure_idx = Some(measure_idx);
+            *last_row_in_measure = row_idx;
+            *last_rows_in_measure = rows_in_measure;
+        }
+    }
+
+    measure.clear();
+}
+
+fn compute_last_beat_from_chart_data_impl<const LANES: usize>(notes_data: &[u8]) -> f64 {
+    let mut measure = Vec::with_capacity(64);
+    let mut hold_depths = [0u32; LANES];
+    let mut last_measure_idx: Option<usize> = None;
+    let mut last_row_in_measure: usize = 0;
+    let mut last_rows_in_measure: usize = 0;
+    let mut measure_idx = 0usize;
+    let mut saw_semicolon = false;
+
+    for line_raw in notes_data.split(|&b| b == b'\n') {
+        let mut start = 0usize;
+        while start < line_raw.len() && line_raw[start].is_ascii_whitespace() {
+            start += 1;
+        }
+        let line = &line_raw[start..];
+
+        if line.is_empty() || line.first() == Some(&b'/') {
+            continue;
+        }
+
+        match line.first() {
+            Some(b',') => {
+                update_last_object_for_measure(
+                    &mut measure,
+                    measure_idx,
+                    &mut hold_depths,
+                    &mut last_measure_idx,
+                    &mut last_row_in_measure,
+                    &mut last_rows_in_measure,
+                );
+                measure_idx += 1;
+            }
+            Some(b';') => {
+                update_last_object_for_measure(
+                    &mut measure,
+                    measure_idx,
+                    &mut hold_depths,
+                    &mut last_measure_idx,
+                    &mut last_row_in_measure,
+                    &mut last_rows_in_measure,
+                );
+                saw_semicolon = true;
+                break;
+            }
+            Some(_) if line.len() >= LANES => {
+                let mut arr = [0u8; LANES];
+                arr.copy_from_slice(&line[..LANES]);
+                measure.push(arr);
+            }
+            _ => {}
+        }
+    }
+
+    if !saw_semicolon {
+        update_last_object_for_measure(
+            &mut measure,
+            measure_idx,
+            &mut hold_depths,
+            &mut last_measure_idx,
+            &mut last_row_in_measure,
+            &mut last_rows_in_measure,
+        );
+    }
+
+    let Some(measure_idx) = last_measure_idx else {
+        return 0.0;
+    };
+
+    let total_rows_in_measure = last_rows_in_measure.max(1) as f64;
+    let row_index = last_row_in_measure as f64;
+    let beats_into_measure = 4.0 * (row_index / total_rows_in_measure);
+    let beat = (measure_idx as f64) * 4.0 + beats_into_measure;
+    let row = crate::timing::beat_to_note_row(beat);
+    crate::timing::note_row_to_beat(row)
+}
+
 /// Computes the beat of the last playable object in the chart from minimized note data.
 ///
 /// The minimized format produced by `minimize_chart_and_count_with_lanes` is:
@@ -726,6 +845,14 @@ pub fn compute_last_beat(minimized_note_data: &[u8], lanes: usize) -> f64 {
         4 => compute_last_beat_impl::<4>(minimized_note_data),
         8 => compute_last_beat_impl::<8>(minimized_note_data),
         _ => compute_last_beat_impl::<4>(minimized_note_data),
+    }
+}
+
+pub(crate) fn compute_last_beat_from_chart_data(notes_data: &[u8], lanes: usize) -> f64 {
+    match lanes {
+        4 => compute_last_beat_from_chart_data_impl::<4>(notes_data),
+        8 => compute_last_beat_from_chart_data_impl::<8>(notes_data),
+        _ => compute_last_beat_from_chart_data_impl::<4>(notes_data),
     }
 }
 
