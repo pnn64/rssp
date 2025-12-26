@@ -1189,8 +1189,10 @@ pub fn compute_chart_peak_nps(
         if step_type == "lights-cabinet" {
             continue;
         }
+        let description = std::str::from_utf8(fields[1]).unwrap_or("").trim();
         let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
-        let difficulty = normalize_difficulty_label(difficulty_raw);
+        let meter_raw = std::str::from_utf8(fields[3]).unwrap_or("").trim();
+        let difficulty = resolve_difficulty_label(difficulty_raw, description, meter_raw, extension);
 
         let lanes = step_type_lanes(&step_type);
         let (_minimized, _stats, measure_densities) =
