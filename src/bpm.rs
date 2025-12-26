@@ -1032,8 +1032,6 @@ pub fn compute_measure_nps_vec_with_timing(
     if measure_densities.is_empty() {
         return out;
     }
-
-    let mut cursor = timing.time_cursor_f32();
     let mut start_beat = 0.0_f64;
     let mut end_beat = 4.0_f64;
 
@@ -1045,8 +1043,8 @@ pub fn compute_measure_nps_vec_with_timing(
             continue;
         }
 
-        let start_time = timing.time_for_beat_f32_from(start_beat, &mut cursor);
-        let end_time = timing.time_for_beat_f32_from(end_beat, &mut cursor);
+        let start_time = timing.get_time_for_beat_f32(start_beat);
+        let end_time = timing.get_time_for_beat_f32(end_beat);
         let duration = end_time - start_time;
 
         if duration <= 0.12 {
