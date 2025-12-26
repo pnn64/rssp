@@ -802,7 +802,7 @@ impl StepParityGenerator {
             if cost[i] == f32::MAX {
                 continue;
             }
-            for &(neighbor_id, weight) in self.nodes[i].neighbors.iter().rev() {
+            for &(neighbor_id, weight) in self.nodes[i].neighbors.iter() {
                 let new_cost = cost[i] + weight;
                 if new_cost < cost[neighbor_id] {
                     cost[neighbor_id] = new_cost;
@@ -854,56 +854,14 @@ impl StepParityGenerator {
     }
 
     fn add_edge(&mut self, from_id: usize, to_id: usize, cost: f32) {
-        let adjusted_cost = cost + self.tie_breaker_cost(from_id, to_id);
         if let Some(node) = self.nodes.get_mut(from_id) {
             if let Some((_, existing_cost)) = node.neighbors.iter_mut().find(|(id, _)| *id == to_id)
             {
-                *existing_cost = adjusted_cost;
+                *existing_cost = cost;
             } else {
-                node.neighbors.push((to_id, adjusted_cost));
+                node.neighbors.push((to_id, cost));
             }
         }
-    }
-
-    fn tie_breaker_cost(&self, from_id: usize, to_id: usize) -> f32 {
-        let Some(from_node) = self.nodes.get(from_id) else {
-            return 0.0;
-        };
-        let Some(to_node) = self.nodes.get(to_id) else {
-            return 0.0;
-        };
-
-        let note_count = to_node
-            .state
-            .columns
-            .iter()
-            .filter(|&&foot| foot != Foot::None)
-            .count();
-        if note_count != 1 {
-            return 0.0;
-        }
-
-        let from_state = &from_node.state;
-        let to_state = &to_node.state;
-        let mut switches = 0;
-        let cols = from_state
-            .combined_columns
-            .len()
-            .min(to_state.columns.len());
-        for c in 0..cols {
-            let prev = from_state.combined_columns[c];
-            let curr = to_state.columns[c];
-            if prev == Foot::None || curr == Foot::None {
-                continue;
-            }
-            if prev != curr && OTHER_PART_OF_FOOT[prev.as_index()] != curr {
-                if self.layout.up_arrows.contains(&c) {
-                    switches += 1;
-                }
-            }
-        }
-
-        switches as f32 * TIE_BREAKER_EPSILON
     }
 }
 
@@ -1964,8 +1922,6 @@ fn is_footswitch(column: usize, current_row: &Row, previous_row: &Row, elapsed_t
 const JACK_CUTOFF: f32 = 0.176;
 const FOOTSWITCH_CUTOFF: f32 = 0.3;
 const DOUBLESTEP_CUTOFF: f32 = 0.235;
-const TIE_BREAKER_EPSILON: f32 = 1e-2;
-
 pub fn analyze(minimized_note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> TechCounts {
     analyze_lanes(minimized_note_data, bpm_map, offset, 4)
 }
