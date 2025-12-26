@@ -991,6 +991,33 @@ pub fn compute_measure_nps_vec(measure_densities: &[usize], bpm_map: &[(f64, f64
     out
 }
 
+/// Computes NPS per measure using TimingData (matches Simply Love timing semantics).
+pub fn compute_measure_nps_vec_with_timing(
+    measure_densities: &[usize],
+    timing: &TimingData,
+) -> Vec<f64> {
+    let mut out = Vec::with_capacity(measure_densities.len());
+    for (i, &density) in measure_densities.iter().enumerate() {
+        if density == 0 {
+            out.push(0.0);
+            continue;
+        }
+
+        let start_beat = i as f64 * 4.0;
+        let end_beat = (i as f64 + 1.0) * 4.0;
+        let start_time = timing.get_time_for_beat_f32(start_beat);
+        let end_time = timing.get_time_for_beat_f32(end_beat);
+        let duration = end_time - start_time;
+
+        if duration <= 0.12 {
+            out.push(0.0);
+        } else {
+            out.push(density as f64 / duration);
+        }
+    }
+    out
+}
+
 /// Computes median of a pre-sorted slice of f64.
 fn median_of_sorted(sorted: &[f64]) -> f64 {
     let len = sorted.len();

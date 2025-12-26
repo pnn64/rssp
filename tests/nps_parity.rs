@@ -8,7 +8,7 @@ use serde::Deserialize;
 use walkdir::WalkDir;
 
 use rssp::bpm::{
-    compute_measure_nps_vec,
+    compute_measure_nps_vec_with_timing,
     get_nps_stats,
     normalize_chart_tag,
     normalize_float_digits,
@@ -149,13 +149,7 @@ fn compute_chart_nps(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartNp
             &normalized_global_fakes,
             timing_format,
         );
-        let bpm_map: Vec<(f64, f64)> = timing
-            .bpm_segments()
-            .iter()
-            .map(|(beat, bpm)| (*beat, *bpm))
-            .collect();
-
-        let measure_nps_vec = compute_measure_nps_vec(&measure_densities, &bpm_map);
+        let measure_nps_vec = compute_measure_nps_vec_with_timing(&measure_densities, &timing);
         let (max_nps, _median_nps) = get_nps_stats(&measure_nps_vec);
 
         results.push(ChartNps {

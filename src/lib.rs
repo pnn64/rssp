@@ -846,6 +846,13 @@ pub fn analyze(
             );
             let lanes = step_type_lanes(&chart.step_type_str);
 
+            let measure_nps_vec =
+                compute_measure_nps_vec_with_timing(&chart.measure_densities, &timing);
+            let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
+            chart.measure_nps_vec = measure_nps_vec;
+            chart.max_nps = max_nps;
+            chart.median_nps = median_nps;
+
             if options.compute_tech_counts && lanes == 4 {
                 chart.tech_counts =
                     step_parity::analyze_with_timing(&chart.minimized_note_data, &timing);
