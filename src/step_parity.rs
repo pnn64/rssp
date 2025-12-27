@@ -8,6 +8,7 @@ const INVALID_COLUMN: isize = -1;
 const CLM_SECOND_INVALID: f32 = -1.0;
 const MAX_NOTE_ROW: i32 = 1 << 30;
 const MISSING_HOLD_LENGTH_BEATS: f32 = MAX_NOTE_ROW as f32 / ROWS_PER_BEAT as f32;
+const HOLD_TAIL_EPS: f32 = 0.0005;
 
 // Weights and thresholds from ITGmania source
 const DOUBLESTEP_WEIGHT: f32 = 850.0;
@@ -574,18 +575,18 @@ impl StepParityGenerator {
         row.beat = counter.last_column_beat;
 
         for c in 0..self.column_count {
-            let active_hold = &counter.active_holds[c];
-            if active_hold.note_type == TapNoteType::Empty
-                || active_hold.second >= counter.last_column_second
+            if counter.active_holds[c].note_type == TapNoteType::Empty
+                || counter.active_holds[c].second >= counter.last_column_second
             {
                 row.holds[c] = IntermediateNoteData::default();
             } else {
-                let end_beat = active_hold.beat + active_hold.hold_length;
-                if (end_beat - counter.last_column_beat).abs() < 0.0005 {
+                row.holds[c] = counter.active_holds[c].clone();
+            }
+
+            if counter.active_holds[c].note_type != TapNoteType::Empty {
+                let end_beat = counter.active_holds[c].beat + counter.active_holds[c].hold_length;
+                if (end_beat - counter.last_column_beat).abs() < HOLD_TAIL_EPS {
                     row.hold_tails.insert(c);
-                    row.holds[c] = IntermediateNoteData::default();
-                } else {
-                    row.holds[c] = active_hold.clone();
                 }
             }
         }
