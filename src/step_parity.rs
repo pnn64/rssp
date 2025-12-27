@@ -870,7 +870,18 @@ impl StepParityGenerator {
             }
             for (&neighbor_id, &weight) in self.nodes[i].neighbors.iter() {
                 let new_cost = cost[i] + weight;
-                if new_cost < cost[neighbor_id] {
+                let current = cost[neighbor_id];
+                if current == f32::MAX {
+                    cost[neighbor_id] = new_cost;
+                    predecessor[neighbor_id] = i;
+                    continue;
+                }
+                let eps = f32::EPSILON * current.abs().max(1.0);
+                if new_cost + eps < current {
+                    cost[neighbor_id] = new_cost;
+                    predecessor[neighbor_id] = i;
+                } else if (new_cost - current).abs() <= eps && i > predecessor[neighbor_id] {
+                    // Break near-ties deterministically to match ITG's path selection.
                     cost[neighbor_id] = new_cost;
                     predecessor[neighbor_id] = i;
                 }
