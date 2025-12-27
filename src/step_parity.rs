@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
 
 use crate::timing::{beat_to_note_row_f32_exact, TimingData, ROWS_PER_BEAT};
@@ -63,6 +64,29 @@ const OTHER_PART_OF_FOOT: [Foot; NUM_FEET] = [
     Foot::RightToe,
     Foot::RightHeel,
 ];
+
+#[derive(Default)]
+struct IdentityHasher(u64);
+
+impl Hasher for IdentityHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        let mut hash = 0u64;
+        for &b in bytes {
+            hash = hash.wrapping_mul(0x100_0000_01b3).wrapping_add(b as u64);
+        }
+        self.0 = hash;
+    }
+
+    fn write_usize(&mut self, value: usize) {
+        self.0 = value as u64;
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+type NeighborMap = HashMap<usize, f32, BuildHasherDefault<IdentityHasher>>;
 
 #[derive(Debug, Clone, Copy, Default)]
 struct StagePoint {
@@ -375,7 +399,7 @@ type FootPlacement = Vec<Foot>;
 struct StepParityNode {
     state: Rc<State>,
     second: f32,
-    neighbors: Vec<(usize, f32)>,
+    neighbors: NeighborMap,
 }
 
 impl StepParityNode {
@@ -383,7 +407,7 @@ impl StepParityNode {
         Self {
             state,
             second,
-            neighbors: Vec::new(),
+            neighbors: NeighborMap::default(),
         }
     }
 }
@@ -529,8 +553,6 @@ impl StepParityGenerator {
         self.state_cache.clear();
 
         let start_state = Rc::new(State::new(self.column_count));
-        self.state_cache
-            .insert(get_state_cache_key(&start_state), Rc::clone(&start_state));
         let start_second = self.rows.first().map(|r| r.second - 1.0).unwrap_or(-1.0);
         let start_id = self.add_node(start_state, start_second, -1);
 
@@ -581,8 +603,6 @@ impl StepParityGenerator {
 
         let end_state = Rc::new(State::new(self.column_count));
         let end_second = self.rows.last().map(|r| r.second + 1.0).unwrap_or(1.0);
-        self.state_cache
-            .insert(get_state_cache_key(&end_state), Rc::clone(&end_state));
         let end_id = self.add_node(end_state, end_second, self.rows.len() as isize);
 
         for node_id in prev_node_ids {
@@ -802,7 +822,7 @@ impl StepParityGenerator {
             if cost[i] == f32::MAX {
                 continue;
             }
-            for &(neighbor_id, weight) in self.nodes[i].neighbors.iter() {
+            for (&neighbor_id, &weight) in self.nodes[i].neighbors.iter() {
                 let new_cost = cost[i] + weight;
                 if new_cost < cost[neighbor_id] {
                     cost[neighbor_id] = new_cost;
@@ -855,12 +875,7 @@ impl StepParityGenerator {
 
     fn add_edge(&mut self, from_id: usize, to_id: usize, cost: f32) {
         if let Some(node) = self.nodes.get_mut(from_id) {
-            if let Some((_, existing_cost)) = node.neighbors.iter_mut().find(|(id, _)| *id == to_id)
-            {
-                *existing_cost = cost;
-            } else {
-                node.neighbors.push((to_id, cost));
-            }
+            node.neighbors.insert(to_id, cost);
         }
     }
 }
