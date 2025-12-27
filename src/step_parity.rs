@@ -880,10 +880,6 @@ impl StepParityGenerator {
                 if new_cost + eps < current {
                     cost[neighbor_id] = new_cost;
                     predecessor[neighbor_id] = i;
-                } else if (new_cost - current).abs() <= eps && i > predecessor[neighbor_id] {
-                    // Break near-ties deterministically to match ITG's path selection.
-                    cost[neighbor_id] = new_cost;
-                    predecessor[neighbor_id] = i;
                 }
             }
         }
