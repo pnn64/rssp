@@ -65,6 +65,51 @@ const OTHER_PART_OF_FOOT: [Foot; NUM_FEET] = [
     Foot::RightHeel,
 ];
 
+fn foot_label(foot: Foot) -> &'static str {
+    match foot {
+        Foot::None => "N",
+        Foot::LeftHeel => "LH",RSSP_STEP_PARITY_DUMP_PATH=1
+        Foot::LeftToe => "LT",
+        Foot::RightHeel => "RH",
+        Foot::RightToe => "RT",
+    }
+}
+
+fn format_foot_vec(feet: &[Foot]) -> String {
+    let mut out = String::from("[");
+    for (i, foot) in feet.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(foot_label(*foot));
+    }
+    out.push(']');
+    out
+}
+
+fn format_foot_positions(positions: &[isize]) -> String {
+    let get = |foot: Foot| positions.get(foot.as_index()).copied().unwrap_or(INVALID_COLUMN);
+    format!(
+        "lh={} lt={} rh={} rt={}",
+        get(Foot::LeftHeel),
+        get(Foot::LeftToe),
+        get(Foot::RightHeel),
+        get(Foot::RightToe)
+    )
+}
+
+fn format_foot_flags(flags: &[bool]) -> String {
+    let get = |foot: Foot| flags.get(foot.as_index()).copied().unwrap_or(false);
+    let as_u8 = |flag| if flag { 1 } else { 0 };
+    format!(
+        "lh={} lt={} rh={} rt={}",
+        as_u8(get(Foot::LeftHeel)),
+        as_u8(get(Foot::LeftToe)),
+        as_u8(get(Foot::RightHeel)),
+        as_u8(get(Foot::RightToe))
+    )
+}
+
 #[derive(Default)]
 struct IdentityHasher(u64);
 
@@ -859,9 +904,74 @@ impl StepParityGenerator {
         if nodes_for_rows.len() != self.rows.len() {
             return false;
         }
+        let dump_path = env_flag("RSSP_STEP_PARITY_DUMP_PATH");
+        let mut total_cost = 0.0f32;
+        if dump_path {
+            let end_id = self.nodes.len().saturating_sub(1);
+            eprintln!(
+                "STEP_PARITY_PATH start rows={} nodes={} start=0 end={}",
+                self.rows.len(),
+                self.nodes.len(),
+                end_id
+            );
+        }
         for (i, &node_id) in nodes_for_rows.iter().enumerate() {
             let state = Rc::clone(&self.nodes[node_id].state);
             self.rows[i].set_foot_placement(&state.combined_columns);
+            if dump_path {
+                let prev_id = if i == 0 { 0 } else { nodes_for_rows[i - 1] };
+                let edge_cost = self.nodes[prev_id]
+                    .neighbors
+                    .get(&node_id)
+                    .copied()
+                    .unwrap_or(-1.0);
+                total_cost += edge_cost;
+                let row = &self.rows[i];
+                let columns = format_foot_vec(&state.columns);
+                let combined = format_foot_vec(&state.combined_columns);
+                let moved = format_foot_vec(&state.moved_feet);
+                let hold = format_foot_vec(&state.hold_feet);
+                let row_feet = format_foot_positions(row.where_the_feet_are.as_slice());
+                let state_feet = format_foot_positions(&state.where_the_feet_are);
+                let moved_flags = format_foot_flags(&state.did_the_foot_move);
+                let hold_flags = format_foot_flags(&state.is_the_foot_holding);
+                eprintln!(
+                    "STEP_PARITY_PATH row_idx={} node={} prev={} edge_cost={:.6} total_cost={:.6} beat={:.6} second={:.6} note_count={} columns={} combined={} moved={} hold={} row_feet={} state_feet={} moved_flags={} hold_flags={}",
+                    i,
+                    node_id,
+                    prev_id,
+                    edge_cost,
+                    total_cost,
+                    row.beat,
+                    row.second,
+                    row.note_count,
+                    columns,
+                    combined,
+                    moved,
+                    hold,
+                    row_feet,
+                    state_feet,
+                    moved_flags,
+                    hold_flags
+                );
+            }
+        }
+        if dump_path {
+            let end_id = self.nodes.len().saturating_sub(1);
+            let last_id = nodes_for_rows.last().copied().unwrap_or(0);
+            let edge_cost = self.nodes[last_id]
+                .neighbors
+                .get(&end_id)
+                .copied()
+                .unwrap_or(-1.0);
+            total_cost += edge_cost;
+            eprintln!(
+                "STEP_PARITY_PATH end last_node={} end_node={} edge_cost={:.6} total_cost={:.6}",
+                last_id,
+                end_id,
+                edge_cost,
+                total_cost
+            );
         }
         true
     }
@@ -1987,6 +2097,33 @@ struct ParsedRow {
     second: f32,
 }
 
+fn env_flag(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(value) => {
+            let trimmed = value.trim();
+            !trimmed.is_empty() && trimmed != "0"
+        }
+        Err(_) => false,
+    }
+}
+
+fn hash_bytes(bytes: &[u8]) -> u64 {
+    let mut hasher = IdentityHasher::default();
+    hasher.write(bytes);
+    hasher.finish()
+}
+
+fn hash_rows(rows: &[ParsedRow]) -> u64 {
+    let mut hasher = IdentityHasher::default();
+    for row in rows {
+        hasher.write(&row.chars);
+        hasher.write(&row.row.to_le_bytes());
+        hasher.write(&row.beat.to_bits().to_le_bytes());
+        hasher.write(&row.second.to_bits().to_le_bytes());
+    }
+    hasher.finish()
+}
+
 fn trim_ascii_whitespace(mut line: &[u8]) -> &[u8] {
     while let Some((&first, rest)) = line.split_first() {
         if first.is_ascii_whitespace() {
@@ -2069,8 +2206,17 @@ fn parse_chart_rows_with_timing(
 ) -> Vec<ParsedRow> {
     let mut rows = Vec::new();
     let mut measure_index = 0usize;
+    let dump_rows = env_flag("RSSP_STEP_PARITY_DUMP_ROWS");
     if column_count == 0 {
         return rows;
+    }
+
+    if dump_rows {
+        let hash = hash_bytes(note_data);
+        eprintln!(
+            "STEP_PARITY_ROWS start hash={:016x} columns={}",
+            hash, column_count
+        );
     }
 
     for measure in note_data.split(|&b| b == b',') {
@@ -2104,15 +2250,39 @@ fn parse_chart_rows_with_timing(
             for (col, ch) in line.iter().take(column_count).enumerate() {
                 chars[col] = *ch;
             }
+            let row_index = rows.len();
             rows.push(ParsedRow {
                 chars,
                 row: note_row,
                 beat,
                 second: second as f32,
             });
+            if dump_rows {
+                let row_text = String::from_utf8_lossy(&rows[row_index].chars);
+                eprintln!(
+                    "STEP_PARITY_ROW idx={} measure={} line={}/{} row={} beat={:.6} second={:.6} data={}",
+                    row_index,
+                    measure_index,
+                    i,
+                    num_rows,
+                    note_row,
+                    beat,
+                    second as f32,
+                    row_text
+                );
+            }
         }
 
         measure_index += 1;
+    }
+
+    if dump_rows {
+        let rows_hash = hash_rows(&rows);
+        eprintln!(
+            "STEP_PARITY_ROWS end total={} rows_hash={:016x}",
+            rows.len(),
+            rows_hash
+        );
     }
 
     rows
@@ -2197,6 +2367,7 @@ fn build_intermediate_notes_with_timing(
     if column_count == 0 {
         return Vec::new();
     }
+    let dump_notes = env_flag("RSSP_STEP_PARITY_DUMP_NOTES");
     let mut hold_starts = vec![None; column_count];
     let mut hold_lengths: HashMap<(usize, usize), f32> = HashMap::new();
 
@@ -2219,6 +2390,15 @@ fn build_intermediate_notes_with_timing(
     }
 
     let mut notes = Vec::new();
+    if dump_notes {
+        let rows_hash = hash_rows(rows);
+        eprintln!(
+            "STEP_PARITY_NOTES start rows={} columns={} rows_hash={:016x}",
+            rows.len(),
+            column_count,
+            rows_hash
+        );
+    }
     for (row_idx, row) in rows.iter().enumerate() {
         let row_fake = timing.is_fake_at_beat(row.row as f64);
         for col in 0..column_count {
@@ -2258,8 +2438,27 @@ fn build_intermediate_notes_with_timing(
                     .unwrap_or(MISSING_HOLD_LENGTH_BEATS);
             }
 
+            if dump_notes {
+                eprintln!(
+                    "STEP_PARITY_NOTE row_idx={} row={} beat={:.6} second={:.6} col={} ch={} type={:?} subtype={:?} fake={} hold_len={:.6}",
+                    row_idx,
+                    row.row,
+                    row.beat,
+                    row.second,
+                    col,
+                    ch as char,
+                    note.note_type,
+                    note.subtype,
+                    note.fake,
+                    note.hold_length
+                );
+            }
+
             notes.push(note);
         }
+    }
+    if dump_notes {
+        eprintln!("STEP_PARITY_NOTES end total={}", notes.len());
     }
     notes
 }
