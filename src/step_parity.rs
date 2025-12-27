@@ -2162,7 +2162,7 @@ fn build_intermediate_notes(rows: &[ParsedRow]) -> Vec<IntermediateNoteData> {
                 _ => TapNoteType::Empty,
             };
 
-            if matches!(note_type, TapNoteType::Empty | TapNoteType::HoldTail) {
+            if note_type == TapNoteType::Empty {
                 continue;
             }
 
@@ -2237,7 +2237,7 @@ fn build_intermediate_notes_with_timing(
                 _ => TapNoteType::Empty,
             };
 
-            if matches!(note_type, TapNoteType::Empty | TapNoteType::HoldTail) {
+            if note_type == TapNoteType::Empty {
                 continue;
             }
 
