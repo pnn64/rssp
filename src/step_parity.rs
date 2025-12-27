@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::hash::{BuildHasherDefault, Hasher};
+use std::hash::Hasher;
 use std::rc::Rc;
 
 use crate::timing::{beat_to_note_row_f32_exact, TimingData, ROWS_PER_BEAT};
@@ -132,7 +132,93 @@ impl Hasher for IdentityHasher {
     }
 }
 
-type NeighborMap = HashMap<usize, f32, BuildHasherDefault<IdentityHasher>>;
+#[derive(Debug, Clone, Copy)]
+struct NeighborEntry {
+    neighbor_id: usize,
+    cost: f32,
+}
+
+#[derive(Debug, Clone)]
+struct NeighborMap {
+    entries: Vec<NeighborEntry>,
+    bucket_count: usize,
+}
+
+impl Default for NeighborMap {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            bucket_count: 13,
+        }
+    }
+}
+
+impl NeighborMap {
+    fn insert(&mut self, neighbor_id: usize, cost: f32) {
+        if let Some(entry) = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.neighbor_id == neighbor_id)
+        {
+            entry.cost = cost;
+            return;
+        }
+
+        let new_size = self.entries.len() + 1;
+        if new_size > self.bucket_count {
+            self.entries.reverse();
+            self.bucket_count = next_prime(self.bucket_count.saturating_mul(2).max(1));
+        }
+
+        self.entries.insert(0, NeighborEntry { neighbor_id, cost });
+    }
+
+    fn get(&self, neighbor_id: usize) -> Option<f32> {
+        self.entries
+            .iter()
+            .find(|entry| entry.neighbor_id == neighbor_id)
+            .map(|entry| entry.cost)
+    }
+
+    fn for_each_in_order<F>(&self, mut visit: F)
+    where
+        F: FnMut(usize, f32),
+    {
+        for entry in &self.entries {
+            visit(entry.neighbor_id, entry.cost);
+        }
+    }
+}
+
+fn next_prime(start: usize) -> usize {
+    if start <= 2 {
+        return 2;
+    }
+    let mut candidate = if start % 2 == 0 { start + 1 } else { start };
+    loop {
+        if is_prime(candidate) {
+            return candidate;
+        }
+        candidate = candidate.saturating_add(2);
+    }
+}
+
+fn is_prime(value: usize) -> bool {
+    if value <= 3 {
+        return value > 1;
+    }
+    if value % 2 == 0 || value % 3 == 0 {
+        return false;
+    }
+    let mut i = 5usize;
+    while i.saturating_mul(i) <= value {
+        if value % i == 0 || value % (i + 2) == 0 {
+            return false;
+        }
+        i += 6;
+    }
+    true
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 struct StagePoint {
@@ -212,16 +298,16 @@ impl StageLayout {
         let left = self.columns[left_index as usize];
         let right = self.columns[right_index as usize];
 
-        let mut dx = right.x - left.x;
-        let dy = right.y - left.y;
+        let dx = (right.x - left.x) as f64;
+        let dy = (right.y - left.y) as f64;
         let distance = (dx * dx + dy * dy).sqrt();
         if distance == 0.0 {
             return 0.0;
         }
 
-        dx /= distance;
+        let dx = dx / distance;
         let negative = dx <= 0.0;
-        let mut magnitude = dx.abs().powf(4.0);
+        let mut magnitude = dx.abs().powf(4.0) as f32;
         if negative {
             magnitude = -magnitude;
         }
@@ -240,16 +326,16 @@ impl StageLayout {
         let left = self.columns[left_index as usize];
         let right = self.columns[right_index as usize];
 
-        let mut dy = right.y - left.y;
-        let dx = right.x - left.x;
+        let dy = (right.y - left.y) as f64;
+        let dx = (right.x - left.x) as f64;
         let distance = (dx * dx + dy * dy).sqrt();
         if distance == 0.0 {
             return 0.0;
         }
 
-        dy /= distance;
+        let dy = dy / distance;
         let negative = dy <= 0.0;
-        let mut magnitude = dy.abs().powf(4.0);
+        let mut magnitude = dy.abs().powf(4.0) as f32;
         if negative {
             magnitude = -magnitude;
         }
@@ -463,7 +549,7 @@ struct StepParityGenerator {
     column_count: usize,
     permute_cache: HashMap<u32, Vec<FootPlacement>>,
     state_cache: HashMap<u64, Rc<State>>,
-    nodes: Vec<StepParityNode>,
+    nodes: Vec<Box<StepParityNode>>,
     rows: Vec<Row>,
 }
 
@@ -868,20 +954,15 @@ impl StepParityGenerator {
             if cost[i] == f32::MAX {
                 continue;
             }
-            for (&neighbor_id, &weight) in self.nodes[i].neighbors.iter() {
-                let new_cost = cost[i] + weight;
-                let current = cost[neighbor_id];
-                if current == f32::MAX {
-                    cost[neighbor_id] = new_cost;
-                    predecessor[neighbor_id] = i;
-                    continue;
-                }
-                let eps = f32::EPSILON * current.abs().max(1.0);
-                if new_cost + eps < current {
-                    cost[neighbor_id] = new_cost;
-                    predecessor[neighbor_id] = i;
-                }
-            }
+            self.nodes[i]
+                .neighbors
+                .for_each_in_order(|neighbor_id, weight| {
+                    let new_cost = cost[i] + weight;
+                    if new_cost < cost[neighbor_id] {
+                        cost[neighbor_id] = new_cost;
+                        predecessor[neighbor_id] = i;
+                    }
+                });
         }
 
         let mut path = VecDeque::new();
@@ -930,8 +1011,7 @@ impl StepParityGenerator {
                 let prev_id = if i == 0 { 0 } else { nodes_for_rows[i - 1] };
                 let edge_cost = self.nodes[prev_id]
                     .neighbors
-                    .get(&node_id)
-                    .copied()
+                    .get(node_id)
                     .unwrap_or(-1.0);
                 total_cost += edge_cost;
                 let row = &self.rows[i];
@@ -969,8 +1049,7 @@ impl StepParityGenerator {
             let last_id = nodes_for_rows.last().copied().unwrap_or(0);
             let edge_cost = self.nodes[last_id]
                 .neighbors
-                .get(&end_id)
-                .copied()
+                .get(end_id)
                 .unwrap_or(-1.0);
             total_cost += edge_cost;
             eprintln!(
@@ -987,7 +1066,7 @@ impl StepParityGenerator {
     fn add_node(&mut self, state: Rc<State>, second: f32, _row_index: isize) -> usize {
         let id = self.nodes.len();
         self.nodes
-            .push(StepParityNode::new(state, second));
+            .push(Box::new(StepParityNode::new(state, second)));
         id
     }
 
@@ -1168,9 +1247,10 @@ impl<'a> CostCalculator<'a> {
                 let distance = if previous_col == INVALID_COLUMN {
                     1.0
                 } else {
-                    self.layout.get_distance_sq(c, previous_col as usize).sqrt()
+                    (self.layout.get_distance_sq(c, previous_col as usize) as f64)
+                        .sqrt() as f32
                 };
-                cost += HOLDSWITCH_WEIGHT * distance;
+                cost += (HOLDSWITCH_WEIGHT as f64 * distance as f64) as f32;
             }
         }
         cost
@@ -1398,10 +1478,15 @@ impl<'a> CostCalculator<'a> {
             0.0
         };
 
-        let heel_penalty = (-heel_facing.min(0.0)).powf(1.8) * 100.0;
-        let toe_penalty = (-toe_facing.min(0.0)).powf(1.8) * 100.0;
-        let left_penalty = (-left_facing.min(0.0)).powf(1.8) * 100.0;
-        let right_penalty = (-right_facing.min(0.0)).powf(1.8) * 100.0;
+        let heel_base = -(heel_facing.min(0.0));
+        let toe_base = -(toe_facing.min(0.0));
+        let left_base = -(left_facing.min(0.0));
+        let right_base = -(right_facing.min(0.0));
+
+        let heel_penalty = (heel_base as f64).powf(1.8) as f32 * 100.0;
+        let toe_penalty = (toe_base as f64).powf(1.8) as f32 * 100.0;
+        let left_penalty = (left_base as f64).powf(1.8) as f32 * 100.0;
+        let right_penalty = (right_base as f64).powf(1.8) as f32 * 100.0;
 
         let mut cost = 0.0;
         if heel_penalty > 0.0 {
@@ -1568,12 +1653,12 @@ impl<'a> CostCalculator<'a> {
             }
             let result_position = result.what_note_the_foot_is_hitting[foot.as_index()];
 
-            let mut distance = self
+            let distance_sq = self
                 .layout
                 .get_distance_sq(initial_position as usize, result_position as usize)
-                .sqrt()
-                * DISTANCE_WEIGHT
-                / elapsed;
+                as f64;
+            let mut distance =
+                ((distance_sq.sqrt() * DISTANCE_WEIGHT as f64) / elapsed as f64) as f32;
 
             let other = OTHER_PART_OF_FOOT[foot.as_index()];
             let is_bracketing =
