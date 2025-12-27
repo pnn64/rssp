@@ -1366,8 +1366,8 @@ impl<'a> CostCalculator<'a> {
             return 0.0;
         }
 
-        if row.mines.iter().all(|mine| *mine == 0.0)
-            && row.fake_mines.iter().all(|mine| *mine == 0.0)
+        if row.mines.iter().all(|mine| (*mine as i32) == 0)
+            && row.fake_mines.iter().all(|mine| (*mine as i32) == 0)
         {
             let time_scaled = elapsed - SLOW_FOOTSWITCH_THRESHOLD;
             for i in 0..column_count {
@@ -1405,8 +1405,8 @@ impl<'a> CostCalculator<'a> {
 
     fn calc_missed_footswitch_cost(&self, row: &Row, jacked_left: bool, jacked_right: bool) -> f32 {
         if (jacked_left || jacked_right)
-            && (row.mines.iter().any(|mine| *mine != 0.0)
-                || row.fake_mines.iter().any(|mine| *mine != 0.0))
+            && (row.mines.iter().any(|mine| (*mine as i32) != 0)
+                || row.fake_mines.iter().any(|mine| (*mine as i32) != 0))
         {
             MISSED_FOOTSWITCH_WEIGHT
         } else {
@@ -2162,7 +2162,7 @@ fn build_intermediate_notes(rows: &[ParsedRow]) -> Vec<IntermediateNoteData> {
                 _ => TapNoteType::Empty,
             };
 
-            if note_type == TapNoteType::Empty {
+            if matches!(note_type, TapNoteType::Empty | TapNoteType::HoldTail) {
                 continue;
             }
 
@@ -2237,7 +2237,7 @@ fn build_intermediate_notes_with_timing(
                 _ => TapNoteType::Empty,
             };
 
-            if note_type == TapNoteType::Empty {
+            if matches!(note_type, TapNoteType::Empty | TapNoteType::HoldTail) {
                 continue;
             }
 
