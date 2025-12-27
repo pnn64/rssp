@@ -68,7 +68,7 @@ const OTHER_PART_OF_FOOT: [Foot; NUM_FEET] = [
 fn foot_label(foot: Foot) -> &'static str {
     match foot {
         Foot::None => "N",
-        Foot::LeftHeel => "LH",RSSP_STEP_PARITY_DUMP_PATH=1
+        Foot::LeftHeel => "LH",
         Foot::LeftToe => "LT",
         Foot::RightHeel => "RH",
         Foot::RightToe => "RT",
