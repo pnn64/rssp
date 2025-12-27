@@ -1377,7 +1377,7 @@ impl<'a> CostCalculator<'a> {
                 let initial_foot = initial.combined_columns[i];
                 let result_foot = result.columns[i];
                 if initial_foot != result_foot
-                    && OTHER_PART_OF_FOOT[initial_foot.as_index()] != result_foot
+                    && initial_foot != OTHER_PART_OF_FOOT[result_foot.as_index()]
                 {
                     let divisor = SLOW_FOOTSWITCH_THRESHOLD + time_scaled;
                     if divisor > 0.0 {
@@ -1449,9 +1449,6 @@ impl<'a> CostCalculator<'a> {
                 continue;
             }
             let result_position = result.what_note_the_foot_is_hitting[foot.as_index()];
-            if result_position == INVALID_COLUMN {
-                continue;
-            }
 
             let mut distance = self
                 .layout
