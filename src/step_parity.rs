@@ -1060,7 +1060,7 @@ impl<'a> CostCalculator<'a> {
             let jack_penalty = if initial.did_the_foot_move[Foot::LeftHeel.as_index()]
                 || initial.did_the_foot_move[Foot::LeftToe.as_index()]
             {
-                if elapsed > 0.0 { 1.0 / elapsed } else { 0.0 }
+                1.0 / elapsed
             } else {
                 1.0
             };
@@ -1083,7 +1083,7 @@ impl<'a> CostCalculator<'a> {
             let jack_penalty = if initial.did_the_foot_move[Foot::RightHeel.as_index()]
                 || initial.did_the_foot_move[Foot::RightToe.as_index()]
             {
-                if elapsed > 0.0 { 1.0 / elapsed } else { 0.0 }
+                1.0 / elapsed
             } else {
                 1.0
             };
@@ -1424,9 +1424,6 @@ impl<'a> CostCalculator<'a> {
         result: &State,
         elapsed: f32,
     ) -> f32 {
-        if elapsed <= 0.0 {
-            return 0.0;
-        }
         let mut cost = 0.0;
         for &foot in &result.moved_feet {
             if foot == Foot::None {
