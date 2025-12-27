@@ -2211,7 +2211,7 @@ fn build_intermediate_notes_with_timing(
 
     let mut notes = Vec::new();
     for (row_idx, row) in rows.iter().enumerate() {
-        let row_fake = timing.is_fake_at_row(row.row);
+        let row_fake = timing.is_fake_at_beat(row.row as f64);
         for col in 0..column_count {
             let ch = row.chars[col];
             let note_type = match ch {
