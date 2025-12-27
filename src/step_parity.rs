@@ -574,18 +574,18 @@ impl StepParityGenerator {
         row.beat = counter.last_column_beat;
 
         for c in 0..self.column_count {
-            if counter.active_holds[c].note_type == TapNoteType::Empty
-                || counter.active_holds[c].second >= counter.last_column_second
+            let active_hold = &counter.active_holds[c];
+            if active_hold.note_type == TapNoteType::Empty
+                || active_hold.second >= counter.last_column_second
             {
                 row.holds[c] = IntermediateNoteData::default();
             } else {
-                row.holds[c] = counter.active_holds[c].clone();
-            }
-
-            if counter.active_holds[c].note_type != TapNoteType::Empty {
-                let end_beat = counter.active_holds[c].beat + counter.active_holds[c].hold_length;
+                let end_beat = active_hold.beat + active_hold.hold_length;
                 if (end_beat - counter.last_column_beat).abs() < 0.0005 {
                     row.hold_tails.insert(c);
+                    row.holds[c] = IntermediateNoteData::default();
+                } else {
+                    row.holds[c] = active_hold.clone();
                 }
             }
         }
@@ -2300,11 +2300,12 @@ fn build_intermediate_notes(rows: &[ParsedRow]) -> Vec<IntermediateNoteData> {
         for col in 0..column_count {
             match row.chars[col] {
                 b'2' | b'4' => {
-                    hold_starts[col] = Some((row_idx, row.beat));
+                    hold_starts[col] = Some((row_idx, row.row));
                 }
                 b'3' => {
-                    if let Some((start_idx, start_beat)) = hold_starts[col] {
-                        let length = row.beat - start_beat;
+                    if let Some((start_idx, start_row)) = hold_starts[col] {
+                        let length_rows = row.row - start_row;
+                        let length = length_rows as f32 / ROWS_PER_BEAT as f32;
                         hold_lengths.insert((start_idx, col), length);
                         hold_starts[col] = None;
                     }
@@ -2375,11 +2376,12 @@ fn build_intermediate_notes_with_timing(
         for col in 0..column_count {
             match row.chars[col] {
                 b'2' | b'4' => {
-                    hold_starts[col] = Some((row_idx, row.beat));
+                    hold_starts[col] = Some((row_idx, row.row));
                 }
                 b'3' => {
-                    if let Some((start_idx, start_beat)) = hold_starts[col] {
-                        let length = row.beat - start_beat;
+                    if let Some((start_idx, start_row)) = hold_starts[col] {
+                        let length_rows = row.row - start_row;
+                        let length = length_rows as f32 / ROWS_PER_BEAT as f32;
                         hold_lengths.insert((start_idx, col), length);
                         hold_starts[col] = None;
                     }
