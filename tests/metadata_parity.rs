@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -6,13 +7,33 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::parse::{clean_tag, extract_sections, strip_title_tags, unescape_tag};
+use rssp::parse::{clean_tag, extract_sections, split_notes_fields, strip_title_tags, unescape_tag};
 
 #[derive(Debug, Deserialize)]
 struct GoldenMetadata {
     title: Option<String>,
     subtitle: Option<String>,
     artist: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GoldenChartStepArtist {
+    #[serde(rename = "steps_type")]
+    step_type: String,
+    difficulty: String,
+    #[serde(default)]
+    description: String,
+    step_artist: String,
+    #[serde(default)]
+    meter: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+struct ChartStepArtist {
+    step_type: String,
+    difficulty: String,
+    description: String,
+    step_artist: String,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +86,11 @@ fn expected_metadata(
     })
 }
 
+#[inline(always)]
+fn normalize_step_type(raw: &str) -> String {
+    raw.trim().replace('_', "-").to_ascii_lowercase()
+}
+
 fn parse_metadata(simfile_data: &[u8], extension: &str) -> Result<(String, String, String), String> {
     let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
 
@@ -92,6 +118,43 @@ fn parse_metadata(simfile_data: &[u8], extension: &str) -> Result<(String, Strin
         .unwrap_or_default();
 
     Ok((title_str, subtitle_str, artist_str))
+}
+
+fn parse_step_artists(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartStepArtist>, String> {
+    let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
+    let mut results = Vec::new();
+
+    for entry in parsed_data.notes_list {
+        let (fields, _) = split_notes_fields(&entry.notes);
+        if fields.len() < 5 {
+            continue;
+        }
+
+        let step_type_raw = std::str::from_utf8(fields[0]).unwrap_or("");
+        let step_type = normalize_step_type(step_type_raw);
+        if step_type.is_empty() || step_type == "lights-cabinet" {
+            continue;
+        }
+
+        let description = std::str::from_utf8(fields[1]).unwrap_or("").trim().to_string();
+        let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
+        let difficulty = rssp::normalize_difficulty_label(difficulty_raw)
+            .to_ascii_lowercase();
+        let step_artist = if extension.eq_ignore_ascii_case("ssc") {
+            std::str::from_utf8(fields[4]).unwrap_or("").trim().to_string()
+        } else {
+            description.clone()
+        };
+
+        results.push(ChartStepArtist {
+            step_type,
+            difficulty,
+            description,
+            step_artist,
+        });
+    }
+
+    Ok(results)
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
@@ -124,6 +187,9 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
 
     let golden_entries: Vec<GoldenMetadata> = serde_json::from_slice(&json_bytes)
+        .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
+
+    let golden_step_entries: Vec<GoldenChartStepArtist> = serde_json::from_slice(&json_bytes)
         .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
 
     let (expected_title, expected_subtitle, expected_artist) =
@@ -162,19 +228,140 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         expected_artist, actual_artist, artist_status
     );
 
-    if title_status == "....ok" && subtitle_status == "....ok" && artist_status == "....ok" {
+    let rssp_step_entries = parse_step_artists(&raw_bytes, extension)
+        .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
+
+    let mut golden_map: HashMap<(String, String, String), Vec<GoldenChartStepArtist>> =
+        HashMap::new();
+    for golden in golden_step_entries {
+        let step_type = normalize_step_type(&golden.step_type);
+        if step_type.is_empty() || step_type == "lights-cabinet" {
+            continue;
+        }
+        let difficulty = rssp::normalize_difficulty_label(&golden.difficulty)
+            .to_ascii_lowercase();
+        let description = golden.description.trim().to_string();
+        let key = (step_type, difficulty, description);
+        golden_map.entry(key).or_default().push(golden);
+    }
+
+    let mut rssp_map: HashMap<(String, String, String), Vec<ChartStepArtist>> = HashMap::new();
+    for chart in rssp_step_entries {
+        if chart.step_type.is_empty() || chart.step_type == "lights-cabinet" {
+            continue;
+        }
+        let key = (
+            chart.step_type.clone(),
+            chart.difficulty.clone(),
+            chart.description.clone(),
+        );
+        rssp_map.entry(key).or_default().push(chart);
+    }
+
+    let mut golden_entries: Vec<_> = golden_map.into_iter().collect();
+    golden_entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut step_artist_ok = true;
+    let mut step_artist_errors: Vec<String> = Vec::new();
+
+    for ((step_type, difficulty, description), expected_entries) in golden_entries {
+        let Some(actual_entries) =
+            rssp_map.remove(&(step_type.clone(), difficulty.clone(), description.clone()))
+        else {
+            step_artist_ok = false;
+            let desc_label = if description.is_empty() {
+                "(empty)".to_string()
+            } else {
+                description.clone()
+            };
+            println!(
+                "  step_artist {} {} [{}]: baseline present, RSSP missing chart",
+                step_type, difficulty, desc_label
+            );
+            step_artist_errors.push(format!(
+                "Step artist chart missing: {} {} {:?}",
+                step_type, difficulty, description
+            ));
+            continue;
+        };
+
+        let count = expected_entries.len().max(actual_entries.len());
+        for idx in 0..count {
+            let expected = expected_entries.get(idx);
+            let actual = actual_entries.get(idx);
+            let meter_label = expected
+                .and_then(|entry| entry.meter)
+                .map(|meter| meter.to_string())
+                .unwrap_or_else(|| (idx + 1).to_string());
+            let desc_label = if description.is_empty() {
+                meter_label.clone()
+            } else {
+                format!("{} {}", meter_label, description)
+            };
+
+            let expected_val = expected
+                .map(|e| e.step_artist.as_str())
+                .unwrap_or("-");
+            let actual_val = actual.map(|a| a.step_artist.as_str()).unwrap_or("-");
+            let status = if expected_val == actual_val {
+                "....ok"
+            } else {
+                "....MISMATCH"
+            };
+
+            println!(
+                "  step_artist {} {} [{}]: baseline: {} -> rssp: {} {}",
+                step_type, difficulty, desc_label, expected_val, actual_val, status
+            );
+
+            if status != "....ok" {
+                step_artist_ok = false;
+                step_artist_errors.push(format!(
+                    "Step artist mismatch {} {} [{}]: RSSP step_artist: {:?}, Golden step_artist: {:?}",
+                    step_type,
+                    difficulty,
+                    desc_label,
+                    actual.map(|a| a.step_artist.as_str()),
+                    expected.map(|e| e.step_artist.as_str())
+                ));
+            }
+        }
+    }
+
+    let metadata_ok = title_status == "....ok"
+        && subtitle_status == "....ok"
+        && artist_status == "....ok";
+    if metadata_ok && step_artist_ok {
         return Ok(());
     }
 
+    let mut error_details = String::new();
+    if !metadata_ok {
+        error_details.push_str(&format!(
+            "RSSP title:    {:?}\nGolden title:  {:?}\nRSSP subtitle: {:?}\nGolden subtitle: {:?}\nRSSP artist:   {:?}\nGolden artist: {:?}\n",
+            actual_title,
+            expected_title,
+            actual_subtitle,
+            expected_subtitle,
+            actual_artist,
+            expected_artist
+        ));
+    }
+    if !step_artist_ok {
+        if !error_details.is_empty() {
+            error_details.push('\n');
+        }
+        error_details.push_str("Step artist mismatches:\n");
+        for line in step_artist_errors {
+            error_details.push_str(&line);
+            error_details.push('\n');
+        }
+    }
+
     Err(format!(
-        "\n\nMISMATCH DETECTED\nFile: {}\nRSSP title:    {:?}\nGolden title:  {:?}\nRSSP subtitle: {:?}\nGolden subtitle: {:?}\nRSSP artist:   {:?}\nGolden artist: {:?}\n",
+        "\n\nMISMATCH DETECTED\nFile: {}\n{}\n",
         path.display(),
-        actual_title,
-        expected_title,
-        actual_subtitle,
-        expected_subtitle,
-        actual_artist,
-        expected_artist
+        error_details
     ))
 }
 
