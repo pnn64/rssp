@@ -766,6 +766,15 @@ fn print_pretty_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
         }
     }
 
+    if !chart.detailed_breakdown.is_empty() {
+        println!("\n--- Detailed Breakdown ---");
+        println!("{}", chart.detailed_breakdown);
+        println!("--- Partial Breakdown ---");
+        println!("{}", chart.partial_breakdown);
+        println!("--- Simple Breakdown ---");
+        println!("{}", chart.simple_breakdown);
+    }
+
     if !chart.sn_detailed_breakdown.is_empty() {
         println!("\n--- SN Detailed Breakdown ---");
         println!("{}", chart.sn_detailed_breakdown);
@@ -773,15 +782,6 @@ fn print_pretty_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
         println!("{}", chart.sn_partial_breakdown);
         println!("--- SN Simplified Breakdown ---");
         println!("{}", chart.sn_simple_breakdown);
-    }
-
-    if !chart.detailed_breakdown.is_empty() {
-        println!("\n--- Stream Breakdown (Detailed) ---");
-        println!("{}", chart.detailed_breakdown);
-        println!("--- Stream Breakdown (Partial) ---");
-        println!("{}", chart.partial_breakdown);
-        println!("--- Stream Breakdown (Simple) ---");
-        println!("{}", chart.simple_breakdown);
     }
 }
 
@@ -902,6 +902,15 @@ fn print_full_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
     println!("Brackets: {}", chart.tech_counts.brackets);
     println!("Doublesteps: {}", chart.tech_counts.doublesteps);
 
+    if !chart.detailed_breakdown.is_empty() {
+        println!("\n--- Detailed Breakdown ---");
+        println!("{}", chart.detailed_breakdown);
+        println!("--- Partial Breakdown ---");
+        println!("{}", chart.partial_breakdown);
+        println!("--- Simple Breakdown ---");
+        println!("{}", chart.simple_breakdown);
+    }
+
     if !chart.sn_detailed_breakdown.is_empty() {
         println!("\n--- SN Detailed Breakdown ---");
         println!("{}", chart.sn_detailed_breakdown);
@@ -909,15 +918,6 @@ fn print_full_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
         println!("{}", chart.sn_partial_breakdown);
         println!("--- SN Simplified Breakdown ---");
         println!("{}", chart.sn_simple_breakdown);
-    }
-
-    if !chart.detailed_breakdown.is_empty() {
-        println!("\n--- Stream Breakdown (Detailed) ---");
-        println!("{}", chart.detailed_breakdown);
-        println!("--- Stream Breakdown (Partial) ---");
-        println!("{}", chart.partial_breakdown);
-        println!("--- Stream Breakdown (Simple) ---");
-        println!("{}", chart.simple_breakdown);
     }
 
     println!("\n--- Other Patterns ---");
