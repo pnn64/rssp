@@ -207,32 +207,42 @@ pub fn extract_sections<'a>(
                 }
 
                 let notedata_slice = &data[notedata_start..notedata_end];
+                let find_tag = |tag: &[u8]| notedata_slice.windows(tag.len()).position(|w| w == tag);
+                let notes_pos = match (find_tag(b"#NOTES:"), find_tag(b"#NOTES2:")) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (Some(a), None) => Some(a),
+                    (None, Some(b)) => Some(b),
+                    (None, None) => None,
+                };
+                let header_slice = notes_pos
+                    .map(|pos| &notedata_slice[..pos])
+                    .unwrap_or(notedata_slice);
                 let step_type =
-                    parse_subtag(notedata_slice, b"#STEPSTYPE:", false).unwrap_or_default();
+                    parse_subtag(header_slice, b"#STEPSTYPE:", false).unwrap_or_default();
                 let description =
-                    parse_subtag(notedata_slice, b"#DESCRIPTION:", false).unwrap_or_default();
-                let credit = parse_subtag(notedata_slice, b"#CREDIT:", false).unwrap_or_default();
+                    parse_subtag(header_slice, b"#DESCRIPTION:", false).unwrap_or_default();
+                let credit = parse_subtag(header_slice, b"#CREDIT:", false).unwrap_or_default();
                 let difficulty =
-                    parse_subtag(notedata_slice, b"#DIFFICULTY:", false).unwrap_or_default();
-                let meter = parse_subtag(notedata_slice, b"#METER:", false).unwrap_or_default();
+                    parse_subtag(header_slice, b"#DIFFICULTY:", false).unwrap_or_default();
+                let meter = parse_subtag(header_slice, b"#METER:", false).unwrap_or_default();
                 let notes = parse_subtag(notedata_slice, b"#NOTES:", true)
                     .or_else(|| parse_subtag(notedata_slice, b"#NOTES2:", true))
                     .unwrap_or_default();
-                let chart_bpms = parse_subtag(notedata_slice, b"#BPMS:", true);
-                let chart_stops = parse_subtag(notedata_slice, b"#STOPS:", true)
-                    .or_else(|| parse_subtag(notedata_slice, b"#FREEZES:", true));
-                let chart_delays = parse_subtag(notedata_slice, b"#DELAYS:", true);
-                let chart_warps = parse_subtag(notedata_slice, b"#WARPS:", true);
-                let chart_speeds = parse_subtag(notedata_slice, b"#SPEEDS:", true);
-                let chart_scrolls = parse_subtag(notedata_slice, b"#SCROLLS:", true);
-                let chart_fakes = parse_subtag(notedata_slice, b"#FAKES:", true);
-                let chart_offset = parse_subtag(notedata_slice, b"#OFFSET:", true);
+                let chart_bpms = parse_subtag(header_slice, b"#BPMS:", true);
+                let chart_stops = parse_subtag(header_slice, b"#STOPS:", true)
+                    .or_else(|| parse_subtag(header_slice, b"#FREEZES:", true));
+                let chart_delays = parse_subtag(header_slice, b"#DELAYS:", true);
+                let chart_warps = parse_subtag(header_slice, b"#WARPS:", true);
+                let chart_speeds = parse_subtag(header_slice, b"#SPEEDS:", true);
+                let chart_scrolls = parse_subtag(header_slice, b"#SCROLLS:", true);
+                let chart_fakes = parse_subtag(header_slice, b"#FAKES:", true);
+                let chart_offset = parse_subtag(header_slice, b"#OFFSET:", true);
                 let chart_time_signatures =
-                    parse_subtag(notedata_slice, b"#TIMESIGNATURES:", true);
-                let chart_labels = parse_subtag(notedata_slice, b"#LABELS:", true);
-                let chart_tickcounts = parse_subtag(notedata_slice, b"#TICKCOUNTS:", true);
-                let chart_combos = parse_subtag(notedata_slice, b"#COMBOS:", true);
-                let chart_radar_values = parse_subtag(notedata_slice, b"#RADARVALUES:", true);
+                    parse_subtag(header_slice, b"#TIMESIGNATURES:", true);
+                let chart_labels = parse_subtag(header_slice, b"#LABELS:", true);
+                let chart_tickcounts = parse_subtag(header_slice, b"#TICKCOUNTS:", true);
+                let chart_combos = parse_subtag(header_slice, b"#COMBOS:", true);
+                let chart_radar_values = parse_subtag(header_slice, b"#RADARVALUES:", true);
 
                 let concatenated =
                     [step_type, description, difficulty, meter, credit, notes].join(&b':');
