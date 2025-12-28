@@ -192,9 +192,9 @@ pub struct ChartSummary {
     pub total_streams:     u32,
     /// Mines that are actually judgable (not inside warps or #FAKES).
     pub mines_nonfake:     u32,
-    pub detailed:          String,
-    pub partial:           String,
-    pub simple:            String,
+    pub sn_detailed_breakdown: String,
+    pub sn_partial_breakdown:  String,
+    pub sn_simple_breakdown:   String,
     pub max_nps:           f64,
     pub median_nps:        f64,
     pub detected_patterns: HashMap<PatternVariant, u32>,
@@ -763,13 +763,13 @@ fn print_pretty_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
         }
     }
 
-    if !chart.detailed.is_empty() {
-        println!("\n--- Detailed Breakdown ---");
-        println!("{}", chart.detailed);
-        println!("--- Partially Simplified ---");
-        println!("{}", chart.partial);
-        println!("--- Simplified Breakdown ---");
-        println!("{}", chart.simple);
+    if !chart.sn_detailed_breakdown.is_empty() {
+        println!("\n--- SN Detailed Breakdown ---");
+        println!("{}", chart.sn_detailed_breakdown);
+        println!("--- SN Partially Simplified ---");
+        println!("{}", chart.sn_partial_breakdown);
+        println!("--- SN Simplified Breakdown ---");
+        println!("{}", chart.sn_simple_breakdown);
     }
 }
 
@@ -890,13 +890,13 @@ fn print_full_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
     println!("Brackets: {}", chart.tech_counts.brackets);
     println!("Doublesteps: {}", chart.tech_counts.doublesteps);
 
-    if !chart.detailed.is_empty() {
-        println!("\n--- Detailed Breakdown ---");
-        println!("{}", chart.detailed);
-        println!("--- Partially Simplified ---");
-        println!("{}", chart.partial);
-        println!("--- Simplified Breakdown ---");
-        println!("{}", chart.simple);
+    if !chart.sn_detailed_breakdown.is_empty() {
+        println!("\n--- SN Detailed Breakdown ---");
+        println!("{}", chart.sn_detailed_breakdown);
+        println!("--- SN Partially Simplified ---");
+        println!("{}", chart.sn_partial_breakdown);
+        println!("--- SN Simplified Breakdown ---");
+        println!("{}", chart.sn_simple_breakdown);
     }
 
     println!("\n--- Other Patterns ---");
@@ -1168,11 +1168,11 @@ fn json_nps(chart: &ChartSummary) -> JsonValue {
     })
 }
 
-fn json_breakdown(chart: &ChartSummary) -> JsonValue {
+fn json_sn_breakdown(chart: &ChartSummary) -> JsonValue {
     serde_json::json!({
-        "detailed_breakdown": chart.detailed,
-        "partial_breakdown": chart.partial,
-        "simple_breakdown": chart.simple,
+        "sn_detailed_breakdown": chart.sn_detailed_breakdown,
+        "sn_partial_breakdown": chart.sn_partial_breakdown,
+        "sn_simple_breakdown": chart.sn_simple_breakdown,
     })
 }
 
@@ -1724,7 +1724,7 @@ pub fn print_json_all(simfile: &SimfileSummary) {
             chart_obj.insert("timing".to_string(), json_timing(chart, simfile));
             chart_obj.insert("stream_info".to_string(), json_stream_info(chart));
             chart_obj.insert("nps".to_string(), json_nps(chart));
-            chart_obj.insert("breakdown".to_string(), json_breakdown(chart));
+            chart_obj.insert("breakdown".to_string(), json_sn_breakdown(chart));
             chart_obj.insert(
                 "mono_candle_stats".to_string(),
                 json_mono_candle_stats(chart),
@@ -1773,7 +1773,7 @@ total_candles,left_foot_candles,right_foot_candles,candles_percent,\
 total_mono,left_face_mono,right_face_mono,mono_percent,\
 total_boxes,lr_boxes,ud_boxes,corner_boxes,ld_boxes,lu_boxes,rd_boxes,ru_boxes,\
 total_anchors,left_anchors,down_anchors,up_anchors,right_anchors,\
-detailed_breakdown,partial_breakdown,simple_breakdown,\
+sn_detailed_breakdown,sn_partial_breakdown,sn_simple_breakdown,\
 total_towers,lr_towers,ud_towers,corner_towers,ld_towers,lu_towers,rd_towers,ru_towers,\
 total_triangles,ldl_triangles,lul_triangles,rdr_triangles,rur_triangles,\
 crossovers,half_crossovers,full_crossovers,footswitches,up_footswitches,down_footswitches,sideswitches,jacks,brackets,doublesteps,\
@@ -1953,9 +1953,9 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
     );
 
     print!("{},{},{},",
-        esc_csv(&chart.detailed),
-        esc_csv(&chart.partial),
-        esc_csv(&chart.simple),
+        esc_csv(&chart.sn_detailed_breakdown),
+        esc_csv(&chart.sn_partial_breakdown),
+        esc_csv(&chart.sn_simple_breakdown),
     );
 
     let tower_parts = compute_tower_parts(&chart.detected_patterns);

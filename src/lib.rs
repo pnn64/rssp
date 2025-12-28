@@ -328,9 +328,9 @@ fn compute_mono_and_candle_stats(
 struct DerivedChartMetrics {
     stream_counts: StreamCounts,
     total_streams: u32,
-    detailed_breakdown: String,
-    partial_breakdown: String,
-    simple_breakdown: String,
+    sn_detailed_breakdown: String,
+    sn_partial_breakdown: String,
+    sn_simple_breakdown: String,
     measure_nps_vec: Vec<f64>,
     max_nps: f64,
     median_nps: f64,
@@ -353,9 +353,9 @@ fn compute_derived_chart_metrics(
         + stream_counts.run24_streams
         + stream_counts.run32_streams;
 
-    let detailed_breakdown = generate_breakdown(measure_densities, BreakdownMode::Detailed);
-    let partial_breakdown = generate_breakdown(measure_densities, BreakdownMode::Partial);
-    let simple_breakdown = generate_breakdown(measure_densities, BreakdownMode::Simplified);
+    let sn_detailed_breakdown = generate_breakdown(measure_densities, BreakdownMode::Detailed);
+    let sn_partial_breakdown = generate_breakdown(measure_densities, BreakdownMode::Partial);
+    let sn_simple_breakdown = generate_breakdown(measure_densities, BreakdownMode::Simplified);
 
     let measure_nps_vec = compute_measure_nps_vec(measure_densities, bpm_map);
     let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
@@ -368,9 +368,9 @@ fn compute_derived_chart_metrics(
     DerivedChartMetrics {
         stream_counts,
         total_streams,
-        detailed_breakdown,
-        partial_breakdown,
-        simple_breakdown,
+        sn_detailed_breakdown,
+        sn_partial_breakdown,
+        sn_simple_breakdown,
         measure_nps_vec,
         max_nps,
         median_nps,
@@ -577,9 +577,9 @@ fn build_chart_summary(
         total_streams: metrics.total_streams,
         mines_nonfake: 0,
         total_measures: measure_densities.len(),
-        detailed: metrics.detailed_breakdown,
-        partial: metrics.partial_breakdown,
-        simple: metrics.simple_breakdown,
+        sn_detailed_breakdown: metrics.sn_detailed_breakdown,
+        sn_partial_breakdown: metrics.sn_partial_breakdown,
+        sn_simple_breakdown: metrics.sn_simple_breakdown,
         max_nps: metrics.max_nps,
         median_nps: metrics.median_nps,
         detected_patterns,

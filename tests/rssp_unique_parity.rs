@@ -36,9 +36,12 @@ struct GoldenChartInfo {
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 struct Breakdown {
-    detailed_breakdown: String,
-    partial_breakdown: String,
-    simple_breakdown: String,
+    #[serde(alias = "detailed_breakdown")]
+    sn_detailed_breakdown: String,
+    #[serde(alias = "partial_breakdown")]
+    sn_partial_breakdown: String,
+    #[serde(alias = "simple_breakdown")]
+    sn_simple_breakdown: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,9 +177,9 @@ fn chart_values_from_summary(chart: &ChartSummary) -> ChartUniqueValues {
     ChartUniqueValues {
         matrix_rating: format_json_float(chart.matrix_rating),
         breakdown: Breakdown {
-            detailed_breakdown: chart.detailed.clone(),
-            partial_breakdown: chart.partial.clone(),
-            simple_breakdown: chart.simple.clone(),
+            sn_detailed_breakdown: chart.sn_detailed_breakdown.clone(),
+            sn_partial_breakdown: chart.sn_partial_breakdown.clone(),
+            sn_simple_breakdown: chart.sn_simple_breakdown.clone(),
         },
         mono_candle_stats: MonoCandleStats {
             total_candles: left_foot_candles + right_foot_candles,
@@ -366,22 +369,22 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             let expected_matrix = expected_values.map(|v| v.matrix_rating.as_str()).unwrap_or("-");
             let actual_matrix = actual_values.map(|v| v.matrix_rating.as_str()).unwrap_or("-");
             let expected_detail = expected_values
-                .map(|v| v.breakdown.detailed_breakdown.as_str())
+                .map(|v| v.breakdown.sn_detailed_breakdown.as_str())
                 .unwrap_or("-");
             let actual_detail = actual_values
-                .map(|v| v.breakdown.detailed_breakdown.as_str())
+                .map(|v| v.breakdown.sn_detailed_breakdown.as_str())
                 .unwrap_or("-");
             let expected_partial = expected_values
-                .map(|v| v.breakdown.partial_breakdown.as_str())
+                .map(|v| v.breakdown.sn_partial_breakdown.as_str())
                 .unwrap_or("-");
             let actual_partial = actual_values
-                .map(|v| v.breakdown.partial_breakdown.as_str())
+                .map(|v| v.breakdown.sn_partial_breakdown.as_str())
                 .unwrap_or("-");
             let expected_simple = expected_values
-                .map(|v| v.breakdown.simple_breakdown.as_str())
+                .map(|v| v.breakdown.sn_simple_breakdown.as_str())
                 .unwrap_or("-");
             let actual_simple = actual_values
-                .map(|v| v.breakdown.simple_breakdown.as_str())
+                .map(|v| v.breakdown.sn_simple_breakdown.as_str())
                 .unwrap_or("-");
             let expected_candles = format_candles(expected_values.map(|v| &v.mono_candle_stats));
             let actual_candles = format_candles(actual_values.map(|v| &v.mono_candle_stats));
@@ -393,7 +396,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             let actual_anchors = format_anchors(actual_values.map(|v| &v.pattern_counts));
 
             println!(
-                "  {} {} [{}]: matrix_rating {} -> {} | detailed {} -> {} | partial {} -> {} | simple {} -> {} | candles {} -> {} | mono {} -> {} | boxes {} -> {} | anchors {} -> {} {}",
+                "  {} {} [{}]: matrix_rating {} -> {} | sn_detailed {} -> {} | sn_partial {} -> {} | sn_simple {} -> {} | candles {} -> {} | mono {} -> {} | boxes {} -> {} | anchors {} -> {} {}",
                 step_type,
                 difficulty,
                 meter_label,

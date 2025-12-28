@@ -1,6 +1,6 @@
 # rssp - Rust Stepmania Simfile Parser
 
-A command-line tool written in Rust for parsing, analyzing, and reporting statistics on StepMania simfiles (`.sm`, `.ssc`). It focuses on detailed analysis of 4-panel (or 8-panel) dance game charts (like DDR/ITG). It also powers the simfile parser in the [DeadSync](https://github.com/pnn64/deadsync) game engine, where it's included as a Git submodule.
+A command-line tool written in Rust for parsing, analyzing, and reporting statistics on StepMania simfiles (`.sm`, `.ssc`). It focuses on detailed analysis of 4-panel dance game charts (like DDR/ITG). It also powers the simfile parser in the [DeadSync](https://github.com/pnn64/deadsync) game engine, where it's included as a Git submodule.
 
 ## Inspiration
 
@@ -31,7 +31,7 @@ Why create another simfile parser?
 *   **Density Analysis:**
     *   Calculates Notes Per Second (NPS): Median and Peak.
     *   Counts measures of different stream densities (16ths, 20ths, 24ths, 32nds) and break measures.
-    *   Generates textual chart breakdowns in Detailed, Partial, and Simplified formats.
+    *   Generates Stamina Nation (SN) chart breakdowns in Detailed, Partial, and Simplified formats.
     *   Calculates Stream Percentage (raw and adjusted).
     *   Computes a "Tier BPM" based on sustained density and BPM.
 *   **Difficulty Rating:**
@@ -131,8 +131,8 @@ rssp <path/to/simfile_or_folder> [options]
 
 ## Output Formats
 
-* **Pretty (Default):** A human-readable summary focusing on key song details, BPM, NPS, core stats (steps, jumps, hands, etc.), and primary patterns (Candles, Mono, Boxes, Anchors). Includes simplified breakdowns if available.
-* **Full:** A comprehensive text output including all song metadata, detailed BPM info, full chart stats, all detected pattern counts (including complex ones like sweeps, spirals, etc.), and the detailed/partial/simplified breakdowns.
+* **Pretty (Default):** A human-readable summary focusing on key song details, BPM, NPS, core stats (steps, jumps, hands, etc.), and primary patterns (Candles, Mono, Boxes, Anchors). Includes simplified SN breakdowns if available.
+* **Full:** A comprehensive text output including all song metadata, detailed BPM info, full chart stats, all detected pattern counts (including complex ones like sweeps, spirals, etc.), and the detailed/partial/simplified SN breakdowns.
 * **JSON:** A structured JSON object containing all song and chart information, suitable for programmatic use. Fields are grouped logically (e.g., `chart_info`, `arrow_stats`, `pattern_counts`).
 * **CSV:** A header row followed by one data row per chart. Contains a flattened representation of most song and chart statistics, suitable for spreadsheets or data analysis pipelines.
 * **PNG / PNG-Alt:** Generates density graph images visualizing NPS over the chart's duration. Useful for quickly identifying high-intensity sections. Filenames are based on the chart's unique SHA1 hash.
@@ -185,11 +185,11 @@ Mono%: 20.23%
 Boxes: 252 (45 LRLR, 24 UDUD, 26 LDLD, 28 LULU, 28 RDRD, 32 RURU)
 Anchors: 605 (276 left, 19 down, 34 up, 276 right)
 
---- Detailed Breakdown ---
+--- SN Detailed Breakdown ---
 32 (16) 31 (3) 29 (17) 15 14 (2) 15 30 (2) 15 14 (2) 15 14 (34) 79 31 (3) 45 79 31 15 (17) 16 (24) 23 47 31 31 30 (2) 14 (2) 63 15 15 15 16 (16) 15 15 15 31 (33) 30 (2) 31 15 15 15 15 31 (17) 103 54 (26) 30 (2) 48 (16) 14 (2) 62 (2) 30 (2) 47 32 (40) 31 32 (32) 31 15 7 7 7 7 7 3 5 1 3 (33) 9 1 84 (16) 46 (2) 31 (25) 14 (2) 16 (48) 15 95 63
---- Partially Simplified ---
+--- SN Partially Simplified ---
 32 / 31 - 29 / 30* - 46* - 30* - 30* | 111* - 173* / 16 / 166* - 14 - 128* / 79* | 30 - 127* / 158* / 30 - 48 / 14 - 62 - 30 - 80* | 64* / 103* | 96* / 46 - 31 / 14 - 16 | 175*
---- Simplified Breakdown ---
+--- SN Simplified Breakdown ---
 32 / 63* / 142* | 287* / 16 / 312* / 79* | 159* / 158* / 80* / 192* | 64* / 103* | 96* / 79* / 32* | 175*
 
 --- Other Patterns ---
@@ -222,7 +222,7 @@ Elapsed Time: 18.667896ms
 - [x] Doubles (8-panel) parsing
 - [x] Custom patterns flag --custom-pattern DULDUDLR
 - [x] Proper parsing for Tech (port Step Parity from ITGMania)
-- [x] Add many tests for edge case simfiles
+- [ ] Add many tests for edge case simfiles
 - [x] Add "matrix rating" (calculate estimated rating based on rating matrix sheet)
 
 ## Contributing
