@@ -207,8 +207,10 @@ pub fn extract_sections<'a>(
                 }
 
                 let notedata_slice = &data[notedata_start..notedata_end];
-                let find_tag = |tag: &[u8]| notedata_slice.windows(tag.len()).position(|w| w == tag);
-                let notes_pos = match (find_tag(b"#NOTES:"), find_tag(b"#NOTES2:")) {
+                let notes_pos = match (
+                    find_tag_at_line_start(notedata_slice, b"#NOTES:"),
+                    find_tag_at_line_start(notedata_slice, b"#NOTES2:"),
+                ) {
                     (Some(a), Some(b)) => Some(a.min(b)),
                     (Some(a), None) => Some(a),
                     (None, Some(b)) => Some(b),
@@ -355,9 +357,7 @@ fn parse_tag(data: &[u8], tag_len: usize) -> Option<&[u8]> {
 }
 
 fn parse_subtag(data: &[u8], tag: &[u8], allow_newlines: bool) -> Option<Vec<u8>> {
-    data.windows(tag.len())
-        .position(|w| w == tag)
-        .and_then(|pos| {
+    find_tag_at_line_start(data, tag).and_then(|pos| {
             let slice = &data[pos + tag.len()..];
             let mut i = 0;
             while i < slice.len() {
@@ -433,4 +433,34 @@ pub fn split_notes_fields(notes_block: &[u8]) -> (Vec<&[u8]>, &[u8]) {
         &[]
     };
     (fields, rest)
+}
+
+fn find_tag_at_line_start(data: &[u8], tag: &[u8]) -> Option<usize> {
+    if tag.is_empty() {
+        return None;
+    }
+    let mut i = 0usize;
+    while i < data.len() {
+        if i == 0 || data[i - 1] == b'\n' || data[i - 1] == b'\r' {
+            let mut j = i;
+            while j < data.len() && (data[j] == b' ' || data[j] == b'\t') {
+                j += 1;
+            }
+            if j + tag.len() <= data.len() && eq_ignore_ascii_case(&data[j..j + tag.len()], tag) {
+                return Some(j);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+#[inline(always)]
+fn eq_ignore_ascii_case(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter()
+        .zip(b.iter())
+        .all(|(lhs, rhs)| lhs.to_ascii_lowercase() == rhs.to_ascii_lowercase())
 }
