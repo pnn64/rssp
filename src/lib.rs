@@ -331,6 +331,9 @@ struct DerivedChartMetrics {
     sn_detailed_breakdown: String,
     sn_partial_breakdown: String,
     sn_simple_breakdown: String,
+    detailed_breakdown: String,
+    partial_breakdown: String,
+    simple_breakdown: String,
     measure_nps_vec: Vec<f64>,
     max_nps: f64,
     median_nps: f64,
@@ -357,6 +360,10 @@ fn compute_derived_chart_metrics(
     let sn_partial_breakdown = generate_breakdown(measure_densities, BreakdownMode::Partial);
     let sn_simple_breakdown = generate_breakdown(measure_densities, BreakdownMode::Simplified);
 
+    let detailed_breakdown = stream_breakdown(measure_densities, StreamBreakdownLevel::Detailed);
+    let partial_breakdown = stream_breakdown(measure_densities, StreamBreakdownLevel::Partial);
+    let simple_breakdown = stream_breakdown(measure_densities, StreamBreakdownLevel::Simple);
+
     let measure_nps_vec = compute_measure_nps_vec(measure_densities, bpm_map);
     let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
 
@@ -371,6 +378,9 @@ fn compute_derived_chart_metrics(
         sn_detailed_breakdown,
         sn_partial_breakdown,
         sn_simple_breakdown,
+        detailed_breakdown,
+        partial_breakdown,
+        simple_breakdown,
         measure_nps_vec,
         max_nps,
         median_nps,
@@ -580,6 +590,9 @@ fn build_chart_summary(
         sn_detailed_breakdown: metrics.sn_detailed_breakdown,
         sn_partial_breakdown: metrics.sn_partial_breakdown,
         sn_simple_breakdown: metrics.sn_simple_breakdown,
+        detailed_breakdown: metrics.detailed_breakdown,
+        partial_breakdown: metrics.partial_breakdown,
+        simple_breakdown: metrics.simple_breakdown,
         max_nps: metrics.max_nps,
         median_nps: metrics.median_nps,
         detected_patterns,

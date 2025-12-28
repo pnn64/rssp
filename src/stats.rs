@@ -45,6 +45,14 @@ pub enum BreakdownMode {
     Simplified,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum StreamBreakdownLevel {
+    Detailed,
+    Partial,
+    Simple,
+    Total,
+}
+
 #[inline]
 fn is_all_zero<const LANES: usize>(line: &[u8; LANES]) -> bool {
     line.iter().all(|&b| b == b'0')
@@ -872,5 +880,221 @@ pub fn format_run_symbol(cat: RunDensity, length: usize, star: bool) -> String {
         format!("{}*", base)
     } else {
         base
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StreamSegment {
+    start: usize,
+    end: usize,
+    is_break: bool,
+}
+
+const STREAM_NOTES_THRESHOLD: usize = 16;
+const STREAM_SEQUENCE_THRESHOLD: usize = 1;
+const STREAM_BREAK_THRESHOLD: usize = 2;
+
+fn stream_sequences(notes_per_measure: &[usize]) -> Vec<StreamSegment> {
+    let mut stream_measures = Vec::new();
+    for (idx, &n) in notes_per_measure.iter().enumerate() {
+        if n >= STREAM_NOTES_THRESHOLD {
+            stream_measures.push(idx + 1);
+        }
+    }
+
+    let mut sequences = Vec::new();
+
+    if let Some(&first) = stream_measures.first() {
+        let break_start = 0usize;
+        let break_end = first.saturating_sub(1);
+        if break_end >= break_start + STREAM_BREAK_THRESHOLD {
+            sequences.push(StreamSegment {
+                start: break_start,
+                end: break_end,
+                is_break: true,
+            });
+        }
+    }
+
+    let mut counter = 1usize;
+    let mut stream_end: Option<usize> = None;
+
+    for (idx, &cur_val) in stream_measures.iter().enumerate() {
+        let next_val = stream_measures.get(idx + 1).copied().unwrap_or(usize::MAX);
+
+        if cur_val + 1 == next_val {
+            counter += 1;
+            stream_end = Some(cur_val + 1);
+            continue;
+        }
+
+        if counter >= STREAM_SEQUENCE_THRESHOLD {
+            let end_val = stream_end.unwrap_or(cur_val);
+            let stream_start = end_val - counter;
+            sequences.push(StreamSegment {
+                start: stream_start,
+                end: end_val,
+                is_break: false,
+            });
+        }
+
+        let break_start = cur_val;
+        let break_end = if next_val != usize::MAX {
+            next_val - 1
+        } else {
+            notes_per_measure.len()
+        };
+        if break_end >= break_start + STREAM_BREAK_THRESHOLD {
+            sequences.push(StreamSegment {
+                start: break_start,
+                end: break_end,
+                is_break: true,
+            });
+        }
+
+        counter = 1;
+        stream_end = None;
+    }
+
+    sequences
+}
+
+fn add_stream_notation(
+    level: StreamBreakdownLevel,
+    notation: &str,
+    segment_size: usize,
+    text_segments: &mut Vec<String>,
+    segment_sum: &mut usize,
+    is_broken: &mut bool,
+    total_sum: &mut usize,
+) {
+    if level == StreamBreakdownLevel::Detailed {
+        text_segments.push(format!(" ({}) ", segment_size));
+        return;
+    }
+
+    if *segment_sum != 0 {
+        match level {
+            StreamBreakdownLevel::Simple => {
+                if *is_broken {
+                    text_segments.push(format!("{}*", *segment_sum));
+                } else {
+                    text_segments.push(segment_sum.to_string());
+                }
+            }
+            StreamBreakdownLevel::Total => {
+                *total_sum += *segment_sum;
+            }
+            _ => {}
+        }
+    }
+
+    if level != StreamBreakdownLevel::Total {
+        text_segments.push(notation.to_string());
+    }
+
+    *is_broken = false;
+    *segment_sum = 0;
+}
+
+pub fn stream_breakdown(
+    notes_per_measure: &[usize],
+    level: StreamBreakdownLevel,
+) -> String {
+    if notes_per_measure.is_empty() {
+        return "Not available!".to_string();
+    }
+
+    let segments = stream_sequences(notes_per_measure);
+    if segments.is_empty() {
+        return "No Streams!".to_string();
+    }
+
+    let mut text_segments: Vec<String> = Vec::new();
+    let mut segment_sum = 0usize;
+    let mut is_broken = false;
+    let mut total_sum = 0usize;
+
+    for (idx, segment) in segments.iter().enumerate() {
+        let segment_size = segment.end - segment.start;
+        if segment.is_break {
+            if idx != 0 && idx + 1 != segments.len() {
+                if segment_size <= 4 {
+                    add_stream_notation(
+                        level,
+                        "-",
+                        segment_size,
+                        &mut text_segments,
+                        &mut segment_sum,
+                        &mut is_broken,
+                        &mut total_sum,
+                    );
+                } else if segment_size < 32 {
+                    add_stream_notation(
+                        level,
+                        "/",
+                        segment_size,
+                        &mut text_segments,
+                        &mut segment_sum,
+                        &mut is_broken,
+                        &mut total_sum,
+                    );
+                } else {
+                    add_stream_notation(
+                        level,
+                        " | ",
+                        segment_size,
+                        &mut text_segments,
+                        &mut segment_sum,
+                        &mut is_broken,
+                        &mut total_sum,
+                    );
+                }
+            }
+        } else {
+            match level {
+                StreamBreakdownLevel::Simple | StreamBreakdownLevel::Total => {
+                    if idx > 0 && !segments[idx - 1].is_break {
+                        is_broken = true;
+                        if level == StreamBreakdownLevel::Simple {
+                            segment_sum += 1;
+                        }
+                    }
+                    segment_sum += segment_size;
+                }
+                _ => {
+                    if idx > 0 && !segments[idx - 1].is_break {
+                        text_segments.push("-".to_string());
+                    }
+                    text_segments.push(segment_size.to_string());
+                }
+            }
+        }
+    }
+
+    if segment_sum != 0 {
+        match level {
+            StreamBreakdownLevel::Simple => {
+                if is_broken {
+                    text_segments.push(format!("{}*", segment_sum));
+                } else {
+                    text_segments.push(segment_sum.to_string());
+                }
+            }
+            StreamBreakdownLevel::Total => {
+                total_sum += segment_sum;
+            }
+            _ => {}
+        }
+    }
+
+    if level == StreamBreakdownLevel::Total {
+        return format!("{} Total", total_sum);
+    }
+
+    if text_segments.is_empty() {
+        "No Streams!".to_string()
+    } else {
+        text_segments.concat()
     }
 }

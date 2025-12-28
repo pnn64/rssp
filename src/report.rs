@@ -195,6 +195,9 @@ pub struct ChartSummary {
     pub sn_detailed_breakdown: String,
     pub sn_partial_breakdown:  String,
     pub sn_simple_breakdown:   String,
+    pub detailed_breakdown: String,
+    pub partial_breakdown:  String,
+    pub simple_breakdown:   String,
     pub max_nps:           f64,
     pub median_nps:        f64,
     pub detected_patterns: HashMap<PatternVariant, u32>,
@@ -771,6 +774,15 @@ fn print_pretty_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
         println!("--- SN Simplified Breakdown ---");
         println!("{}", chart.sn_simple_breakdown);
     }
+
+    if !chart.detailed_breakdown.is_empty() {
+        println!("\n--- Stream Breakdown (Detailed) ---");
+        println!("{}", chart.detailed_breakdown);
+        println!("--- Stream Breakdown (Partial) ---");
+        println!("{}", chart.partial_breakdown);
+        println!("--- Stream Breakdown (Simple) ---");
+        println!("{}", chart.simple_breakdown);
+    }
 }
 
 fn print_full_all(simfile: &SimfileSummary) {
@@ -897,6 +909,15 @@ fn print_full_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
         println!("{}", chart.sn_partial_breakdown);
         println!("--- SN Simplified Breakdown ---");
         println!("{}", chart.sn_simple_breakdown);
+    }
+
+    if !chart.detailed_breakdown.is_empty() {
+        println!("\n--- Stream Breakdown (Detailed) ---");
+        println!("{}", chart.detailed_breakdown);
+        println!("--- Stream Breakdown (Partial) ---");
+        println!("{}", chart.partial_breakdown);
+        println!("--- Stream Breakdown (Simple) ---");
+        println!("{}", chart.simple_breakdown);
     }
 
     println!("\n--- Other Patterns ---");
@@ -1173,6 +1194,14 @@ fn json_sn_breakdown(chart: &ChartSummary) -> JsonValue {
         "sn_detailed_breakdown": chart.sn_detailed_breakdown,
         "sn_partial_breakdown": chart.sn_partial_breakdown,
         "sn_simple_breakdown": chart.sn_simple_breakdown,
+    })
+}
+
+fn json_stream_breakdown(chart: &ChartSummary) -> JsonValue {
+    serde_json::json!({
+        "detailed_breakdown": chart.detailed_breakdown,
+        "partial_breakdown": chart.partial_breakdown,
+        "simple_breakdown": chart.simple_breakdown,
     })
 }
 
@@ -1725,6 +1754,7 @@ pub fn print_json_all(simfile: &SimfileSummary) {
             chart_obj.insert("stream_info".to_string(), json_stream_info(chart));
             chart_obj.insert("nps".to_string(), json_nps(chart));
             chart_obj.insert("breakdown".to_string(), json_sn_breakdown(chart));
+            chart_obj.insert("stream_breakdown".to_string(), json_stream_breakdown(chart));
             chart_obj.insert(
                 "mono_candle_stats".to_string(),
                 json_mono_candle_stats(chart),
@@ -1774,6 +1804,7 @@ total_mono,left_face_mono,right_face_mono,mono_percent,\
 total_boxes,lr_boxes,ud_boxes,corner_boxes,ld_boxes,lu_boxes,rd_boxes,ru_boxes,\
 total_anchors,left_anchors,down_anchors,up_anchors,right_anchors,\
 sn_detailed_breakdown,sn_partial_breakdown,sn_simple_breakdown,\
+detailed_breakdown,partial_breakdown,simple_breakdown,\
 total_towers,lr_towers,ud_towers,corner_towers,ld_towers,lu_towers,rd_towers,ru_towers,\
 total_triangles,ldl_triangles,lul_triangles,rdr_triangles,rur_triangles,\
 crossovers,half_crossovers,full_crossovers,footswitches,up_footswitches,down_footswitches,sideswitches,jacks,brackets,doublesteps,\
@@ -1956,6 +1987,12 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
         esc_csv(&chart.sn_detailed_breakdown),
         esc_csv(&chart.sn_partial_breakdown),
         esc_csv(&chart.sn_simple_breakdown),
+    );
+
+    print!("{},{},{},",
+        esc_csv(&chart.detailed_breakdown),
+        esc_csv(&chart.partial_breakdown),
+        esc_csv(&chart.simple_breakdown),
     );
 
     let tower_parts = compute_tower_parts(&chart.detected_patterns);
