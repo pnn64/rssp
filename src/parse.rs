@@ -68,17 +68,22 @@ pub fn parse_offset_seconds(parsed_offset: Option<&[u8]>) -> f64 {
         .unwrap_or(0.0)
 }
 
-pub fn parse_version(parsed_version: Option<&[u8]>, _timing_format: TimingFormat) -> f32 {
+#[inline(always)]
+pub fn parse_version_value(parsed_version: Option<&[u8]>) -> Option<f32> {
     parsed_version
         .and_then(|b| std::str::from_utf8(b).ok())
-        .and_then(|s| s.parse::<f32>().ok())
-        .unwrap_or(STEPFILE_VERSION_NUMBER)
+        .and_then(|s| s.trim().parse::<f32>().ok())
+}
+
+pub fn parse_version(parsed_version: Option<&[u8]>, _timing_format: TimingFormat) -> f32 {
+    parse_version_value(parsed_version).unwrap_or(STEPFILE_VERSION_NUMBER)
 }
 
 /// Parsed note data for a single chart found in the simfile.
 #[derive(Default)]
 pub struct ParsedChartEntry {
     pub notes: Vec<u8>,
+    pub chart_version: Option<Vec<u8>>,
     pub chart_bpms: Option<Vec<u8>>,
     pub chart_stops: Option<Vec<u8>>,
     pub chart_delays: Option<Vec<u8>>,
@@ -227,6 +232,7 @@ pub fn extract_sections<'a>(
                 let difficulty =
                     parse_subtag(header_slice, b"#DIFFICULTY:", false).unwrap_or_default();
                 let meter = parse_subtag(header_slice, b"#METER:", false).unwrap_or_default();
+                let chart_version = parse_subtag(header_slice, b"#VERSION:", false);
                 let notes = parse_subtag(notedata_slice, b"#NOTES:", true)
                     .or_else(|| parse_subtag(notedata_slice, b"#NOTES2:", true))
                     .unwrap_or_default();
@@ -250,6 +256,7 @@ pub fn extract_sections<'a>(
                     [step_type, description, difficulty, meter, credit, notes].join(&b':');
                 result.notes_list.push(ParsedChartEntry {
                     notes: concatenated,
+                    chart_version,
                     chart_bpms,
                     chart_stops,
                     chart_delays,
@@ -285,6 +292,7 @@ pub fn extract_sections<'a>(
                 let chart_fakes = parse_subtag(&block, b"#FAKES:", true);
                 result.notes_list.push(ParsedChartEntry {
                     notes: block,
+                    chart_version: None,
                     chart_bpms: None,
                     chart_stops: None,
                     chart_delays: None,
@@ -441,9 +449,9 @@ fn find_tag_at_line_start(data: &[u8], tag: &[u8]) -> Option<usize> {
     }
     let mut i = 0usize;
     while i < data.len() {
-        if i == 0 || data[i - 1] == b'\n' || data[i - 1] == b'\r' {
+        if i == 0 || data[i - 1] == b'\n' || data[i - 1] == b'\r' || data[i - 1] == b';' {
             let mut j = i;
-            while j < data.len() && (data[j] == b' ' || data[j] == b'\t') {
+            while j < data.len() && data[j].is_ascii_whitespace() {
                 j += 1;
             }
             if j + tag.len() <= data.len() && eq_ignore_ascii_case(&data[j..j + tag.len()], tag) {

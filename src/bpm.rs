@@ -2,6 +2,7 @@ use crate::parse::{
     extract_sections,
     parse_offset_seconds,
     parse_version,
+    parse_version_value,
     split_notes_fields,
     ParsedChartEntry,
     ParsedSimfileData,
@@ -151,7 +152,7 @@ struct TimingGlobals {
     bpms_norm: String,
     song_offset: f64,
     timing_format: TimingFormat,
-    allow_steps_timing: bool,
+    version: f32,
 }
 
 #[derive(Clone)]
@@ -168,8 +169,7 @@ struct ChartTimingTags {
 
 fn timing_globals(parsed: &ParsedSimfileData<'_>, extension: &str) -> TimingGlobals {
     let timing_format = TimingFormat::from_extension(extension);
-    let allow_steps_timing =
-        steps_timing_allowed(parse_version(parsed.version, timing_format), timing_format);
+    let version = parse_version(parsed.version, timing_format);
 
     TimingGlobals {
         bpms_raw: clean_tag_bytes(parsed.bpms),
@@ -182,7 +182,7 @@ fn timing_globals(parsed: &ParsedSimfileData<'_>, extension: &str) -> TimingGlob
         bpms_norm: normalize_tag_bytes(parsed.bpms),
         song_offset: parse_offset_seconds(parsed.offset),
         timing_format,
-        allow_steps_timing,
+        version,
     }
 }
 
@@ -219,8 +219,7 @@ fn chart_metadata(fields: &[&[u8]], timing_format: TimingFormat) -> Option<(Stri
     Some((step_type, difficulty))
 }
 
-fn timing_data_for_chart(tags: &ChartTimingTags, globals: &TimingGlobals) -> TimingData {
-    let use_chart = globals.allow_steps_timing;
+fn timing_data_for_chart(tags: &ChartTimingTags, globals: &TimingGlobals, use_chart: bool) -> TimingData {
     TimingData::from_chart_data(
         globals.song_offset,
         0.0,
@@ -246,12 +245,14 @@ fn chart_bpm_snapshot(entry: &ParsedChartEntry, globals: &TimingGlobals) -> Opti
     let (fields, _chart_data) = split_notes_fields(&entry.notes);
     let (step_type, difficulty) = chart_metadata(&fields, globals.timing_format)?;
     let tags = chart_timing_tags(entry);
+    let chart_version = parse_version_value(entry.chart_version.as_deref()).unwrap_or(globals.version);
+    let use_chart = steps_timing_allowed(chart_version, globals.timing_format);
     let hash_bpms = tags
         .bpms_norm
         .clone()
         .unwrap_or_else(|| globals.bpms_norm.clone());
     let bpms_formatted =
-        format_bpm_segments_like_itg(&timing_data_for_chart(&tags, globals).bpm_segments());
+        format_bpm_segments_like_itg(&timing_data_for_chart(&tags, globals, use_chart).bpm_segments());
 
     Some(ChartBpmSnapshot {
         step_type,
