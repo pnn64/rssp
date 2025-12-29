@@ -451,18 +451,18 @@ fn build_chart_summary(
         return None;
     }
 
-    let step_type_str = unescape_trim(std::str::from_utf8(fields[0]).unwrap_or(""));
+    let step_type_str = unescape_trim(decode_bytes(fields[0]).as_ref());
     if step_type_str == "lights-cabinet" {
         return None;
     }
 
-    let description = unescape_trim(std::str::from_utf8(fields[1]).unwrap_or(""));
-    let difficulty_raw = unescape_trim(std::str::from_utf8(fields[2]).unwrap_or(""));
-    let rating_raw = unescape_trim(std::str::from_utf8(fields[3]).unwrap_or(""));
+    let description = unescape_trim(decode_bytes(fields[1]).as_ref());
+    let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
+    let rating_raw = unescape_trim(decode_bytes(fields[3]).as_ref());
     let difficulty_str = resolve_difficulty_label(&difficulty_raw, &description, &rating_raw, extension);
     let rating_str = rating_raw;
     let credit = if extension.eq_ignore_ascii_case("ssc") {
-        unescape_trim(std::str::from_utf8(fields[4]).unwrap_or(""))
+        unescape_trim(decode_bytes(fields[4]).as_ref())
     } else {
         String::new()
     };
@@ -495,18 +495,23 @@ fn build_chart_summary(
     let chart_scrolls_timing = if allow_steps_timing { chart_scrolls.as_deref() } else { None };
     let chart_fakes_timing = if allow_steps_timing { chart_fakes.as_deref() } else { None };
     let chart_time_signatures = chart_time_signatures_opt.and_then(|bytes| {
-        std::str::from_utf8(&bytes)
-            .ok()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
+        let decoded = decode_bytes(&bytes);
+        let trimmed = decoded.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
     });
     let chart_labels = chart_labels_opt.and_then(|bytes| {
-        std::str::from_utf8(&bytes)
-            .ok()
-            .map(|s| clean_tag(&unescape_tag(s)))
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
+        let decoded = decode_bytes(&bytes);
+        let cleaned = clean_tag(&unescape_tag(decoded.as_ref()));
+        let trimmed = cleaned.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
     });
     let chart_tickcounts = chart_tickcounts_opt.and_then(|bytes| {
         std::str::from_utf8(&bytes)
@@ -667,8 +672,7 @@ pub fn analyze(
 
     let mut title_str = parsed_data
         .title
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .map(|tag| clean_tag(&unescape_tag(tag)))
+        .map(|b| clean_tag(&unescape_tag(decode_bytes(b).as_ref())))
         .unwrap_or_else(|| "<invalid-title>".to_string());
     if options.strip_tags {
         title_str = strip_title_tags(&title_str);
@@ -678,23 +682,50 @@ pub fn analyze(
         title_str = trimmed_title.to_string();
     }
 
-    let mut subtitle_str = parsed_data.subtitle.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let mut subtitle_str = parsed_data
+        .subtitle
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .unwrap_or_default();
     let trimmed_subtitle = subtitle_str.trim();
     if trimmed_subtitle.len() != subtitle_str.len() {
         subtitle_str = trimmed_subtitle.to_string();
     }
-    let mut artist_str = parsed_data.artist.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let mut artist_str = parsed_data
+        .artist
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .unwrap_or_default();
     let trimmed_artist = artist_str.trim();
     if trimmed_artist.len() != artist_str.len() {
         artist_str = trimmed_artist.to_string();
     }
-    let mut titletranslit_str = parsed_data.title_translit.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
-    let mut subtitletranslit_str = parsed_data.subtitle_translit.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
-    let mut artisttranslit_str = parsed_data.artist_translit.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
-    let banner_path_str = parsed_data.banner.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
-    let background_path_str = parsed_data.background.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
-    let music_path_str = parsed_data.music.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
-    let display_bpm_str = parsed_data.display_bpm.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let mut titletranslit_str = parsed_data
+        .title_translit
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .unwrap_or_default();
+    let mut subtitletranslit_str = parsed_data
+        .subtitle_translit
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .unwrap_or_default();
+    let mut artisttranslit_str = parsed_data
+        .artist_translit
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .unwrap_or_default();
+    let banner_path_str = parsed_data
+        .banner
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .unwrap_or_default();
+    let background_path_str = parsed_data
+        .background
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .unwrap_or_default();
+    let music_path_str = parsed_data
+        .music
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .unwrap_or_default();
+    let display_bpm_str = parsed_data
+        .display_bpm
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .unwrap_or_default();
 
     if options.translate_markers {
         crate::translate::replace_markers_in_place(&mut title_str);
@@ -756,8 +787,7 @@ pub fn analyze(
         .to_string();
     let normalized_global_labels = parsed_data
         .labels
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .map(|s| clean_tag(&unescape_tag(s)))
+        .map(|b| clean_tag(&unescape_tag(decode_bytes(b).as_ref())))
         .unwrap_or_default();
     let normalized_global_tickcounts = parsed_data
         .tickcounts
@@ -989,10 +1019,10 @@ pub fn compute_all_hashes(
             continue;
         }
 
-        let step_type = unescape_trim(std::str::from_utf8(fields[0]).unwrap_or(""));
-        let description = unescape_trim(std::str::from_utf8(fields[1]).unwrap_or(""));
-        let difficulty_raw = unescape_trim(std::str::from_utf8(fields[2]).unwrap_or(""));
-        let meter_raw = unescape_trim(std::str::from_utf8(fields[3]).unwrap_or(""));
+        let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());
+        let description = unescape_trim(decode_bytes(fields[1]).as_ref());
+        let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
+        let meter_raw = unescape_trim(decode_bytes(fields[3]).as_ref());
         let difficulty = resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
 
         // Skip lights, etc.
@@ -1082,13 +1112,13 @@ pub fn compute_chart_durations(
             continue;
         }
 
-        let step_type = unescape_trim(std::str::from_utf8(fields[0]).unwrap_or(""));
+        let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());
         if step_type == "lights-cabinet" {
             continue;
         }
-        let description = unescape_trim(std::str::from_utf8(fields[1]).unwrap_or(""));
-        let difficulty_raw = unescape_trim(std::str::from_utf8(fields[2]).unwrap_or(""));
-        let meter_raw = unescape_trim(std::str::from_utf8(fields[3]).unwrap_or(""));
+        let description = unescape_trim(decode_bytes(fields[1]).as_ref());
+        let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
+        let meter_raw = unescape_trim(decode_bytes(fields[3]).as_ref());
         let difficulty = resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
 
         let lanes = step_type_lanes(&step_type);
@@ -1244,13 +1274,13 @@ pub fn compute_chart_peak_nps(
             continue;
         }
 
-        let step_type = unescape_trim(std::str::from_utf8(fields[0]).unwrap_or(""));
+        let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());
         if step_type == "lights-cabinet" {
             continue;
         }
-        let description = unescape_trim(std::str::from_utf8(fields[1]).unwrap_or(""));
-        let difficulty_raw = unescape_trim(std::str::from_utf8(fields[2]).unwrap_or(""));
-        let meter_raw = unescape_trim(std::str::from_utf8(fields[3]).unwrap_or(""));
+        let description = unescape_trim(decode_bytes(fields[1]).as_ref());
+        let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
+        let meter_raw = unescape_trim(decode_bytes(fields[3]).as_ref());
         let difficulty = resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
 
         let lanes = step_type_lanes(&step_type);

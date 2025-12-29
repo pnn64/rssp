@@ -1,4 +1,5 @@
 use crate::parse::{
+    decode_bytes,
     extract_sections,
     parse_offset_seconds,
     parse_version,
@@ -204,13 +205,13 @@ fn chart_metadata(fields: &[&[u8]], timing_format: TimingFormat) -> Option<(Stri
     if fields.len() < 4 {
         return None;
     }
-    let step_type = unescape_trim(std::str::from_utf8(fields[0]).unwrap_or(""));
+    let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());
     if step_type == "lights-cabinet" {
         return None;
     }
-    let description = unescape_trim(std::str::from_utf8(fields[1]).unwrap_or(""));
-    let difficulty_raw = unescape_trim(std::str::from_utf8(fields[2]).unwrap_or(""));
-    let meter_raw = unescape_trim(std::str::from_utf8(fields[3]).unwrap_or(""));
+    let description = unescape_trim(decode_bytes(fields[1]).as_ref());
+    let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
+    let meter_raw = unescape_trim(decode_bytes(fields[3]).as_ref());
     let extension = if timing_format == TimingFormat::Sm {
         "sm"
     } else {
