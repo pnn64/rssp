@@ -138,16 +138,16 @@ pub static EXTRA_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::
     (PatternVariant::TowerCornerRU, string_to_pattern_bits("URURU")),
 
     // Double staircases
-    (PatternVariant::DStaircaseLeft,     string_to_pattern_bits("RDULRDUL")),
-    (PatternVariant::DStaircaseRight,    string_to_pattern_bits("LUDRLUDR")),
-    (PatternVariant::DStaircaseInvLeft,  string_to_pattern_bits("RDULRDUL")),
-    (PatternVariant::DStaircaseInvRight, string_to_pattern_bits("LDURLDUR")),
+    (PatternVariant::DStaircaseLeft,     string_to_pattern_bits("LUDRLUDR")),
+    (PatternVariant::DStaircaseRight,    string_to_pattern_bits("RDULRDUL")),
+    (PatternVariant::DStaircaseInvLeft,  string_to_pattern_bits("LDURLDUR")),
+    (PatternVariant::DStaircaseInvRight, string_to_pattern_bits("RDULRDUL")),
 
     // Alternating staircases
-    (PatternVariant::AltStaircasesLeft,     string_to_pattern_bits("RDULRUDL")),
-    (PatternVariant::AltStaircasesRight,    string_to_pattern_bits("LUDRLDUR")),
-    (PatternVariant::AltStaircasesInvLeft,  string_to_pattern_bits("RUDLRDUL")),
-    (PatternVariant::AltStaircasesInvRight, string_to_pattern_bits("LDURLUDR")),
+    (PatternVariant::AltStaircasesLeft,     string_to_pattern_bits("LUDRLDUR")),
+    (PatternVariant::AltStaircasesRight,    string_to_pattern_bits("RDULRUDL")),
+    (PatternVariant::AltStaircasesInvLeft,  string_to_pattern_bits("LDURLUDR")),
+    (PatternVariant::AltStaircasesInvRight, string_to_pattern_bits("RUDLRDUL")),
 
     // Luchi
     (PatternVariant::LuchiLeftDU,  string_to_pattern_bits("LDLUL")),
@@ -186,7 +186,6 @@ pub static EXTRA_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::
     (PatternVariant::SweepCandleInvRight, string_to_pattern_bits("RDULDLUDR")),
     ]
 });
-
 
 fn string_to_pattern_bits(p: &str) -> Vec<u8> {
     let mut result = Vec::with_capacity(p.len());
