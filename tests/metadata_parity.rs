@@ -7,15 +7,8 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::parse::{
-    clean_tag,
-    extract_sections,
-    split_notes_fields,
-    strip_title_tags,
-    unescape_tag,
-    unescape_trim,
-};
-use rssp::translate::replace_markers_in_place;
+use rssp::parse::{extract_sections, split_notes_fields, unescape_trim};
+use rssp::{analyze, display_metadata, AnalysisOptions};
 
 #[derive(Debug, Deserialize)]
 struct GoldenMetadata {
@@ -155,74 +148,32 @@ fn has_hash_prefix(value: &str) -> bool {
 }
 
 fn parse_metadata(simfile_data: &[u8], extension: &str) -> Result<ParsedMetadata, String> {
-    let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
-
-    const STRIP_TAGS: bool = false;
-
-    let mut title_str = parsed_data
-        .title
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .map(|tag| clean_tag(&unescape_tag(tag)))
-        .unwrap_or_else(|| "<invalid-title>".to_string());
-
-    if STRIP_TAGS {
-        title_str = strip_title_tags(&title_str);
-    }
-
-    let mut subtitle_str = parsed_data
-        .subtitle
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .map(unescape_tag)
-        .unwrap_or_default();
-    let mut artist_str = parsed_data
-        .artist
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .map(unescape_tag)
-        .unwrap_or_default();
-
-    let title_translit = parsed_data
-        .title_translit
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .map(unescape_tag)
-        .unwrap_or_default();
-    let subtitle_translit = parsed_data
-        .subtitle_translit
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .map(unescape_tag)
-        .unwrap_or_default();
-    let artist_translit = parsed_data
-        .artist_translit
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .map(unescape_tag)
-        .unwrap_or_default();
-
-    let mut title_translated = if title_translit.is_empty() {
-        title_str.clone()
-    } else {
-        title_translit
+    let options = AnalysisOptions {
+        compute_tech_counts: false,
+        translate_markers: true,
+        ..AnalysisOptions::default()
     };
-    let mut subtitle_translated = if subtitle_translit.is_empty() {
-        subtitle_str.clone()
-    } else {
-        subtitle_translit
-    };
-    let mut artist_translated = if artist_translit.is_empty() {
-        artist_str.clone()
-    } else {
-        artist_translit
-    };
-
-    replace_markers_in_place(&mut title_str);
-    replace_markers_in_place(&mut subtitle_str);
-    replace_markers_in_place(&mut artist_str);
-    replace_markers_in_place(&mut title_translated);
-    replace_markers_in_place(&mut subtitle_translated);
-    replace_markers_in_place(&mut artist_translated);
+    let summary = analyze(simfile_data, extension, options).map_err(|e| e.to_string())?;
+    let title = summary.title_str;
+    let subtitle = summary.subtitle_str;
+    let artist = summary.artist_str;
+    let title_translit = summary.titletranslit_str;
+    let subtitle_translit = summary.subtitletranslit_str;
+    let artist_translit = summary.artisttranslit_str;
+    let (title_translated, subtitle_translated, artist_translated) = display_metadata(
+        &title,
+        &subtitle,
+        &artist,
+        &title_translit,
+        &subtitle_translit,
+        &artist_translit,
+        false,
+    );
 
     Ok(ParsedMetadata {
-        title: title_str,
-        subtitle: subtitle_str,
-        artist: artist_str,
+        title,
+        subtitle,
+        artist,
         title_translated,
         subtitle_translated,
         artist_translated,

@@ -185,6 +185,28 @@ pub fn step_type_lanes(step_type: &str) -> usize {
     }
 }
 
+pub fn display_metadata(
+    title: &str,
+    subtitle: &str,
+    artist: &str,
+    title_translit: &str,
+    subtitle_translit: &str,
+    artist_translit: &str,
+    show_native: bool,
+) -> (String, String, String) {
+    if show_native {
+        return (title.to_string(), subtitle.to_string(), artist.to_string());
+    }
+    let title_out = if title_translit.is_empty() { title } else { title_translit };
+    let subtitle_out = if subtitle_translit.is_empty() { subtitle } else { subtitle_translit };
+    let artist_out = if artist_translit.is_empty() { artist } else { artist_translit };
+    (
+        title_out.to_string(),
+        subtitle_out.to_string(),
+        artist_out.to_string(),
+    )
+}
+
 fn chart_timing_tag_pair(tag: Option<Vec<u8>>) -> (Option<String>, Option<String>) {
     let Some(bytes) = tag else {
         return (None, None);
@@ -651,9 +673,21 @@ pub fn analyze(
     if options.strip_tags {
         title_str = strip_title_tags(&title_str);
     }
+    let trimmed_title = title_str.trim();
+    if trimmed_title.len() != title_str.len() {
+        title_str = trimmed_title.to_string();
+    }
 
     let mut subtitle_str = parsed_data.subtitle.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let trimmed_subtitle = subtitle_str.trim();
+    if trimmed_subtitle.len() != subtitle_str.len() {
+        subtitle_str = trimmed_subtitle.to_string();
+    }
     let mut artist_str = parsed_data.artist.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let trimmed_artist = artist_str.trim();
+    if trimmed_artist.len() != artist_str.len() {
+        artist_str = trimmed_artist.to_string();
+    }
     let mut titletranslit_str = parsed_data.title_translit.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
     let mut subtitletranslit_str = parsed_data.subtitle_translit.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
     let mut artisttranslit_str = parsed_data.artist_translit.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
