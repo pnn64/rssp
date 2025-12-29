@@ -222,7 +222,7 @@ Elapsed Time: 18.667896ms
 - [x] Doubles (8-panel) parsing
 - [x] Custom patterns flag --custom-pattern DULDUDLR
 - [x] Proper parsing for Tech (port Step Parity from ITGMania)
-- [ ] Add many tests for edge case simfiles
+- [x] Add many tests for edge case simfiles
 - [x] Add "matrix rating" (calculate estimated rating based on rating matrix sheet)
 
 ## Contributing
