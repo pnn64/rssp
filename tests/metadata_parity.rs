@@ -22,6 +22,12 @@ struct GoldenMetadata {
     title: Option<String>,
     subtitle: Option<String>,
     artist: Option<String>,
+    #[serde(rename = "title_translated")]
+    title_translated: Option<String>,
+    #[serde(rename = "subtitle_translated")]
+    subtitle_translated: Option<String>,
+    #[serde(rename = "artist_translated")]
+    artist_translated: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,11 +63,31 @@ struct Failure {
     message: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct ExpectedMetadata {
+    title: String,
+    subtitle: String,
+    artist: String,
+    title_translated: String,
+    subtitle_translated: String,
+    artist_translated: String,
+}
+
+#[derive(Debug, Clone)]
+struct ParsedMetadata {
+    title: String,
+    subtitle: String,
+    artist: String,
+    title_translated: String,
+    subtitle_translated: String,
+    artist_translated: String,
+}
+
 fn expected_metadata(
     entries: &[GoldenMetadata],
     path: &Path,
-) -> Result<(String, String, String), String> {
-    let mut expected: Option<(String, String, String)> = None;
+) -> Result<ExpectedMetadata, String> {
+    let mut expected: Option<ExpectedMetadata> = None;
 
     for entry in entries {
         let title = entry.title.as_deref().ok_or_else(|| {
@@ -73,8 +99,33 @@ fn expected_metadata(
         let artist = entry.artist.as_deref().ok_or_else(|| {
             format!("\n\nMISSING BASELINE FIELD\nFile: {}\nField: artist\n", path.display())
         })?;
+        let title_translated = entry.title_translated.as_deref().ok_or_else(|| {
+            format!(
+                "\n\nMISSING BASELINE FIELD\nFile: {}\nField: title_translated\n",
+                path.display()
+            )
+        })?;
+        let subtitle_translated = entry.subtitle_translated.as_deref().ok_or_else(|| {
+            format!(
+                "\n\nMISSING BASELINE FIELD\nFile: {}\nField: subtitle_translated\n",
+                path.display()
+            )
+        })?;
+        let artist_translated = entry.artist_translated.as_deref().ok_or_else(|| {
+            format!(
+                "\n\nMISSING BASELINE FIELD\nFile: {}\nField: artist_translated\n",
+                path.display()
+            )
+        })?;
 
-        let current = (title.to_string(), subtitle.to_string(), artist.to_string());
+        let current = ExpectedMetadata {
+            title: title.to_string(),
+            subtitle: subtitle.to_string(),
+            artist: artist.to_string(),
+            title_translated: title_translated.to_string(),
+            subtitle_translated: subtitle_translated.to_string(),
+            artist_translated: artist_translated.to_string(),
+        };
         if let Some(ref expected_value) = expected {
             if expected_value != &current {
                 return Err(format!(
@@ -103,7 +154,7 @@ fn has_hash_prefix(value: &str) -> bool {
     value.trim_start().starts_with('#')
 }
 
-fn parse_metadata(simfile_data: &[u8], extension: &str) -> Result<(String, String, String), String> {
+fn parse_metadata(simfile_data: &[u8], extension: &str) -> Result<ParsedMetadata, String> {
     let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
 
     const STRIP_TAGS: bool = false;
@@ -129,11 +180,25 @@ fn parse_metadata(simfile_data: &[u8], extension: &str) -> Result<(String, Strin
         .map(unescape_tag)
         .unwrap_or_default();
 
+    let mut title_translated = title_str.clone();
+    let mut subtitle_translated = subtitle_str.clone();
+    let mut artist_translated = artist_str.clone();
+
     replace_markers_in_place(&mut title_str);
     replace_markers_in_place(&mut subtitle_str);
     replace_markers_in_place(&mut artist_str);
+    replace_markers_in_place(&mut title_translated);
+    replace_markers_in_place(&mut subtitle_translated);
+    replace_markers_in_place(&mut artist_translated);
 
-    Ok((title_str, subtitle_str, artist_str))
+    Ok(ParsedMetadata {
+        title: title_str,
+        subtitle: subtitle_str,
+        artist: artist_str,
+        title_translated,
+        subtitle_translated,
+        artist_translated,
+    })
 }
 
 fn parse_step_artists(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartStepArtist>, String> {
