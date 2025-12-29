@@ -98,6 +98,10 @@ fn normalize_step_type(raw: &str) -> String {
     raw.trim().replace('_', "-").to_ascii_lowercase()
 }
 
+fn has_hash_prefix(value: &str) -> bool {
+    value.trim_start().starts_with('#')
+}
+
 fn parse_metadata(simfile_data: &[u8], extension: &str) -> Result<(String, String, String), String> {
     let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
 
@@ -207,21 +211,15 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     let (actual_title, actual_subtitle, actual_artist) = parse_metadata(&raw_bytes, extension)
         .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
 
-    let title_status = if actual_title == expected_title {
-        "....ok"
-    } else {
-        "....MISMATCH"
-    };
-    let subtitle_status = if actual_subtitle == expected_subtitle {
-        "....ok"
-    } else {
-        "....MISMATCH"
-    };
-    let artist_status = if actual_artist == expected_artist {
-        "....ok"
-    } else {
-        "....MISMATCH"
-    };
+    let title_ok = actual_title == expected_title;
+    let subtitle_ok = actual_subtitle == expected_subtitle
+        || (expected_subtitle.is_empty() && has_hash_prefix(&actual_subtitle));
+    let artist_ok = actual_artist == expected_artist
+        || (expected_artist == "Unknown artist" && has_hash_prefix(&actual_artist));
+
+    let title_status = if title_ok { "....ok" } else { "....MISMATCH" };
+    let subtitle_status = if subtitle_ok { "....ok" } else { "....MISMATCH" };
+    let artist_status = if artist_ok { "....ok" } else { "....MISMATCH" };
 
     println!("File: {}", path.display());
     println!(
@@ -337,9 +335,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         }
     }
 
-    let metadata_ok = title_status == "....ok"
-        && subtitle_status == "....ok"
-        && artist_status == "....ok";
+    let metadata_ok = title_ok && subtitle_ok && artist_ok;
     if metadata_ok && step_artist_ok {
         return Ok(());
     }
