@@ -275,34 +275,55 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     let golden_step_entries: Vec<GoldenChartStepArtist> = serde_json::from_slice(&json_bytes)
         .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
 
-    let (expected_title, expected_subtitle, expected_artist) =
-        expected_metadata(&golden_entries, path)?;
+    let expected = expected_metadata(&golden_entries, path)?;
 
-    let (actual_title, actual_subtitle, actual_artist) = parse_metadata(&raw_bytes, extension)
+    let actual = parse_metadata(&raw_bytes, extension)
         .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
 
-    let title_ok = actual_title == expected_title;
-    let subtitle_ok = actual_subtitle == expected_subtitle
-        || (expected_subtitle.is_empty() && has_hash_prefix(&actual_subtitle));
-    let artist_ok = actual_artist == expected_artist
-        || (expected_artist == "Unknown artist" && has_hash_prefix(&actual_artist));
+    let title_ok = actual.title == expected.title;
+    let subtitle_ok = actual.subtitle == expected.subtitle
+        || (expected.subtitle.is_empty() && has_hash_prefix(&actual.subtitle));
+    let artist_ok = actual.artist == expected.artist
+        || (expected.artist == "Unknown artist" && has_hash_prefix(&actual.artist));
+    let title_translated_ok = actual.title_translated == expected.title_translated;
+    let subtitle_translated_ok = actual.subtitle_translated == expected.subtitle_translated
+        || (expected.subtitle_translated.is_empty()
+            && has_hash_prefix(&actual.subtitle_translated));
+    let artist_translated_ok = actual.artist_translated == expected.artist_translated
+        || (expected.artist_translated == "Unknown artist"
+            && has_hash_prefix(&actual.artist_translated));
 
     let title_status = if title_ok { "....ok" } else { "....MISMATCH" };
     let subtitle_status = if subtitle_ok { "....ok" } else { "....MISMATCH" };
     let artist_status = if artist_ok { "....ok" } else { "....MISMATCH" };
+    let title_translated_status = if title_translated_ok { "....ok" } else { "....MISMATCH" };
+    let subtitle_translated_status = if subtitle_translated_ok { "....ok" } else { "....MISMATCH" };
+    let artist_translated_status = if artist_translated_ok { "....ok" } else { "....MISMATCH" };
 
     println!("File: {}", path.display());
     println!(
         "  title: baseline: {} -> rssp: {} {}",
-        expected_title, actual_title, title_status
+        expected.title, actual.title, title_status
     );
     println!(
         "  subtitle: baseline: {} -> rssp: {} {}",
-        expected_subtitle, actual_subtitle, subtitle_status
+        expected.subtitle, actual.subtitle, subtitle_status
     );
     println!(
         "  artist: baseline: {} -> rssp: {} {}",
-        expected_artist, actual_artist, artist_status
+        expected.artist, actual.artist, artist_status
+    );
+    println!(
+        "  title_translated: baseline: {} -> rssp: {} {}",
+        expected.title_translated, actual.title_translated, title_translated_status
+    );
+    println!(
+        "  subtitle_translated: baseline: {} -> rssp: {} {}",
+        expected.subtitle_translated, actual.subtitle_translated, subtitle_translated_status
+    );
+    println!(
+        "  artist_translated: baseline: {} -> rssp: {} {}",
+        expected.artist_translated, actual.artist_translated, artist_translated_status
     );
 
     let rssp_step_entries = parse_step_artists(&raw_bytes, extension)
@@ -405,7 +426,12 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         }
     }
 
-    let metadata_ok = title_ok && subtitle_ok && artist_ok;
+    let metadata_ok = title_ok
+        && subtitle_ok
+        && artist_ok
+        && title_translated_ok
+        && subtitle_translated_ok
+        && artist_translated_ok;
     if metadata_ok && step_artist_ok {
         return Ok(());
     }
@@ -414,12 +440,21 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     if !metadata_ok {
         error_details.push_str(&format!(
             "RSSP title:    {:?}\nGolden title:  {:?}\nRSSP subtitle: {:?}\nGolden subtitle: {:?}\nRSSP artist:   {:?}\nGolden artist: {:?}\n",
-            actual_title,
-            expected_title,
-            actual_subtitle,
-            expected_subtitle,
-            actual_artist,
-            expected_artist
+            actual.title,
+            expected.title,
+            actual.subtitle,
+            expected.subtitle,
+            actual.artist,
+            expected.artist
+        ));
+        error_details.push_str(&format!(
+            "RSSP title_translated:    {:?}\nGolden title_translated:  {:?}\nRSSP subtitle_translated: {:?}\nGolden subtitle_translated: {:?}\nRSSP artist_translated:   {:?}\nGolden artist_translated: {:?}\n",
+            actual.title_translated,
+            expected.title_translated,
+            actual.subtitle_translated,
+            expected.subtitle_translated,
+            actual.artist_translated,
+            expected.artist_translated
         ));
     }
     if !step_artist_ok {
