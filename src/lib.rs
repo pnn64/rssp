@@ -726,6 +726,7 @@ pub fn analyze(
         .unwrap_or("")
         .to_string();
 
+    let allow_steps_timing = steps_timing_allowed(ssc_version, timing_format);
     let global_timing_segments = compute_timing_segments(
         None,
         &cleaned_global_bpms,
@@ -752,12 +753,10 @@ pub fn analyze(
     let bpm_values: Vec<f64> = global_bpm_map.iter().map(|&(_, bpm)| bpm).collect();
     let (median_bpm, average_bpm) = compute_bpm_stats(&bpm_values);
 
-    let mut chart_summaries: Vec<(ChartSummary, bool)> = parsed_data
+    let mut chart_summaries: Vec<ChartSummary> = parsed_data
         .notes_list
         .into_iter()
         .filter_map(|entry| {
-            let chart_version = parse_version_value(entry.chart_version.as_deref()).unwrap_or(ssc_version);
-            let allow_steps_timing = steps_timing_allowed(chart_version, timing_format);
             build_chart_summary(
                 entry.notes,
                 entry.chart_bpms,
@@ -785,50 +784,49 @@ pub fn analyze(
                 allow_steps_timing,
                 &options,
             )
-            .map(|chart| (chart, allow_steps_timing))
         })
         .collect();
 
     let total_length = chart_summaries
         .iter_mut()
-        .map(|(chart, allow_steps_timing)| {
-            let chart_bpms_timing = if *allow_steps_timing {
+        .map(|chart| {
+            let chart_bpms_timing = if allow_steps_timing {
                 chart.chart_bpms.as_deref()
             } else {
                 None
             };
-            let chart_stops_timing = if *allow_steps_timing {
+            let chart_stops_timing = if allow_steps_timing {
                 chart.chart_stops.as_deref()
             } else {
                 None
             };
-            let chart_delays_timing = if *allow_steps_timing {
+            let chart_delays_timing = if allow_steps_timing {
                 chart.chart_delays.as_deref()
             } else {
                 None
             };
-            let chart_warps_timing = if *allow_steps_timing {
+            let chart_warps_timing = if allow_steps_timing {
                 chart.chart_warps.as_deref()
             } else {
                 None
             };
-            let chart_speeds_timing = if *allow_steps_timing {
+            let chart_speeds_timing = if allow_steps_timing {
                 chart.chart_speeds.as_deref()
             } else {
                 None
             };
-            let chart_scrolls_timing = if *allow_steps_timing {
+            let chart_scrolls_timing = if allow_steps_timing {
                 chart.chart_scrolls.as_deref()
             } else {
                 None
             };
-            let chart_fakes_timing = if *allow_steps_timing {
+            let chart_fakes_timing = if allow_steps_timing {
                 chart.chart_fakes.as_deref()
             } else {
                 None
             };
 
-            let chart_has_timing = *allow_steps_timing
+            let chart_has_timing = allow_steps_timing
                 && (chart.chart_bpms.is_some()
                     || chart.chart_stops.is_some()
                     || chart.chart_delays.is_some()
@@ -921,11 +919,7 @@ pub fn analyze(
         display_bpm_str,
         sample_start, sample_length,
         min_bpm: min_bpm_i32 as f64, max_bpm: max_bpm_i32 as f64,
-        median_bpm,
-        average_bpm,
-        total_length,
-        charts: chart_summaries.into_iter().map(|(chart, _)| chart).collect(),
-        total_elapsed,
+        median_bpm, average_bpm, total_length, charts: chart_summaries, total_elapsed,
     })
 }
 
@@ -998,6 +992,7 @@ pub fn compute_chart_durations(
 
     let timing_format = TimingFormat::from_extension(extension);
     let ssc_version = parse_version(parsed_data.version, timing_format);
+    let allow_steps_timing = steps_timing_allowed(ssc_version, timing_format);
     let song_offset = parse_offset_seconds(parsed_data.offset);
 
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"")).unwrap_or("");
@@ -1036,9 +1031,6 @@ pub fn compute_chart_durations(
     let mut results = Vec::new();
 
     for entry in parsed_data.notes_list {
-        let chart_version = parse_version_value(entry.chart_version.as_deref()).unwrap_or(ssc_version);
-        let allow_steps_timing = steps_timing_allowed(chart_version, timing_format);
-
         let (fields, chart_data) = split_notes_fields(&entry.notes);
         if fields.len() < 5 {
             continue;
@@ -1162,6 +1154,7 @@ pub fn compute_chart_peak_nps(
 
     let timing_format = TimingFormat::from_extension(extension);
     let ssc_version = parse_version(parsed_data.version, timing_format);
+    let allow_steps_timing = steps_timing_allowed(ssc_version, timing_format);
     let song_offset = parse_offset_seconds(parsed_data.offset);
 
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"")).unwrap_or("");
@@ -1200,9 +1193,6 @@ pub fn compute_chart_peak_nps(
     let mut results = Vec::new();
 
     for entry in parsed_data.notes_list {
-        let chart_version = parse_version_value(entry.chart_version.as_deref()).unwrap_or(ssc_version);
-        let allow_steps_timing = steps_timing_allowed(chart_version, timing_format);
-
         let (fields, chart_data) = split_notes_fields(&entry.notes);
         if fields.len() < 5 {
             continue;

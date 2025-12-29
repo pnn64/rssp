@@ -68,22 +68,23 @@ pub fn parse_offset_seconds(parsed_offset: Option<&[u8]>) -> f64 {
         .unwrap_or(0.0)
 }
 
-#[inline(always)]
-pub fn parse_version_value(parsed_version: Option<&[u8]>) -> Option<f32> {
+pub fn parse_version(parsed_version: Option<&[u8]>, timing_format: TimingFormat) -> f32 {
     parsed_version
         .and_then(|b| std::str::from_utf8(b).ok())
-        .and_then(|s| s.trim().parse::<f32>().ok())
-}
-
-pub fn parse_version(parsed_version: Option<&[u8]>, _timing_format: TimingFormat) -> f32 {
-    parse_version_value(parsed_version).unwrap_or(STEPFILE_VERSION_NUMBER)
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or_else(|| {
+            if timing_format == TimingFormat::Ssc {
+                0.0
+            } else {
+                STEPFILE_VERSION_NUMBER
+            }
+        })
 }
 
 /// Parsed note data for a single chart found in the simfile.
 #[derive(Default)]
 pub struct ParsedChartEntry {
     pub notes: Vec<u8>,
-    pub chart_version: Option<Vec<u8>>,
     pub chart_bpms: Option<Vec<u8>>,
     pub chart_stops: Option<Vec<u8>>,
     pub chart_delays: Option<Vec<u8>>,
@@ -212,51 +213,37 @@ pub fn extract_sections<'a>(
                 }
 
                 let notedata_slice = &data[notedata_start..notedata_end];
-                let notes_pos = match (
-                    find_tag_at_line_start(notedata_slice, b"#NOTES:"),
-                    find_tag_at_line_start(notedata_slice, b"#NOTES2:"),
-                ) {
-                    (Some(a), Some(b)) => Some(a.min(b)),
-                    (Some(a), None) => Some(a),
-                    (None, Some(b)) => Some(b),
-                    (None, None) => None,
-                };
-                let header_slice = notes_pos
-                    .map(|pos| &notedata_slice[..pos])
-                    .unwrap_or(notedata_slice);
                 let step_type =
-                    parse_subtag(header_slice, b"#STEPSTYPE:", false).unwrap_or_default();
+                    parse_subtag(notedata_slice, b"#STEPSTYPE:", false).unwrap_or_default();
                 let description =
-                    parse_subtag(header_slice, b"#DESCRIPTION:", false).unwrap_or_default();
-                let credit = parse_subtag(header_slice, b"#CREDIT:", false).unwrap_or_default();
+                    parse_subtag(notedata_slice, b"#DESCRIPTION:", false).unwrap_or_default();
+                let credit = parse_subtag(notedata_slice, b"#CREDIT:", false).unwrap_or_default();
                 let difficulty =
-                    parse_subtag(header_slice, b"#DIFFICULTY:", false).unwrap_or_default();
-                let meter = parse_subtag(header_slice, b"#METER:", false).unwrap_or_default();
-                let chart_version = parse_subtag(header_slice, b"#VERSION:", false);
+                    parse_subtag(notedata_slice, b"#DIFFICULTY:", false).unwrap_or_default();
+                let meter = parse_subtag(notedata_slice, b"#METER:", false).unwrap_or_default();
                 let notes = parse_subtag(notedata_slice, b"#NOTES:", true)
                     .or_else(|| parse_subtag(notedata_slice, b"#NOTES2:", true))
                     .unwrap_or_default();
-                let chart_bpms = parse_subtag(header_slice, b"#BPMS:", true);
-                let chart_stops = parse_subtag(header_slice, b"#STOPS:", true)
-                    .or_else(|| parse_subtag(header_slice, b"#FREEZES:", true));
-                let chart_delays = parse_subtag(header_slice, b"#DELAYS:", true);
-                let chart_warps = parse_subtag(header_slice, b"#WARPS:", true);
-                let chart_speeds = parse_subtag(header_slice, b"#SPEEDS:", true);
-                let chart_scrolls = parse_subtag(header_slice, b"#SCROLLS:", true);
-                let chart_fakes = parse_subtag(header_slice, b"#FAKES:", true);
-                let chart_offset = parse_subtag(header_slice, b"#OFFSET:", true);
+                let chart_bpms = parse_subtag(notedata_slice, b"#BPMS:", true);
+                let chart_stops = parse_subtag(notedata_slice, b"#STOPS:", true)
+                    .or_else(|| parse_subtag(notedata_slice, b"#FREEZES:", true));
+                let chart_delays = parse_subtag(notedata_slice, b"#DELAYS:", true);
+                let chart_warps = parse_subtag(notedata_slice, b"#WARPS:", true);
+                let chart_speeds = parse_subtag(notedata_slice, b"#SPEEDS:", true);
+                let chart_scrolls = parse_subtag(notedata_slice, b"#SCROLLS:", true);
+                let chart_fakes = parse_subtag(notedata_slice, b"#FAKES:", true);
+                let chart_offset = parse_subtag(notedata_slice, b"#OFFSET:", true);
                 let chart_time_signatures =
-                    parse_subtag(header_slice, b"#TIMESIGNATURES:", true);
-                let chart_labels = parse_subtag(header_slice, b"#LABELS:", true);
-                let chart_tickcounts = parse_subtag(header_slice, b"#TICKCOUNTS:", true);
-                let chart_combos = parse_subtag(header_slice, b"#COMBOS:", true);
-                let chart_radar_values = parse_subtag(header_slice, b"#RADARVALUES:", true);
+                    parse_subtag(notedata_slice, b"#TIMESIGNATURES:", true);
+                let chart_labels = parse_subtag(notedata_slice, b"#LABELS:", true);
+                let chart_tickcounts = parse_subtag(notedata_slice, b"#TICKCOUNTS:", true);
+                let chart_combos = parse_subtag(notedata_slice, b"#COMBOS:", true);
+                let chart_radar_values = parse_subtag(notedata_slice, b"#RADARVALUES:", true);
 
                 let concatenated =
                     [step_type, description, difficulty, meter, credit, notes].join(&b':');
                 result.notes_list.push(ParsedChartEntry {
                     notes: concatenated,
-                    chart_version,
                     chart_bpms,
                     chart_stops,
                     chart_delays,
@@ -292,7 +279,6 @@ pub fn extract_sections<'a>(
                 let chart_fakes = parse_subtag(&block, b"#FAKES:", true);
                 result.notes_list.push(ParsedChartEntry {
                     notes: block,
-                    chart_version: None,
                     chart_bpms: None,
                     chart_stops: None,
                     chart_delays: None,
@@ -365,7 +351,9 @@ fn parse_tag(data: &[u8], tag_len: usize) -> Option<&[u8]> {
 }
 
 fn parse_subtag(data: &[u8], tag: &[u8], allow_newlines: bool) -> Option<Vec<u8>> {
-    find_tag_at_line_start(data, tag).and_then(|pos| {
+    data.windows(tag.len())
+        .position(|w| w == tag)
+        .and_then(|pos| {
             let slice = &data[pos + tag.len()..];
             let mut i = 0;
             while i < slice.len() {
@@ -441,34 +429,4 @@ pub fn split_notes_fields(notes_block: &[u8]) -> (Vec<&[u8]>, &[u8]) {
         &[]
     };
     (fields, rest)
-}
-
-fn find_tag_at_line_start(data: &[u8], tag: &[u8]) -> Option<usize> {
-    if tag.is_empty() {
-        return None;
-    }
-    let mut i = 0usize;
-    while i < data.len() {
-        if i == 0 || data[i - 1] == b'\n' || data[i - 1] == b'\r' || data[i - 1] == b';' {
-            let mut j = i;
-            while j < data.len() && data[j].is_ascii_whitespace() {
-                j += 1;
-            }
-            if j + tag.len() <= data.len() && eq_ignore_ascii_case(&data[j..j + tag.len()], tag) {
-                return Some(j);
-            }
-        }
-        i += 1;
-    }
-    None
-}
-
-#[inline(always)]
-fn eq_ignore_ascii_case(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter()
-        .zip(b.iter())
-        .all(|(lhs, rhs)| lhs.to_ascii_lowercase() == rhs.to_ascii_lowercase())
 }
