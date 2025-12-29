@@ -7,7 +7,14 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::parse::{clean_tag, extract_sections, split_notes_fields, strip_title_tags, unescape_tag};
+use rssp::parse::{
+    clean_tag,
+    extract_sections,
+    split_notes_fields,
+    strip_title_tags,
+    unescape_tag,
+    unescape_trim,
+};
 
 #[derive(Debug, Deserialize)]
 struct GoldenMetadata {
@@ -131,17 +138,19 @@ fn parse_step_artists(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartS
         }
 
         let step_type_raw = std::str::from_utf8(fields[0]).unwrap_or("");
-        let step_type = normalize_step_type(step_type_raw);
+        let step_type_unescaped = unescape_trim(step_type_raw);
+        let step_type = normalize_step_type(&step_type_unescaped);
         if step_type.is_empty() || step_type == "lights-cabinet" {
             continue;
         }
 
-        let description = std::str::from_utf8(fields[1]).unwrap_or("").trim().to_string();
-        let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
-        let difficulty = rssp::normalize_difficulty_label(difficulty_raw)
-            .to_ascii_lowercase();
+        let description_raw = std::str::from_utf8(fields[1]).unwrap_or("");
+        let description = unescape_trim(description_raw);
+        let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("");
+        let difficulty_unescaped = unescape_trim(difficulty_raw);
+        let difficulty = rssp::normalize_difficulty_label(&difficulty_unescaped).to_ascii_lowercase();
         let step_artist = if extension.eq_ignore_ascii_case("ssc") {
-            std::str::from_utf8(fields[4]).unwrap_or("").trim().to_string()
+            unescape_trim(std::str::from_utf8(fields[4]).unwrap_or(""))
         } else {
             description.clone()
         };

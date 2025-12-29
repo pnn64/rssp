@@ -3,6 +3,7 @@ use crate::parse::{
     parse_offset_seconds,
     parse_version,
     split_notes_fields,
+    unescape_trim,
     ParsedChartEntry,
     ParsedSimfileData,
 };
@@ -203,19 +204,19 @@ fn chart_metadata(fields: &[&[u8]], timing_format: TimingFormat) -> Option<(Stri
     if fields.len() < 4 {
         return None;
     }
-    let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_string();
+    let step_type = unescape_trim(std::str::from_utf8(fields[0]).unwrap_or(""));
     if step_type == "lights-cabinet" {
         return None;
     }
-    let description = std::str::from_utf8(fields[1]).unwrap_or("").trim();
-    let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
-    let meter_raw = std::str::from_utf8(fields[3]).unwrap_or("").trim();
+    let description = unescape_trim(std::str::from_utf8(fields[1]).unwrap_or(""));
+    let difficulty_raw = unescape_trim(std::str::from_utf8(fields[2]).unwrap_or(""));
+    let meter_raw = unescape_trim(std::str::from_utf8(fields[3]).unwrap_or(""));
     let extension = if timing_format == TimingFormat::Sm {
         "sm"
     } else {
         "ssc"
     };
-    let difficulty = crate::resolve_difficulty_label(difficulty_raw, description, meter_raw, extension);
+    let difficulty = crate::resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
     Some((step_type, difficulty))
 }
 

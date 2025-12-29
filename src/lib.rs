@@ -426,18 +426,18 @@ fn build_chart_summary(
         return None;
     }
 
-    let step_type_str = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_owned();
+    let step_type_str = unescape_trim(std::str::from_utf8(fields[0]).unwrap_or(""));
     if step_type_str == "lights-cabinet" {
         return None;
     }
 
-    let description = std::str::from_utf8(fields[1]).unwrap_or("").trim().to_owned();
-    let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
-    let rating_raw = std::str::from_utf8(fields[3]).unwrap_or("").trim();
-    let difficulty_str = resolve_difficulty_label(difficulty_raw, &description, rating_raw, extension);
-    let rating_str = rating_raw.to_owned();
+    let description = unescape_trim(std::str::from_utf8(fields[1]).unwrap_or(""));
+    let difficulty_raw = unescape_trim(std::str::from_utf8(fields[2]).unwrap_or(""));
+    let rating_raw = unescape_trim(std::str::from_utf8(fields[3]).unwrap_or(""));
+    let difficulty_str = resolve_difficulty_label(&difficulty_raw, &description, &rating_raw, extension);
+    let rating_str = rating_raw;
     let credit = if extension.eq_ignore_ascii_case("ssc") {
-        std::str::from_utf8(fields[4]).unwrap_or("").trim().to_owned()
+        unescape_trim(std::str::from_utf8(fields[4]).unwrap_or(""))
     } else {
         String::new()
     };
@@ -943,11 +943,11 @@ pub fn compute_all_hashes(
             continue;
         }
 
-        let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_string();
-        let description = std::str::from_utf8(fields[1]).unwrap_or("").trim();
-        let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
-        let meter_raw = std::str::from_utf8(fields[3]).unwrap_or("").trim();
-        let difficulty = resolve_difficulty_label(difficulty_raw, description, meter_raw, extension);
+        let step_type = unescape_trim(std::str::from_utf8(fields[0]).unwrap_or(""));
+        let description = unescape_trim(std::str::from_utf8(fields[1]).unwrap_or(""));
+        let difficulty_raw = unescape_trim(std::str::from_utf8(fields[2]).unwrap_or(""));
+        let meter_raw = unescape_trim(std::str::from_utf8(fields[3]).unwrap_or(""));
+        let difficulty = resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
 
         // Skip lights, etc.
         if step_type == "lights-cabinet" {
@@ -1036,14 +1036,14 @@ pub fn compute_chart_durations(
             continue;
         }
 
-        let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_string();
+        let step_type = unescape_trim(std::str::from_utf8(fields[0]).unwrap_or(""));
         if step_type == "lights-cabinet" {
             continue;
         }
-        let description = std::str::from_utf8(fields[1]).unwrap_or("").trim();
-        let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
-        let meter_raw = std::str::from_utf8(fields[3]).unwrap_or("").trim();
-        let difficulty = resolve_difficulty_label(difficulty_raw, description, meter_raw, extension);
+        let description = unescape_trim(std::str::from_utf8(fields[1]).unwrap_or(""));
+        let difficulty_raw = unescape_trim(std::str::from_utf8(fields[2]).unwrap_or(""));
+        let meter_raw = unescape_trim(std::str::from_utf8(fields[3]).unwrap_or(""));
+        let difficulty = resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
 
         let lanes = step_type_lanes(&step_type);
         let target_beat = compute_last_beat_from_chart_data(chart_data, lanes);
@@ -1198,14 +1198,14 @@ pub fn compute_chart_peak_nps(
             continue;
         }
 
-        let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_string();
+        let step_type = unescape_trim(std::str::from_utf8(fields[0]).unwrap_or(""));
         if step_type == "lights-cabinet" {
             continue;
         }
-        let description = std::str::from_utf8(fields[1]).unwrap_or("").trim();
-        let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
-        let meter_raw = std::str::from_utf8(fields[3]).unwrap_or("").trim();
-        let difficulty = resolve_difficulty_label(difficulty_raw, description, meter_raw, extension);
+        let description = unescape_trim(std::str::from_utf8(fields[1]).unwrap_or(""));
+        let difficulty_raw = unescape_trim(std::str::from_utf8(fields[2]).unwrap_or(""));
+        let meter_raw = unescape_trim(std::str::from_utf8(fields[3]).unwrap_or(""));
+        let difficulty = resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
 
         let lanes = step_type_lanes(&step_type);
         let measure_densities = stats::measure_densities(chart_data, lanes);

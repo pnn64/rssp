@@ -43,19 +43,20 @@ pub fn unescape_tag(tag: &str) -> String {
     while let Some(c) = chars.next() {
         if c == '\\' {
             if let Some(next_c) = chars.next() {
-                match next_c {
-                    ':' | ';' | '#' | '\\' => out.push(next_c),
-                    other => {
-                        out.push('\\');
-                        out.push(other);
-                    }
-                }
-            } else {
-                out.push('\\');
+                out.push(next_c);
             }
         } else {
             out.push(c);
         }
+    }
+    out
+}
+
+pub fn unescape_trim(tag: &str) -> String {
+    let mut out = unescape_tag(tag);
+    let trimmed = out.trim();
+    if trimmed.len() != out.len() {
+        out = trimmed.to_string();
     }
     out
 }
