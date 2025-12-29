@@ -1,4 +1,4 @@
-name: rssp Parity Test
+name: Parity Test
 run-name: Parity Test - ${{ inputs.test_suite }}
 
 on:
