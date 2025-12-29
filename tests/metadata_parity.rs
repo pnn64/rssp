@@ -15,6 +15,7 @@ use rssp::parse::{
     unescape_tag,
     unescape_trim,
 };
+use rssp::translate::replace_markers_in_place;
 
 #[derive(Debug, Deserialize)]
 struct GoldenMetadata {
@@ -117,16 +118,20 @@ fn parse_metadata(simfile_data: &[u8], extension: &str) -> Result<(String, Strin
         title_str = strip_title_tags(&title_str);
     }
 
-    let subtitle_str = parsed_data
+    let mut subtitle_str = parsed_data
         .subtitle
         .and_then(|b| std::str::from_utf8(b).ok())
         .map(unescape_tag)
         .unwrap_or_default();
-    let artist_str = parsed_data
+    let mut artist_str = parsed_data
         .artist
         .and_then(|b| std::str::from_utf8(b).ok())
         .map(unescape_tag)
         .unwrap_or_default();
+
+    replace_markers_in_place(&mut title_str);
+    replace_markers_in_place(&mut subtitle_str);
+    replace_markers_in_place(&mut artist_str);
 
     Ok((title_str, subtitle_str, artist_str))
 }

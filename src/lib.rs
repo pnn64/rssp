@@ -14,6 +14,7 @@ pub mod stats;
 pub mod step_parity;
 pub mod tech;
 pub mod timing;
+pub mod translate;
 
 pub const RSSP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -44,6 +45,7 @@ pub struct AnalysisOptions {
     pub mono_threshold: usize,
     pub custom_patterns: Vec<String>,
     pub compute_tech_counts: bool,
+    pub translate_markers: bool,
 }
 
 impl Default for AnalysisOptions {
@@ -53,6 +55,7 @@ impl Default for AnalysisOptions {
             mono_threshold: 0,
             custom_patterns: Vec::new(),
             compute_tech_counts: true,
+            translate_markers: false,
         }
     }
 }
@@ -649,15 +652,24 @@ pub fn analyze(
         title_str = strip_title_tags(&title_str);
     }
 
-    let subtitle_str = parsed_data.subtitle.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
-    let artist_str = parsed_data.artist.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
-    let titletranslit_str = parsed_data.title_translit.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
-    let subtitletranslit_str = parsed_data.subtitle_translit.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
-    let artisttranslit_str = parsed_data.artist_translit.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let mut subtitle_str = parsed_data.subtitle.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let mut artist_str = parsed_data.artist.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let mut titletranslit_str = parsed_data.title_translit.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let mut subtitletranslit_str = parsed_data.subtitle_translit.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+    let mut artisttranslit_str = parsed_data.artist_translit.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
     let banner_path_str = parsed_data.banner.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
     let background_path_str = parsed_data.background.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
     let music_path_str = parsed_data.music.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
     let display_bpm_str = parsed_data.display_bpm.and_then(|b| std::str::from_utf8(b).ok()).map(unescape_tag).unwrap_or_default();
+
+    if options.translate_markers {
+        crate::translate::replace_markers_in_place(&mut title_str);
+        crate::translate::replace_markers_in_place(&mut subtitle_str);
+        crate::translate::replace_markers_in_place(&mut artist_str);
+        crate::translate::replace_markers_in_place(&mut titletranslit_str);
+        crate::translate::replace_markers_in_place(&mut subtitletranslit_str);
+        crate::translate::replace_markers_in_place(&mut artisttranslit_str);
+    }
     let timing_format = TimingFormat::from_extension(extension);
     let offset = parse_offset_seconds(parsed_data.offset);
     let ssc_version = parse_version(parsed_data.version, timing_format);

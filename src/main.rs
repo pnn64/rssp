@@ -190,6 +190,7 @@ fn main() -> io::Result<()> {
         mono_threshold,
         custom_patterns,
         compute_tech_counts: !skip_tech,
+        translate_markers: false,
     };
 
     // --- Determine output mode ---
