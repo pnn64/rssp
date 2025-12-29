@@ -32,6 +32,8 @@ struct RsspGoldenFile {
 struct RsspGoldenChart {
     chart_info: RsspChartInfo,
     breakdown: SnBreakdown,
+    #[serde(default)]
+    stream_info: RsspStreamInfo,
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,6 +53,12 @@ struct SnBreakdown {
     sn_simple_breakdown: String,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct RsspStreamInfo {
+    #[serde(default)]
+    total_breaks: u32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct BreakdownSet {
     detailed: String,
@@ -67,12 +75,14 @@ struct ChartBreakdowns {
     sn: BreakdownSet,
     total_streams: u32,
     total_breaks: u32,
+    sn_breaks: u32,
 }
 
 #[derive(Debug, Clone)]
 struct SnSnapshot {
     rating: String,
     breakdown: BreakdownSet,
+    sn_breaks: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +127,7 @@ fn compute_chart_breakdowns(
             },
             total_streams: chart.total_streams,
             total_breaks: chart.stream_counts.total_breaks,
+            sn_breaks: chart.stream_counts.sn_breaks,
         });
     }
 
@@ -207,6 +218,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 partial: chart.breakdown.sn_partial_breakdown,
                 simple: chart.breakdown.sn_simple_breakdown,
             },
+            sn_breaks: chart.stream_info.total_breaks,
         });
     }
 
@@ -415,16 +427,26 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             let actual_simple = actual
                 .map(|v| v.sn.simple.as_str())
                 .unwrap_or("-");
+            let expected_breaks = expected.map(|v| v.sn_breaks);
+            let actual_breaks = actual.map(|v| v.sn_breaks);
 
             let matches = expected.is_some()
                 && actual.is_some()
                 && expected_detail == actual_detail
                 && expected_partial == actual_partial
-                && expected_simple == actual_simple;
+                && expected_simple == actual_simple
+                && expected_breaks == actual_breaks;
             let status = if matches { "....ok" } else { "....MISMATCH" };
 
+            let expected_breaks = expected_breaks
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string());
+            let actual_breaks = actual_breaks
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string());
+
             println!(
-                "  {} {} [{}]: sn_detailed {} -> {} | sn_partial {} -> {} | sn_simple {} -> {} {}",
+                "  {} {} [{}]: sn_detailed {} -> {} | sn_partial {} -> {} | sn_simple {} -> {} | sn_breaks {} -> {} {}",
                 step_type,
                 difficulty,
                 meter_label,
@@ -434,13 +456,15 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 actual_partial,
                 expected_simple,
                 actual_simple,
+                expected_breaks,
+                actual_breaks,
                 status
             );
         }
 
         let matches = expected_entries.len() == actual_entries.len()
             && expected_entries.iter().zip(actual_entries).all(|(e, a)| {
-                e.breakdown == a.sn
+                e.breakdown == a.sn && e.sn_breaks == a.sn_breaks
             });
         if !matches {
             let expected_detail: Vec<String> =
@@ -455,9 +479,13 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 expected_entries.iter().map(|e| e.breakdown.simple.clone()).collect();
             let actual_simple: Vec<String> =
                 actual_entries.iter().map(|a| a.sn.simple.clone()).collect();
+            let expected_breaks: Vec<u32> =
+                expected_entries.iter().map(|e| e.sn_breaks).collect();
+            let actual_breaks: Vec<u32> =
+                actual_entries.iter().map(|a| a.sn_breaks).collect();
 
             return Err(format!(
-                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP sn_detailed: {:?}\nGolden sn_detailed: {:?}\nRSSP sn_partial: {:?}\nGolden sn_partial: {:?}\nRSSP sn_simple: {:?}\nGolden sn_simple: {:?}\n",
+                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP sn_detailed: {:?}\nGolden sn_detailed: {:?}\nRSSP sn_partial: {:?}\nGolden sn_partial: {:?}\nRSSP sn_simple: {:?}\nGolden sn_simple: {:?}\nRSSP sn_breaks: {:?}\nGolden sn_breaks: {:?}\n",
                 path.display(),
                 step_type,
                 difficulty,
@@ -466,7 +494,9 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 actual_partial,
                 expected_partial,
                 actual_simple,
-                expected_simple
+                expected_simple,
+                actual_breaks,
+                expected_breaks
             ));
         }
     }

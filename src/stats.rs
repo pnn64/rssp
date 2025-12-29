@@ -27,6 +27,7 @@ pub struct StreamCounts {
     pub run24_streams: u32,
     pub run32_streams: u32,
     pub total_breaks: u32,
+    pub sn_breaks: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -596,7 +597,7 @@ fn minimize_chart_and_count_impl<const LANES: usize>(
         }
     }
 
-    if !saw_semicolon && !measure.is_empty() {
+    if !saw_semicolon {
         finalize_and_process_measure(
             &mut measure,
             &mut output,
@@ -637,7 +638,6 @@ fn measure_densities_impl<const LANES: usize>(notes_data: &[u8]) -> Vec<usize> {
     let mut densities = Vec::new();
     let mut density = 0usize;
     let mut saw_semicolon = false;
-    let mut measure_has_rows = false;
 
     for line_raw in notes_data.split(|&b| b == b'\n') {
         let mut start = 0usize;
@@ -654,7 +654,6 @@ fn measure_densities_impl<const LANES: usize>(notes_data: &[u8]) -> Vec<usize> {
             Some(b',') => {
                 densities.push(density);
                 density = 0;
-                measure_has_rows = false;
             }
             Some(b';') => {
                 densities.push(density);
@@ -662,7 +661,6 @@ fn measure_densities_impl<const LANES: usize>(notes_data: &[u8]) -> Vec<usize> {
                 break;
             }
             Some(_) if line.len() >= LANES => {
-                measure_has_rows = true;
                 if line[..LANES]
                     .iter()
                     .any(|&b| matches!(b, b'1' | b'2' | b'4'))
@@ -674,7 +672,7 @@ fn measure_densities_impl<const LANES: usize>(notes_data: &[u8]) -> Vec<usize> {
         }
     }
 
-    if !saw_semicolon && measure_has_rows {
+    if !saw_semicolon {
         densities.push(density);
     }
 
@@ -731,9 +729,15 @@ pub fn compute_stream_counts(measure_densities: &[usize]) -> StreamCounts {
             RunDensity::Run20 => sc.run20_streams += 1,
             RunDensity::Run24 => sc.run24_streams += 1,
             RunDensity::Run32 => sc.run32_streams += 1,
-            RunDensity::Break => sc.total_breaks += 1,
+            RunDensity::Break => sc.sn_breaks += 1,
         }
     }
+
+    sc.total_breaks = stream_sequences(measure_densities)
+        .iter()
+        .filter(|segment| segment.is_break)
+        .map(|segment| (segment.end - segment.start) as u32)
+        .sum();
 
     sc
 }
