@@ -1,6 +1,6 @@
 [package]
 name = "rssp"
-version = "0.2.267"
+version = "0.2.268"
 edition = "2024"
 authors = ["Patrik Nilsson <perfecttaste@pm.me>"]
 description = "A high-performance simfile parser for StepMania."
@@ -10,7 +10,6 @@ keywords = ["stepmania", "simfile", "parser", "rust", "rssp"]
 
 [dependencies]
 png = "0.18.0"
-sha1 = { version = "0.10.6", default-features = false }
 serde_json = { version = "1.0.145", features = ["preserve_order"] }
 
 [dev-dependencies]
