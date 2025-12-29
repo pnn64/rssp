@@ -129,5 +129,51 @@ fn bench_breakdown_inner(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_breakdown_pipeline, bench_breakdown_inner);
+fn bench_breakdown_counts(c: &mut Criterion) {
+    let charts = build_breakdown_inputs();
+    let densities: Vec<Vec<usize>> = charts
+        .iter()
+        .map(|chart| rssp::stats::measure_densities(&chart.chart_data, chart.lanes))
+        .collect();
+
+    let mut group = c.benchmark_group("breakdown_counts");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("measure_densities", |b| {
+        b.iter(|| {
+            let mut total = 0usize;
+            for chart in &charts {
+                let dens = rssp::stats::measure_densities(
+                    black_box(&chart.chart_data),
+                    black_box(chart.lanes),
+                );
+                total += dens.len();
+            }
+            black_box(total);
+        })
+    });
+    group.bench_function("compute_stream_counts", |b| {
+        b.iter(|| {
+            let mut total = 0u32;
+            for dens in &densities {
+                let counts = rssp::stats::compute_stream_counts(black_box(dens));
+                total += counts.run16_streams
+                    + counts.run20_streams
+                    + counts.run24_streams
+                    + counts.run32_streams
+                    + counts.total_breaks
+                    + counts.sn_breaks;
+            }
+            black_box(total);
+        })
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_breakdown_pipeline,
+    bench_breakdown_inner,
+    bench_breakdown_counts
+);
 criterion_main!(benches);
