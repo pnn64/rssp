@@ -1,4 +1,5 @@
 name: rssp Parity Test
+run-name: Parity Test - ${{ inputs.test_suite }}
 
 on:
   workflow_dispatch:
@@ -13,7 +14,6 @@ on:
           - "all alternative"
           - hash_parity
           - bpm_parity
-          - breakdown_parity
           - metadata_parity
           - step_counts_parity
           - duration_parity
@@ -31,6 +31,7 @@ env:
 
 jobs:
   build:
+    name: Parity Test - ${{ inputs.test_suite }}
     runs-on: self-hosted 
 
     steps:
