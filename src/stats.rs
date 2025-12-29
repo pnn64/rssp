@@ -1002,7 +1002,7 @@ pub fn stream_breakdown(
     level: StreamBreakdownLevel,
 ) -> String {
     if notes_per_measure.is_empty() {
-        return "Not available!".to_string();
+        return "No Streams!".to_string();
     }
 
     let segments = stream_sequences(notes_per_measure);
