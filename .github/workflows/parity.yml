@@ -18,6 +18,7 @@ on:
           - step_counts_parity
           - duration_parity
           - nps_parity
+          - breakdown_parity
           - tech_counts_parity
           - rssp_unique_parity
       pack_filter:
