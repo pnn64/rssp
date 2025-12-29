@@ -17,6 +17,8 @@ struct HarnessChart {
     streams_breakdown: String,
     streams_breakdown_level1: String,
     streams_breakdown_level2: String,
+    total_stream_measures: u32,
+    total_break_measures: u32,
     #[serde(default)]
     meter: Option<u32>,
 }
@@ -63,6 +65,8 @@ struct ChartBreakdowns {
     rating: String,
     streams: BreakdownSet,
     sn: BreakdownSet,
+    total_streams: u32,
+    total_breaks: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -111,6 +115,8 @@ fn compute_chart_breakdowns(
                 partial: chart.sn_partial_breakdown,
                 simple: chart.sn_simple_breakdown,
             },
+            total_streams: chart.total_streams,
+            total_breaks: chart.stream_counts.total_breaks,
         });
     }
 
@@ -260,16 +266,35 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             let actual_simple = actual
                 .map(|v| v.streams.simple.as_str())
                 .unwrap_or("-");
+            let expected_total_streams = expected.map(|v| v.total_stream_measures);
+            let actual_total_streams = actual.map(|v| v.total_streams);
+            let expected_total_breaks = expected.map(|v| v.total_break_measures);
+            let actual_total_breaks = actual.map(|v| v.total_breaks);
 
             let matches = expected.is_some()
                 && actual.is_some()
                 && expected_detail == actual_detail
                 && expected_partial == actual_partial
-                && expected_simple == actual_simple;
+                && expected_simple == actual_simple
+                && expected_total_streams == actual_total_streams
+                && expected_total_breaks == actual_total_breaks;
             let status = if matches { "....ok" } else { "....MISMATCH" };
 
+            let expected_total_streams = expected_total_streams
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string());
+            let actual_total_streams = actual_total_streams
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string());
+            let expected_total_breaks = expected_total_breaks
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string());
+            let actual_total_breaks = actual_total_breaks
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string());
+
             println!(
-                "  {} {} [{}]: detailed {} -> {} | partial {} -> {} | simple {} -> {} {}",
+                "  {} {} [{}]: detailed {} -> {} | partial {} -> {} | simple {} -> {} | total_streams {} -> {} | total_breaks {} -> {} {}",
                 step_type,
                 difficulty,
                 meter_label,
@@ -279,6 +304,10 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 actual_partial,
                 expected_simple,
                 actual_simple,
+                expected_total_streams,
+                actual_total_streams,
+                expected_total_breaks,
+                actual_total_breaks,
                 status
             );
         }
@@ -288,6 +317,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 e.streams_breakdown == a.streams.detailed
                     && e.streams_breakdown_level1 == a.streams.partial
                     && e.streams_breakdown_level2 == a.streams.simple
+                    && e.total_stream_measures == a.total_streams
+                    && e.total_break_measures == a.total_breaks
             });
         if !matches {
             let expected_detail: Vec<String> =
@@ -306,9 +337,17 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 .collect();
             let actual_simple: Vec<String> =
                 actual_entries.iter().map(|a| a.streams.simple.clone()).collect();
+            let expected_total_streams: Vec<u32> =
+                expected_entries.iter().map(|e| e.total_stream_measures).collect();
+            let actual_total_streams: Vec<u32> =
+                actual_entries.iter().map(|a| a.total_streams).collect();
+            let expected_total_breaks: Vec<u32> =
+                expected_entries.iter().map(|e| e.total_break_measures).collect();
+            let actual_total_breaks: Vec<u32> =
+                actual_entries.iter().map(|a| a.total_breaks).collect();
 
             return Err(format!(
-                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP detailed: {:?}\nGolden detailed: {:?}\nRSSP partial: {:?}\nGolden partial: {:?}\nRSSP simple: {:?}\nGolden simple: {:?}\n",
+                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP detailed: {:?}\nGolden detailed: {:?}\nRSSP partial: {:?}\nGolden partial: {:?}\nRSSP simple: {:?}\nGolden simple: {:?}\nRSSP total_streams: {:?}\nGolden total_streams: {:?}\nRSSP total_breaks: {:?}\nGolden total_breaks: {:?}\n",
                 path.display(),
                 step_type,
                 difficulty,
@@ -317,7 +356,11 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 actual_partial,
                 expected_partial,
                 actual_simple,
-                expected_simple
+                expected_simple,
+                actual_total_streams,
+                expected_total_streams,
+                actual_total_breaks,
+                expected_total_breaks
             ));
         }
     }
