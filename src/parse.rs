@@ -33,7 +33,7 @@ pub fn strip_title_tags(mut title: &str) -> String {
 
 pub fn clean_tag(tag: &str) -> String {
     tag.chars()
-        .filter(|c| !c.is_control() && *c != '\u{200b}')
+        .filter(|c| !c.is_control())
         .collect()
 }
 
