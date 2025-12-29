@@ -180,9 +180,37 @@ fn parse_metadata(simfile_data: &[u8], extension: &str) -> Result<ParsedMetadata
         .map(unescape_tag)
         .unwrap_or_default();
 
-    let mut title_translated = title_str.clone();
-    let mut subtitle_translated = subtitle_str.clone();
-    let mut artist_translated = artist_str.clone();
+    let title_translit = parsed_data
+        .title_translit
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .map(unescape_tag)
+        .unwrap_or_default();
+    let subtitle_translit = parsed_data
+        .subtitle_translit
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .map(unescape_tag)
+        .unwrap_or_default();
+    let artist_translit = parsed_data
+        .artist_translit
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .map(unescape_tag)
+        .unwrap_or_default();
+
+    let mut title_translated = if title_translit.is_empty() {
+        title_str.clone()
+    } else {
+        title_translit
+    };
+    let mut subtitle_translated = if subtitle_translit.is_empty() {
+        subtitle_str.clone()
+    } else {
+        subtitle_translit
+    };
+    let mut artist_translated = if artist_translit.is_empty() {
+        artist_str.clone()
+    } else {
+        artist_translit
+    };
 
     replace_markers_in_place(&mut title_str);
     replace_markers_in_place(&mut subtitle_str);
