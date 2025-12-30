@@ -42,6 +42,7 @@ struct ChartStepArtist {
     difficulty: String,
     description: String,
     step_artist: String,
+    meter: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -206,6 +207,8 @@ fn parse_step_artists(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartS
         let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("");
         let difficulty_unescaped = unescape_trim(difficulty_raw);
         let difficulty = rssp::normalize_difficulty_label(&difficulty_unescaped).to_ascii_lowercase();
+        let meter_raw = std::str::from_utf8(fields[3]).unwrap_or("");
+        let meter = unescape_trim(meter_raw).parse::<u32>().ok();
         let step_artist = if extension.eq_ignore_ascii_case("ssc") {
             unescape_trim(std::str::from_utf8(fields[4]).unwrap_or(""))
         } else {
@@ -217,6 +220,7 @@ fn parse_step_artists(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartS
             difficulty,
             description,
             step_artist,
+            meter,
         });
     }
 
@@ -312,8 +316,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     let rssp_step_entries = parse_step_artists(&raw_bytes, extension)
         .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
 
-    let mut golden_map: HashMap<(String, String, String), Vec<GoldenChartStepArtist>> =
-        HashMap::new();
+    let mut golden_map: HashMap<(String, String), Vec<GoldenChartStepArtist>> = HashMap::new();
     for golden in golden_step_entries {
         let step_type = normalize_step_type(&golden.step_type);
         if step_type.is_empty() || step_type == "lights-cabinet" {
@@ -321,21 +324,16 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         }
         let difficulty = rssp::normalize_difficulty_label(&golden.difficulty)
             .to_ascii_lowercase();
-        let description = golden.description.trim().to_string();
-        let key = (step_type, difficulty, description);
+        let key = (step_type, difficulty);
         golden_map.entry(key).or_default().push(golden);
     }
 
-    let mut rssp_map: HashMap<(String, String, String), Vec<ChartStepArtist>> = HashMap::new();
+    let mut rssp_map: HashMap<(String, String), Vec<ChartStepArtist>> = HashMap::new();
     for chart in rssp_step_entries {
         if chart.step_type.is_empty() || chart.step_type == "lights-cabinet" {
             continue;
         }
-        let key = (
-            chart.step_type.clone(),
-            chart.difficulty.clone(),
-            chart.description.clone(),
-        );
+        let key = (chart.step_type.clone(), chart.difficulty.clone());
         rssp_map.entry(key).or_default().push(chart);
     }
 
@@ -345,33 +343,58 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     let mut step_artist_ok = true;
     let mut step_artist_errors: Vec<String> = Vec::new();
 
-    for ((step_type, difficulty, description), expected_entries) in golden_entries {
-        let Some(actual_entries) =
-            rssp_map.remove(&(step_type.clone(), difficulty.clone(), description.clone()))
-        else {
-            step_artist_ok = false;
-            let desc_label = if description.is_empty() {
-                "(empty)".to_string()
-            } else {
-                description.clone()
-            };
-            println!(
-                "  step_artist {} {} [{}]: baseline present, RSSP missing chart",
-                step_type, difficulty, desc_label
-            );
-            step_artist_errors.push(format!(
-                "Step artist chart missing: {} {} {:?}",
-                step_type, difficulty, description
-            ));
-            continue;
-        };
+    for ((step_type, difficulty), expected_entries) in golden_entries {
+        let mut actual_entries = rssp_map
+            .remove(&(step_type.clone(), difficulty.clone()))
+            .unwrap_or_default();
 
-        let count = expected_entries.len().max(actual_entries.len());
-        for idx in 0..count {
-            let expected = expected_entries.get(idx);
-            let actual = actual_entries.get(idx);
+        if actual_entries.is_empty() {
+            step_artist_ok = false;
+            for expected in expected_entries {
+                let desc_label = if expected.description.trim().is_empty() {
+                    "(empty)".to_string()
+                } else {
+                    expected.description.trim().to_string()
+                };
+                println!(
+                    "  step_artist {} {} [{}]: baseline present, RSSP missing chart",
+                    step_type, difficulty, desc_label
+                );
+                step_artist_errors.push(format!(
+                    "Step artist chart missing: {} {} {:?}",
+                    step_type,
+                    difficulty,
+                    expected.description.trim()
+                ));
+            }
+            continue;
+        }
+
+        for (idx, expected) in expected_entries.iter().enumerate() {
+            let description = expected.description.trim();
+            let matched_idx = if !description.is_empty() {
+                actual_entries
+                    .iter()
+                    .position(|entry| entry.description == description)
+            } else if let Some(meter) = expected.meter {
+                actual_entries
+                    .iter()
+                    .position(|entry| entry.meter == Some(meter))
+            } else {
+                Some(0)
+            };
+
+            let actual = matched_idx
+                .and_then(|pos| {
+                    if pos < actual_entries.len() {
+                        Some(actual_entries.remove(pos))
+                    } else {
+                        None
+                    }
+                });
+
             let meter_label = expected
-                .and_then(|entry| entry.meter)
+                .meter
                 .map(|meter| meter.to_string())
                 .unwrap_or_else(|| (idx + 1).to_string());
             let desc_label = if description.is_empty() {
@@ -380,10 +403,24 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 format!("{} {}", meter_label, description)
             };
 
-            let expected_val = expected
-                .map(|e| e.step_artist.as_str())
+            if actual.is_none() {
+                step_artist_ok = false;
+                println!(
+                    "  step_artist {} {} [{}]: baseline present, RSSP missing chart",
+                    step_type, difficulty, desc_label
+                );
+                step_artist_errors.push(format!(
+                    "Step artist chart missing: {} {} {:?}",
+                    step_type, difficulty, description
+                ));
+                continue;
+            }
+
+            let expected_val = expected.step_artist.as_str();
+            let actual_val = actual
+                .as_ref()
+                .map(|a| a.step_artist.as_str())
                 .unwrap_or("-");
-            let actual_val = actual.map(|a| a.step_artist.as_str()).unwrap_or("-");
             let status = if expected_val == actual_val {
                 "....ok"
             } else {
@@ -402,8 +439,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                     step_type,
                     difficulty,
                     desc_label,
-                    actual.map(|a| a.step_artist.as_str()),
-                    expected.map(|e| e.step_artist.as_str())
+                    actual.as_ref().map(|a| a.step_artist.as_str()),
+                    Some(expected_val)
                 ));
             }
         }
