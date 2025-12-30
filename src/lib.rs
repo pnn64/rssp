@@ -441,6 +441,7 @@ fn build_chart_summary(
     global_bpms_norm: &str,
     extension: &str,
     timing_format: TimingFormat,
+    ssc_version: f32,
     allow_steps_timing: bool,
     options: &AnalysisOptions,
 ) -> Option<ChartSummary> {
@@ -456,7 +457,8 @@ fn build_chart_summary(
         return None;
     }
 
-    let description = unescape_trim(decode_bytes(fields[1]).as_ref());
+    let description_raw = unescape_trim(decode_bytes(fields[1]).as_ref());
+    let description = normalize_chart_desc(description_raw, timing_format, ssc_version);
     let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
     let rating_raw = unescape_trim(decode_bytes(fields[3]).as_ref());
     let difficulty_str = resolve_difficulty_label(&difficulty_raw, &description, &rating_raw, extension);
@@ -864,6 +866,7 @@ pub fn analyze(
                 &normalized_global_bpms,
                 extension,
                 timing_format,
+                ssc_version,
                 allow_steps_timing,
                 &options,
             )
@@ -1012,6 +1015,8 @@ pub fn compute_all_hashes(
 ) -> Result<Vec<ChartHashInfo>, String> {
     // 1. Parse the file structure (fast, just byte slicing)
     let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
+    let timing_format = TimingFormat::from_extension(extension);
+    let ssc_version = parse_version(parsed_data.version, timing_format);
 
     // 2. Prepare Global BPMs
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"")).unwrap_or("");
@@ -1027,7 +1032,8 @@ pub fn compute_all_hashes(
         }
 
         let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());
-        let description = unescape_trim(decode_bytes(fields[1]).as_ref());
+        let description_raw = unescape_trim(decode_bytes(fields[1]).as_ref());
+        let description = normalize_chart_desc(description_raw, timing_format, ssc_version);
         let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
         let meter_raw = unescape_trim(decode_bytes(fields[3]).as_ref());
         let difficulty = resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
@@ -1123,7 +1129,8 @@ pub fn compute_chart_durations(
         if step_type == "lights-cabinet" {
             continue;
         }
-        let description = unescape_trim(decode_bytes(fields[1]).as_ref());
+        let description_raw = unescape_trim(decode_bytes(fields[1]).as_ref());
+        let description = normalize_chart_desc(description_raw, timing_format, ssc_version);
         let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
         let meter_raw = unescape_trim(decode_bytes(fields[3]).as_ref());
         let difficulty = resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
@@ -1285,7 +1292,8 @@ pub fn compute_chart_peak_nps(
         if step_type == "lights-cabinet" {
             continue;
         }
-        let description = unescape_trim(decode_bytes(fields[1]).as_ref());
+        let description_raw = unescape_trim(decode_bytes(fields[1]).as_ref());
+        let description = normalize_chart_desc(description_raw, timing_format, ssc_version);
         let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
         let meter_raw = unescape_trim(decode_bytes(fields[3]).as_ref());
         let difficulty = resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);

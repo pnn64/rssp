@@ -111,6 +111,16 @@ pub fn parse_version(parsed_version: Option<&[u8]>, timing_format: TimingFormat)
         })
 }
 
+pub const SSC_VERSION_CHART_NAME_TAG: f32 = 0.74;
+
+pub fn normalize_chart_desc(desc: String, timing_format: TimingFormat, ssc_version: f32) -> String {
+    if timing_format == TimingFormat::Ssc && ssc_version < SSC_VERSION_CHART_NAME_TAG {
+        String::new()
+    } else {
+        desc
+    }
+}
+
 /// Parsed note data for a single chart found in the simfile.
 #[derive(Default)]
 pub struct ParsedChartEntry {

@@ -7,7 +7,8 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::parse::{extract_sections, split_notes_fields, unescape_trim};
+use rssp::parse::{extract_sections, normalize_chart_desc, parse_version, split_notes_fields, unescape_trim};
+use rssp::timing::TimingFormat;
 use rssp::{analyze, display_metadata, AnalysisOptions};
 
 #[derive(Debug, Deserialize)]
@@ -182,6 +183,8 @@ fn parse_metadata(simfile_data: &[u8], extension: &str) -> Result<ParsedMetadata
 
 fn parse_step_artists(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartStepArtist>, String> {
     let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
+    let timing_format = TimingFormat::from_extension(extension);
+    let ssc_version = parse_version(parsed_data.version, timing_format);
     let mut results = Vec::new();
 
     for entry in parsed_data.notes_list {
@@ -198,7 +201,8 @@ fn parse_step_artists(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartS
         }
 
         let description_raw = std::str::from_utf8(fields[1]).unwrap_or("");
-        let description = unescape_trim(description_raw);
+        let description_raw = unescape_trim(description_raw);
+        let description = normalize_chart_desc(description_raw, timing_format, ssc_version);
         let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("");
         let difficulty_unescaped = unescape_trim(difficulty_raw);
         let difficulty = rssp::normalize_difficulty_label(&difficulty_unescaped).to_ascii_lowercase();
