@@ -59,52 +59,10 @@ fn parse_chunk_as_tech(chunk: &str) -> Option<Vec<String>> {
     Some(results)
 }
 
-/// Splits a combined artist string into individual artists, omitting various separators.
+/// Parses a single input string into tech notations, skipping measure data and "No Tech".
 #[inline(always)]
-fn split_artists(artist_str: &str) -> Vec<String> {
-    let mut normalized = artist_str.to_string();
-    normalized = normalized.replace(" vs. ", " & ");
-    normalized = normalized.replace(" and ", " & ");
-    normalized = normalized.replace(" x ", " & ");
-    normalized = normalized.replace(" + ", " & ");
-    normalized
-        .split('&')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
-/// Deduplicates artists, preferring longer variants for prefix matches while preserving order.
-#[inline(always)]
-fn deduplicate_artists(artists: Vec<String>) -> Vec<String> {
-    let mut unique: Vec<String> = Vec::new();
-    for artist in artists {
-        let mut replaced = false;
-        for i in 0..unique.len() {
-            if unique[i] == artist {
-                replaced = true;
-                break;
-            } else if artist.starts_with(&unique[i]) && artist.len() > unique[i].len() {
-                unique[i] = artist.clone();
-                replaced = true;
-                break;
-            } else if unique[i].starts_with(&artist) && unique[i].len() > artist.len() {
-                replaced = true;
-                break;
-            }
-        }
-        if !replaced {
-            unique.push(artist);
-        }
-    }
-    unique
-}
-
-/// Parses a single input string into artists and tech notations, skipping measure data and "No Tech".
-#[inline(always)]
-fn parse_single(input: &str) -> (Vec<String>, Vec<String>) {
+fn parse_single_tech(input: &str) -> Vec<String> {
     let cleaned = input.trim().replace(',', " ");
-    let mut artist_builder = String::new();
     let mut tech_notations = Vec::new();
     let mut chunks = cleaned.split_whitespace().peekable();
 
@@ -120,30 +78,15 @@ fn parse_single(input: &str) -> (Vec<String>, Vec<String>) {
 
         if let Some(parsed_list) = parse_chunk_as_tech(chunk) {
             tech_notations.extend(parsed_list);
-        } else {
-            if !artist_builder.is_empty() {
-                artist_builder.push(' ');
-            }
-            artist_builder.push_str(chunk);
         }
     }
 
-    let artists = split_artists(&artist_builder);
-    (artists, tech_notations)
+    tech_notations
 }
 
-/// Parses credit and description into unique step artists and formatted tech notation string.
-pub fn parse_step_artist_and_tech(credit: &str, description: &str) -> (Vec<String>, String) {
-    let (artists1, tech1) = parse_single(credit);
-    let (artists2, tech2) = parse_single(description);
-
-    let mut artists = artists1;
-    artists.extend(artists2);
-    artists = deduplicate_artists(artists);
-
-    let mut tech_notations = tech1;
-    tech_notations.extend(tech2);
-    let tech_notation_str = tech_notations.join(" ");
-
-    (artists, tech_notation_str)
+/// Parses credit and description into a formatted tech notation string.
+pub fn parse_tech_notation(credit: &str, description: &str) -> String {
+    let mut tech_notations = parse_single_tech(credit);
+    tech_notations.extend(parse_single_tech(description));
+    tech_notations.join(" ")
 }

@@ -77,7 +77,7 @@ fn print_minimized_notes(simfile: &SimfileSummary) {
         let artists = if chart.step_artist_str.is_empty() {
             String::new()
         } else {
-            format!(" by {}", chart.step_artist_str.join(", "))
+            format!(" by {}", chart.step_artist_str)
         };
 
         eprintln!(

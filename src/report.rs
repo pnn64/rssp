@@ -180,7 +180,7 @@ fn compute_simple_quad_parts(
 #[derive(Debug)]
 pub struct ChartSummary {
     pub step_type_str:     String,
-    pub step_artist_str:   Vec<String>,
+    pub step_artist_str:   String,
     pub difficulty_str:    String,
     pub rating_str:        String,
     pub matrix_rating:     f64,
@@ -700,7 +700,7 @@ fn print_pretty_all(simfile: &SimfileSummary) {
 }
 
 fn print_pretty_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
-    let header = format!("{} {} : {}", chart.difficulty_str, chart.rating_str, chart.step_artist_str.join(", "));
+    let header = format!("{} {} : {}", chart.difficulty_str, chart.rating_str, chart.step_artist_str);
     println!("\n{}", header);
     println!("{}", "-".repeat(header.len()));
 
@@ -820,7 +820,7 @@ fn print_full_all(simfile: &SimfileSummary) {
 }
 
 fn print_full_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
-    let header = format!("{} {} : {}", chart.difficulty_str, chart.rating_str, chart.step_artist_str.join(", "));
+    let header = format!("{} {} : {}", chart.difficulty_str, chart.rating_str, chart.step_artist_str);
     println!("\n{}", header);
     println!("{}", "-".repeat(header.len()));
 
@@ -1874,7 +1874,7 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
         esc_csv(&chart.step_type_str),
         esc_csv(&chart.difficulty_str),
         esc_csv(&chart.rating_str),
-        esc_csv(&chart.step_artist_str.join(", ")),
+        esc_csv(&chart.step_artist_str),
         esc_csv(&chart.tech_notation_str),
         esc_csv(&chart.short_hash),
         esc_csv(&chart.bpm_neutral_hash),

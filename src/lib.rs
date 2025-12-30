@@ -28,7 +28,7 @@ use crate::matrix::compute_matrix_rating;
 use crate::parse::*;
 use crate::patterns::*;
 use crate::stats::*;
-use crate::tech::parse_step_artist_and_tech;
+use crate::tech::parse_tech_notation;
 use crate::timing::{
     compute_row_to_beat,
     compute_timing_segments,
@@ -461,12 +461,14 @@ fn build_chart_summary(
     let rating_raw = unescape_trim(decode_bytes(fields[3]).as_ref());
     let difficulty_str = resolve_difficulty_label(&difficulty_raw, &description, &rating_raw, extension);
     let rating_str = rating_raw;
-    let credit = if extension.eq_ignore_ascii_case("ssc") {
+    let is_ssc = extension.eq_ignore_ascii_case("ssc");
+    let credit = if is_ssc {
         unescape_trim(decode_bytes(fields[4]).as_ref())
     } else {
         String::new()
     };
-    let (step_artist_str, tech_notation_str) = parse_step_artist_and_tech(&credit, &description);
+    let step_artist_str = if is_ssc { credit.clone() } else { description.clone() };
+    let tech_notation_str = parse_tech_notation(&credit, &description);
 
     let lanes = step_type_lanes(&step_type_str);
     let (mut minimized_chart, stats, measure_densities) =
