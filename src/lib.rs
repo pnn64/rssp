@@ -45,6 +45,7 @@ pub struct AnalysisOptions {
     pub mono_threshold: usize,
     pub custom_patterns: Vec<String>,
     pub compute_tech_counts: bool,
+    pub compute_pattern_counts: bool,
     pub translate_markers: bool,
 }
 
@@ -55,6 +56,7 @@ impl Default for AnalysisOptions {
             mono_threshold: 0,
             custom_patterns: Vec::new(),
             compute_tech_counts: true,
+            compute_pattern_counts: true,
             translate_markers: false,
         }
     }
@@ -578,7 +580,8 @@ fn build_chart_summary(
     let metrics =
         compute_derived_chart_metrics(&measure_densities, &bpm_map, &minimized_chart, &bpms_to_use);
 
-    let bitmasks = if lanes == 4 {
+    let compute_patterns = lanes == 4 && options.compute_pattern_counts;
+    let bitmasks = if compute_patterns {
         Some(generate_bitmasks(&minimized_chart))
     } else {
         None
@@ -598,7 +601,7 @@ fn build_chart_summary(
             (0, 0, 0, 0.0, 0, 0.0)
         };
 
-    let custom_patterns = if lanes == 4 && !options.custom_patterns.is_empty() {
+    let custom_patterns = if compute_patterns && !options.custom_patterns.is_empty() {
         detect_custom_patterns(bitmasks.as_ref().unwrap(), &options.custom_patterns)
     } else {
         Vec::new()
@@ -1005,7 +1008,11 @@ pub fn analyze(
         display_bpm_str,
         sample_start, sample_length,
         min_bpm: min_bpm_i32 as f64, max_bpm: max_bpm_i32 as f64,
-        median_bpm, average_bpm, total_length, charts: chart_summaries, total_elapsed,
+        median_bpm, average_bpm, total_length,
+        pattern_counts_enabled: options.compute_pattern_counts,
+        tech_counts_enabled: options.compute_tech_counts,
+        charts: chart_summaries,
+        total_elapsed,
     })
 }
 

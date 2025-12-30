@@ -240,6 +240,8 @@ fn compute_chart_values(
         mono_threshold: DEFAULT_MONO_THRESHOLD,
         custom_patterns: Vec::new(),
         compute_tech_counts: true,
+        compute_pattern_counts: true,
+        translate_markers: false,
     };
 
     let summary = analyze(simfile_data, extension, options).map_err(|e| e.to_string())?;
