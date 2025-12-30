@@ -206,9 +206,16 @@ fn parse_step_artists(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartS
         let description = normalize_chart_desc(description_raw, timing_format, ssc_version);
         let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("");
         let difficulty_unescaped = unescape_trim(difficulty_raw);
-        let difficulty = rssp::normalize_difficulty_label(&difficulty_unescaped).to_ascii_lowercase();
         let meter_raw = std::str::from_utf8(fields[3]).unwrap_or("");
-        let meter = unescape_trim(meter_raw).parse::<u32>().ok();
+        let meter_unescaped = unescape_trim(meter_raw);
+        let difficulty = rssp::resolve_difficulty_label(
+            &difficulty_unescaped,
+            &description,
+            &meter_unescaped,
+            extension,
+        )
+        .to_ascii_lowercase();
+        let meter = meter_unescaped.parse::<u32>().ok();
         let step_artist = if extension.eq_ignore_ascii_case("ssc") {
             unescape_trim(std::str::from_utf8(fields[4]).unwrap_or(""))
         } else {
