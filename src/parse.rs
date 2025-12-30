@@ -433,7 +433,11 @@ fn parse_subtag(data: &[u8], tag: &[u8], allow_newlines: bool) -> Option<Vec<u8>
                         }
 
                         if !allow_newlines {
-                            return None;
+                            if j < slice.len() && slice[j] == b';' {
+                                // Allow tags that put the terminator on the next line.
+                            } else {
+                                return None;
+                            }
                         }
                     }
                     _ => {}
