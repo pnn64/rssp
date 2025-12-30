@@ -735,6 +735,11 @@ pub fn analyze(
         crate::translate::replace_markers_in_place(&mut subtitletranslit_str);
         crate::translate::replace_markers_in_place(&mut artisttranslit_str);
     }
+    if artist_str.is_empty() && artisttranslit_str.trim().is_empty() {
+        let unknown = "Unknown artist".to_string();
+        artist_str = unknown.clone();
+        artisttranslit_str = unknown;
+    }
     let timing_format = TimingFormat::from_extension(extension);
     let offset = parse_offset_seconds(parsed_data.offset);
     let ssc_version = parse_version(parsed_data.version, timing_format);
