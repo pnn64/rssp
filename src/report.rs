@@ -1176,6 +1176,7 @@ fn json_stream_info(chart: &ChartSummary) -> JsonValue {
         "24th_streams": chart.stream_counts.run24_streams,
         "32nd_streams": chart.stream_counts.run32_streams,
         "total_breaks": total_break,
+        "sn_breaks": chart.stream_counts.sn_breaks,
         "stream_percent": stream_percent,
         "adj_stream_percent": adj_stream_percent,
         "break_percent": break_percent,
@@ -1798,7 +1799,7 @@ fn print_csv_all(simfile: &SimfileSummary) {
 step_type,difficulty,rating,step_artist,tech_notation,sha1_hash,bpm_neutral_hash,\
 total_arrows,left_arrows,down_arrows,up_arrows,right_arrows,\
 total_steps,jumps,hands,holds,rolls,mines,lifts,fakes,stops_freezes,delays,warps,speeds,scrolls,\
-total_streams,16th_streams,20th_streams,24th_streams,32nd_streams,total_breaks,stream_percent,adj_stream_percent,max_nps,median_nps,matrix_rating,mono_total,\
+total_streams,16th_streams,20th_streams,24th_streams,32nd_streams,total_breaks,sn_breaks,stream_percent,adj_stream_percent,max_nps,median_nps,matrix_rating,mono_total,\
 total_candles,left_foot_candles,right_foot_candles,candles_percent,\
 total_mono,left_face_mono,right_face_mono,mono_percent,\
 total_boxes,lr_boxes,ud_boxes,corner_boxes,ld_boxes,lu_boxes,rd_boxes,ru_boxes,\
@@ -1925,13 +1926,14 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
     let total_breaks = chart.stream_counts.total_breaks;
     let (_stream_percent, adj_stream_percent, _break_percent) =
         compute_stream_percentages(total_streams, total_breaks, chart.total_measures);
-    print!("{},{},{},{},{},{},{},",
+    print!("{},{},{},{},{},{},{},{},",
         total_streams,
         chart.stream_counts.run16_streams,
         chart.stream_counts.run20_streams,
         chart.stream_counts.run24_streams,
         chart.stream_counts.run32_streams,
         total_breaks,
+        chart.stream_counts.sn_breaks,
         adj_stream_percent,
     );
     print!(",");
