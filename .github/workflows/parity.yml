@@ -12,6 +12,7 @@ on:
         options:
           - all
           - "all alternative"
+          - fast_all_parity
           - hash_parity
           - bpm_parity
           - metadata_parity

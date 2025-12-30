@@ -432,6 +432,7 @@ fn build_chart_summary(
     chart_labels_opt: Option<Vec<u8>>,
     chart_tickcounts_opt: Option<Vec<u8>>,
     chart_combos_opt: Option<Vec<u8>>,
+    chart_offset_opt: Option<Vec<u8>>,
     chart_radar_values_opt: Option<Vec<u8>>,
     global_bpms_raw: &str,
     global_stops_raw: &str,
@@ -441,6 +442,7 @@ fn build_chart_summary(
     global_scrolls_raw: &str,
     global_fakes_raw: &str,
     global_bpms_norm: &str,
+    song_offset: f64,
     extension: &str,
     timing_format: TimingFormat,
     ssc_version: f32,
@@ -533,6 +535,11 @@ fn build_chart_summary(
             .filter(|s| !s.is_empty())
             .map(str::to_string)
     });
+    let chart_offset = if allow_steps_timing && chart_offset_opt.is_some() {
+        parse_offset_seconds(chart_offset_opt.as_deref())
+    } else {
+        song_offset
+    };
     let cached_radar_values = if extension.eq_ignore_ascii_case("sm") {
         parse_radar_values_bytes(fields.get(4).copied(), false)
     } else {
@@ -576,6 +583,29 @@ fn build_chart_summary(
         .iter()
         .map(|(beat, bpm)| (*beat as f64, *bpm as f64))
         .collect();
+    let target_beat = compute_last_beat_from_chart_data(chart_data, lanes);
+    let duration_seconds = if target_beat <= 0.0 {
+        0.0
+    } else {
+        let stops: Vec<(f64, f64)> = timing_segments
+            .stops
+            .iter()
+            .map(|(beat, duration)| (*beat as f64, *duration as f64))
+            .collect();
+        let delays: Vec<(f64, f64)> = timing_segments
+            .delays
+            .iter()
+            .map(|(beat, duration)| (*beat as f64, *duration as f64))
+            .collect();
+        let warps: Vec<(f64, f64)> = timing_segments
+            .warps
+            .iter()
+            .map(|(beat, length)| (*beat as f64, *length as f64))
+            .collect();
+        let elapsed = get_elapsed_time(target_beat, &bpm_map, &stops, &delays, &warps);
+        let offset = chart_offset + timing_segments.beat0_offset_adjust as f64;
+        round_millis(elapsed + offset)
+    };
 
     let metrics =
         compute_derived_chart_metrics(&measure_densities, &bpm_map, &minimized_chart, &bpms_to_use);
@@ -632,6 +662,7 @@ fn build_chart_summary(
         simple_breakdown: metrics.simple_breakdown,
         max_nps: metrics.max_nps,
         median_nps: metrics.median_nps,
+        duration_seconds,
         detected_patterns,
         anchor_left,
         anchor_down,
@@ -858,6 +889,7 @@ pub fn analyze(
                 entry.chart_labels,
                 entry.chart_tickcounts,
                 entry.chart_combos,
+                entry.chart_offset,
                 entry.chart_radar_values,
                 &cleaned_global_bpms,
                 &cleaned_global_stops,
@@ -867,6 +899,7 @@ pub fn analyze(
                 &cleaned_global_scrolls,
                 &cleaned_global_fakes,
                 &normalized_global_bpms,
+                offset,
                 extension,
                 timing_format,
                 ssc_version,

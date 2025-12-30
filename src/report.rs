@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
+use crate::bpm::normalize_float_digits;
 use crate::patterns::{CustomPatternSummary, PatternVariant};
 use crate::stats::{ArrowStats, StreamCounts, RADAR_CATEGORY_COUNT};
 use crate::step_parity::TechCounts;
@@ -200,6 +201,7 @@ pub struct ChartSummary {
     pub simple_breakdown:   String,
     pub max_nps:           f64,
     pub median_nps:        f64,
+    pub duration_seconds: f64,
     pub detected_patterns: HashMap<PatternVariant, u32>,
     pub anchor_left:       u32,
     pub anchor_down:       u32,
@@ -1346,10 +1348,22 @@ fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
         .into_iter()
         .map(|(beat, length)| serde_json::json!([beat, length]))
         .collect();
+    let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
+    let hash_bpms = if allow_steps_timing {
+        chart
+            .chart_bpms
+            .as_deref()
+            .map(normalize_float_digits)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| simfile.normalized_bpms.clone())
+    } else {
+        simfile.normalized_bpms.clone()
+    };
 
     serde_json::json!({
         "beat0_offset_seconds": beat0_offset_seconds,
         "beat0_group_offset_seconds": beat0_group_offset_seconds,
+        "hash_bpms": hash_bpms,
         "bpms_formatted": bpms_formatted,
         "bpms": bpms,
         "stops": stops,
@@ -1374,6 +1388,7 @@ fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
         "speeds": speeds,
         "scrolls": scrolls,
         "fakes": fakes,
+        "duration_seconds": chart.duration_seconds,
     })
 }
 
