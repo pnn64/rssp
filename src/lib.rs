@@ -250,7 +250,10 @@ fn parse_radar_values_str(
         return None;
     }
 
-    let mut values = Vec::new();
+    let mut out = [0.0f32; RADAR_CATEGORY_COUNT];
+    let mut filled = 0usize;
+    let mut total = 0usize;
+
     for part in cleaned.split(',') {
         if part.is_empty() {
             continue;
@@ -258,24 +261,21 @@ fn parse_radar_values_str(
         let Ok(value) = part.trim().parse::<f32>() else {
             continue;
         };
-        values.push(value);
+        if filled < RADAR_CATEGORY_COUNT {
+            out[filled] = value;
+            filled += 1;
+        }
+        total += 1;
     }
 
-    let slice = if split_players {
-        let per_player = values.len() / 2;
-        if per_player < RADAR_CATEGORY_COUNT {
-            return None;
-        }
-        &values[..per_player]
+    let needed = if split_players {
+        RADAR_CATEGORY_COUNT * 2
     } else {
-        if values.len() < RADAR_CATEGORY_COUNT {
-            return None;
-        }
-        &values[..]
+        RADAR_CATEGORY_COUNT
     };
-
-    let mut out = [0.0f32; RADAR_CATEGORY_COUNT];
-    out.copy_from_slice(&slice[..RADAR_CATEGORY_COUNT]);
+    if total < needed {
+        return None;
+    }
     if out
         .iter()
         .skip(RADAR_CATEGORY_NOTES)
