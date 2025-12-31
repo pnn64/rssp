@@ -1343,25 +1343,33 @@ fn parse_fakes(s: &str) -> Result<Vec<FakeSegment>, &'static str> {
 }
 
 fn parse_stops(s: &str) -> Result<Vec<StopSegment>, &'static str> {
-    if s.is_empty() {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
         return Ok(Vec::new());
     }
-    let segments: Result<Vec<_>, _> = s
-        .split(',')
-        .map(|pair| -> Result<StopSegment, &'static str> {
-            let mut parts = pair.split('=');
-            let beat_str = parts.next().ok_or("Missing beat")?.trim();
-            let duration_str = parts.next().ok_or("Missing duration")?.trim();
-            let beat = parse_beat_or_row(beat_str).ok_or("Invalid beat")?;
-            let duration = duration_str
-                .parse::<f64>()
-                .map_err(|_| "Invalid duration")?;
-            let duration = duration as f32 as f64;
-            Ok(StopSegment { beat, duration })
-        })
-        .collect();
 
-    Ok(segments?.into_iter().collect())
+    let mut out = Vec::with_capacity(trimmed.as_bytes().iter().filter(|&&b| b == b',').count() + 1);
+    for part in trimmed.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let Some((beat_str, duration_str)) = part.split_once('=') else {
+            continue;
+        };
+        let Some(beat) = parse_beat_or_row(beat_str) else {
+            continue;
+        };
+        let Some(duration) = parse_f64_fast(duration_str) else {
+            continue;
+        };
+        if beat.is_finite() && duration.is_finite() {
+            let duration = duration as f32 as f64;
+            out.push(StopSegment { beat, duration });
+        }
+    }
+
+    Ok(out)
 }
 
 fn parse_delays(s: &str) -> Result<Vec<DelaySegment>, &'static str> {
