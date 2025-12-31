@@ -315,9 +315,7 @@ fn generate_bitmasks(minimized_chart: &[u8]) -> Vec<u8> {
 fn compute_pattern_and_anchor_stats(
     bitmasks: &[u8],
 ) -> (HashMap<PatternVariant, u32>, (u32, u32, u32, u32)) {
-    let patterns_to_detect: Vec<_> =
-        DEFAULT_PATTERNS.iter().chain(EXTRA_PATTERNS.iter()).cloned().collect();
-    let detected_patterns = detect_patterns(bitmasks, &patterns_to_detect);
+    let detected_patterns = detect_patterns(bitmasks, &ALL_PATTERNS);
     let anchors = count_anchors(bitmasks);
     (detected_patterns, anchors)
 }

@@ -187,6 +187,13 @@ pub static EXTRA_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::
     ]
 });
 
+pub static ALL_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::new(|| {
+    let mut patterns = Vec::with_capacity(DEFAULT_PATTERNS.len() + EXTRA_PATTERNS.len());
+    patterns.extend(DEFAULT_PATTERNS.iter().cloned());
+    patterns.extend(EXTRA_PATTERNS.iter().cloned());
+    patterns
+});
+
 fn string_to_pattern_bits(p: &str) -> Vec<u8> {
     let mut result = Vec::with_capacity(p.len());
     for c in p.chars() {
