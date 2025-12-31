@@ -605,33 +605,13 @@ fn trim_cr(line: &[u8]) -> &[u8] {
     }
 }
 
-fn match_hold_ends<const LANES: usize>(
-    lines: &[[u8; LANES]],
-) -> Vec<[Option<usize>; LANES]> {
-    let mut stacks: [Vec<usize>; LANES] = std::array::from_fn(|_| Vec::new());
-    let mut hold_ends = vec![[None; LANES]; lines.len()];
-
-    for (row_idx, line) in lines.iter().enumerate() {
-        for (col, &ch) in line.iter().enumerate() {
-            match ch {
-                b'2' | b'4' => stacks[col].push(row_idx),
-                b'3' => {
-                    if let Some(start_idx) = stacks[col].pop() {
-                        hold_ends[start_idx][col] = Some(row_idx);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    hold_ends
-}
-
 fn compute_last_beat_impl<const LANES: usize>(minimized_note_data: &[u8]) -> f64 {
-    let mut rows_per_measure: Vec<usize> = Vec::new();
-    let mut current_rows: usize = 0;
-    let mut lines: Vec<[u8; LANES]> = Vec::new();
+    let mut hold_depths = [0u32; LANES];
+    let mut last_measure_idx: Option<usize> = None;
+    let mut last_row_in_measure: usize = 0;
+    let mut last_rows_in_measure: usize = 0;
+    let mut measure_idx = 0usize;
+    let mut row_in_measure = 0usize;
     let mut saw_terminator = false;
 
     for line_raw in minimized_note_data.split(|&b| b == b'\n') {
@@ -639,99 +619,66 @@ fn compute_last_beat_impl<const LANES: usize>(minimized_note_data: &[u8]) -> f64
         if line.is_empty() {
             continue;
         }
+
         match line[0] {
             b',' => {
-                rows_per_measure.push(current_rows);
-                current_rows = 0;
+                if last_measure_idx == Some(measure_idx) {
+                    last_rows_in_measure = row_in_measure;
+                }
+                measure_idx += 1;
+                row_in_measure = 0;
                 continue;
             }
             b';' => {
-                rows_per_measure.push(current_rows);
+                if last_measure_idx == Some(measure_idx) {
+                    last_rows_in_measure = row_in_measure;
+                }
                 saw_terminator = true;
                 break;
             }
             _ => {}
         }
 
-        if line.len() >= LANES {
-            let mut row = [0u8; LANES];
-            row.copy_from_slice(&line[..LANES]);
-            lines.push(row);
-            current_rows += 1;
+        if line.len() < LANES {
+            continue;
         }
-    }
 
-    if !saw_terminator {
-        rows_per_measure.push(current_rows);
-    }
-
-    if lines.is_empty() {
-        return 0.0;
-    }
-
-    let hold_ends = match_hold_ends(&lines);
-    let mut tail_mask = vec![0u8; lines.len()];
-    for ends in &hold_ends {
-        for (col, end_row) in ends.iter().enumerate() {
-            if let Some(end_idx) = *end_row {
-                if let Some(mask) = tail_mask.get_mut(end_idx) {
-                    *mask |= 1 << col;
+        let mut has_object = false;
+        for (col, &ch) in line[..LANES].iter().enumerate() {
+            match ch {
+                b'1' | b'M' | b'K' | b'L' | b'F' => {
+                    has_object = true;
                 }
-            }
-        }
-    }
-
-    let mut last_measure_idx: Option<usize> = None;
-    let mut last_row_in_measure: usize = 0;
-    let mut row_idx = 0usize;
-
-    for (measure_idx, &rows_in_measure) in rows_per_measure.iter().enumerate() {
-        for row_in_measure in 0..rows_in_measure {
-            if row_idx >= lines.len() {
-                break;
-            }
-            let line = &lines[row_idx];
-            let mut has_object = false;
-            for (col, &ch) in line.iter().enumerate() {
-                match ch {
-                    b'1' | b'M' | b'K' | b'L' | b'F' => {
+                b'2' | b'4' => {
+                    hold_depths[col] = hold_depths[col].saturating_add(1);
+                }
+                b'3' => {
+                    if hold_depths[col] > 0 {
+                        hold_depths[col] -= 1;
                         has_object = true;
-                        break;
                     }
-                    b'2' | b'4' => {
-                        if hold_ends[row_idx][col].is_some() {
-                            has_object = true;
-                            break;
-                        }
-                    }
-                    b'3' => {
-                        if (tail_mask[row_idx] & (1 << col)) != 0 {
-                            has_object = true;
-                            break;
-                        }
-                    }
-                    _ => {}
                 }
+                _ => {}
             }
-            if has_object {
-                last_measure_idx = Some(measure_idx);
-                last_row_in_measure = row_in_measure;
-            }
-            row_idx += 1;
         }
+
+        if has_object {
+            last_measure_idx = Some(measure_idx);
+            last_row_in_measure = row_in_measure;
+        }
+        row_in_measure += 1;
+    }
+
+    if !saw_terminator && last_measure_idx == Some(measure_idx) {
+        last_rows_in_measure = row_in_measure;
     }
 
     let Some(measure_idx) = last_measure_idx else {
         return 0.0;
     };
 
-    let total_rows_in_measure = rows_per_measure
-        .get(measure_idx)
-        .copied()
-        .unwrap_or(0)
-        .max(1) as f64;
+    let total_rows_in_measure = last_rows_in_measure.max(1) as f64;
     let row_index = last_row_in_measure as f64;
-
     let beats_into_measure = 4.0 * (row_index / total_rows_in_measure);
     let beat = (measure_idx as f64) * 4.0 + beats_into_measure;
     let row = crate::timing::beat_to_note_row(beat);
