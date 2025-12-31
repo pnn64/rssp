@@ -1713,6 +1713,15 @@ fn write_json_string<W: Write>(writer: &mut W, s: &str) -> io::Result<()> {
     writer.write_all(encoded.as_bytes())
 }
 
+#[inline(always)]
+fn round_sig_figs_6(value: f64) -> f64 {
+    if !value.is_finite() || value == 0.0 {
+        return value;
+    }
+    let formatted = format!("{:.5e}", value);
+    formatted.parse::<f64>().unwrap_or(value)
+}
+
 fn write_json_number_for_key<W: Write>(
     writer: &mut W,
     key: Option<&str>,
@@ -1726,7 +1735,7 @@ fn write_json_number_for_key<W: Write>(
         match key {
             Some("offset") => write!(writer, "{:.3}", f),
             Some("duration_seconds") => write!(writer, "{}", round_millis(f)),
-            Some("max_nps") => write!(writer, "{}", round_millis(f)),
+            Some("max_nps") => write!(writer, "{}", round_sig_figs_6(f)),
             Some("bpm") => write!(writer, "{}", f),
             _ => write!(writer, "{:.2}", f),
         }

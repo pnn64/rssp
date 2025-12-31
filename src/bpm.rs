@@ -1049,7 +1049,7 @@ pub fn compute_measure_nps_vec_with_timing(
         let end_time = timing.get_time_for_beat_f32(end_beat);
         let duration = end_time - start_time;
 
-        if duration <= 0.12 {
+        if duration <= 0.12_f64 {
             out.push(0.0);
         } else {
             out.push(density as f64 / duration);
