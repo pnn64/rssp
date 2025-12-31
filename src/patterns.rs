@@ -252,23 +252,29 @@ pub fn detect_custom_patterns(bitmasks: &[u8], patterns: &[String]) -> Vec<Custo
     summaries
 }
 
-#[inline]
-fn count_anchors_for_bit(bitmasks: &[u8], bit_mask: u8) -> u32 {
-    bitmasks
-        .iter()
-        .zip(bitmasks.iter().skip(2))
-        .zip(bitmasks.iter().skip(4))
-        .filter(|((a, b), c)| {
-            (*a & bit_mask) != 0 && (*b & bit_mask) != 0 && (*c & bit_mask) != 0
-        })
-        .count() as u32
-}
-
 pub fn count_anchors(bitmasks: &[u8]) -> (u32, u32, u32, u32) {
-    let anchor_left = count_anchors_for_bit(bitmasks, 0b0001);
-    let anchor_down = count_anchors_for_bit(bitmasks, 0b0010);
-    let anchor_up = count_anchors_for_bit(bitmasks, 0b0100);
-    let anchor_right = count_anchors_for_bit(bitmasks, 0b1000);
+    let mut anchor_left = 0u32;
+    let mut anchor_down = 0u32;
+    let mut anchor_up = 0u32;
+    let mut anchor_right = 0u32;
+
+    let limit = bitmasks.len().saturating_sub(4);
+    for i in 0..limit {
+        let mask = bitmasks[i] & bitmasks[i + 2] & bitmasks[i + 4];
+        if (mask & 0b0001) != 0 {
+            anchor_left += 1;
+        }
+        if (mask & 0b0010) != 0 {
+            anchor_down += 1;
+        }
+        if (mask & 0b0100) != 0 {
+            anchor_up += 1;
+        }
+        if (mask & 0b1000) != 0 {
+            anchor_right += 1;
+        }
+    }
+
     (anchor_left, anchor_down, anchor_up, anchor_right)
 }
 
