@@ -13,6 +13,7 @@ use crate::timing::{
     format_bpm_segments_like_itg,
     normalize_scrolls_like_itg,
     normalize_speeds_like_itg,
+    round_millis,
     roundtrip_bpm_itg,
     steps_timing_allowed,
     SpeedUnit,
@@ -1724,6 +1725,8 @@ fn write_json_number_for_key<W: Write>(
     } else if let Some(f) = number.as_f64() {
         match key {
             Some("offset") => write!(writer, "{:.3}", f),
+            Some("duration_seconds") => write!(writer, "{}", round_millis(f)),
+            Some("max_nps") => write!(writer, "{}", round_millis(f)),
             Some("bpm") => write!(writer, "{}", f),
             _ => write!(writer, "{:.2}", f),
         }

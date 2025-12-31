@@ -587,24 +587,26 @@ fn build_chart_summary(
     let duration_seconds = if target_beat <= 0.0 {
         0.0
     } else {
-        let stops: Vec<(f64, f64)> = timing_segments
-            .stops
-            .iter()
-            .map(|(beat, duration)| (*beat as f64, *duration as f64))
-            .collect();
-        let delays: Vec<(f64, f64)> = timing_segments
-            .delays
-            .iter()
-            .map(|(beat, duration)| (*beat as f64, *duration as f64))
-            .collect();
-        let warps: Vec<(f64, f64)> = timing_segments
-            .warps
-            .iter()
-            .map(|(beat, length)| (*beat as f64, *length as f64))
-            .collect();
-        let elapsed = get_elapsed_time(target_beat, &bpm_map, &stops, &delays, &warps);
-        let offset = chart_offset + timing_segments.beat0_offset_adjust as f64;
-        round_millis(elapsed + offset)
+        let timing = TimingData::from_chart_data(
+            chart_offset,
+            0.0,
+            chart_bpms_timing,
+            timing_bpms_global,
+            chart_stops_timing,
+            timing_stops_global,
+            chart_delays_timing,
+            timing_delays_global,
+            chart_warps_timing,
+            timing_warps_global,
+            chart_speeds_timing,
+            timing_speeds_global,
+            chart_scrolls_timing,
+            timing_scrolls_global,
+            chart_fakes_timing,
+            timing_fakes_global,
+            timing_format,
+        );
+        round_millis(timing.get_time_for_beat_f32(target_beat))
     };
 
     let metrics =
