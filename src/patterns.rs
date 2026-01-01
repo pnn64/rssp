@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -239,8 +239,12 @@ pub fn detect_custom_patterns(bitmasks: &[u8], patterns: &[String]) -> Vec<Custo
 
 pub(crate) fn compile_custom_patterns(patterns: &[String]) -> Vec<CompiledPattern> {
     let mut compiled = Vec::with_capacity(patterns.len());
+    let mut seen = HashSet::with_capacity(patterns.len());
     for pattern_str in patterns {
         let upper = pattern_str.to_ascii_uppercase();
+        if !seen.insert(upper.clone()) {
+            continue;
+        }
         let bits = string_to_pattern_bits(&upper);
         compiled.push(CompiledPattern {
             pattern: upper,
