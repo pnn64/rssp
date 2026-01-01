@@ -445,6 +445,7 @@ fn build_chart_summary(
     timing_format: TimingFormat,
     ssc_version: f32,
     allow_steps_timing: bool,
+    compiled_custom_patterns: &[CompiledPattern],
     options: &AnalysisOptions,
 ) -> Option<ChartSummary> {
     let chart_start_time = Instant::now();
@@ -631,8 +632,8 @@ fn build_chart_summary(
             (0, 0, 0, 0.0, 0, 0.0)
         };
 
-    let custom_patterns = if compute_patterns && !options.custom_patterns.is_empty() {
-        detect_custom_patterns(bitmasks.as_ref().unwrap(), &options.custom_patterns)
+    let custom_patterns = if compute_patterns && !compiled_custom_patterns.is_empty() {
+        detect_custom_patterns_compiled(bitmasks.as_ref().unwrap(), compiled_custom_patterns)
     } else {
         Vec::new()
     };
@@ -846,6 +847,11 @@ pub fn analyze(
         .to_string();
 
     let allow_steps_timing = steps_timing_allowed(ssc_version, timing_format);
+    let compiled_custom_patterns = if options.compute_pattern_counts && !options.custom_patterns.is_empty() {
+        compile_custom_patterns(&options.custom_patterns)
+    } else {
+        Vec::new()
+    };
     let global_timing_segments = compute_timing_segments(
         None,
         &cleaned_global_bpms,
@@ -904,6 +910,7 @@ pub fn analyze(
                 timing_format,
                 ssc_version,
                 allow_steps_timing,
+                &compiled_custom_patterns,
                 &options,
             )
         })

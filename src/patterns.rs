@@ -73,6 +73,12 @@ pub struct CustomPatternSummary {
     pub count: u32,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct CompiledPattern {
+    pattern: String,
+    bits: Vec<u8>,
+}
+
 pub static DEFAULT_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::new(|| {
     vec![
     // Candles
@@ -227,11 +233,31 @@ pub fn detect_patterns(
 }
 
 pub fn detect_custom_patterns(bitmasks: &[u8], patterns: &[String]) -> Vec<CustomPatternSummary> {
-    let mut summaries = Vec::new();
+    let compiled = compile_custom_patterns(patterns);
+    detect_custom_patterns_compiled(bitmasks, &compiled)
+}
 
+pub(crate) fn compile_custom_patterns(patterns: &[String]) -> Vec<CompiledPattern> {
+    let mut compiled = Vec::with_capacity(patterns.len());
     for pattern_str in patterns {
-        let upper = pattern_str.to_uppercase();
-        let pat_bits = string_to_pattern_bits(&upper);
+        let upper = pattern_str.to_ascii_uppercase();
+        let bits = string_to_pattern_bits(&upper);
+        compiled.push(CompiledPattern {
+            pattern: upper,
+            bits,
+        });
+    }
+    compiled
+}
+
+pub(crate) fn detect_custom_patterns_compiled(
+    bitmasks: &[u8],
+    patterns: &[CompiledPattern],
+) -> Vec<CustomPatternSummary> {
+    let mut summaries = Vec::with_capacity(patterns.len());
+
+    for pattern in patterns {
+        let pat_bits = &pattern.bits;
         let plen = pat_bits.len();
         let mut count = 0u32;
 
@@ -244,7 +270,7 @@ pub fn detect_custom_patterns(bitmasks: &[u8], patterns: &[String]) -> Vec<Custo
         }
 
         summaries.push(CustomPatternSummary {
-            pattern: upper,
+            pattern: pattern.pattern.clone(),
             count,
         });
     }
