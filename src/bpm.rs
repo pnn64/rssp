@@ -1,7 +1,6 @@
 use crate::parse::{
     decode_bytes,
     extract_sections,
-    parse_offset_seconds,
     parse_version,
     split_notes_fields,
     unescape_trim,
@@ -9,6 +8,7 @@ use crate::parse::{
     ParsedSimfileData,
 };
 use crate::timing::{
+    compute_timing_segments,
     format_bpm_segments_like_itg,
     steps_timing_allowed,
     TimingData,
@@ -152,7 +152,6 @@ struct TimingGlobals {
     scrolls_raw: String,
     fakes_raw: String,
     bpms_norm: String,
-    song_offset: f64,
     timing_format: TimingFormat,
     allow_steps_timing: bool,
 }
@@ -183,7 +182,6 @@ fn timing_globals(parsed: &ParsedSimfileData<'_>, extension: &str) -> TimingGlob
         scrolls_raw: clean_tag_bytes(parsed.scrolls),
         fakes_raw: clean_tag_bytes(parsed.fakes),
         bpms_norm: normalize_tag_bytes(parsed.bpms),
-        song_offset: parse_offset_seconds(parsed.offset),
         timing_format,
         allow_steps_timing,
     }
@@ -222,11 +220,9 @@ fn chart_metadata(fields: &[&[u8]], timing_format: TimingFormat) -> Option<(Stri
     Some((step_type, difficulty))
 }
 
-fn timing_data_for_chart(tags: &ChartTimingTags, globals: &TimingGlobals) -> TimingData {
+fn format_bpms_for_chart(tags: &ChartTimingTags, globals: &TimingGlobals) -> String {
     let use_chart = globals.allow_steps_timing;
-    TimingData::from_chart_data(
-        globals.song_offset,
-        0.0,
+    let segments = compute_timing_segments(
         if use_chart { tags.bpms_raw.as_deref() } else { None },
         &globals.bpms_raw,
         if use_chart { tags.stops_raw.as_deref() } else { None },
@@ -242,7 +238,13 @@ fn timing_data_for_chart(tags: &ChartTimingTags, globals: &TimingGlobals) -> Tim
         if use_chart { tags.fakes_raw.as_deref() } else { None },
         &globals.fakes_raw,
         globals.timing_format,
-    )
+    );
+
+    let mut bpms = Vec::with_capacity(segments.bpms.len());
+    for (beat, bpm) in segments.bpms {
+        bpms.push((beat as f64, bpm as f64));
+    }
+    format_bpm_segments_like_itg(&bpms)
 }
 
 fn chart_bpm_snapshot(entry: &ParsedChartEntry, globals: &TimingGlobals) -> Option<ChartBpmSnapshot> {
@@ -253,8 +255,7 @@ fn chart_bpm_snapshot(entry: &ParsedChartEntry, globals: &TimingGlobals) -> Opti
         .bpms_norm
         .clone()
         .unwrap_or_else(|| globals.bpms_norm.clone());
-    let bpms_formatted =
-        format_bpm_segments_like_itg(&timing_data_for_chart(&tags, globals).bpm_segments());
+    let bpms_formatted = format_bpms_for_chart(&tags, globals);
 
     Some(ChartBpmSnapshot {
         step_type,
