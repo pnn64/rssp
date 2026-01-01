@@ -1,4 +1,5 @@
 use crate::timing::{beat_to_note_row, TimingData};
+use std::fmt::Write;
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ArrowStats {
@@ -742,53 +743,56 @@ pub fn compute_stream_counts(measure_densities: &[usize]) -> StreamCounts {
     sc
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Token {
-    Run(super::stats::RunDensity, usize),
+    Run(RunDensity, usize),
     Break(usize),
 }
 
 pub fn generate_breakdown(measure_densities: &[usize], mode: BreakdownMode) -> String {
-    // Convert densities into categories.
-    let cats: Vec<RunDensity> = measure_densities
-        .iter()
-        .map(|&d| categorize_measure_density(d))
-        .collect();
-
-    // Trim leading/trailing Breaks.
-    let start = cats.iter().position(|&c| c != RunDensity::Break);
-    let end = cats.iter().rposition(|&c| c != RunDensity::Break);
-    if start.is_none() || end.is_none() {
-        return String::new();
-    }
-    let cats = &cats[start.unwrap()..=end.unwrap()];
-
-    // Group consecutive identical categories into tokens.
-    #[derive(Debug)]
-    enum Token {
-        Run(RunDensity, usize),
-        Break(usize),
-    }
-    let tokens: Vec<Token> = {
-        let mut tokens = Vec::new();
-        let mut iter = cats.iter().cloned().peekable();
-        while let Some(cat) = iter.next() {
-            let mut count = 1;
-            while let Some(&next) = iter.peek() {
-                if next == cat {
-                    count += 1;
-                    iter.next();
-                } else {
-                    break;
-                }
+    let mut start_idx = None;
+    let mut end_idx = None;
+    for (idx, &d) in measure_densities.iter().enumerate() {
+        if categorize_measure_density(d) != RunDensity::Break {
+            if start_idx.is_none() {
+                start_idx = Some(idx);
             }
-            tokens.push(match cat {
+            end_idx = Some(idx);
+        }
+    }
+
+    let Some(start_idx) = start_idx else {
+        return String::new();
+    };
+    let end_idx = end_idx.unwrap();
+
+    let dens = &measure_densities[start_idx..=end_idx];
+
+    let mut tokens = Vec::with_capacity(dens.len());
+    let mut iter = dens.iter();
+    let Some(&first) = iter.next() else {
+        return String::new();
+    };
+
+    let mut cur = categorize_measure_density(first);
+    let mut count = 1usize;
+    for &d in iter {
+        let next = categorize_measure_density(d);
+        if next == cur {
+            count += 1;
+        } else {
+            tokens.push(match cur {
                 RunDensity::Break => Token::Break(count),
                 other => Token::Run(other, count),
             });
+            cur = next;
+            count = 1;
         }
-        tokens
-    };
+    }
+    tokens.push(match cur {
+        RunDensity::Break => Token::Break(count),
+        other => Token::Run(other, count),
+    });
 
     // Determine the break threshold.
     let threshold = match mode {
@@ -797,94 +801,121 @@ pub fn generate_breakdown(measure_densities: &[usize], mode: BreakdownMode) -> S
         BreakdownMode::Detailed => 0,
     };
 
-    // Merge tokens—when a Run is separated from a subsequent Run of the same type
-    // by a short Break (<= threshold), merge them.
-    #[derive(Debug)]
-    enum MToken {
-        Run(RunDensity, usize, bool), // (category, total length, star flag)
-        Break(usize),
-    }
-    let merged: Vec<MToken> = {
-        let mut merged = Vec::new();
-        let mut iter = tokens.into_iter().peekable();
-        while let Some(tok) = iter.next() {
-            match tok {
-                Token::Run(cat, len) => {
-                    let mut total = len;
-                    let mut star = false;
-                    // While a short Break is found...
-                    while let Some(Token::Break(bk)) = iter.peek() {
-                        if *bk > threshold {
-                            break;
-                        }
-                        // Consume the Break.
-                        let Token::Break(bk) = iter.next().unwrap() else { unreachable!() };
-                        // If followed by a Run...
-                        if let Some(Token::Run(next_cat, next_len)) = iter.peek() {
-                            if *next_cat == cat {
-                                total += bk + *next_len;
-                                star = true;
-                                iter.next(); // consume the next Run
-                                continue;
-                            } else {
-                                // In Simplified mode, if the break length is >1 and ≤4, merge it.
-                                if bk != 1 && mode == BreakdownMode::Simplified && bk <= 4 {
-                                    total += bk;
-                                    star = true;
-                                }
-                                break;
+    let mut out = String::new();
+    let mut idx = 0usize;
+
+    while idx < tokens.len() {
+        match tokens[idx] {
+            Token::Run(cat, len) => {
+                let mut total = len;
+                let mut star = false;
+                let mut next_idx = idx + 1;
+
+                while next_idx + 1 < tokens.len() {
+                    let Token::Break(bk) = tokens[next_idx] else { break; };
+                    if bk > threshold {
+                        break;
+                    }
+                    let Token::Run(next_cat, next_len) = tokens[next_idx + 1] else { break; };
+                    if next_cat == cat {
+                        total += bk + next_len;
+                        star = true;
+                        next_idx += 2;
+                        continue;
+                    }
+                    if mode == BreakdownMode::Simplified && bk != 1 && bk <= 4 {
+                        total += bk;
+                        star = true;
+                    }
+                    next_idx += 1;
+                    break;
+                }
+
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                write_run_symbol(&mut out, cat, total, star);
+                idx = next_idx;
+            }
+            Token::Break(bk) => {
+                match mode {
+                    BreakdownMode::Detailed => {
+                        if bk > 1 {
+                            if !out.is_empty() {
+                                out.push(' ');
                             }
-                        } else {
-                            break;
+                            out.push('(');
+                            let _ = write!(out, "{}", bk);
+                            out.push(')');
                         }
                     }
-                    merged.push(MToken::Run(cat, total, star));
+                    BreakdownMode::Partial => {
+                        let sym = match bk {
+                            1 => None,
+                            2..=4 => Some("-"),
+                            5..=32 => Some("/"),
+                            _ => Some("|"),
+                        };
+                        if let Some(sym) = sym {
+                            if !out.is_empty() {
+                                out.push(' ');
+                            }
+                            out.push_str(sym);
+                        }
+                    }
+                    BreakdownMode::Simplified => {
+                        let sym = match bk {
+                            1..=4 => None,
+                            5..=32 => Some("/"),
+                            _ => Some("|"),
+                        };
+                        if let Some(sym) = sym {
+                            if !out.is_empty() {
+                                out.push(' ');
+                            }
+                            out.push_str(sym);
+                        }
+                    }
                 }
-                Token::Break(bk) => merged.push(MToken::Break(bk)),
+                idx += 1;
             }
         }
-        merged
-    };
+    }
 
-    // Map merged tokens into output strings.
-    let output: Vec<String> = merged
-        .into_iter()
-        .filter_map(|mt| match mt {
-            MToken::Run(cat, len, star) => Some(format_run_symbol(cat, len, star)),
-            MToken::Break(bk) => match mode {
-                BreakdownMode::Detailed if bk > 1 => Some(format!("({})", bk)),
-                BreakdownMode::Partial => match bk {
-                    1 => None,
-                    2..=4 => Some("-".to_owned()),
-                    5..=32 => Some("/".to_owned()),
-                    _ => Some("|".to_owned()),
-                },
-                BreakdownMode::Simplified => match bk {
-                    1..=4 => None,
-                    5..=32 => Some("/".to_owned()),
-                    _ => Some("|".to_owned()),
-                },
-                _ => None,
-            },
-        })
-        .collect();
+    out
+}
 
-    output.join(" ")
+fn write_run_symbol(out: &mut String, cat: RunDensity, length: usize, star: bool) {
+    match cat {
+        RunDensity::Run16 => {
+            let _ = write!(out, "{}", length);
+        }
+        RunDensity::Run20 => {
+            out.push('~');
+            let _ = write!(out, "{}", length);
+            out.push('~');
+        }
+        RunDensity::Run24 => {
+            out.push('\\');
+            let _ = write!(out, "{}", length);
+            out.push('\\');
+        }
+        RunDensity::Run32 => {
+            out.push('=');
+            let _ = write!(out, "{}", length);
+            out.push('=');
+        }
+        RunDensity::Break => unreachable!(),
+    }
+    if star {
+        out.push('*');
+    }
 }
 
 pub fn format_run_symbol(cat: RunDensity, length: usize, star: bool) -> String {
-    let base = match cat {
-        RunDensity::Run16 => format!("{}", length),
-        RunDensity::Run20 => format!("~{}~", length),
-        RunDensity::Run24 => format!(r"\{}\", length),
-        RunDensity::Run32 => format!("={}=", length),
-        RunDensity::Break => unreachable!(),
-    };
-    if star {
-        format!("{}*", base)
-    } else {
-        base
-    }
+    let mut out = String::new();
+    write_run_symbol(&mut out, cat, length, star);
+    out
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -967,23 +998,24 @@ fn add_stream_notation(
     level: StreamBreakdownLevel,
     notation: &str,
     segment_size: usize,
-    text_segments: &mut Vec<String>,
+    out: &mut String,
     segment_sum: &mut usize,
     is_broken: &mut bool,
     total_sum: &mut usize,
 ) {
     if level == StreamBreakdownLevel::Detailed {
-        text_segments.push(format!(" ({}) ", segment_size));
+        out.push_str(" (");
+        let _ = write!(out, "{}", segment_size);
+        out.push_str(") ");
         return;
     }
 
     if *segment_sum != 0 {
         match level {
             StreamBreakdownLevel::Simple => {
+                let _ = write!(out, "{}", *segment_sum);
                 if *is_broken {
-                    text_segments.push(format!("{}*", *segment_sum));
-                } else {
-                    text_segments.push(segment_sum.to_string());
+                    out.push('*');
                 }
             }
             StreamBreakdownLevel::Total => {
@@ -994,7 +1026,7 @@ fn add_stream_notation(
     }
 
     if level != StreamBreakdownLevel::Total {
-        text_segments.push(notation.to_string());
+        out.push_str(notation);
     }
 
     *is_broken = false;
@@ -1014,7 +1046,7 @@ pub fn stream_breakdown(
         return "No Streams!".to_string();
     }
 
-    let mut text_segments: Vec<String> = Vec::new();
+    let mut out = String::new();
     let mut segment_sum = 0usize;
     let mut is_broken = false;
     let mut total_sum = 0usize;
@@ -1028,7 +1060,7 @@ pub fn stream_breakdown(
                         level,
                         "-",
                         segment_size,
-                        &mut text_segments,
+                        &mut out,
                         &mut segment_sum,
                         &mut is_broken,
                         &mut total_sum,
@@ -1038,7 +1070,7 @@ pub fn stream_breakdown(
                         level,
                         "/",
                         segment_size,
-                        &mut text_segments,
+                        &mut out,
                         &mut segment_sum,
                         &mut is_broken,
                         &mut total_sum,
@@ -1048,7 +1080,7 @@ pub fn stream_breakdown(
                         level,
                         " | ",
                         segment_size,
-                        &mut text_segments,
+                        &mut out,
                         &mut segment_sum,
                         &mut is_broken,
                         &mut total_sum,
@@ -1068,9 +1100,9 @@ pub fn stream_breakdown(
                 }
                 _ => {
                     if idx > 0 && !segments[idx - 1].is_break {
-                        text_segments.push("-".to_string());
+                        out.push('-');
                     }
-                    text_segments.push(segment_size.to_string());
+                    let _ = write!(out, "{}", segment_size);
                 }
             }
         }
@@ -1079,10 +1111,9 @@ pub fn stream_breakdown(
     if segment_sum != 0 {
         match level {
             StreamBreakdownLevel::Simple => {
+                let _ = write!(out, "{}", segment_sum);
                 if is_broken {
-                    text_segments.push(format!("{}*", segment_sum));
-                } else {
-                    text_segments.push(segment_sum.to_string());
+                    out.push('*');
                 }
             }
             StreamBreakdownLevel::Total => {
@@ -1093,12 +1124,14 @@ pub fn stream_breakdown(
     }
 
     if level == StreamBreakdownLevel::Total {
-        return format!("{} Total", total_sum);
+        let mut out = String::new();
+        let _ = write!(out, "{} Total", total_sum);
+        return out;
     }
 
-    if text_segments.is_empty() {
+    if out.is_empty() {
         "No Streams!".to_string()
     } else {
-        text_segments.concat()
+        out
     }
 }
