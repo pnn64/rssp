@@ -58,6 +58,7 @@ const FEET: [Foot; 4] = [
     Foot::RightHeel,
     Foot::RightToe,
 ];
+const FOOT_MASKS: [u8; NUM_FEET] = [0, 1, 2, 4, 8];
 const OTHER_PART_OF_FOOT: [Foot; NUM_FEET] = [
     Foot::None,
     Foot::LeftToe,
@@ -547,7 +548,7 @@ impl StepParityNode {
 struct StepParityGenerator {
     layout: StageLayout,
     column_count: usize,
-    permute_cache: HashMap<u32, Vec<FootPlacement>>,
+    permute_cache: HashMap<u32, Rc<[FootPlacement]>>,
     state_cache: HashMap<u64, Rc<State>>,
     nodes: Vec<Box<StepParityNode>>,
     rows: Vec<Row>,
@@ -694,14 +695,14 @@ impl StepParityGenerator {
 
         for i in 0..self.rows.len() {
             let row_clone = self.rows[i].clone();
-            let permutations = self.get_foot_placement_permutations(&row_clone).to_vec();
+            let permutations = self.get_foot_placement_permutations(&row_clone);
             let mut result_nodes_for_row: Vec<usize> = Vec::new();
 
             for &initial_node_id in &prev_node_ids {
                 let initial_state = Rc::clone(&self.nodes[initial_node_id].state);
                 let elapsed = row_clone.second - self.nodes[initial_node_id].second;
 
-                for perm in &permutations {
+                for perm in permutations.iter() {
                     let result_state = self.init_result_state(&initial_state, &row_clone, perm);
                     let cost = cost_calculator.get_action_cost(
                         &initial_state,
@@ -841,7 +842,7 @@ impl StepParityGenerator {
         }
     }
 
-    fn get_foot_placement_permutations(&mut self, row: &Row) -> &Vec<FootPlacement> {
+    fn get_foot_placement_permutations(&mut self, row: &Row) -> Rc<[FootPlacement]> {
         let mut key = 0u32;
         for i in 0..row.column_count.min(32) {
             if row.notes[i].note_type != TapNoteType::Empty
@@ -851,28 +852,35 @@ impl StepParityGenerator {
             }
         }
 
-        if !self.permute_cache.contains_key(&key) {
-            let blank = vec![Foot::None; row.column_count];
-            let mut perms = self.permute_recursive(row, blank.clone(), 0, false);
-            if perms.is_empty() {
-                perms = self.permute_recursive(row, blank.clone(), 0, true);
-            }
-            if perms.is_empty() {
-                perms.push(blank);
-            }
-            self.permute_cache.insert(key, perms);
+        if let Some(perms) = self.permute_cache.get(&key) {
+            return Rc::clone(perms);
         }
 
-        self.permute_cache.get(&key).unwrap()
+        let mut columns = vec![Foot::None; row.column_count];
+        let mut perms = Vec::new();
+        self.permute_recursive(row, &mut columns, 0, false, 0, &mut perms);
+        if perms.is_empty() {
+            self.permute_recursive(row, &mut columns, 0, true, 0, &mut perms);
+        }
+        if perms.is_empty() {
+            columns.fill(Foot::None);
+            perms.push(columns);
+        }
+
+        let perms = Rc::from(perms.into_boxed_slice());
+        self.permute_cache.insert(key, Rc::clone(&perms));
+        perms
     }
 
     fn permute_recursive(
         &self,
         row: &Row,
-        mut columns: FootPlacement,
+        columns: &mut [Foot],
         column: usize,
         ignore_holds: bool,
-    ) -> Vec<FootPlacement> {
+        used_mask: u8,
+        out: &mut Vec<FootPlacement>,
+    ) {
         if column >= columns.len() {
             let mut left_heel = INVALID_COLUMN;
             let mut left_toe = INVALID_COLUMN;
@@ -892,7 +900,7 @@ impl StepParityGenerator {
             if (left_heel == INVALID_COLUMN && left_toe != INVALID_COLUMN)
                 || (right_heel == INVALID_COLUMN && right_toe != INVALID_COLUMN)
             {
-                return Vec::new();
+                return;
             }
 
             if left_heel != INVALID_COLUMN && left_toe != INVALID_COLUMN {
@@ -900,7 +908,7 @@ impl StepParityGenerator {
                     .layout
                     .bracket_check(left_heel as usize, left_toe as usize)
                 {
-                    return Vec::new();
+                    return;
                 }
             }
 
@@ -909,34 +917,37 @@ impl StepParityGenerator {
                     .layout
                     .bracket_check(right_heel as usize, right_toe as usize)
                 {
-                    return Vec::new();
+                    return;
                 }
             }
 
-            return vec![columns];
+            out.push(columns.to_vec());
+            return;
         }
 
-        let mut permutations = Vec::new();
         if row.notes[column].note_type != TapNoteType::Empty
             || (!ignore_holds && row.holds[column].note_type != TapNoteType::Empty)
         {
             for &foot in &FEET {
-                if columns.contains(&foot) {
+                let foot_mask = FOOT_MASKS[foot.as_index()];
+                if used_mask & foot_mask != 0 {
                     continue;
                 }
                 columns[column] = foot;
-                permutations.extend(self.permute_recursive(
+                self.permute_recursive(
                     row,
-                    columns.clone(),
+                    columns,
                     column + 1,
                     ignore_holds,
-                ));
+                    used_mask | foot_mask,
+                    out,
+                );
                 columns[column] = Foot::None;
             }
-            return permutations;
+            return;
         }
 
-        self.permute_recursive(row, columns, column + 1, ignore_holds)
+        self.permute_recursive(row, columns, column + 1, ignore_holds, used_mask, out);
     }
 
     fn compute_cheapest_path(&self) -> Vec<usize> {
