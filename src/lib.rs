@@ -359,9 +359,6 @@ struct DerivedChartMetrics {
     detailed_breakdown: String,
     partial_breakdown: String,
     simple_breakdown: String,
-    measure_nps_vec: Vec<f64>,
-    max_nps: f64,
-    median_nps: f64,
     short_hash: String,
     bpm_neutral_hash: String,
     tier_bpm: f64,
@@ -389,9 +386,6 @@ fn compute_derived_chart_metrics(
     let partial_breakdown = stream_breakdown(measure_densities, StreamBreakdownLevel::Partial);
     let simple_breakdown = stream_breakdown(measure_densities, StreamBreakdownLevel::Simple);
 
-    let measure_nps_vec = compute_measure_nps_vec(measure_densities, bpm_map);
-    let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
-
     let short_hash = compute_chart_hash(minimized_chart, bpms_to_use);
     let bpm_neutral_hash = compute_chart_hash(minimized_chart, "0.000=0.000");
     let tier_bpm = compute_tier_bpm(measure_densities, bpm_map, 4.0);
@@ -406,9 +400,6 @@ fn compute_derived_chart_metrics(
         detailed_breakdown,
         partial_breakdown,
         simple_breakdown,
-        measure_nps_vec,
-        max_nps,
-        median_nps,
         short_hash,
         bpm_neutral_hash,
         tier_bpm,
@@ -661,8 +652,8 @@ fn build_chart_summary(
         detailed_breakdown: metrics.detailed_breakdown,
         partial_breakdown: metrics.partial_breakdown,
         simple_breakdown: metrics.simple_breakdown,
-        max_nps: metrics.max_nps,
-        median_nps: metrics.median_nps,
+        max_nps: 0.0,
+        median_nps: 0.0,
         duration_seconds,
         detected_patterns,
         anchor_left,
@@ -681,7 +672,7 @@ fn build_chart_summary(
         bpm_neutral_hash: metrics.bpm_neutral_hash,
         elapsed: elapsed_chart,
         measure_densities,
-        measure_nps_vec: metrics.measure_nps_vec,
+        measure_nps_vec: Vec::new(),
         row_to_beat,
         timing_segments,
         minimized_note_data: minimized_chart,
