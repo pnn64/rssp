@@ -104,12 +104,13 @@ pub fn clean_timing_map(param: &str) -> String {
 }
 
 pub fn normalize_chart_tag(tag: Option<Vec<u8>>) -> Option<String> {
-    tag.and_then(|bytes| {
-        std::str::from_utf8(&bytes)
-            .ok()
-            .map(normalize_float_digits)
-    })
-    .filter(|s| !s.is_empty())
+    normalize_chart_tag_bytes(tag.as_deref())
+}
+
+fn normalize_chart_tag_bytes(tag: Option<&[u8]>) -> Option<String> {
+    tag.and_then(|bytes| std::str::from_utf8(bytes).ok())
+        .map(normalize_float_digits)
+        .filter(|s| !s.is_empty())
 }
 
 fn normalize_tag_bytes(tag: Option<&[u8]>) -> String {
@@ -125,12 +126,13 @@ fn clean_tag_bytes(tag: Option<&[u8]>) -> String {
 }
 
 fn clean_chart_tag(tag: Option<Vec<u8>>) -> Option<String> {
-    tag.and_then(|bytes| {
-        std::str::from_utf8(&bytes)
-            .ok()
-            .map(clean_timing_map)
-    })
-    .filter(|s| !s.is_empty())
+    clean_chart_tag_bytes(tag.as_deref())
+}
+
+fn clean_chart_tag_bytes(tag: Option<&[u8]>) -> Option<String> {
+    tag.and_then(|bytes| std::str::from_utf8(bytes).ok())
+        .map(clean_timing_map)
+        .filter(|s| !s.is_empty())
 }
 
 #[derive(Debug, Clone)]
@@ -190,14 +192,14 @@ fn timing_globals(parsed: &ParsedSimfileData<'_>, extension: &str) -> TimingGlob
 
 fn chart_timing_tags(entry: &ParsedChartEntry) -> ChartTimingTags {
     ChartTimingTags {
-        bpms_raw: clean_chart_tag(entry.chart_bpms.clone()),
-        stops_raw: clean_chart_tag(entry.chart_stops.clone()),
-        delays_raw: clean_chart_tag(entry.chart_delays.clone()),
-        warps_raw: clean_chart_tag(entry.chart_warps.clone()),
-        speeds_raw: clean_chart_tag(entry.chart_speeds.clone()),
-        scrolls_raw: clean_chart_tag(entry.chart_scrolls.clone()),
-        fakes_raw: clean_chart_tag(entry.chart_fakes.clone()),
-        bpms_norm: normalize_chart_tag(entry.chart_bpms.clone()),
+        bpms_raw: clean_chart_tag_bytes(entry.chart_bpms.as_deref()),
+        stops_raw: clean_chart_tag_bytes(entry.chart_stops.as_deref()),
+        delays_raw: clean_chart_tag_bytes(entry.chart_delays.as_deref()),
+        warps_raw: clean_chart_tag_bytes(entry.chart_warps.as_deref()),
+        speeds_raw: clean_chart_tag_bytes(entry.chart_speeds.as_deref()),
+        scrolls_raw: clean_chart_tag_bytes(entry.chart_scrolls.as_deref()),
+        fakes_raw: clean_chart_tag_bytes(entry.chart_fakes.as_deref()),
+        bpms_norm: normalize_chart_tag_bytes(entry.chart_bpms.as_deref()),
     }
 }
 
