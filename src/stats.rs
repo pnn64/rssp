@@ -453,25 +453,42 @@ fn compute_timing_aware_stats_impl<const LANES: usize>(
 }
 
 /// Helper to process a completed measure: minimize, count stats, and update buffers.
-fn finalize_and_process_measure<const LANES: usize>(
+#[inline(always)]
+fn append_row_to_beat(row_to_beat: &mut Vec<f32>, measure_idx: usize, rows: usize) {
+    if rows == 0 {
+        return;
+    }
+    row_to_beat.reserve(rows);
+    let rows_f = rows as f32;
+    let measure_start = measure_idx as f32 * 4.0;
+    let row_step = 4.0 / rows_f;
+    for row_in_measure in 0..rows {
+        let beat = measure_start + row_in_measure as f32 * row_step;
+        row_to_beat.push(beat);
+    }
+}
+
+/// Helper to process a completed measure: minimize, count stats, and update buffers.
+fn finalize_and_process_measure<const LANES: usize, F: FnMut(usize, usize)>(
     measure: &mut Vec<[u8; LANES]>,
     output: &mut Vec<u8>,
     stats: &mut ArrowStats,
     measure_densities: &mut Vec<usize>,
-    all_lines_buffer: &mut Vec<[u8; LANES]>,
     total_holds_started: &mut u32,
     total_ends_seen: &mut u32,
+    measure_idx: usize,
+    on_rows: &mut F,
 ) {
     if measure.is_empty() {
         measure_densities.push(0);
         return;
     }
     minimize_measure(measure);
+    on_rows(measure_idx, measure.len());
     output.reserve(measure.len() * (LANES + 1));
 
     let mut density = 0;
     for mline in measure.iter() {
-        all_lines_buffer.push(*mline);
         if count_line(mline, stats, total_holds_started, total_ends_seen) {
             density += 1;
         }
@@ -540,17 +557,18 @@ fn minimize_chart_for_hash_impl<const LANES: usize>(notes_data: &[u8]) -> Vec<u8
     output
 }
 
-fn minimize_chart_and_count_impl<const LANES: usize>(
+fn minimize_chart_and_count_impl<const LANES: usize, F: FnMut(usize, usize)>(
     notes_data: &[u8],
+    on_rows: &mut F,
 ) -> (Vec<u8>, ArrowStats, Vec<usize>) {
     let mut output = Vec::with_capacity(notes_data.len());
     let mut measure = Vec::with_capacity(64);
     let mut stats = ArrowStats::default();
     let mut measure_densities = Vec::new();
-    let mut all_lines_buffer = Vec::new();
     let mut total_holds_started = 0u32;
     let mut total_ends_seen = 0u32;
     let mut saw_semicolon = false;
+    let mut measure_idx = 0usize;
 
     for line_raw in notes_data.split(|&b| b == b'\n') {
         let mut start = 0usize;
@@ -570,11 +588,13 @@ fn minimize_chart_and_count_impl<const LANES: usize>(
                     &mut output,
                     &mut stats,
                     &mut measure_densities,
-                    &mut all_lines_buffer,
                     &mut total_holds_started,
                     &mut total_ends_seen,
+                    measure_idx,
+                    on_rows,
                 );
                 output.extend_from_slice(b",\n");
+                measure_idx += 1;
             }
             Some(b';') => {
                 finalize_and_process_measure(
@@ -582,11 +602,13 @@ fn minimize_chart_and_count_impl<const LANES: usize>(
                     &mut output,
                     &mut stats,
                     &mut measure_densities,
-                    &mut all_lines_buffer,
                     &mut total_holds_started,
                     &mut total_ends_seen,
+                    measure_idx,
+                    on_rows,
                 );
                 saw_semicolon = true;
+                measure_idx += 1;
                 break;
             }
             Some(_) if line.len() >= LANES => {
@@ -604,14 +626,31 @@ fn minimize_chart_and_count_impl<const LANES: usize>(
             &mut output,
             &mut stats,
             &mut measure_densities,
-            &mut all_lines_buffer,
             &mut total_holds_started,
             &mut total_ends_seen,
+            measure_idx,
+            on_rows,
         );
     }
 
     if total_holds_started != total_ends_seen {
         let raw_total_steps = stats.total_steps;
+        let mut all_lines_buffer = Vec::with_capacity(output.len() / (LANES + 1));
+        for line in output.split(|&b| b == b'\n') {
+            if line.is_empty() {
+                continue;
+            }
+            match line[0] {
+                b',' | b';' => continue,
+                _ => {}
+            }
+            if line.len() < LANES {
+                continue;
+            }
+            let mut arr = [0u8; LANES];
+            arr.copy_from_slice(&line[..LANES]);
+            all_lines_buffer.push(arr);
+        }
         let mut cleaned = recalculate_stats_without_phantom_holds(&all_lines_buffer);
         cleaned.total_steps = raw_total_steps;
         stats = cleaned;
@@ -628,10 +667,34 @@ pub fn minimize_chart_and_count_with_lanes(
     notes_data: &[u8],
     lanes: usize,
 ) -> (Vec<u8>, ArrowStats, Vec<usize>) {
+    let mut noop = |_, _| {};
     match lanes {
-        4 => minimize_chart_and_count_impl::<4>(notes_data),
-        8 => minimize_chart_and_count_impl::<8>(notes_data),
-        _ => minimize_chart_and_count_impl::<4>(notes_data),
+        4 => minimize_chart_and_count_impl::<4, _>(notes_data, &mut noop),
+        8 => minimize_chart_and_count_impl::<8, _>(notes_data, &mut noop),
+        _ => minimize_chart_and_count_impl::<4, _>(notes_data, &mut noop),
+    }
+}
+
+fn minimize_chart_count_rows_impl<const LANES: usize>(
+    notes_data: &[u8],
+) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>) {
+    let mut row_to_beat = Vec::with_capacity(notes_data.len() / (LANES + 1));
+    let mut on_rows = |measure_idx: usize, rows: usize| {
+        append_row_to_beat(&mut row_to_beat, measure_idx, rows);
+    };
+    let (output, stats, measure_densities) =
+        minimize_chart_and_count_impl::<LANES, _>(notes_data, &mut on_rows);
+    (output, stats, measure_densities, row_to_beat)
+}
+
+pub(crate) fn minimize_chart_count_rows(
+    notes_data: &[u8],
+    lanes: usize,
+) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>) {
+    match lanes {
+        4 => minimize_chart_count_rows_impl::<4>(notes_data),
+        8 => minimize_chart_count_rows_impl::<8>(notes_data),
+        _ => minimize_chart_count_rows_impl::<4>(notes_data),
     }
 }
 

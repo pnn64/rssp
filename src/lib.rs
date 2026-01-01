@@ -30,7 +30,6 @@ use crate::patterns::*;
 use crate::stats::*;
 use crate::tech::parse_tech_notation;
 use crate::timing::{
-    compute_row_to_beat,
     compute_timing_segments,
     round_millis,
     steps_timing_allowed,
@@ -468,12 +467,11 @@ fn build_chart_summary(
     let tech_notation_str = parse_tech_notation(&credit, &description);
 
     let lanes = step_type_lanes(&step_type_str);
-    let (mut minimized_chart, mut stats, measure_densities) =
-        minimize_chart_and_count_with_lanes(chart_data, lanes);
+    let (mut minimized_chart, mut stats, measure_densities, row_to_beat) =
+        minimize_chart_count_rows(chart_data, lanes);
     if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
         minimized_chart.truncate(pos + 1);
     }
-    let row_to_beat = compute_row_to_beat(&minimized_chart);
 
     let (chart_bpms, chart_bpms_norm) = chart_timing_tag_pair(chart_bpms_opt);
     let bpms_to_use = chart_bpms_norm
