@@ -325,33 +325,57 @@ fn replace_entity_text(text: &mut String) {
     *text = out;
 }
 
-#[inline(always)]
-fn find_unicode_marker(text: &str, start: usize) -> Option<(usize, bool)> {
-    let slice = &text[start..];
-    let dec_pos = slice.find("&#").map(|d| start + d);
-    let hex_pos = slice.find("&x").map(|h| start + h);
-    match (dec_pos, hex_pos) {
-        (Some(d), Some(h)) => {
-            if d <= h { Some((d, false)) } else { Some((h, true)) }
-        }
-        (Some(d), None) => Some((d, false)),
-        (None, Some(h)) => Some((h, true)),
-        (None, None) => None,
-    }
-}
-
 fn replace_unicode_markers(text: &mut String) {
-    let mut start = 0;
+    if !text.contains('&') {
+        return;
+    }
+    let input = text.as_str();
+    let bytes = input.as_bytes();
+    let len = input.len();
     let invalid = char::from_u32(INVALID_CODEPOINT).unwrap();
-    let mut buf = [0u8; 4];
-    while start < text.len() {
-        let Some((pos, hex)) = find_unicode_marker(text, start) else {
-            break;
+    let mut out = String::with_capacity(len);
+    let mut offset = 0;
+
+    while offset < len {
+        let start = match input[offset..].find('&') {
+            Some(pos) => offset + pos,
+            None => {
+                out.push_str(&input[offset..]);
+                *text = out;
+                return;
+            }
         };
-        let mut p = pos + 2;
-        let bytes = text.as_bytes();
+        out.push_str(&input[offset..start]);
+        let after_amp = start + 1;
+        if after_amp >= len {
+            out.push('&');
+            offset = after_amp;
+            break;
+        }
+        let next = bytes[after_amp];
+        let (hex, digits_start) = if next == b'#' {
+            if after_amp + 1 >= len {
+                out.push('&');
+                offset = after_amp;
+                continue;
+            }
+            let third = bytes[after_amp + 1];
+            if third == b'x' || third == b'X' {
+                (true, after_amp + 2)
+            } else {
+                (false, after_amp + 1)
+            }
+        } else if next == b'x' || next == b'X' {
+            (true, after_amp + 1)
+        } else {
+            out.push('&');
+            offset = after_amp;
+            continue;
+        };
+
+        let mut p = digits_start;
         let mut digits = 0;
-        while p < text.len() {
+        while p < len {
             let b = bytes[p];
             let ok = if hex { b.is_ascii_hexdigit() } else { b.is_ascii_digit() };
             if !ok {
@@ -360,11 +384,13 @@ fn replace_unicode_markers(text: &mut String) {
             p += 1;
             digits += 1;
         }
-        if digits == 0 || p >= text.len() || bytes[p] != b';' {
-            start = pos + 1;
+        if digits == 0 || p >= len || bytes[p] != b';' {
+            out.push('&');
+            offset = after_amp;
             continue;
         }
-        let num_str = &text[pos + 2..p];
+
+        let num_str = &input[digits_start..p];
         let mut value = if hex {
             u32::from_str_radix(num_str, 16).unwrap_or(INVALID_CODEPOINT)
         } else {
@@ -374,10 +400,14 @@ fn replace_unicode_markers(text: &mut String) {
             value = INVALID_CODEPOINT;
         }
         let ch = char::from_u32(value).unwrap_or(invalid);
-        let replacement = ch.encode_utf8(&mut buf);
-        text.replace_range(pos..=p, replacement);
-        start = pos + replacement.len();
+        out.push(ch);
+        offset = p + 1;
     }
+
+    if offset < len {
+        out.push_str(&input[offset..]);
+    }
+    *text = out;
 }
 
 /// Replace &alias; markers and unicode markers in place, matching ITGmania behavior.
