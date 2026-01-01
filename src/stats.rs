@@ -113,6 +113,29 @@ fn trim_cr(line: &[u8]) -> &[u8] {
     }
 }
 
+#[inline(always)]
+fn trim_leading_ws(line: &[u8]) -> &[u8] {
+    if line.is_empty() || !line[0].is_ascii_whitespace() {
+        return line;
+    }
+    let mut start = 1usize;
+    while start < line.len() && line[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    &line[start..]
+}
+
+#[inline(always)]
+fn has_step<const LANES: usize>(line: &[u8]) -> bool {
+    for i in 0..LANES {
+        let b = line[i];
+        if b == b'1' || b == b'2' || b == b'4' {
+            return true;
+        }
+    }
+    false
+}
+
 fn scan_minimized_rows_for_holds<const LANES: usize>(
     minimized_note_data: &[u8],
 ) -> (Vec<[usize; LANES]>, Vec<usize>) {
@@ -700,12 +723,13 @@ pub fn minimize_chart_and_count_with_lanes(
 }
 
 #[inline(always)]
-fn line_has_object<const LANES: usize>(
-    line: &[u8; LANES],
+pub(crate) fn line_has_object<const LANES: usize>(
+    line: &[u8],
     hold_depths: &mut [u32; LANES],
 ) -> bool {
     let mut has_object = false;
-    for (col, &ch) in line.iter().enumerate() {
+    for col in 0..LANES {
+        let ch = line[col];
         match ch {
             b'1' | b'M' | b'K' | b'L' | b'F' => {
                 has_object = true;
@@ -726,7 +750,7 @@ fn line_has_object<const LANES: usize>(
 }
 
 #[inline(always)]
-fn calc_last_beat(
+pub(crate) fn calc_last_beat(
     last_measure_idx: Option<usize>,
     last_row_in_measure: usize,
     last_rows_in_measure: usize,
@@ -826,31 +850,27 @@ fn measure_densities_impl<const LANES: usize>(notes_data: &[u8]) -> Vec<usize> {
     let mut saw_semicolon = false;
 
     for line_raw in notes_data.split(|&b| b == b'\n') {
-        let mut start = 0usize;
-        while start < line_raw.len() && line_raw[start].is_ascii_whitespace() {
-            start += 1;
+        let line = trim_leading_ws(line_raw);
+        if line.is_empty() {
+            continue;
         }
-        let line = &line_raw[start..];
-
-        if line.is_empty() || line.first() == Some(&b'/') {
+        let first = line[0];
+        if first == b'/' {
             continue;
         }
 
-        match line.first() {
-            Some(b',') => {
+        match first {
+            b',' => {
                 densities.push(density);
                 density = 0;
             }
-            Some(b';') => {
+            b';' => {
                 densities.push(density);
                 saw_semicolon = true;
                 break;
             }
-            Some(_) if line.len() >= LANES => {
-                if line[..LANES]
-                    .iter()
-                    .any(|&b| matches!(b, b'1' | b'2' | b'4'))
-                {
+            _ if line.len() >= LANES => {
+                if has_step::<LANES>(line) {
                     density += 1;
                 }
             }

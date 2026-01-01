@@ -701,123 +701,148 @@ fn compute_last_beat_impl<const LANES: usize>(minimized_note_data: &[u8]) -> f64
     crate::timing::note_row_to_beat(row)
 }
 
-fn update_last_object_for_measure<const LANES: usize>(
-    measure: &mut Vec<[u8; LANES]>,
+#[inline(always)]
+fn trim_leading_ws(line: &[u8]) -> &[u8] {
+    if line.is_empty() || !line[0].is_ascii_whitespace() {
+        return line;
+    }
+    let mut start = 1usize;
+    while start < line.len() && line[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    &line[start..]
+}
+
+#[inline(always)]
+fn line_is_all_zero<const LANES: usize>(line: &[u8]) -> bool {
+    for i in 0..LANES {
+        if line[i] != b'0' {
+            return false;
+        }
+    }
+    true
+}
+
+#[inline(always)]
+fn finalize_last_measure(
     measure_idx: usize,
-    hold_depths: &mut [u32; LANES],
+    row_count: usize,
+    min_tz_nonzero: u32,
+    last_row_raw: usize,
+    has_object: bool,
     last_measure_idx: &mut Option<usize>,
-    last_row_in_measure: &mut usize,
-    last_rows_in_measure: &mut usize,
+    last_row_min: &mut usize,
+    last_rows_min: &mut usize,
 ) {
-    if measure.is_empty() {
+    if row_count == 0 || !has_object {
         return;
     }
-    crate::stats::minimize_measure(measure);
-    let rows_in_measure = measure.len();
-
-    for (row_idx, row) in measure.iter().enumerate() {
-        let mut has_object = false;
-        for (col, &ch) in row.iter().enumerate() {
-            match ch {
-                b'1' | b'M' | b'K' | b'L' | b'F' => {
-                    has_object = true;
-                }
-                b'2' | b'4' => {
-                    hold_depths[col] = hold_depths[col].saturating_add(1);
-                }
-                b'3' => {
-                    if hold_depths[col] > 0 {
-                        hold_depths[col] -= 1;
-                        has_object = true;
-                    }
-                }
-                _ => {}
-            }
-        }
-        if has_object {
-            *last_measure_idx = Some(measure_idx);
-            *last_row_in_measure = row_idx;
-            *last_rows_in_measure = rows_in_measure;
-        }
-    }
-
-    measure.clear();
+    let tz_rows = row_count.trailing_zeros();
+    let k = if min_tz_nonzero == u32::MAX {
+        tz_rows
+    } else if min_tz_nonzero < tz_rows {
+        min_tz_nonzero
+    } else {
+        tz_rows
+    } as usize;
+    let rows_min = row_count >> k;
+    let row_min = last_row_raw >> k;
+    *last_measure_idx = Some(measure_idx);
+    *last_row_min = row_min;
+    *last_rows_min = rows_min;
 }
 
 fn compute_last_beat_from_chart_data_impl<const LANES: usize>(notes_data: &[u8]) -> f64 {
-    let mut measure = Vec::with_capacity(64);
     let mut hold_depths = [0u32; LANES];
     let mut last_measure_idx: Option<usize> = None;
-    let mut last_row_in_measure: usize = 0;
-    let mut last_rows_in_measure: usize = 0;
+    let mut last_row_min = 0usize;
+    let mut last_rows_min = 0usize;
     let mut measure_idx = 0usize;
+    let mut row_in_measure = 0usize;
+    let mut min_tz_nonzero = u32::MAX;
+    let mut last_row_raw = 0usize;
+    let mut has_object = false;
     let mut saw_semicolon = false;
 
     for line_raw in notes_data.split(|&b| b == b'\n') {
-        let mut start = 0usize;
-        while start < line_raw.len() && line_raw[start].is_ascii_whitespace() {
-            start += 1;
+        let line = trim_leading_ws(line_raw);
+        if line.is_empty() {
+            continue;
         }
-        let line = &line_raw[start..];
-
-        if line.is_empty() || line.first() == Some(&b'/') {
+        let first = line[0];
+        if first == b'/' {
             continue;
         }
 
-        match line.first() {
-            Some(b',') => {
-                update_last_object_for_measure(
-                    &mut measure,
+        match first {
+            b',' => {
+                finalize_last_measure(
                     measure_idx,
-                    &mut hold_depths,
+                    row_in_measure,
+                    min_tz_nonzero,
+                    last_row_raw,
+                    has_object,
                     &mut last_measure_idx,
-                    &mut last_row_in_measure,
-                    &mut last_rows_in_measure,
+                    &mut last_row_min,
+                    &mut last_rows_min,
                 );
                 measure_idx += 1;
+                row_in_measure = 0;
+                min_tz_nonzero = u32::MAX;
+                last_row_raw = 0;
+                has_object = false;
+                continue;
             }
-            Some(b';') => {
-                update_last_object_for_measure(
-                    &mut measure,
+            b';' => {
+                finalize_last_measure(
                     measure_idx,
-                    &mut hold_depths,
+                    row_in_measure,
+                    min_tz_nonzero,
+                    last_row_raw,
+                    has_object,
                     &mut last_measure_idx,
-                    &mut last_row_in_measure,
-                    &mut last_rows_in_measure,
+                    &mut last_row_min,
+                    &mut last_rows_min,
                 );
                 saw_semicolon = true;
                 break;
             }
-            Some(_) if line.len() >= LANES => {
-                let mut arr = [0u8; LANES];
-                arr.copy_from_slice(&line[..LANES]);
-                measure.push(arr);
-            }
             _ => {}
         }
+
+        if line.len() < LANES {
+            continue;
+        }
+
+        if row_in_measure != 0 && !line_is_all_zero::<LANES>(line) {
+            let tz = row_in_measure.trailing_zeros();
+            if tz < min_tz_nonzero {
+                min_tz_nonzero = tz;
+            }
+        }
+
+        if crate::stats::line_has_object::<LANES>(line, &mut hold_depths) {
+            has_object = true;
+            last_row_raw = row_in_measure;
+        }
+
+        row_in_measure += 1;
     }
 
     if !saw_semicolon {
-        update_last_object_for_measure(
-            &mut measure,
+        finalize_last_measure(
             measure_idx,
-            &mut hold_depths,
+            row_in_measure,
+            min_tz_nonzero,
+            last_row_raw,
+            has_object,
             &mut last_measure_idx,
-            &mut last_row_in_measure,
-            &mut last_rows_in_measure,
+            &mut last_row_min,
+            &mut last_rows_min,
         );
     }
 
-    let Some(measure_idx) = last_measure_idx else {
-        return 0.0;
-    };
-
-    let total_rows_in_measure = last_rows_in_measure.max(1) as f64;
-    let row_index = last_row_in_measure as f64;
-    let beats_into_measure = 4.0 * (row_index / total_rows_in_measure);
-    let beat = (measure_idx as f64) * 4.0 + beats_into_measure;
-    let row = crate::timing::beat_to_note_row(beat);
-    crate::timing::note_row_to_beat(row)
+    crate::stats::calc_last_beat(last_measure_idx, last_row_min, last_rows_min)
 }
 
 /// Computes the beat of the last playable object in the chart from minimized note data.
