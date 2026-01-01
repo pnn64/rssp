@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::parse::{
     decode_bytes,
     extract_sections,
@@ -104,6 +106,18 @@ pub fn clean_timing_map(param: &str) -> String {
     }
 
     out
+}
+
+pub fn clean_timing_map_cow(param: &str) -> Cow<'_, str> {
+    if param.is_empty() {
+        return Cow::Borrowed("");
+    }
+    for entry in param.split(',') {
+        if entry.is_empty() || entry.trim() != entry || entry.chars().any(|c| c.is_control()) {
+            return Cow::Owned(clean_timing_map(param));
+        }
+    }
+    Cow::Borrowed(param)
 }
 
 pub fn normalize_chart_tag(tag: Option<Vec<u8>>) -> Option<String> {

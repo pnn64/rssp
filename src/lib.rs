@@ -245,7 +245,8 @@ fn parse_radar_values_str(
     raw: &str,
     split_players: bool,
 ) -> Option<[f32; RADAR_CATEGORY_COUNT]> {
-    let cleaned = clean_timing_map(raw);
+    let cleaned = clean_timing_map_cow(raw);
+    let cleaned = cleaned.as_ref();
     if cleaned.is_empty() {
         return None;
     }

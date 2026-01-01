@@ -1,4 +1,4 @@
-use crate::bpm::{clean_timing_map, parse_beat_or_row, parse_bpm_map};
+use crate::bpm::{clean_timing_map_cow, parse_beat_or_row, parse_bpm_map};
 use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,8 +236,8 @@ where
     F: Fn(&str) -> Result<Vec<T>, &'static str>,
 {
     let s = chart_val.filter(|s| !s.is_empty()).unwrap_or(global_val);
-    let cleaned = clean_timing_map(s);
-    parser(&cleaned).unwrap_or_else(|_| vec![])
+    let cleaned = clean_timing_map_cow(s);
+    parser(cleaned.as_ref()).unwrap_or_else(|_| vec![])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -277,8 +277,8 @@ pub fn compute_timing_segments(
     format: TimingFormat,
 ) -> TimingSegments {
     let bpms_str = chart_bpms.filter(|s| !s.is_empty()).unwrap_or(global_bpms);
-    let cleaned_bpms = clean_timing_map(bpms_str);
-    let mut parsed_bpms: Vec<(f64, f64)> = parse_bpm_map(&cleaned_bpms);
+    let cleaned_bpms = clean_timing_map_cow(bpms_str);
+    let mut parsed_bpms: Vec<(f64, f64)> = parse_bpm_map(cleaned_bpms.as_ref());
 
     if parsed_bpms.is_empty() {
         parsed_bpms.push((0.0, DEFAULT_BPM));
@@ -564,8 +564,8 @@ impl TimingData {
         format: TimingFormat,
     ) -> Self {
         let bpms_str = chart_bpms.filter(|s| !s.is_empty()).unwrap_or(global_bpms);
-        let cleaned_bpms = clean_timing_map(bpms_str);
-        let mut parsed_bpms: Vec<(f64, f64)> = parse_bpm_map(&cleaned_bpms);
+        let cleaned_bpms = clean_timing_map_cow(bpms_str);
+        let mut parsed_bpms: Vec<(f64, f64)> = parse_bpm_map(cleaned_bpms.as_ref());
 
         if parsed_bpms.is_empty() {
             parsed_bpms.push((0.0, DEFAULT_BPM));
