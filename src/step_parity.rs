@@ -2235,6 +2235,14 @@ fn trim_ascii_whitespace(mut line: &[u8]) -> &[u8] {
     line
 }
 
+#[inline(always)]
+fn count_measure_rows(measure: &[u8]) -> usize {
+    measure
+        .split(|&b| b == b'\n')
+        .filter(|line| !trim_ascii_whitespace(*line).is_empty())
+        .count()
+}
+
 fn parse_chart_rows(
     note_data: &[u8],
     bpm_map: &[(f64, f64)],
@@ -2248,42 +2256,35 @@ fn parse_chart_rows(
     }
 
     for measure in note_data.split(|&b| b == b',') {
-        if measure.is_empty() {
-            continue;
-        }
-        let lines: Vec<&[u8]> = measure
-            .split(|&b| b == b'\n')
-            .filter_map(|line| {
-                let trimmed = trim_ascii_whitespace(line);
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed)
-                }
-            })
-            .collect();
-        let num_rows = lines.len();
+        let num_rows = count_measure_rows(measure);
         if num_rows == 0 {
             measure_index += 1;
             continue;
         }
 
-        for (i, line) in lines.iter().enumerate() {
-            let percent = i as f32 / num_rows as f32;
-            let beat = (measure_index as f32 + percent) * 4.0;
+        rows.reserve(num_rows);
+        let measure_start = measure_index as f32 * 4.0;
+        let row_step = 4.0 / num_rows as f32;
+        let mut row_in_measure = 0usize;
+        for line in measure.split(|&b| b == b'\n') {
+            let trimmed = trim_ascii_whitespace(line);
+            if trimmed.is_empty() {
+                continue;
+            }
+            let beat = measure_start + row_in_measure as f32 * row_step;
             let note_row = beat_to_note_row_f32_exact(beat);
             let beat = note_row as f32 / ROWS_PER_BEAT as f32;
             let second = beat_to_time(beat as f64, bpm_map, offset);
             let mut chars = vec![b'0'; column_count];
-            for (col, ch) in line.iter().take(column_count).enumerate() {
-                chars[col] = *ch;
-            }
+            let copy_len = trimmed.len().min(column_count);
+            chars[..copy_len].copy_from_slice(&trimmed[..copy_len]);
             rows.push(ParsedRow {
                 chars,
                 row: note_row,
                 beat,
                 second: second as f32,
             });
+            row_in_measure += 1;
         }
 
         measure_index += 1;
@@ -2313,50 +2314,42 @@ fn parse_chart_rows_with_timing(
     }
 
     for measure in note_data.split(|&b| b == b',') {
-        if measure.is_empty() {
-            continue;
-        }
-        let lines: Vec<&[u8]> = measure
-            .split(|&b| b == b'\n')
-            .filter_map(|line| {
-                let trimmed = trim_ascii_whitespace(line);
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed)
-                }
-            })
-            .collect();
-        let num_rows = lines.len();
+        let num_rows = count_measure_rows(measure);
         if num_rows == 0 {
             measure_index += 1;
             continue;
         }
 
-        for (i, line) in lines.iter().enumerate() {
-            let percent = i as f32 / num_rows as f32;
-            let beat = (measure_index as f32 + percent) * 4.0;
+        rows.reserve(num_rows);
+        let measure_start = measure_index as f32 * 4.0;
+        let row_step = 4.0 / num_rows as f32;
+        let mut row_in_measure = 0usize;
+        for line in measure.split(|&b| b == b'\n') {
+            let trimmed = trim_ascii_whitespace(line);
+            if trimmed.is_empty() {
+                continue;
+            }
+            let beat = measure_start + row_in_measure as f32 * row_step;
             let note_row = beat_to_note_row_f32_exact(beat);
             let beat = note_row as f32 / ROWS_PER_BEAT as f32;
             let second = timing.get_time_for_beat_f32(beat as f64);
             let mut chars = vec![b'0'; column_count];
-            for (col, ch) in line.iter().take(column_count).enumerate() {
-                chars[col] = *ch;
-            }
-            let row_index = rows.len();
+            let copy_len = trimmed.len().min(column_count);
+            chars[..copy_len].copy_from_slice(&trimmed[..copy_len]);
             rows.push(ParsedRow {
                 chars,
                 row: note_row,
                 beat,
                 second: second as f32,
             });
+            let row_index = rows.len() - 1;
             if dump_rows {
                 let row_text = String::from_utf8_lossy(&rows[row_index].chars);
                 eprintln!(
                     "STEP_PARITY_ROW idx={} measure={} line={}/{} row={} beat={:.6} second={:.6} data={}",
                     row_index,
                     measure_index,
-                    i,
+                    row_in_measure,
                     num_rows,
                     note_row,
                     beat,
@@ -2364,6 +2357,7 @@ fn parse_chart_rows_with_timing(
                     row_text
                 );
             }
+            row_in_measure += 1;
         }
 
         measure_index += 1;
