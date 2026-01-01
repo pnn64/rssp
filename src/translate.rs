@@ -283,58 +283,81 @@ fn alias_lookup(aliases: &HashMap<&'static str, char>, element: &str) -> Option<
     aliases.get(lowered.as_str()).copied()
 }
 
-fn replace_entity_text(text: &mut String) {
-    let aliases = alias_map();
-    if !text.contains('&') {
-        return;
+#[inline(always)]
+fn parse_numeric_marker(element: &str, invalid: char) -> Option<char> {
+    let bytes = element.as_bytes();
+    if bytes.is_empty() {
+        return None;
     }
-    let mut out = String::with_capacity(text.len());
-    let mut offset = 0;
-    while offset < text.len() {
-        let start = match text[offset..].find('&') {
-            Some(pos) => offset + pos,
-            None => {
-                out.push_str(&text[offset..]);
-                *text = out;
-                return;
+    let (hex, digits_start) = match bytes[0] {
+        b'#' => {
+            if bytes.len() < 2 {
+                return None;
             }
-        };
-        out.push_str(&text[offset..start]);
-        let rest = &text[start + 1..];
-        let next_amp = rest.find('&');
-        let next_semi = rest.find(';');
-        let end = match (next_amp, next_semi) {
-            (Some(a), Some(s)) => if a < s { None } else { Some(start + 1 + s) },
-            (Some(_), None) => None,
-            (None, Some(s)) => Some(start + 1 + s),
-            (None, None) => None,
-        };
-        if let Some(end_idx) = end {
-            let element = &text[start + 1..end_idx];
-            if let Some(repl) = alias_lookup(aliases, element) {
-                out.push(repl);
+            if bytes[1] == b'x' || bytes[1] == b'X' {
+                (true, 2)
             } else {
-                out.push_str(&text[start..=end_idx]);
+                (false, 1)
             }
-            offset = end_idx + 1;
-        } else {
-            out.push('&');
-            offset = start + 1;
+        }
+        b'x' | b'X' => (true, 1),
+        _ => return None,
+    };
+    if digits_start >= bytes.len() {
+        return None;
+    }
+
+    let mut value = 0u32;
+    let mut overflow = false;
+    if hex {
+        for &b in &bytes[digits_start..] {
+            let digit = match b {
+                b'0'..=b'9' => (b - b'0') as u32,
+                b'a'..=b'f' => (b - b'a' + 10) as u32,
+                b'A'..=b'F' => (b - b'A' + 10) as u32,
+                _ => return None,
+            };
+            if !overflow {
+                if let Some(next) = value.checked_mul(16).and_then(|v| v.checked_add(digit)) {
+                    value = next;
+                } else {
+                    overflow = true;
+                }
+            }
+        }
+    } else {
+        for &b in &bytes[digits_start..] {
+            if !b.is_ascii_digit() {
+                return None;
+            }
+            let digit = (b - b'0') as u32;
+            if !overflow {
+                if let Some(next) = value.checked_mul(10).and_then(|v| v.checked_add(digit)) {
+                    value = next;
+                } else {
+                    overflow = true;
+                }
+            }
         }
     }
-    *text = out;
+
+    if overflow || value > 0xFFFF {
+        value = INVALID_CODEPOINT;
+    }
+    Some(char::from_u32(value).unwrap_or(invalid))
 }
 
-fn replace_unicode_markers(text: &mut String) {
+/// Replace &alias; markers and unicode markers in place, matching ITGmania behavior.
+pub fn replace_markers_in_place(text: &mut String) {
     if !text.contains('&') {
         return;
     }
+    let aliases = alias_map();
     let input = text.as_str();
-    let bytes = input.as_bytes();
     let len = input.len();
     let invalid = char::from_u32(INVALID_CODEPOINT).unwrap();
     let mut out = String::with_capacity(len);
-    let mut offset = 0;
+    let mut offset = 0usize;
 
     while offset < len {
         let start = match input[offset..].find('&') {
@@ -352,68 +375,37 @@ fn replace_unicode_markers(text: &mut String) {
             offset = after_amp;
             break;
         }
-        let next = bytes[after_amp];
-        let (hex, digits_start) = if next == b'#' {
-            if after_amp + 1 >= len {
-                out.push('&');
-                offset = after_amp;
-                continue;
-            }
-            let third = bytes[after_amp + 1];
-            if third == b'x' || third == b'X' {
-                (true, after_amp + 2)
-            } else {
-                (false, after_amp + 1)
-            }
-        } else if next == b'x' || next == b'X' {
-            (true, after_amp + 1)
-        } else {
+        let rest = &input[after_amp..];
+        let next_amp = rest.find('&');
+        let next_semi = rest.find(';');
+        let end = match (next_amp, next_semi) {
+            (Some(a), Some(s)) => if a < s { None } else { Some(after_amp + s) },
+            (Some(_), None) => None,
+            (None, Some(s)) => Some(after_amp + s),
+            (None, None) => None,
+        };
+        let Some(end_idx) = end else {
             out.push('&');
             offset = after_amp;
             continue;
         };
-
-        let mut p = digits_start;
-        let mut digits = 0;
-        while p < len {
-            let b = bytes[p];
-            let ok = if hex { b.is_ascii_hexdigit() } else { b.is_ascii_digit() };
-            if !ok {
-                break;
-            }
-            p += 1;
-            digits += 1;
-        }
-        if digits == 0 || p >= len || bytes[p] != b';' {
-            out.push('&');
-            offset = after_amp;
+        let element = &input[after_amp..end_idx];
+        let repl = alias_lookup(aliases, element)
+            .or_else(|| parse_numeric_marker(element, invalid));
+        if let Some(repl) = repl {
+            out.push(repl);
+            offset = end_idx + 1;
             continue;
         }
 
-        let num_str = &input[digits_start..p];
-        let mut value = if hex {
-            u32::from_str_radix(num_str, 16).unwrap_or(INVALID_CODEPOINT)
-        } else {
-            num_str.parse::<u32>().unwrap_or(INVALID_CODEPOINT)
-        };
-        if value > 0xFFFF {
-            value = INVALID_CODEPOINT;
-        }
-        let ch = char::from_u32(value).unwrap_or(invalid);
-        out.push(ch);
-        offset = p + 1;
+        out.push_str(&input[start..=end_idx]);
+        offset = end_idx + 1;
     }
 
     if offset < len {
         out.push_str(&input[offset..]);
     }
     *text = out;
-}
-
-/// Replace &alias; markers and unicode markers in place, matching ITGmania behavior.
-pub fn replace_markers_in_place(text: &mut String) {
-    replace_entity_text(text);
-    replace_unicode_markers(text);
 }
 
 /// Replace &alias; markers and unicode markers, returning an updated string.
