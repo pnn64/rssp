@@ -253,11 +253,12 @@ static ALIAS_ENTRIES: &[(&str, u32)] = &[
     ("auxback", INTERNAL_CODEPOINT),
 ];
 
-fn alias_map() -> &'static HashMap<String, String> {
-    static MAP: OnceLock<HashMap<String, String>> = OnceLock::new();
+fn alias_map() -> &'static HashMap<&'static str, char> {
+    static MAP: OnceLock<HashMap<&'static str, char>> = OnceLock::new();
     MAP.get_or_init(|| {
         let mut map = HashMap::with_capacity(ALIAS_ENTRIES.len());
         let mut next_internal = INTERNAL_CODEPOINT;
+        let invalid = char::from_u32(INVALID_CODEPOINT).unwrap();
         for (alias, codepoint) in ALIAS_ENTRIES {
             let value = if *codepoint == INTERNAL_CODEPOINT {
                 let current = next_internal;
@@ -266,12 +267,20 @@ fn alias_map() -> &'static HashMap<String, String> {
             } else {
                 *codepoint
             };
-            let key = alias.to_ascii_lowercase();
-            let ch = char::from_u32(value).unwrap_or(char::from_u32(INVALID_CODEPOINT).unwrap());
-            map.insert(key, ch.to_string());
+            let ch = char::from_u32(value).unwrap_or(invalid);
+            map.insert(*alias, ch);
         }
         map
     })
+}
+
+#[inline(always)]
+fn alias_lookup(aliases: &HashMap<&'static str, char>, element: &str) -> Option<char> {
+    if element.as_bytes().iter().all(|b| !b.is_ascii_uppercase()) {
+        return aliases.get(element).copied();
+    }
+    let lowered = element.to_ascii_lowercase();
+    aliases.get(lowered.as_str()).copied()
 }
 
 fn replace_entity_text(text: &mut String) {
@@ -302,9 +311,8 @@ fn replace_entity_text(text: &mut String) {
         };
         if let Some(end_idx) = end {
             let element = &text[start + 1..end_idx];
-            let key = element.to_ascii_lowercase();
-            if let Some(repl) = aliases.get(&key) {
-                out.push_str(repl);
+            if let Some(repl) = alias_lookup(aliases, element) {
+                out.push(repl);
             } else {
                 out.push_str(&text[start..=end_idx]);
             }
@@ -317,31 +325,35 @@ fn replace_entity_text(text: &mut String) {
     *text = out;
 }
 
+#[inline(always)]
+fn find_unicode_marker(text: &str, start: usize) -> Option<(usize, bool)> {
+    let slice = &text[start..];
+    let dec_pos = slice.find("&#").map(|d| start + d);
+    let hex_pos = slice.find("&x").map(|h| start + h);
+    match (dec_pos, hex_pos) {
+        (Some(d), Some(h)) => {
+            if d <= h { Some((d, false)) } else { Some((h, true)) }
+        }
+        (Some(d), None) => Some((d, false)),
+        (None, Some(h)) => Some((h, true)),
+        (None, None) => None,
+    }
+}
+
 fn replace_unicode_markers(text: &mut String) {
     let mut start = 0;
-    loop {
-        if start >= text.len() {
-            break;
-        }
-        let dec_pos = text[start..].find("&#");
-        let (pos, hex) = if let Some(d) = dec_pos {
-            (start + d, false)
-        } else if let Some(h) = text[start..].find("&x") {
-            (start + h, true)
-        } else {
+    let invalid = char::from_u32(INVALID_CODEPOINT).unwrap();
+    let mut buf = [0u8; 4];
+    while start < text.len() {
+        let Some((pos, hex)) = find_unicode_marker(text, start) else {
             break;
         };
-        start = pos + 1;
         let mut p = pos + 2;
         let bytes = text.as_bytes();
         let mut digits = 0;
         while p < text.len() {
             let b = bytes[p];
-            let ok = if hex {
-                b.is_ascii_hexdigit()
-            } else {
-                b.is_ascii_digit()
-            };
+            let ok = if hex { b.is_ascii_hexdigit() } else { b.is_ascii_digit() };
             if !ok {
                 break;
             }
@@ -349,6 +361,7 @@ fn replace_unicode_markers(text: &mut String) {
             digits += 1;
         }
         if digits == 0 || p >= text.len() || bytes[p] != b';' {
+            start = pos + 1;
             continue;
         }
         let num_str = &text[pos + 2..p];
@@ -360,8 +373,10 @@ fn replace_unicode_markers(text: &mut String) {
         if value > 0xFFFF {
             value = INVALID_CODEPOINT;
         }
-        let ch = char::from_u32(value).unwrap_or(char::from_u32(INVALID_CODEPOINT).unwrap());
-        text.replace_range(pos..=p, ch.to_string().as_str());
+        let ch = char::from_u32(value).unwrap_or(invalid);
+        let replacement = ch.encode_utf8(&mut buf);
+        text.replace_range(pos..=p, replacement);
+        start = pos + replacement.len();
     }
 }
 
