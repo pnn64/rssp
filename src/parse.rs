@@ -342,23 +342,19 @@ pub fn extract_sections<'a>(
 fn parse_tag(data: &[u8], tag_len: usize) -> Option<&[u8]> {
     let slice = data.get(tag_len..)?;
     let mut i = 0;
+    let mut bs_run = 0usize;
     while i < slice.len() {
         match slice[i] {
             b';' => {
-                // Count preceding backslashes to determine if this semicolon is escaped
-                let mut bs_count = 0;
-                let mut j = i;
-                while j > 0 && slice[j - 1] == b'\\' {
-                    bs_count += 1;
-                    j -= 1;
-                }
-                if bs_count % 2 == 0 {
+                if bs_run % 2 == 0 {
                     return Some(&slice[..i]);
                 }
+                bs_run = 0;
             }
             // Fallback for malformed tags missing a terminating semicolon: if the next
             // line starts a new tag (`#...:`), stop at this line break.
             b'\n' | b'\r' => {
+                bs_run = 0;
                 let mut j = i + 1;
                 // Handle CRLF.
                 if slice[i] == b'\r' && j < slice.len() && slice[j] == b'\n' {
@@ -377,7 +373,13 @@ fn parse_tag(data: &[u8], tag_len: usize) -> Option<&[u8]> {
                     return Some(&slice[..i]);
                 }
             }
+            b'\\' => {
+                bs_run += 1;
+            }
             _ => {}
+        }
+        if slice[i] != b'\\' {
+            bs_run = 0;
         }
         i += 1;
     }
