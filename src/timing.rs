@@ -201,15 +201,9 @@ pub fn compute_row_to_beat(minimized_note_data: &[u8]) -> Vec<f32> {
         let rows = num_rows_in_measure as f32;
         let measure_start = measure_index as f32 * 4.0;
         let row_step = 4.0 / rows;
-        let mut row_in_measure = 0usize;
-        for line in measure_bytes.split(|&b| b == b'\n') {
-            let trimmed = trim_ascii_whitespace(line);
-            if trimmed.is_empty() {
-                continue;
-            }
+        for row_in_measure in 0..num_rows_in_measure {
             let beat = measure_start + row_in_measure as f32 * row_step;
             row_to_beat.push(beat);
-            row_in_measure += 1;
         }
         measure_index += 1;
     }
@@ -218,30 +212,23 @@ pub fn compute_row_to_beat(minimized_note_data: &[u8]) -> Vec<f32> {
 }
 
 #[inline(always)]
-fn trim_ascii_whitespace(mut line: &[u8]) -> &[u8] {
-    while let Some((&first, rest)) = line.split_first() {
-        if first.is_ascii_whitespace() {
-            line = rest;
-        } else {
-            break;
-        }
-    }
-    while let Some((&last, rest)) = line.split_last() {
-        if last.is_ascii_whitespace() {
-            line = rest;
-        } else {
-            break;
-        }
-    }
-    line
-}
-
-#[inline(always)]
 fn count_measure_rows(measure: &[u8]) -> usize {
-    measure
-        .split(|&b| b == b'\n')
-        .filter(|line| !trim_ascii_whitespace(*line).is_empty())
-        .count()
+    let mut count = 0usize;
+    let mut has_non_ws = false;
+    for &b in measure {
+        if b == b'\n' {
+            if has_non_ws {
+                count += 1;
+                has_non_ws = false;
+            }
+        } else if !b.is_ascii_whitespace() {
+            has_non_ws = true;
+        }
+    }
+    if has_non_ws {
+        count += 1;
+    }
+    count
 }
 
 fn parse_optional_timing<T, F>(chart_val: Option<&str>, global_val: &str, parser: F) -> Vec<T>
