@@ -438,7 +438,7 @@ fn build_chart_summary(
     allow_steps_timing: bool,
     compiled_custom_patterns: &[CompiledPattern],
     options: &AnalysisOptions,
-) -> Option<ChartSummary> {
+) -> Option<(ChartSummary, i32)> {
     let chart_start_time = Instant::now();
 
     let (fields, chart_data) = split_notes_fields(&notes_data);
@@ -467,7 +467,7 @@ fn build_chart_summary(
     let tech_notation_str = parse_tech_notation(&credit, &description);
 
     let lanes = step_type_lanes(&step_type_str);
-    let (mut minimized_chart, stats, measure_densities) =
+    let (mut minimized_chart, mut stats, measure_densities) =
         minimize_chart_and_count_with_lanes(chart_data, lanes);
     if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
         minimized_chart.truncate(pos + 1);
@@ -573,31 +573,6 @@ fn build_chart_summary(
         .iter()
         .map(|(beat, bpm)| (*beat as f64, *bpm as f64))
         .collect();
-    let target_beat = compute_last_beat_from_chart_data(chart_data, lanes);
-    let duration_seconds = if target_beat <= 0.0 {
-        0.0
-    } else {
-        let timing = TimingData::from_chart_data(
-            chart_offset,
-            0.0,
-            chart_bpms_timing,
-            timing_bpms_global,
-            chart_stops_timing,
-            timing_stops_global,
-            chart_delays_timing,
-            timing_delays_global,
-            chart_warps_timing,
-            timing_warps_global,
-            chart_speeds_timing,
-            timing_speeds_global,
-            chart_scrolls_timing,
-            timing_scrolls_global,
-            chart_fakes_timing,
-            timing_fakes_global,
-            timing_format,
-        );
-        round_millis(timing.get_time_for_beat_f32(target_beat))
-    };
 
     let metrics =
         compute_derived_chart_metrics(&measure_densities, &bpm_map, &minimized_chart, &bpms_to_use);
@@ -629,11 +604,57 @@ fn build_chart_summary(
         Vec::new()
     };
 
-    let tech_counts = step_parity::TechCounts::default();
+    let timing = TimingData::from_chart_data(
+        chart_offset,
+        0.0,
+        chart_bpms_timing,
+        timing_bpms_global,
+        chart_stops_timing,
+        timing_stops_global,
+        chart_delays_timing,
+        timing_delays_global,
+        chart_warps_timing,
+        timing_warps_global,
+        chart_speeds_timing,
+        timing_speeds_global,
+        chart_scrolls_timing,
+        timing_scrolls_global,
+        chart_fakes_timing,
+        timing_fakes_global,
+        timing_format,
+    );
+
+    let last_beat = compute_last_beat(&minimized_chart, lanes);
+    let (duration_seconds, chart_length) = if last_beat <= 0.0 {
+        (0.0, 0)
+    } else {
+        let time_chart_f32 = timing.get_time_for_beat_f32(last_beat);
+        let time_chart_f64 = timing.get_time_for_beat(last_beat);
+        let duration = round_millis(time_chart_f32);
+        let length = (time_chart_f64 + (song_offset - chart_offset)).floor() as i32;
+        (duration, length)
+    };
+
+    let measure_nps_vec = compute_measure_nps_vec_with_timing(&measure_densities, &timing);
+    let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
+
+    let tech_counts = if options.compute_tech_counts {
+        step_parity::analyze_timing_lanes(&minimized_chart, &timing, lanes)
+    } else {
+        step_parity::TechCounts::default()
+    };
+
+    let raw_total_steps = stats.total_steps;
+    let raw_holding = stats.holding;
+    let mut timing_stats = compute_timing_aware_stats(&minimized_chart, lanes, &timing);
+    timing_stats.total_steps = raw_total_steps;
+    timing_stats.holding = raw_holding;
+    let mines_nonfake = timing_stats.mines;
+    stats = timing_stats;
 
     let elapsed_chart = chart_start_time.elapsed();
 
-    Some(ChartSummary {
+    Some((ChartSummary {
         step_type_str,
         step_artist_str,
         difficulty_str,
@@ -644,7 +665,7 @@ fn build_chart_summary(
         stats,
         stream_counts: metrics.stream_counts,
         total_streams: metrics.total_streams,
-        mines_nonfake: 0,
+        mines_nonfake,
         total_measures: measure_densities.len(),
         sn_detailed_breakdown: metrics.sn_detailed_breakdown,
         sn_partial_breakdown: metrics.sn_partial_breakdown,
@@ -652,8 +673,8 @@ fn build_chart_summary(
         detailed_breakdown: metrics.detailed_breakdown,
         partial_breakdown: metrics.partial_breakdown,
         simple_breakdown: metrics.simple_breakdown,
-        max_nps: 0.0,
-        median_nps: 0.0,
+        max_nps,
+        median_nps,
         duration_seconds,
         detected_patterns,
         anchor_left,
@@ -672,7 +693,7 @@ fn build_chart_summary(
         bpm_neutral_hash: metrics.bpm_neutral_hash,
         elapsed: elapsed_chart,
         measure_densities,
-        measure_nps_vec: Vec::new(),
+        measure_nps_vec,
         row_to_beat,
         timing_segments,
         minimized_note_data: minimized_chart,
@@ -688,7 +709,7 @@ fn build_chart_summary(
         chart_tickcounts,
         chart_combos,
         cached_radar_values,
-    })
+    }, chart_length))
 }
 
 pub fn analyze(
@@ -869,152 +890,46 @@ pub fn analyze(
     let bpm_values: Vec<f64> = global_bpm_map.iter().map(|&(_, bpm)| bpm).collect();
     let (median_bpm, average_bpm) = compute_bpm_stats(&bpm_values);
 
-    let mut chart_summaries: Vec<ChartSummary> = parsed_data
-        .notes_list
-        .into_iter()
-        .filter_map(|entry| {
-            build_chart_summary(
-                entry.notes,
-                entry.chart_bpms,
-                entry.chart_delays,
-                entry.chart_warps,
-                entry.chart_stops,
-                entry.chart_speeds,
-                entry.chart_scrolls,
-                entry.chart_fakes,
-                entry.chart_time_signatures,
-                entry.chart_labels,
-                entry.chart_tickcounts,
-                entry.chart_combos,
-                entry.chart_offset,
-                entry.chart_radar_values,
-                &cleaned_global_bpms,
-                &cleaned_global_stops,
-                &cleaned_global_delays,
-                &cleaned_global_warps,
-                &cleaned_global_speeds,
-                &cleaned_global_scrolls,
-                &cleaned_global_fakes,
-                &normalized_global_bpms,
-                offset,
-                extension,
-                timing_format,
-                ssc_version,
-                allow_steps_timing,
-                &compiled_custom_patterns,
-                &options,
-            )
-        })
-        .collect();
-
-    let total_length = chart_summaries
-        .iter_mut()
-        .map(|chart| {
-            let chart_bpms_timing = if allow_steps_timing {
-                chart.chart_bpms.as_deref()
-            } else {
-                None
-            };
-            let chart_stops_timing = if allow_steps_timing {
-                chart.chart_stops.as_deref()
-            } else {
-                None
-            };
-            let chart_delays_timing = if allow_steps_timing {
-                chart.chart_delays.as_deref()
-            } else {
-                None
-            };
-            let chart_warps_timing = if allow_steps_timing {
-                chart.chart_warps.as_deref()
-            } else {
-                None
-            };
-            let chart_speeds_timing = if allow_steps_timing {
-                chart.chart_speeds.as_deref()
-            } else {
-                None
-            };
-            let chart_scrolls_timing = if allow_steps_timing {
-                chart.chart_scrolls.as_deref()
-            } else {
-                None
-            };
-            let chart_fakes_timing = if allow_steps_timing {
-                chart.chart_fakes.as_deref()
-            } else {
-                None
-            };
-
-            let chart_has_timing = allow_steps_timing
-                && (chart.chart_bpms.is_some()
-                    || chart.chart_stops.is_some()
-                    || chart.chart_delays.is_some()
-                    || chart.chart_warps.is_some()
-                    || chart.chart_speeds.is_some()
-                    || chart.chart_scrolls.is_some()
-                    || chart.chart_fakes.is_some());
-            let (timing_bpms_global, timing_stops_global, timing_delays_global, timing_warps_global,
-                timing_speeds_global, timing_scrolls_global, timing_fakes_global) =
-                if chart_has_timing {
-                    ("", "", "", "", "", "", "")
-                } else {
-                    (cleaned_global_bpms.as_str(), cleaned_global_stops.as_str(),
-                        cleaned_global_delays.as_str(), cleaned_global_warps.as_str(),
-                        cleaned_global_speeds.as_str(), cleaned_global_scrolls.as_str(),
-                        cleaned_global_fakes.as_str())
-                };
-
-            let timing = TimingData::from_chart_data(
-                offset,
-                0.0,
-                chart_bpms_timing,
-                timing_bpms_global,
-                chart_stops_timing,
-                timing_stops_global,
-                chart_delays_timing,
-                timing_delays_global,
-                chart_warps_timing,
-                timing_warps_global,
-                chart_speeds_timing,
-                timing_speeds_global,
-                chart_scrolls_timing,
-                timing_scrolls_global,
-                chart_fakes_timing,
-                timing_fakes_global,
-                timing_format,
-            );
-            let lanes = step_type_lanes(&chart.step_type_str);
-
-            let measure_nps_vec =
-                compute_measure_nps_vec_with_timing(&chart.measure_densities, &timing);
-            let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
-            chart.measure_nps_vec = measure_nps_vec;
-            chart.max_nps = max_nps;
-            chart.median_nps = median_nps;
-
-            if options.compute_tech_counts {
-                chart.tech_counts =
-                    step_parity::analyze_timing_lanes(&chart.minimized_note_data, &timing, lanes);
+    let mut chart_summaries = Vec::with_capacity(parsed_data.notes_list.len());
+    let mut total_length = 0i32;
+    for entry in parsed_data.notes_list {
+        if let Some((summary, chart_length)) = build_chart_summary(
+            entry.notes,
+            entry.chart_bpms,
+            entry.chart_delays,
+            entry.chart_warps,
+            entry.chart_stops,
+            entry.chart_speeds,
+            entry.chart_scrolls,
+            entry.chart_fakes,
+            entry.chart_time_signatures,
+            entry.chart_labels,
+            entry.chart_tickcounts,
+            entry.chart_combos,
+            entry.chart_offset,
+            entry.chart_radar_values,
+            &cleaned_global_bpms,
+            &cleaned_global_stops,
+            &cleaned_global_delays,
+            &cleaned_global_warps,
+            &cleaned_global_speeds,
+            &cleaned_global_scrolls,
+            &cleaned_global_fakes,
+            &normalized_global_bpms,
+            offset,
+            extension,
+            timing_format,
+            ssc_version,
+            allow_steps_timing,
+            &compiled_custom_patterns,
+            &options,
+        ) {
+            if chart_length > total_length {
+                total_length = chart_length;
             }
-
-            let timing_stats = compute_timing_aware_stats(&chart.minimized_note_data, lanes, &timing);
-            let total_steps = chart.stats.total_steps;
-            let holding = chart.stats.holding;
-            chart.stats = timing_stats;
-            chart.stats.total_steps = total_steps;
-            chart.stats.holding = holding;
-            chart.mines_nonfake = chart.stats.mines;
-
-            let last_beat = compute_last_beat(&chart.minimized_note_data, lanes);
-            if last_beat <= 0.0 {
-                0
-            } else {
-                timing.get_time_for_beat(last_beat).floor() as i32
-            }
-        })
-        .max()
-        .unwrap_or(0);
+            chart_summaries.push(summary);
+        }
+    }
 
     let total_elapsed = total_start_time.elapsed();
 
