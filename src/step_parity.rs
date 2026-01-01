@@ -2381,13 +2381,14 @@ fn parse_chart_rows_with_timing(
     rows
 }
 
-fn build_intermediate_notes(rows: &[ParsedRow]) -> Vec<IntermediateNoteData> {
-    let column_count = rows.first().map(|row| row.chars.len()).unwrap_or(0);
-    if column_count == 0 {
+#[inline(always)]
+fn hold_lengths_for_rows(rows: &[ParsedRow], column_count: usize) -> Vec<f32> {
+    if rows.is_empty() || column_count == 0 {
         return Vec::new();
     }
+
     let mut hold_starts = vec![None; column_count];
-    let mut hold_lengths: HashMap<(usize, usize), f32> = HashMap::new();
+    let mut lengths = vec![MISSING_HOLD_LENGTH_BEATS; rows.len() * column_count];
 
     for (row_idx, row) in rows.iter().enumerate() {
         for col in 0..column_count {
@@ -2399,7 +2400,7 @@ fn build_intermediate_notes(rows: &[ParsedRow]) -> Vec<IntermediateNoteData> {
                     if let Some((start_idx, start_row)) = hold_starts[col] {
                         let length_rows = row.row - start_row;
                         let length = length_rows as f32 / ROWS_PER_BEAT as f32;
-                        hold_lengths.insert((start_idx, col), length);
+                        lengths[start_idx * column_count + col] = length;
                         hold_starts[col] = None;
                     }
                 }
@@ -2407,6 +2408,16 @@ fn build_intermediate_notes(rows: &[ParsedRow]) -> Vec<IntermediateNoteData> {
             }
         }
     }
+
+    lengths
+}
+
+fn build_intermediate_notes(rows: &[ParsedRow]) -> Vec<IntermediateNoteData> {
+    let column_count = rows.first().map(|row| row.chars.len()).unwrap_or(0);
+    if column_count == 0 {
+        return Vec::new();
+    }
+    let hold_lengths = hold_lengths_for_rows(rows, column_count);
 
     let mut notes = Vec::new();
     for (row_idx, row) in rows.iter().enumerate() {
@@ -2441,10 +2452,7 @@ fn build_intermediate_notes(rows: &[ParsedRow]) -> Vec<IntermediateNoteData> {
             };
 
             if note_type == TapNoteType::HoldHead {
-                note.hold_length = hold_lengths
-                    .get(&(row_idx, col))
-                    .copied()
-                    .unwrap_or(MISSING_HOLD_LENGTH_BEATS);
+                note.hold_length = hold_lengths[row_idx * column_count + col];
             }
 
             notes.push(note);
@@ -2462,27 +2470,7 @@ fn build_intermediate_notes_with_timing(
         return Vec::new();
     }
     let dump_notes = env_flag("RSSP_STEP_PARITY_DUMP_NOTES");
-    let mut hold_starts = vec![None; column_count];
-    let mut hold_lengths: HashMap<(usize, usize), f32> = HashMap::new();
-
-    for (row_idx, row) in rows.iter().enumerate() {
-        for col in 0..column_count {
-            match row.chars[col] {
-                b'2' | b'4' => {
-                    hold_starts[col] = Some((row_idx, row.row));
-                }
-                b'3' => {
-                    if let Some((start_idx, start_row)) = hold_starts[col] {
-                        let length_rows = row.row - start_row;
-                        let length = length_rows as f32 / ROWS_PER_BEAT as f32;
-                        hold_lengths.insert((start_idx, col), length);
-                        hold_starts[col] = None;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
+    let hold_lengths = hold_lengths_for_rows(rows, column_count);
 
     let mut notes = Vec::new();
     if dump_notes {
@@ -2527,10 +2515,7 @@ fn build_intermediate_notes_with_timing(
             };
 
             if note_type == TapNoteType::HoldHead {
-                note.hold_length = hold_lengths
-                    .get(&(row_idx, col))
-                    .copied()
-                    .unwrap_or(MISSING_HOLD_LENGTH_BEATS);
+                note.hold_length = hold_lengths[row_idx * column_count + col];
             }
 
             if dump_notes {
