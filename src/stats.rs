@@ -1,4 +1,4 @@
-use crate::timing::{beat_to_note_row, TimingData};
+use crate::timing::{beat_to_note_row, note_row_to_beat, TimingData};
 use std::fmt::Write;
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -469,7 +469,11 @@ fn append_row_to_beat(row_to_beat: &mut Vec<f32>, measure_idx: usize, rows: usiz
 }
 
 /// Helper to process a completed measure: minimize, count stats, and update buffers.
-fn finalize_and_process_measure<const LANES: usize, F: FnMut(usize, usize)>(
+fn finalize_and_process_measure<
+    const LANES: usize,
+    F: FnMut(usize, usize),
+    G: FnMut(&[u8; LANES], usize, usize, usize),
+>(
     measure: &mut Vec<[u8; LANES]>,
     output: &mut Vec<u8>,
     stats: &mut ArrowStats,
@@ -478,6 +482,7 @@ fn finalize_and_process_measure<const LANES: usize, F: FnMut(usize, usize)>(
     total_ends_seen: &mut u32,
     measure_idx: usize,
     on_rows: &mut F,
+    on_line: &mut G,
 ) {
     if measure.is_empty() {
         measure_densities.push(0);
@@ -488,7 +493,9 @@ fn finalize_and_process_measure<const LANES: usize, F: FnMut(usize, usize)>(
     output.reserve(measure.len() * (LANES + 1));
 
     let mut density = 0;
-    for mline in measure.iter() {
+    let rows_in_measure = measure.len();
+    for (row_idx, mline) in measure.iter().enumerate() {
+        on_line(mline, measure_idx, row_idx, rows_in_measure);
         if count_line(mline, stats, total_holds_started, total_ends_seen) {
             density += 1;
         }
@@ -557,9 +564,14 @@ fn minimize_chart_for_hash_impl<const LANES: usize>(notes_data: &[u8]) -> Vec<u8
     output
 }
 
-fn minimize_chart_and_count_impl<const LANES: usize, F: FnMut(usize, usize)>(
+fn minimize_chart_and_count_impl<
+    const LANES: usize,
+    F: FnMut(usize, usize),
+    G: FnMut(&[u8; LANES], usize, usize, usize),
+>(
     notes_data: &[u8],
     on_rows: &mut F,
+    on_line: &mut G,
 ) -> (Vec<u8>, ArrowStats, Vec<usize>) {
     let mut output = Vec::with_capacity(notes_data.len());
     let mut measure = Vec::with_capacity(64);
@@ -592,6 +604,7 @@ fn minimize_chart_and_count_impl<const LANES: usize, F: FnMut(usize, usize)>(
                     &mut total_ends_seen,
                     measure_idx,
                     on_rows,
+                    on_line,
                 );
                 output.extend_from_slice(b",\n");
                 measure_idx += 1;
@@ -606,6 +619,7 @@ fn minimize_chart_and_count_impl<const LANES: usize, F: FnMut(usize, usize)>(
                     &mut total_ends_seen,
                     measure_idx,
                     on_rows,
+                    on_line,
                 );
                 saw_semicolon = true;
                 measure_idx += 1;
@@ -630,6 +644,7 @@ fn minimize_chart_and_count_impl<const LANES: usize, F: FnMut(usize, usize)>(
             &mut total_ends_seen,
             measure_idx,
             on_rows,
+            on_line,
         );
     }
 
@@ -667,35 +682,142 @@ pub fn minimize_chart_and_count_with_lanes(
     notes_data: &[u8],
     lanes: usize,
 ) -> (Vec<u8>, ArrowStats, Vec<usize>) {
-    let mut noop = |_, _| {};
+    let mut noop_rows = |_, _| {};
     match lanes {
-        4 => minimize_chart_and_count_impl::<4, _>(notes_data, &mut noop),
-        8 => minimize_chart_and_count_impl::<8, _>(notes_data, &mut noop),
-        _ => minimize_chart_and_count_impl::<4, _>(notes_data, &mut noop),
+        4 => {
+            let mut noop_line = |_: &[u8; 4], _: usize, _: usize, _: usize| {};
+            minimize_chart_and_count_impl::<4, _, _>(notes_data, &mut noop_rows, &mut noop_line)
+        }
+        8 => {
+            let mut noop_line = |_: &[u8; 8], _: usize, _: usize, _: usize| {};
+            minimize_chart_and_count_impl::<8, _, _>(notes_data, &mut noop_rows, &mut noop_line)
+        }
+        _ => {
+            let mut noop_line = |_: &[u8; 4], _: usize, _: usize, _: usize| {};
+            minimize_chart_and_count_impl::<4, _, _>(notes_data, &mut noop_rows, &mut noop_line)
+        }
     }
+}
+
+#[inline(always)]
+fn line_has_object<const LANES: usize>(
+    line: &[u8; LANES],
+    hold_depths: &mut [u32; LANES],
+) -> bool {
+    let mut has_object = false;
+    for (col, &ch) in line.iter().enumerate() {
+        match ch {
+            b'1' | b'M' | b'K' | b'L' | b'F' => {
+                has_object = true;
+            }
+            b'2' | b'4' => {
+                hold_depths[col] = hold_depths[col].saturating_add(1);
+            }
+            b'3' => {
+                if hold_depths[col] > 0 {
+                    hold_depths[col] -= 1;
+                    has_object = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    has_object
+}
+
+#[inline(always)]
+fn calc_last_beat(
+    last_measure_idx: Option<usize>,
+    last_row_in_measure: usize,
+    last_rows_in_measure: usize,
+) -> f64 {
+    let Some(measure_idx) = last_measure_idx else {
+        return 0.0;
+    };
+    let total_rows_in_measure = last_rows_in_measure.max(1) as f64;
+    let row_index = last_row_in_measure as f64;
+    let beats_into_measure = 4.0 * (row_index / total_rows_in_measure);
+    let beat = measure_idx as f64 * 4.0 + beats_into_measure;
+    let row = beat_to_note_row(beat);
+    note_row_to_beat(row)
 }
 
 fn minimize_chart_count_rows_impl<const LANES: usize>(
     notes_data: &[u8],
-) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>) {
+) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
     let mut row_to_beat = Vec::with_capacity(notes_data.len() / (LANES + 1));
+    let mut hold_depths = [0u32; LANES];
+    let mut last_measure_idx: Option<usize> = None;
+    let mut last_row_in_measure = 0usize;
+    let mut last_rows_in_measure = 0usize;
     let mut on_rows = |measure_idx: usize, rows: usize| {
         append_row_to_beat(&mut row_to_beat, measure_idx, rows);
     };
+    let mut on_line = |line: &[u8; LANES], measure_idx: usize, row_idx: usize, rows: usize| {
+        if line_has_object(line, &mut hold_depths) {
+            last_measure_idx = Some(measure_idx);
+            last_row_in_measure = row_idx;
+            last_rows_in_measure = rows;
+        }
+    };
     let (output, stats, measure_densities) =
-        minimize_chart_and_count_impl::<LANES, _>(notes_data, &mut on_rows);
-    (output, stats, measure_densities, row_to_beat)
+        minimize_chart_and_count_impl::<LANES, _, _>(notes_data, &mut on_rows, &mut on_line);
+    let last_beat = calc_last_beat(last_measure_idx, last_row_in_measure, last_rows_in_measure);
+    (output, stats, measure_densities, row_to_beat, last_beat)
 }
 
 pub(crate) fn minimize_chart_count_rows(
     notes_data: &[u8],
     lanes: usize,
-) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>) {
+) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
     match lanes {
         4 => minimize_chart_count_rows_impl::<4>(notes_data),
         8 => minimize_chart_count_rows_impl::<8>(notes_data),
         _ => minimize_chart_count_rows_impl::<4>(notes_data),
     }
+}
+
+pub(crate) fn minimize_chart_rows_bits(
+    notes_data: &[u8],
+) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64, Vec<u8>) {
+    let mut row_to_beat = Vec::with_capacity(notes_data.len() / (4 + 1));
+    let mut hold_depths = [0u32; 4];
+    let mut last_measure_idx: Option<usize> = None;
+    let mut last_row_in_measure = 0usize;
+    let mut last_rows_in_measure = 0usize;
+    let mut bitmasks = Vec::with_capacity(row_to_beat.capacity());
+    let mut on_rows = |measure_idx: usize, rows: usize| {
+        append_row_to_beat(&mut row_to_beat, measure_idx, rows);
+    };
+    let mut on_line = |line: &[u8; 4], measure_idx: usize, row_idx: usize, rows: usize| {
+        let mut mask = 0u8;
+        let ch0 = line[0];
+        let ch1 = line[1];
+        let ch2 = line[2];
+        let ch3 = line[3];
+        if ch0 == b'1' || ch0 == b'2' || ch0 == b'4' {
+            mask |= 1;
+        }
+        if ch1 == b'1' || ch1 == b'2' || ch1 == b'4' {
+            mask |= 1 << 1;
+        }
+        if ch2 == b'1' || ch2 == b'2' || ch2 == b'4' {
+            mask |= 1 << 2;
+        }
+        if ch3 == b'1' || ch3 == b'2' || ch3 == b'4' {
+            mask |= 1 << 3;
+        }
+        bitmasks.push(mask);
+        if line_has_object(line, &mut hold_depths) {
+            last_measure_idx = Some(measure_idx);
+            last_row_in_measure = row_idx;
+            last_rows_in_measure = rows;
+        }
+    };
+    let (output, stats, measure_densities) =
+        minimize_chart_and_count_impl::<4, _, _>(notes_data, &mut on_rows, &mut on_line);
+    let last_beat = calc_last_beat(last_measure_idx, last_row_in_measure, last_rows_in_measure);
+    (output, stats, measure_densities, row_to_beat, last_beat, bitmasks)
 }
 
 fn measure_densities_impl<const LANES: usize>(notes_data: &[u8]) -> Vec<usize> {

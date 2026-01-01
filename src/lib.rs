@@ -287,30 +287,6 @@ fn parse_radar_values_str(
     Some(out)
 }
 
-/// Parses the minimized chart data string into a sequence of note bitmasks.
-fn generate_bitmasks(minimized_chart: &[u8]) -> Vec<u8> {
-    minimized_chart
-        .split(|&b| b == b'\n')
-        .filter_map(|line| {
-            // A line must have at least 4 characters to be a valid note line.
-            // Also, filter out lines that are just measure separators (',') or empty.
-            if line.len() < 4 || line.iter().all(|&b| b == b' ' || b == b',') {
-                return None;
-            }
-
-            let mut mask = 0u8;
-            // The first 4 bytes represent the 4 arrow panels.
-            for i in 0..4 {
-                // A step can be a tap ('1'), a hold start ('2'), or a roll start ('4').
-                if matches!(line[i], b'1' | b'2' | b'4') {
-                    mask |= 1 << i;
-                }
-            }
-            Some(mask)
-        })
-        .collect()
-}
-
 /// Detects predefined patterns and counts anchors from note bitmasks.
 fn compute_pattern_and_anchor_stats(
     bitmasks: &[u8],
@@ -467,8 +443,17 @@ fn build_chart_summary(
     let tech_notation_str = parse_tech_notation(&credit, &description);
 
     let lanes = step_type_lanes(&step_type_str);
-    let (mut minimized_chart, mut stats, measure_densities, row_to_beat) =
-        minimize_chart_count_rows(chart_data, lanes);
+    let compute_patterns = lanes == 4 && options.compute_pattern_counts;
+    let (mut minimized_chart, mut stats, measure_densities, row_to_beat, last_beat, bitmasks) =
+        if compute_patterns {
+            let (chart, stats, densities, row_to_beat, last_beat, bitmasks) =
+                minimize_chart_rows_bits(chart_data);
+            (chart, stats, densities, row_to_beat, last_beat, Some(bitmasks))
+        } else {
+            let (chart, stats, densities, row_to_beat, last_beat) =
+                minimize_chart_count_rows(chart_data, lanes);
+            (chart, stats, densities, row_to_beat, last_beat, None)
+        };
     if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
         minimized_chart.truncate(pos + 1);
     }
@@ -576,13 +561,6 @@ fn build_chart_summary(
     let metrics =
         compute_derived_chart_metrics(&measure_densities, &bpm_map, &minimized_chart, &bpms_to_use);
 
-    let compute_patterns = lanes == 4 && options.compute_pattern_counts;
-    let bitmasks = if compute_patterns {
-        Some(generate_bitmasks(&minimized_chart))
-    } else {
-        None
-    };
-
     let (detected_patterns, (anchor_left, anchor_down, anchor_up, anchor_right)) =
         if let Some(bitmasks) = bitmasks.as_ref() {
             compute_pattern_and_anchor_stats(bitmasks)
@@ -623,7 +601,6 @@ fn build_chart_summary(
         timing_format,
     );
 
-    let last_beat = compute_last_beat(&minimized_chart, lanes);
     let (duration_seconds, chart_length) = if last_beat <= 0.0 {
         (0.0, 0)
     } else {
