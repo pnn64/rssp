@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 const KNOWN_TECH_LIST: &[&str] = &[
     "24ths", "32nds", "br", "BR", "BR+", "BR-", "BT", "BT+", "BT-", "bu", "BU", "BU+", "BU-",
     "BXF", "BXF+", "BXF-", "bXF", "bXF+", "bXF-", "BxF", "BXf", "BxF+", "BxF-", "bXf", "bXf+",
@@ -31,18 +33,42 @@ fn is_measure_data(chunk: &str) -> bool {
 /// Finds the longest tech prefix that matches the remainder.
 #[inline(always)]
 fn best_prefix(remainder: &str) -> Option<&'static str> {
-    let mut best = None;
-    let mut best_len = 0usize;
-    for &pat in KNOWN_TECH_LIST {
+    let bytes = remainder.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+
+    let table = tech_prefixes();
+    let list = &table[bytes[0] as usize];
+    for &pat in list {
         if remainder.starts_with(pat) {
-            let len = pat.len();
-            if len > best_len {
-                best = Some(pat);
-                best_len = len;
-            }
+            return Some(pat);
         }
     }
-    best
+    None
+}
+
+#[inline(always)]
+fn tech_prefixes() -> &'static [Vec<&'static str>] {
+    static TABLE: OnceLock<Vec<Vec<&'static str>>> = OnceLock::new();
+    TABLE
+        .get_or_init(|| {
+            let mut table = vec![Vec::new(); 256];
+            for &pat in KNOWN_TECH_LIST {
+                let bytes = pat.as_bytes();
+                if bytes.is_empty() {
+                    continue;
+                }
+                table[bytes[0] as usize].push(pat);
+            }
+            for list in &mut table {
+                if list.len() > 1 {
+                    list.sort_unstable_by(|a, b| b.len().cmp(&a.len()));
+                }
+            }
+            table
+        })
+        .as_slice()
 }
 
 /// Parses a chunk into a sequence of known tech notations using greedy longest prefix matching.
