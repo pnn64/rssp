@@ -9,51 +9,46 @@ use rssp::matrix::get_difficulty;
 use rssp::report::{print_reports, OutputMode, SimfileSummary};
 use rssp::AnalysisOptions;
 
-/// Finds the best simfile in a directory (prefers .ssc over .sm)
-fn find_simfile_in_dir(dir: &Path) -> Option<PathBuf> {
-    let entries = fs::read_dir(dir).ok()?;
-    
-    let mut ssc_file: Option<PathBuf> = None;
-    let mut sm_file: Option<PathBuf> = None;
-    
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_file() {
-            if let Some(ext) = path.extension() {
-                let ext_str = ext.to_string_lossy().to_lowercase();
-                if ext_str == "ssc" {
-                    ssc_file = Some(path);
-                } else if ext_str == "sm" && ssc_file.is_none() {
-                    sm_file = Some(path);
-                }
-            }
-        }
-    }
-    
-    // Prefer .ssc over .sm
-    ssc_file.or(sm_file)
-}
-
-/// Recursively finds all simfiles in a directory structure
+/// Recursively finds all simfiles in a directory structure.
+/// Directories containing a simfile are treated as leaves.
 fn find_all_simfiles(root: &Path) -> Vec<PathBuf> {
     let mut simfiles = Vec::new();
-    
-    if let Ok(entries) = fs::read_dir(root) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            
-            if path.is_dir() {
-                // Check if this directory contains a simfile
-                if let Some(simfile) = find_simfile_in_dir(&path) {
-                    simfiles.push(simfile);
-                } else {
-                    // Recursively search subdirectories
-                    simfiles.extend(find_all_simfiles(&path));
-                }
-            }
+    let Ok(entries) = fs::read_dir(root) else {
+        return simfiles;
+    };
+
+    let mut ssc_file: Option<PathBuf> = None;
+    let mut sm_file: Option<PathBuf> = None;
+    let mut subdirs: Vec<PathBuf> = Vec::new();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            subdirs.push(path);
+            continue;
+        }
+        if !path.is_file() {
+            continue;
+        }
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            continue;
+        };
+        if ext.eq_ignore_ascii_case("ssc") {
+            ssc_file = Some(path);
+        } else if ext.eq_ignore_ascii_case("sm") && ssc_file.is_none() {
+            sm_file = Some(path);
         }
     }
-    
+
+    if let Some(simfile) = ssc_file.or(sm_file) {
+        simfiles.push(simfile);
+        return simfiles;
+    }
+
+    for dir in subdirs {
+        simfiles.extend(find_all_simfiles(&dir));
+    }
+
     simfiles
 }
 
