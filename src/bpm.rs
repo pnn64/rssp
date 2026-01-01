@@ -51,6 +51,9 @@ pub(crate) fn parse_beat_or_row(raw: &str) -> Option<f64> {
     }
     let value = trimmed.parse::<f64>().ok()?;
     let value_f32 = value as f32;
+    if !value_f32.is_finite() {
+        return None;
+    }
     if is_row {
         Some((value_f32 / ROWS_PER_BEAT as f32) as f64)
     } else {
@@ -123,10 +126,6 @@ fn clean_tag_bytes(tag: Option<&[u8]>) -> String {
     tag.and_then(|bytes| std::str::from_utf8(bytes).ok())
         .map(clean_timing_map)
         .unwrap_or_default()
-}
-
-fn clean_chart_tag(tag: Option<Vec<u8>>) -> Option<String> {
-    clean_chart_tag_bytes(tag.as_deref())
 }
 
 fn clean_chart_tag_bytes(tag: Option<&[u8]>) -> Option<String> {
