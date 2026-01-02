@@ -67,7 +67,7 @@ jobs:
 
           case "${{ inputs.test_suite }}" in
             all)
-              cargo test --release --verbose "${extra_args[@]}"
+              cargo test --release --verbose --test all_parity "${extra_args[@]}"
               ;;
             "all alternative")
               cargo test --release --verbose --test rssp_unique_parity "${extra_args[@]}"
