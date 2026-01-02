@@ -1349,17 +1349,13 @@ fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
         .into_iter()
         .map(|(beat, length)| serde_json::json!([beat, length]))
         .collect();
-    let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
-    let hash_bpms = if allow_steps_timing {
-        chart
-            .chart_bpms
-            .as_deref()
-            .map(normalize_float_digits)
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| simfile.normalized_bpms.clone())
-    } else {
-        simfile.normalized_bpms.clone()
-    };
+    // SL-ChartParser uses chart BPMS for hashing when present, regardless of split timing.
+    let hash_bpms = chart
+        .chart_bpms
+        .as_deref()
+        .map(normalize_float_digits)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| simfile.normalized_bpms.clone());
 
     serde_json::json!({
         "beat0_offset_seconds": beat0_offset_seconds,

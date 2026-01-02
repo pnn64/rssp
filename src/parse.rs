@@ -98,11 +98,16 @@ pub fn parse_offset_seconds(parsed_offset: Option<&[u8]>) -> f64 {
         .unwrap_or(0.0)
 }
 
-pub fn parse_version(parsed_version: Option<&[u8]>, _timing_format: TimingFormat) -> f32 {
-    parsed_version
+pub fn parse_version(parsed_version: Option<&[u8]>, timing_format: TimingFormat) -> f32 {
+    let parsed = parsed_version
         .and_then(|b| std::str::from_utf8(b).ok())
-        .and_then(|s| s.parse::<f32>().ok())
-        .unwrap_or(STEPFILE_VERSION_NUMBER)
+        .and_then(|s| s.parse::<f32>().ok());
+    match (parsed, timing_format) {
+        (Some(version), _) => version,
+        // Missing SSC version disables split timing; NaN keeps < checks false.
+        (None, TimingFormat::Ssc) => f32::NAN,
+        (None, TimingFormat::Sm) => STEPFILE_VERSION_NUMBER,
+    }
 }
 
 pub const SSC_VERSION_CHART_NAME_TAG: f32 = 0.74;
