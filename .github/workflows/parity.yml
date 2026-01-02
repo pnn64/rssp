@@ -11,8 +11,8 @@ on:
         default: all
         options:
           - all
-          - "all alternative"
           - fast_all_parity
+          - rssp_unique_parity
           - hash_parity
           - bpm_parity
           - metadata_parity
@@ -21,7 +21,7 @@ on:
           - nps_parity
           - breakdown_parity
           - tech_counts_parity
-          - rssp_unique_parity
+          - timing_parity
       pack_filter:
         description: Comma-separated pack name filters (matches path under tests/data/packs); use "all" for everything
         type: string
@@ -30,7 +30,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  PARITY_LOG: ${{ runner.temp }}/parity_output.txt
 
 jobs:
   build:
@@ -53,6 +52,7 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
+        PARITY_LOG="$RUNNER_TEMP/parity_output.txt"
         : > "$PARITY_LOG"
         exec > >(tee -a "$PARITY_LOG") 2>&1
         pack_input="${{ inputs.pack_filter }}"
@@ -101,6 +101,7 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
+        PARITY_LOG="$RUNNER_TEMP/parity_output.txt"
         if [[ ! -s "$PARITY_LOG" ]]; then
           {
             echo "## Parity Failures"
