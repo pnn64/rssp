@@ -30,6 +30,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  PARITY_LOG: ${{ runner.temp }}/parity_output.txt
 
 jobs:
   build:
@@ -49,8 +50,11 @@ jobs:
         lfs: false
         
     - name: Run Tests
+      shell: bash
       run: |
         set -euo pipefail
+        : > "$PARITY_LOG"
+        exec > >(tee -a "$PARITY_LOG") 2>&1
         pack_input="${{ inputs.pack_filter }}"
         if [[ -z "$pack_input" || "$pack_input" == "all" ]]; then
           pack_filters=("")
@@ -91,3 +95,35 @@ jobs:
         if [[ "$ran_any" -eq 0 ]]; then
           run_suite ""
         fi
+
+    - name: Summarize Failures
+      if: ${{ always() }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ ! -s "$PARITY_LOG" ]]; then
+          {
+            echo "## Parity Failures"
+            echo
+            echo "No log output captured."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        failures="$(awk '
+          /^failures:$/ {in_block=1}
+          in_block {print}
+          in_block && /^test result:/ {in_block=0}
+        ' "$PARITY_LOG")"
+
+        {
+          echo "## Parity Failures"
+          echo
+          if [[ -n "$failures" ]]; then
+            echo '```'
+            echo "$failures"
+            echo '```'
+          else
+            echo "No failures reported."
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
