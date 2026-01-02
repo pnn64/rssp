@@ -406,6 +406,18 @@ fn parse_subtag(data: &[u8], tag: &[u8], allow_newlines: bool) -> Option<Vec<u8>
                             return Some(slice[..i].to_vec());
                         }
                     }
+                    b':' if !allow_newlines => {
+                        // Mimic MsdFile param splitting: stop at the first unescaped colon.
+                        let mut bs_count = 0;
+                        let mut j = i;
+                        while j > 0 && slice[j - 1] == b'\\' {
+                            bs_count += 1;
+                            j -= 1;
+                        }
+                        if bs_count % 2 == 0 {
+                            return Some(slice[..i].to_vec());
+                        }
+                    }
                     // Fallback for malformed subtags missing a terminating semicolon: if the next
                     // line starts a new tag (`#...:`), stop at this line break.
                     b'\n' | b'\r' => {
