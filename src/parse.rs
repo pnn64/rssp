@@ -468,5 +468,22 @@ pub fn split_notes_fields(notes_block: &[u8]) -> (Vec<&[u8]>, &[u8]) {
     } else {
         &[]
     };
-    (fields, rest)
+    let mut end = rest.len();
+    let mut k = 0usize;
+    while k < rest.len() {
+        if rest[k] == b':' {
+            let mut bs_count = 0;
+            let mut j = k;
+            while j > 0 && rest[j - 1] == b'\\' {
+                bs_count += 1;
+                j -= 1;
+            }
+            if bs_count % 2 == 0 {
+                end = k;
+                break;
+            }
+        }
+        k += 1;
+    }
+    (fields, &rest[..end])
 }
