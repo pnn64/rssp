@@ -2185,7 +2185,8 @@ fn beat_to_time(beat: f64, bpm_map: &[(f64, f64)], offset: f64) -> f64 {
 
 #[derive(Clone)]
 struct ParsedRow {
-    chars: Vec<u8>,
+    chars: [u8; 8],
+    columns: u8,
     row: i32,
     beat: f32,
     second: f32,
@@ -2210,7 +2211,8 @@ fn hash_bytes(bytes: &[u8]) -> u64 {
 fn hash_rows(rows: &[ParsedRow]) -> u64 {
     let mut hasher = IdentityHasher::default();
     for row in rows {
-        hasher.write(&row.chars);
+        let cols = row.columns as usize;
+        hasher.write(&row.chars[..cols]);
         hasher.write(&row.row.to_le_bytes());
         hasher.write(&row.beat.to_bits().to_le_bytes());
         hasher.write(&row.second.to_bits().to_le_bytes());
@@ -2263,7 +2265,7 @@ fn parse_chart_rows(
 ) -> Vec<ParsedRow> {
     let mut rows = Vec::new();
     let mut measure_index = 0usize;
-    if column_count == 0 {
+    if column_count == 0 || column_count > 8 {
         return rows;
     }
 
@@ -2289,10 +2291,11 @@ fn parse_chart_rows(
                 let note_row = beat_to_note_row_f32_exact(beat);
                 let beat = note_row as f32 / ROWS_PER_BEAT as f32;
                 let second = beat_to_time(beat as f64, bpm_map, offset);
-                let mut chars = vec![b'0'; column_count];
+                let mut chars = [b'0'; 8];
                 chars[..copy_len].copy_from_slice(&trimmed[..copy_len]);
                 rows.push(ParsedRow {
                     chars,
+                    columns: column_count as u8,
                     row: note_row,
                     beat,
                     second: second as f32,
@@ -2315,7 +2318,7 @@ fn parse_chart_rows_with_timing(
     let mut rows = Vec::new();
     let mut measure_index = 0usize;
     let dump_rows = env_flag("RSSP_STEP_PARITY_DUMP_ROWS");
-    if column_count == 0 {
+    if column_count == 0 || column_count > 8 {
         return rows;
     }
 
@@ -2349,17 +2352,19 @@ fn parse_chart_rows_with_timing(
                 let note_row = beat_to_note_row_f32_exact(beat);
                 let beat = note_row as f32 / ROWS_PER_BEAT as f32;
                 let second = timing.get_time_for_beat_f32(beat as f64);
-                let mut chars = vec![b'0'; column_count];
+                let mut chars = [b'0'; 8];
                 chars[..copy_len].copy_from_slice(&trimmed[..copy_len]);
                 rows.push(ParsedRow {
                     chars,
+                    columns: column_count as u8,
                     row: note_row,
                     beat,
                     second: second as f32,
                 });
                 let row_index = rows.len() - 1;
                 if dump_rows {
-                    let row_text = String::from_utf8_lossy(&rows[row_index].chars);
+                    let cols = rows[row_index].columns as usize;
+                    let row_text = String::from_utf8_lossy(&rows[row_index].chars[..cols]);
                     eprintln!(
                         "STEP_PARITY_ROW idx={} measure={} line={}/{} row={} beat={:.6} second={:.6} data={}",
                         row_index,
@@ -2423,7 +2428,7 @@ fn hold_lengths_for_rows(rows: &[ParsedRow], column_count: usize) -> Vec<f32> {
 }
 
 fn build_intermediate_notes(rows: &[ParsedRow]) -> Vec<IntermediateNoteData> {
-    let column_count = rows.first().map(|row| row.chars.len()).unwrap_or(0);
+    let column_count = rows.first().map(|row| row.columns as usize).unwrap_or(0);
     if column_count == 0 {
         return Vec::new();
     }
@@ -2475,7 +2480,7 @@ fn build_intermediate_notes_with_timing(
     rows: &[ParsedRow],
     timing: &TimingData,
 ) -> Vec<IntermediateNoteData> {
-    let column_count = rows.first().map(|row| row.chars.len()).unwrap_or(0);
+    let column_count = rows.first().map(|row| row.columns as usize).unwrap_or(0);
     if column_count == 0 {
         return Vec::new();
     }
