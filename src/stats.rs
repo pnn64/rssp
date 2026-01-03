@@ -60,6 +60,11 @@ fn is_all_zero<const LANES: usize>(line: &[u8; LANES]) -> bool {
     line.iter().all(|&b| b == b'0')
 }
 
+#[inline(always)]
+fn is_hold_blocker(ch: u8) -> bool {
+    matches!(ch, b'1' | b'M' | b'L' | b'F')
+}
+
 fn match_hold_ends<const LANES: usize>(
     lines: &[[u8; LANES]],
 ) -> Vec<[Option<usize>; LANES]> {
@@ -69,6 +74,7 @@ fn match_hold_ends<const LANES: usize>(
     for (row_idx, line) in lines.iter().enumerate() {
         for (col, &ch) in line.iter().enumerate() {
             match ch {
+                ch if is_hold_blocker(ch) => stacks[col].clear(),
                 b'2' | b'4' => stacks[col].push(row_idx),
                 b'3' => {
                     if let Some(start_idx) = stacks[col].pop() {
@@ -100,6 +106,21 @@ fn strip_phantom_holds<const LANES: usize>(
             new_line
         })
         .collect()
+}
+
+#[inline(always)]
+fn has_unmatched_hold_heads<const LANES: usize>(
+    lines: &[[u8; LANES]],
+    hold_ends: &[[Option<usize>; LANES]],
+) -> bool {
+    for (row_idx, line) in lines.iter().enumerate() {
+        for (col, &ch) in line.iter().enumerate() {
+            if matches!(ch, b'2' | b'4') && hold_ends[row_idx][col].is_none() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 const HOLD_END_NONE: usize = usize::MAX;
@@ -174,6 +195,7 @@ fn scan_minimized_rows_for_holds<const LANES: usize>(
         hold_ends.push([HOLD_END_NONE; LANES]);
         for (col, &ch) in line[..LANES].iter().enumerate() {
             match ch {
+                ch if is_hold_blocker(ch) => stacks[col].clear(),
                 b'2' | b'4' => stacks[col].push(row_idx),
                 b'3' => {
                     if let Some(start_idx) = stacks[col].pop() {
@@ -290,8 +312,8 @@ fn count_line<const LANES: usize>(
 /// Recalculates chart stats after identifying and ignoring phantom (unclosed) holds.
 fn recalculate_stats_without_phantom_holds<const LANES: usize>(
     all_lines_buffer: &[[u8; LANES]],
+    hold_ends: &[[Option<usize>; LANES]],
 ) -> ArrowStats {
-    let hold_ends = match_hold_ends(all_lines_buffer);
     let fixed_lines = strip_phantom_holds(all_lines_buffer, &hold_ends);
 
     // Pass 3: Recalculate stats using the fixed lines.
@@ -671,7 +693,7 @@ fn minimize_chart_and_count_impl<
         );
     }
 
-    if total_holds_started != total_ends_seen {
+    if total_holds_started > 0 {
         let raw_total_steps = stats.total_steps;
         let mut all_lines_buffer = Vec::with_capacity(output.len() / (LANES + 1));
         for line in output.split(|&b| b == b'\n') {
@@ -689,9 +711,14 @@ fn minimize_chart_and_count_impl<
             arr.copy_from_slice(&line[..LANES]);
             all_lines_buffer.push(arr);
         }
-        let mut cleaned = recalculate_stats_without_phantom_holds(&all_lines_buffer);
-        cleaned.total_steps = raw_total_steps;
-        stats = cleaned;
+        let hold_ends = match_hold_ends(&all_lines_buffer);
+        let needs_cleanup =
+            total_holds_started != total_ends_seen || has_unmatched_hold_heads(&all_lines_buffer, &hold_ends);
+        if needs_cleanup {
+            let mut cleaned = recalculate_stats_without_phantom_holds(&all_lines_buffer, &hold_ends);
+            cleaned.total_steps = raw_total_steps;
+            stats = cleaned;
+        }
     }
 
     (output, stats, measure_densities)
@@ -731,7 +758,11 @@ pub(crate) fn line_has_object<const LANES: usize>(
     for col in 0..LANES {
         let ch = line[col];
         match ch {
-            b'1' | b'M' | b'K' | b'L' | b'F' => {
+            b'1' | b'M' | b'L' | b'F' => {
+                has_object = true;
+                hold_depths[col] = 0;
+            }
+            b'K' => {
                 has_object = true;
             }
             b'2' | b'4' => {
