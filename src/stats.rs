@@ -109,18 +109,39 @@ fn strip_phantom_holds<const LANES: usize>(
 }
 
 #[inline(always)]
-fn has_unmatched_hold_heads<const LANES: usize>(
-    lines: &[[u8; LANES]],
-    hold_ends: &[[Option<usize>; LANES]],
-) -> bool {
-    for (row_idx, line) in lines.iter().enumerate() {
-        for (col, &ch) in line.iter().enumerate() {
-            if matches!(ch, b'2' | b'4') && hold_ends[row_idx][col].is_none() {
-                return true;
+fn has_phantom_holds<const LANES: usize>(minimized: &[u8]) -> bool {
+    let mut depths = [0u32; LANES];
+    for line_raw in minimized.split(|&b| b == b'\n') {
+        let line = trim_cr(line_raw);
+        if line.is_empty() {
+            continue;
+        }
+        match line[0] {
+            b',' | b';' => continue,
+            _ => {}
+        }
+        if line.len() < LANES {
+            continue;
+        }
+        for col in 0..LANES {
+            match line[col] {
+                ch if is_hold_blocker(ch) => {
+                    if depths[col] != 0 {
+                        return true;
+                    }
+                    depths[col] = 0;
+                }
+                b'2' | b'4' => depths[col] += 1,
+                b'3' => {
+                    if depths[col] > 0 {
+                        depths[col] -= 1;
+                    }
+                }
+                _ => {}
             }
         }
     }
-    false
+    depths.iter().any(|&depth| depth != 0)
 }
 
 const HOLD_END_NONE: usize = usize::MAX;
@@ -695,26 +716,29 @@ fn minimize_chart_and_count_impl<
 
     if total_holds_started > 0 {
         let raw_total_steps = stats.total_steps;
-        let mut all_lines_buffer = Vec::with_capacity(output.len() / (LANES + 1));
-        for line in output.split(|&b| b == b'\n') {
-            if line.is_empty() {
-                continue;
-            }
-            match line[0] {
-                b',' | b';' => continue,
-                _ => {}
-            }
-            if line.len() < LANES {
-                continue;
-            }
-            let mut arr = [0u8; LANES];
-            arr.copy_from_slice(&line[..LANES]);
-            all_lines_buffer.push(arr);
-        }
-        let hold_ends = match_hold_ends(&all_lines_buffer);
-        let needs_cleanup =
-            total_holds_started != total_ends_seen || has_unmatched_hold_heads(&all_lines_buffer, &hold_ends);
+        let needs_cleanup = if total_holds_started != total_ends_seen {
+            true
+        } else {
+            has_phantom_holds::<LANES>(&output)
+        };
         if needs_cleanup {
+            let mut all_lines_buffer = Vec::with_capacity(output.len() / (LANES + 1));
+            for line in output.split(|&b| b == b'\n') {
+                if line.is_empty() {
+                    continue;
+                }
+                match line[0] {
+                    b',' | b';' => continue,
+                    _ => {}
+                }
+                if line.len() < LANES {
+                    continue;
+                }
+                let mut arr = [0u8; LANES];
+                arr.copy_from_slice(&line[..LANES]);
+                all_lines_buffer.push(arr);
+            }
+            let hold_ends = match_hold_ends(&all_lines_buffer);
             let mut cleaned = recalculate_stats_without_phantom_holds(&all_lines_buffer, &hold_ends);
             cleaned.total_steps = raw_total_steps;
             stats = cleaned;
