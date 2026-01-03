@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::hash::Hasher;
 use std::rc::Rc;
 
@@ -8,7 +8,6 @@ const INVALID_COLUMN: isize = -1;
 const CLM_SECOND_INVALID: f32 = -1.0;
 const MAX_NOTE_ROW: i32 = 1 << 30;
 const MISSING_HOLD_LENGTH_BEATS: f32 = MAX_NOTE_ROW as f32 / ROWS_PER_BEAT as f32;
-const HOLD_TAIL_EPS: f32 = 0.0005;
 
 // Weights and thresholds from ITGmania source
 const DOUBLESTEP_WEIGHT: f32 = 850.0;
@@ -413,7 +412,6 @@ impl Default for IntermediateNoteData {
 struct Row {
     notes: Vec<IntermediateNoteData>,
     holds: Vec<IntermediateNoteData>,
-    hold_tails: HashSet<usize>,
     mines: Vec<f32>,
     fake_mines: Vec<f32>,
     columns: Vec<Foot>,
@@ -430,7 +428,6 @@ impl Row {
         Self {
             notes: vec![IntermediateNoteData::default(); column_count],
             holds: vec![IntermediateNoteData::default(); column_count],
-            hold_tails: HashSet::new(),
             mines: vec![0.0; column_count],
             fake_mines: vec![0.0; column_count],
             columns: vec![Foot::None; column_count],
@@ -621,7 +618,7 @@ impl StepParityGenerator {
                 counter.last_column_beat = note.beat;
                 counter.next_mines.clone_from(&counter.mines);
                 counter.next_fake_mines.clone_from(&counter.fake_mines);
-                counter.notes = vec![IntermediateNoteData::default(); column_count];
+                counter.notes.fill(IntermediateNoteData::default());
                 counter.mines.fill(0.0);
                 counter.fake_mines.fill(0.0);
 
@@ -668,13 +665,6 @@ impl StepParityGenerator {
                 row.holds[c] = IntermediateNoteData::default();
             } else {
                 row.holds[c] = counter.active_holds[c].clone();
-            }
-
-            if counter.active_holds[c].note_type != TapNoteType::Empty {
-                let end_beat = counter.active_holds[c].beat + counter.active_holds[c].hold_length;
-                if (end_beat - counter.last_column_beat).abs() < HOLD_TAIL_EPS {
-                    row.hold_tails.insert(c);
-                }
             }
         }
 
@@ -2228,6 +2218,7 @@ fn hash_rows(rows: &[ParsedRow]) -> u64 {
     hasher.finish()
 }
 
+#[inline(always)]
 fn trim_ascii_whitespace(mut line: &[u8]) -> &[u8] {
     while let Some((&first, rest)) = line.split_first() {
         if first.is_ascii_whitespace() {
@@ -2244,6 +2235,16 @@ fn trim_ascii_whitespace(mut line: &[u8]) -> &[u8] {
         }
     }
     line
+}
+
+#[inline(always)]
+fn row_has_obj(line: &[u8]) -> bool {
+    for &b in line {
+        if b != b'0' {
+            return true;
+        }
+    }
+    false
 }
 
 #[inline(always)]
@@ -2282,19 +2283,21 @@ fn parse_chart_rows(
             if trimmed.is_empty() {
                 continue;
             }
-            let beat = measure_start + row_in_measure as f32 * row_step;
-            let note_row = beat_to_note_row_f32_exact(beat);
-            let beat = note_row as f32 / ROWS_PER_BEAT as f32;
-            let second = beat_to_time(beat as f64, bpm_map, offset);
-            let mut chars = vec![b'0'; column_count];
             let copy_len = trimmed.len().min(column_count);
-            chars[..copy_len].copy_from_slice(&trimmed[..copy_len]);
-            rows.push(ParsedRow {
-                chars,
-                row: note_row,
-                beat,
-                second: second as f32,
-            });
+            if row_has_obj(&trimmed[..copy_len]) {
+                let beat = measure_start + row_in_measure as f32 * row_step;
+                let note_row = beat_to_note_row_f32_exact(beat);
+                let beat = note_row as f32 / ROWS_PER_BEAT as f32;
+                let second = beat_to_time(beat as f64, bpm_map, offset);
+                let mut chars = vec![b'0'; column_count];
+                chars[..copy_len].copy_from_slice(&trimmed[..copy_len]);
+                rows.push(ParsedRow {
+                    chars,
+                    row: note_row,
+                    beat,
+                    second: second as f32,
+                });
+            }
             row_in_measure += 1;
         }
 
@@ -2340,33 +2343,35 @@ fn parse_chart_rows_with_timing(
             if trimmed.is_empty() {
                 continue;
             }
-            let beat = measure_start + row_in_measure as f32 * row_step;
-            let note_row = beat_to_note_row_f32_exact(beat);
-            let beat = note_row as f32 / ROWS_PER_BEAT as f32;
-            let second = timing.get_time_for_beat_f32(beat as f64);
-            let mut chars = vec![b'0'; column_count];
             let copy_len = trimmed.len().min(column_count);
-            chars[..copy_len].copy_from_slice(&trimmed[..copy_len]);
-            rows.push(ParsedRow {
-                chars,
-                row: note_row,
-                beat,
-                second: second as f32,
-            });
-            let row_index = rows.len() - 1;
-            if dump_rows {
-                let row_text = String::from_utf8_lossy(&rows[row_index].chars);
-                eprintln!(
-                    "STEP_PARITY_ROW idx={} measure={} line={}/{} row={} beat={:.6} second={:.6} data={}",
-                    row_index,
-                    measure_index,
-                    row_in_measure,
-                    num_rows,
-                    note_row,
+            if row_has_obj(&trimmed[..copy_len]) {
+                let beat = measure_start + row_in_measure as f32 * row_step;
+                let note_row = beat_to_note_row_f32_exact(beat);
+                let beat = note_row as f32 / ROWS_PER_BEAT as f32;
+                let second = timing.get_time_for_beat_f32(beat as f64);
+                let mut chars = vec![b'0'; column_count];
+                chars[..copy_len].copy_from_slice(&trimmed[..copy_len]);
+                rows.push(ParsedRow {
+                    chars,
+                    row: note_row,
                     beat,
-                    second as f32,
-                    row_text
-                );
+                    second: second as f32,
+                });
+                let row_index = rows.len() - 1;
+                if dump_rows {
+                    let row_text = String::from_utf8_lossy(&rows[row_index].chars);
+                    eprintln!(
+                        "STEP_PARITY_ROW idx={} measure={} line={}/{} row={} beat={:.6} second={:.6} data={}",
+                        row_index,
+                        measure_index,
+                        row_in_measure,
+                        num_rows,
+                        note_row,
+                        beat,
+                        second as f32,
+                        row_text
+                    );
+                }
             }
             row_in_measure += 1;
         }
