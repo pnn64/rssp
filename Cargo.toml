@@ -72,6 +72,11 @@ path = "tests/rssp_unique_parity.rs"
 harness = false
 
 [[test]]
+name = "all_parity"
+path = "tests/all_parity.rs"
+harness = false
+
+[[test]]
 name = "fast_all_parity"
 path = "tests/fast_all_parity.rs"
 harness = false
