@@ -2,7 +2,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use std::hint::black_box;
 use std::time::Duration;
 
-const FIXTURE: &str = include_str!("fixtures/variation.ssc");
+const FIXTURE: &str = include_str!("fixtures/camellia_mix.ssc");
 const MONO_THRESHOLD: usize = 6;
 
 fn step_type_lanes(step_type: &str) -> usize {

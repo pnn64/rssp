@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use rssp::stats::{BreakdownMode, StreamBreakdownLevel};
 
-const FIXTURE: &str = include_str!("fixtures/variation.ssc");
+const FIXTURE: &str = include_str!("fixtures/camellia_mix.ssc");
 const EXTENSION: &str = "ssc";
 
 #[derive(Clone)]

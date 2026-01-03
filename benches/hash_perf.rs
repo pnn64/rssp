@@ -3,7 +3,7 @@ use std::hint::black_box;
 use std::borrow::Cow;
 use std::time::Duration;
 
-const FIXTURE: &str = include_str!("fixtures/hash_fixture.ssc");
+const FIXTURE: &str = include_str!("fixtures/camellia_mix.ssc");
 
 #[derive(Clone)]
 struct ChartInput {
