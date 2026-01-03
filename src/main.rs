@@ -123,6 +123,8 @@ fn main() -> io::Result<()> {
         eprintln!("  --debug         Print minimized chart note data to stderr");
         eprintln!("  --skip-slow     Skip step parity and pattern variant analysis");
         eprintln!("  --skip-tech     Skip tech count analysis");
+        eprintln!("  --parallel      Enable parallel chart analysis (default)");
+        eprintln!("  --no-parallel   Disable parallel chart analysis");
         eprintln!("  --mono-threshold <value>  Set mono threshold (default: 6)");
         eprintln!("  --custom-pattern <pattern>  Count a custom LRUDN pattern (e.g. DULDUDLR)");
         eprintln!("\nFolder analysis:");
@@ -140,6 +142,13 @@ fn main() -> io::Result<()> {
     let skip_slow = args.iter().any(|a| a == "--skip-slow");
     let skip_tech = skip_slow || args.iter().any(|a| a == "--skip-tech");
     let skip_patterns = skip_slow;
+    let enable_parallel = args.iter().any(|a| a == "--parallel");
+    let disable_parallel = args.iter().any(|a| a == "--no-parallel");
+    if enable_parallel && disable_parallel {
+        eprintln!("Error: --parallel and --no-parallel cannot be used together.");
+        std::process::exit(1);
+    }
+    let parallel = if disable_parallel { false } else { true };
 
     let mut mono_threshold = 6;
     if let Some(pos) = args.iter().position(|arg| arg == "--mono-threshold") {
@@ -190,6 +199,7 @@ fn main() -> io::Result<()> {
         compute_tech_counts: !skip_tech,
         compute_pattern_counts: !skip_patterns,
         translate_markers: false,
+        parallel,
     };
 
     // --- Determine output mode ---

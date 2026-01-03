@@ -46,6 +46,7 @@ pub struct AnalysisOptions {
     pub compute_tech_counts: bool,
     pub compute_pattern_counts: bool,
     pub translate_markers: bool,
+    pub parallel: bool,
 }
 
 impl Default for AnalysisOptions {
@@ -57,6 +58,7 @@ impl Default for AnalysisOptions {
             compute_tech_counts: true,
             compute_pattern_counts: true,
             translate_markers: false,
+            parallel: true,
         }
     }
 }
@@ -866,44 +868,118 @@ pub fn analyze(
     let bpm_values: Vec<f64> = global_bpm_map.iter().map(|&(_, bpm)| bpm).collect();
     let (median_bpm, average_bpm) = compute_bpm_stats(&bpm_values);
 
-    let mut chart_summaries = Vec::with_capacity(parsed_data.notes_list.len());
+    let cleaned_global_bpms_str = cleaned_global_bpms.as_str();
+    let cleaned_global_stops_str = cleaned_global_stops.as_str();
+    let cleaned_global_delays_str = cleaned_global_delays.as_str();
+    let cleaned_global_warps_str = cleaned_global_warps.as_str();
+    let cleaned_global_speeds_str = cleaned_global_speeds.as_str();
+    let cleaned_global_scrolls_str = cleaned_global_scrolls.as_str();
+    let cleaned_global_fakes_str = cleaned_global_fakes.as_str();
+    let normalized_global_bpms_str = normalized_global_bpms.as_str();
+
+    let entries = parsed_data.notes_list;
+    let entry_count = entries.len();
+    let mut chart_summaries = Vec::with_capacity(entry_count);
     let mut total_length = 0i32;
-    for entry in parsed_data.notes_list {
-        if let Some((summary, chart_length)) = build_chart_summary(
-            entry.notes,
-            entry.chart_bpms,
-            entry.chart_delays,
-            entry.chart_warps,
-            entry.chart_stops,
-            entry.chart_speeds,
-            entry.chart_scrolls,
-            entry.chart_fakes,
-            entry.chart_time_signatures,
-            entry.chart_labels,
-            entry.chart_tickcounts,
-            entry.chart_combos,
-            entry.chart_offset,
-            entry.chart_radar_values,
-            &cleaned_global_bpms,
-            &cleaned_global_stops,
-            &cleaned_global_delays,
-            &cleaned_global_warps,
-            &cleaned_global_speeds,
-            &cleaned_global_scrolls,
-            &cleaned_global_fakes,
-            &normalized_global_bpms,
-            offset,
-            extension,
-            timing_format,
-            ssc_version,
-            allow_steps_timing,
-            &compiled_custom_patterns,
-            &options,
-        ) {
-            if chart_length > total_length {
-                total_length = chart_length;
+    let options_ref = &options;
+    let compiled_custom_patterns_ref = &compiled_custom_patterns;
+    let allow_parallel = options.parallel
+        && entry_count > 1
+        && std::thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(1)
+            > 1;
+
+    if allow_parallel {
+        let mut results = Vec::with_capacity(entry_count);
+        std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(entry_count);
+            for entry in entries {
+                handles.push(scope.spawn(move || {
+                    build_chart_summary(
+                        entry.notes,
+                        entry.chart_bpms,
+                        entry.chart_delays,
+                        entry.chart_warps,
+                        entry.chart_stops,
+                        entry.chart_speeds,
+                        entry.chart_scrolls,
+                        entry.chart_fakes,
+                        entry.chart_time_signatures,
+                        entry.chart_labels,
+                        entry.chart_tickcounts,
+                        entry.chart_combos,
+                        entry.chart_offset,
+                        entry.chart_radar_values,
+                        cleaned_global_bpms_str,
+                        cleaned_global_stops_str,
+                        cleaned_global_delays_str,
+                        cleaned_global_warps_str,
+                        cleaned_global_speeds_str,
+                        cleaned_global_scrolls_str,
+                        cleaned_global_fakes_str,
+                        normalized_global_bpms_str,
+                        offset,
+                        extension,
+                        timing_format,
+                        ssc_version,
+                        allow_steps_timing,
+                        compiled_custom_patterns_ref,
+                        options_ref,
+                    )
+                }));
             }
-            chart_summaries.push(summary);
+            for handle in handles {
+                results.push(handle.join().unwrap());
+            }
+        });
+
+        for result in results {
+            if let Some((summary, chart_length)) = result {
+                if chart_length > total_length {
+                    total_length = chart_length;
+                }
+                chart_summaries.push(summary);
+            }
+        }
+    } else {
+        for entry in entries {
+            if let Some((summary, chart_length)) = build_chart_summary(
+                entry.notes,
+                entry.chart_bpms,
+                entry.chart_delays,
+                entry.chart_warps,
+                entry.chart_stops,
+                entry.chart_speeds,
+                entry.chart_scrolls,
+                entry.chart_fakes,
+                entry.chart_time_signatures,
+                entry.chart_labels,
+                entry.chart_tickcounts,
+                entry.chart_combos,
+                entry.chart_offset,
+                entry.chart_radar_values,
+                cleaned_global_bpms_str,
+                cleaned_global_stops_str,
+                cleaned_global_delays_str,
+                cleaned_global_warps_str,
+                cleaned_global_speeds_str,
+                cleaned_global_scrolls_str,
+                cleaned_global_fakes_str,
+                normalized_global_bpms_str,
+                offset,
+                extension,
+                timing_format,
+                ssc_version,
+                allow_steps_timing,
+                compiled_custom_patterns_ref,
+                options_ref,
+            ) {
+                if chart_length > total_length {
+                    total_length = chart_length;
+                }
+                chart_summaries.push(summary);
+            }
         }
     }
 
