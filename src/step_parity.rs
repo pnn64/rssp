@@ -379,7 +379,7 @@ impl Default for TapNoteSubType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct IntermediateNoteData {
     note_type: TapNoteType,
     subtype: TapNoteSubType,
@@ -412,8 +412,10 @@ impl Default for IntermediateNoteData {
 struct Row {
     notes: Vec<IntermediateNoteData>,
     holds: Vec<IntermediateNoteData>,
-    mines: Vec<f32>,
-    fake_mines: Vec<f32>,
+    note_mask: u32,
+    hold_mask: u32,
+    mine_mask: u32,
+    fake_mine_mask: u32,
     columns: Vec<Foot>,
     where_the_feet_are: Vec<isize>,
     second: f32,
@@ -428,8 +430,10 @@ impl Row {
         Self {
             notes: vec![IntermediateNoteData::default(); column_count],
             holds: vec![IntermediateNoteData::default(); column_count],
-            mines: vec![0.0; column_count],
-            fake_mines: vec![0.0; column_count],
+            note_mask: 0,
+            hold_mask: 0,
+            mine_mask: 0,
+            fake_mine_mask: 0,
             columns: vec![Foot::None; column_count],
             where_the_feet_are: vec![INVALID_COLUMN; NUM_FEET],
             second: 0.0,
@@ -462,10 +466,10 @@ impl Row {
 struct RowCounter {
     notes: Vec<IntermediateNoteData>,
     active_holds: Vec<IntermediateNoteData>,
-    mines: Vec<f32>,
-    fake_mines: Vec<f32>,
-    next_mines: Vec<f32>,
-    next_fake_mines: Vec<f32>,
+    mines: u32,
+    fake_mines: u32,
+    next_mines: u32,
+    next_fake_mines: u32,
     last_column_second: f32,
     last_column_beat: f32,
 }
@@ -475,10 +479,10 @@ impl RowCounter {
         Self {
             notes: vec![IntermediateNoteData::default(); column_count],
             active_holds: vec![IntermediateNoteData::default(); column_count],
-            mines: vec![0.0; column_count],
-            fake_mines: vec![0.0; column_count],
-            next_mines: vec![0.0; column_count],
-            next_fake_mines: vec![0.0; column_count],
+            mines: 0,
+            fake_mines: 0,
+            next_mines: 0,
+            next_fake_mines: 0,
             last_column_second: CLM_SECOND_INVALID,
             last_column_beat: CLM_SECOND_INVALID,
         }
@@ -583,6 +587,7 @@ impl StepParityGenerator {
 
     fn create_rows(&mut self, note_data: Vec<IntermediateNoteData>) {
         let column_count = self.column_count;
+        debug_assert!(column_count <= 32);
         let mut counter = RowCounter::new(column_count);
 
         for note in note_data.into_iter() {
@@ -591,16 +596,17 @@ impl StepParityGenerator {
             }
 
             if note.note_type == TapNoteType::Mine {
+                let bit = 1u32 << note.col;
                 if note.second == counter.last_column_second && !self.rows.is_empty() {
                     if note.fake {
-                        counter.next_fake_mines[note.col] = note.second;
+                        counter.next_fake_mines |= bit;
                     } else {
-                        counter.next_mines[note.col] = note.second;
+                        counter.next_mines |= bit;
                     }
                 } else if note.fake {
-                    counter.fake_mines[note.col] = note.second;
+                    counter.fake_mines |= bit;
                 } else {
-                    counter.mines[note.col] = note.second;
+                    counter.mines |= bit;
                 }
                 continue;
             }
@@ -616,11 +622,11 @@ impl StepParityGenerator {
 
                 counter.last_column_second = note.second;
                 counter.last_column_beat = note.beat;
-                counter.next_mines.clone_from(&counter.mines);
-                counter.next_fake_mines.clone_from(&counter.fake_mines);
+                counter.next_mines = counter.mines;
+                counter.next_fake_mines = counter.fake_mines;
                 counter.notes.fill(IntermediateNoteData::default());
-                counter.mines.fill(0.0);
-                counter.fake_mines.fill(0.0);
+                counter.mines = 0;
+                counter.fake_mines = 0;
 
                 for c in 0..column_count {
                     if counter.active_holds[c].note_type == TapNoteType::Empty
@@ -632,9 +638,9 @@ impl StepParityGenerator {
                 }
             }
 
-            counter.notes[note.col] = note.clone();
+            counter.notes[note.col] = note;
             if note.note_type == TapNoteType::HoldHead {
-                counter.active_holds[note.col] = note.clone();
+                counter.active_holds[note.col] = note;
             }
         }
 
@@ -653,20 +659,33 @@ impl StepParityGenerator {
     fn create_row(&self, counter: &RowCounter) -> Row {
         let mut row = Row::new(self.column_count);
         row.notes.clone_from(&counter.notes);
-        row.mines.clone_from(&counter.next_mines);
-        row.fake_mines.clone_from(&counter.next_fake_mines);
+        row.mine_mask = counter.next_mines;
+        row.fake_mine_mask = counter.next_fake_mines;
         row.second = counter.last_column_second;
         row.beat = counter.last_column_beat;
 
+        let mut note_mask = 0u32;
+        let mut hold_mask = 0u32;
+        let mut note_count = 0usize;
+
         for c in 0..self.column_count {
+            if row.notes[c].note_type != TapNoteType::Empty {
+                note_mask |= 1u32 << c;
+                note_count += 1;
+            }
             if counter.active_holds[c].note_type == TapNoteType::Empty
                 || counter.active_holds[c].second >= counter.last_column_second
             {
                 row.holds[c] = IntermediateNoteData::default();
             } else {
-                row.holds[c] = counter.active_holds[c].clone();
+                row.holds[c] = counter.active_holds[c];
+                hold_mask |= 1u32 << c;
             }
         }
+
+        row.note_mask = note_mask;
+        row.hold_mask = hold_mask;
+        row.note_count = note_count;
 
         row
     }
@@ -833,14 +852,7 @@ impl StepParityGenerator {
     }
 
     fn get_foot_placement_permutations(&mut self, row: &Row) -> Rc<[FootPlacement]> {
-        let mut key = 0u32;
-        for i in 0..row.column_count.min(32) {
-            if row.notes[i].note_type != TapNoteType::Empty
-                || row.holds[i].note_type != TapNoteType::Empty
-            {
-                key |= 1 << i;
-            }
-        }
+        let key = row.note_mask | row.hold_mask;
 
         if let Some(perms) = self.permute_cache.get(&key) {
             return Rc::clone(perms);
@@ -1123,13 +1135,29 @@ impl<'a> CostCalculator<'a> {
         let mut left_toe = INVALID_COLUMN;
         let mut right_heel = INVALID_COLUMN;
         let mut right_toe = INVALID_COLUMN;
+        let mut end_left_heel = INVALID_COLUMN;
+        let mut end_left_toe = INVALID_COLUMN;
+        let mut end_right_heel = INVALID_COLUMN;
+        let mut end_right_toe = INVALID_COLUMN;
+        let mut combined_mask = 0u32;
 
-        for (i, &foot) in result.columns.iter().enumerate() {
-            match foot {
+        for i in 0..column_count {
+            match result.columns[i] {
                 Foot::LeftHeel => left_heel = i as isize,
                 Foot::LeftToe => left_toe = i as isize,
                 Foot::RightHeel => right_heel = i as isize,
                 Foot::RightToe => right_toe = i as isize,
+                Foot::None => {}
+            }
+            let combined = result.combined_columns[i];
+            if combined != Foot::None {
+                combined_mask |= 1u32 << i;
+            }
+            match combined {
+                Foot::LeftHeel => end_left_heel = i as isize,
+                Foot::LeftToe => end_left_toe = i as isize,
+                Foot::RightHeel => end_right_heel = i as isize,
+                Foot::RightToe => end_right_toe = i as isize,
                 Foot::None => {}
             }
         }
@@ -1159,8 +1187,10 @@ impl<'a> CostCalculator<'a> {
             did_jump,
         );
 
+        let hold_empty = result.hold_feet.iter().all(|&f| f == Foot::None);
+
         let mut cost = 0.0;
-        cost += self.calc_mine_cost(result, row, column_count);
+        cost += self.calc_mine_cost(combined_mask, row);
         cost += self.calc_hold_switch_cost(initial, result, row, column_count);
         cost += self.calc_bracket_tap_cost(
             initial,
@@ -1183,7 +1213,7 @@ impl<'a> CostCalculator<'a> {
             jacked_left,
             jacked_right,
             did_jump,
-            column_count,
+            hold_empty,
         );
         cost += self.calc_doublestep_cost(
             initial,
@@ -1195,12 +1225,12 @@ impl<'a> CostCalculator<'a> {
             jacked_left,
             jacked_right,
             did_jump,
-            column_count,
+            hold_empty,
         );
         cost += self.calc_slow_bracket_cost(row, moved_left, moved_right, elapsed);
         cost += self.calc_twisted_foot_cost(result);
-        cost += self.calc_facing_cost(initial, result, column_count);
-        cost += self.calc_spin_cost(initial, result, column_count);
+        cost += self.calc_facing_cost(end_left_heel, end_left_toe, end_right_heel, end_right_toe);
+        cost += self.calc_spin_cost(initial, end_left_heel, end_left_toe, end_right_heel, end_right_toe);
         cost += self.calc_footswitch_cost(initial, result, row, elapsed, column_count);
         cost += self.calc_sideswitch_cost(initial, result);
         cost += self.calc_missed_footswitch_cost(row, jacked_left, jacked_right);
@@ -1210,11 +1240,9 @@ impl<'a> CostCalculator<'a> {
         cost
     }
 
-    fn calc_mine_cost(&self, result: &State, row: &Row, column_count: usize) -> f32 {
-        for i in 0..column_count {
-            if result.combined_columns[i] != Foot::None && row.mines[i] != 0.0 {
-                return MINE_WEIGHT;
-            }
+    fn calc_mine_cost(&self, combined_mask: u32, row: &Row) -> f32 {
+        if combined_mask & row.mine_mask != 0 {
+            return MINE_WEIGHT;
         }
         0.0
     }
@@ -1226,6 +1254,9 @@ impl<'a> CostCalculator<'a> {
         row: &Row,
         column_count: usize,
     ) -> f32 {
+        if row.hold_mask == 0 {
+            return 0.0;
+        }
         let mut cost = 0.0;
         for c in 0..column_count {
             if row.holds[c].note_type == TapNoteType::Empty {
@@ -1330,10 +1361,8 @@ impl<'a> CostCalculator<'a> {
         jacked_left: bool,
         jacked_right: bool,
         did_jump: bool,
-        _column_count: usize,
+        hold_empty: bool,
     ) -> f32 {
-        let hold_empty = result.hold_feet.iter().all(|&f| f == Foot::None);
-
         let mut cost = 0.0;
         if moved_left != moved_right && (moved_left || moved_right) && hold_empty && !did_jump {
             if jacked_left
@@ -1364,10 +1393,8 @@ impl<'a> CostCalculator<'a> {
         jacked_left: bool,
         jacked_right: bool,
         did_jump: bool,
-        _column_count: usize,
+        hold_empty: bool,
     ) -> f32 {
-        let hold_empty = result.hold_feet.iter().all(|&f| f == Foot::None);
-
         if moved_left != moved_right && (moved_left || moved_right) && hold_empty && !did_jump {
             if self.did_double_step(
                 initial,
@@ -1394,12 +1421,7 @@ impl<'a> CostCalculator<'a> {
     ) -> f32 {
         if elapsed > SLOW_BRACKET_THRESHOLD
             && moved_left != moved_right
-            && row
-                .notes
-                .iter()
-                .filter(|note| note.note_type != TapNoteType::Empty)
-                .count()
-                >= 2
+            && row.note_count >= 2
         {
             let time_diff = elapsed - SLOW_BRACKET_THRESHOLD;
             return time_diff * SLOW_BRACKET_WEIGHT;
@@ -1435,22 +1457,13 @@ impl<'a> CostCalculator<'a> {
         }
     }
 
-    fn calc_facing_cost(&self, _initial: &State, result: &State, column_count: usize) -> f32 {
-        let mut end_left_heel = INVALID_COLUMN;
-        let mut end_left_toe = INVALID_COLUMN;
-        let mut end_right_heel = INVALID_COLUMN;
-        let mut end_right_toe = INVALID_COLUMN;
-
-        for i in 0..column_count {
-            match result.combined_columns[i] {
-                Foot::LeftHeel => end_left_heel = i as isize,
-                Foot::LeftToe => end_left_toe = i as isize,
-                Foot::RightHeel => end_right_heel = i as isize,
-                Foot::RightToe => end_right_toe = i as isize,
-                Foot::None => {}
-            }
-        }
-
+    fn calc_facing_cost(
+        &self,
+        mut end_left_heel: isize,
+        mut end_left_toe: isize,
+        mut end_right_heel: isize,
+        mut end_right_toe: isize,
+    ) -> f32 {
         if end_left_toe == INVALID_COLUMN {
             end_left_toe = end_left_heel;
         }
@@ -1506,22 +1519,14 @@ impl<'a> CostCalculator<'a> {
         cost
     }
 
-    fn calc_spin_cost(&self, initial: &State, result: &State, column_count: usize) -> f32 {
-        let mut end_left_heel = INVALID_COLUMN;
-        let mut end_left_toe = INVALID_COLUMN;
-        let mut end_right_heel = INVALID_COLUMN;
-        let mut end_right_toe = INVALID_COLUMN;
-
-        for i in 0..column_count {
-            match result.combined_columns[i] {
-                Foot::LeftHeel => end_left_heel = i as isize,
-                Foot::LeftToe => end_left_toe = i as isize,
-                Foot::RightHeel => end_right_heel = i as isize,
-                Foot::RightToe => end_right_toe = i as isize,
-                Foot::None => {}
-            }
-        }
-
+    fn calc_spin_cost(
+        &self,
+        initial: &State,
+        mut end_left_heel: isize,
+        mut end_left_toe: isize,
+        mut end_right_heel: isize,
+        mut end_right_toe: isize,
+    ) -> f32 {
         if end_left_toe == INVALID_COLUMN {
             end_left_toe = end_left_heel;
         }
@@ -1570,9 +1575,7 @@ impl<'a> CostCalculator<'a> {
             return 0.0;
         }
 
-        if row.mines.iter().all(|mine| (*mine as i32) == 0)
-            && row.fake_mines.iter().all(|mine| (*mine as i32) == 0)
-        {
+        if row.mine_mask == 0 && row.fake_mine_mask == 0 {
             let time_scaled = elapsed - SLOW_FOOTSWITCH_THRESHOLD;
             for i in 0..column_count {
                 if initial.combined_columns[i] == Foot::None || result.columns[i] == Foot::None {
@@ -1608,10 +1611,7 @@ impl<'a> CostCalculator<'a> {
     }
 
     fn calc_missed_footswitch_cost(&self, row: &Row, jacked_left: bool, jacked_right: bool) -> f32 {
-        if (jacked_left || jacked_right)
-            && (row.mines.iter().any(|mine| (*mine as i32) != 0)
-                || row.fake_mines.iter().any(|mine| (*mine as i32) != 0))
-        {
+        if (jacked_left || jacked_right) && (row.mine_mask | row.fake_mine_mask) != 0 {
             MISSED_FOOTSWITCH_WEIGHT
         } else {
             0.0
