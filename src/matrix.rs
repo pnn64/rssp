@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::LazyLock;
 
-use crate::bpm::get_current_bpm;
+use crate::bpm::for_each_measure_bpm;
 use crate::stats::{categorize_measure_density, RunDensity};
 
 /// Sorted difficulty table for efficient bound queries.
@@ -236,20 +236,13 @@ pub fn compute_matrix_rating(measure_densities: &[usize], bpm_map: &[(f64, f64)]
 
     let mut stream_counts: HashMap<(RunDensity, u64), usize> = HashMap::new();
 
-    for (i, &density) in measure_densities.iter().enumerate() {
+    for_each_measure_bpm(measure_densities.len(), bpm_map, 4.0, |idx, bpm| {
+        let density = measure_densities[idx];
         let category = categorize_measure_density(density);
-        if category == RunDensity::Break {
-            continue;
+        if category != RunDensity::Break && bpm > 0.0 {
+            *stream_counts.entry((category, bpm.to_bits())).or_insert(0) += 1;
         }
-
-        let beat = i as f64 * 4.0;
-        let bpm = get_current_bpm(beat, bpm_map);
-        if bpm <= 0.0 {
-            continue;
-        }
-
-        *stream_counts.entry((category, bpm.to_bits())).or_insert(0) += 1;
-    }
+    });
 
     stream_counts
         .into_iter()

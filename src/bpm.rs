@@ -457,6 +457,40 @@ pub fn get_current_bpm(beat: f64, bpm_map: &[(f64, f64)]) -> f64 {
     }
 }
 
+#[inline(always)]
+pub(crate) fn for_each_measure_bpm<F>(
+    measure_count: usize,
+    bpm_map: &[(f64, f64)],
+    beats_per_measure: f64,
+    mut f: F,
+) where
+    F: FnMut(usize, f64),
+{
+    if measure_count == 0 || bpm_map.is_empty() {
+        return;
+    }
+
+    let mut bpm_idx = 0usize;
+    let mut cur_bpm = bpm_map[0].1;
+    let mut next_change = bpm_map
+        .get(1)
+        .map(|(beat, _)| *beat)
+        .unwrap_or(f64::INFINITY);
+
+    for idx in 0..measure_count {
+        let beat = idx as f64 * beats_per_measure;
+        while beat >= next_change {
+            bpm_idx += 1;
+            cur_bpm = bpm_map[bpm_idx].1;
+            next_change = bpm_map
+                .get(bpm_idx + 1)
+                .map(|(b, _)| *b)
+                .unwrap_or(f64::INFINITY);
+        }
+        f(idx, cur_bpm);
+    }
+}
+
 /// Threshold for determining if a BPM is a "gimmick" (warp/visual effect) vs playable.
 /// Matches Simply Love's logic roughly (SL uses 0.12s/measure which is ~2000 BPM).
 /// We use 10,000 here to be conservative but catch the millions.
@@ -1147,41 +1181,42 @@ pub fn compute_tier_bpm(
         bpm_map.iter().map(|&(_, bpm)| bpm).fold(f64::NEG_INFINITY, f64::max)
     };
 
-    let cats: Vec<RunDensity> = measure_densities
-        .iter()
-        .map(|&d| categorize_measure_density(d))
-        .collect();
-    let mut max_e: f64 = 0.0;
+    let mut max_e = 0.0f64;
+    let mut run_cat = RunDensity::Break;
+    let mut run_len = 0usize;
+    let mut run_max_e = 0.0f64;
 
-    let mut i = 0;
-    while i < cats.len() {
-        let cat = cats[i];
+    for_each_measure_bpm(measure_densities.len(), bpm_map, beats_per_measure, |idx, bpm| {
+        let density = measure_densities[idx];
+        let cat = categorize_measure_density(density);
         if cat == RunDensity::Break {
-            i += 1;
-            continue;
-        }
-
-        let mut j = i;
-        while j < cats.len() && cats[j] == cat {
-            j += 1;
-        }
-        let seq_len = j - i;
-
-        if seq_len >= 4 {
-            for k in i..j {
-                let beat = k as f64 * beats_per_measure;
-                let bpm_k = get_current_bpm(beat, bpm_map);
-                
-                // Only count stream density for playable BPMs.
-                // If it's a gimmick warp, the stream doesn't physically exist for the player.
-                if is_display_bpm(bpm_k) {
-                    let d_k = measure_densities[k] as f64;
-                    let e_k = (d_k * bpm_k) / 16.0;
-                    max_e = max_e.max(e_k);
+            if run_len >= 4 {
+                max_e = max_e.max(run_max_e);
+            }
+            run_cat = RunDensity::Break;
+            run_len = 0;
+            run_max_e = 0.0;
+        } else {
+            if run_len == 0 || cat != run_cat {
+                if run_len >= 4 {
+                    max_e = max_e.max(run_max_e);
+                }
+                run_cat = cat;
+                run_len = 0;
+                run_max_e = 0.0;
+            }
+            run_len += 1;
+            if is_display_bpm(bpm) {
+                let e_k = (density as f64 * bpm) / 16.0;
+                if e_k > run_max_e {
+                    run_max_e = e_k;
                 }
             }
         }
-        i = j;
+    });
+
+    if run_len >= 4 {
+        max_e = max_e.max(run_max_e);
     }
 
     if max_e > 0.0 {
