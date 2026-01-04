@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::hash::Hasher;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
 
 use crate::timing::{beat_to_note_row_f32_exact, TimingData, ROWS_PER_BEAT};
@@ -127,10 +127,20 @@ impl Hasher for IdentityHasher {
         self.0 = value as u64;
     }
 
+    fn write_u32(&mut self, value: u32) {
+        self.0 = value as u64;
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.0 = value;
+    }
+
     fn finish(&self) -> u64 {
         self.0
     }
 }
+
+type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<IdentityHasher>>;
 
 #[derive(Debug, Clone, Copy)]
 struct NeighborEntry {
@@ -545,8 +555,8 @@ impl StepParityNode {
 struct StepParityGenerator {
     layout: StageLayout,
     column_count: usize,
-    permute_cache: HashMap<u32, Rc<[FootPlacement]>>,
-    state_cache: HashMap<u64, Rc<State>>,
+    permute_cache: FastMap<u32, Rc<[FootPlacement]>>,
+    state_cache: FastMap<u64, Rc<State>>,
     nodes: Vec<Box<StepParityNode>>,
     rows: Vec<Row>,
 }
@@ -556,8 +566,8 @@ impl StepParityGenerator {
         Self {
             column_count: layout.column_count(),
             layout,
-            permute_cache: HashMap::new(),
-            state_cache: HashMap::new(),
+            permute_cache: FastMap::default(),
+            state_cache: FastMap::default(),
             nodes: Vec::new(),
             rows: Vec::new(),
         }
@@ -675,269 +685,68 @@ impl StepParityGenerator {
         self.nodes.clear();
         self.state_cache.clear();
 
-        let start_state = Rc::new(State::new(self.column_count));
-        let start_second = self.rows.first().map(|r| r.second - 1.0).unwrap_or(-1.0);
-        let start_id = self.add_node(start_state, start_second, -1);
+        let column_count = self.column_count;
+        let layout = &self.layout;
+        let cost_calculator = CostCalculator::new(layout);
+        let rows = &self.rows;
+        let permute_cache = &mut self.permute_cache;
+        let state_cache = &mut self.state_cache;
+        let nodes = &mut self.nodes;
+
+        let start_state = Rc::new(State::new(column_count));
+        let start_second = rows.first().map(|r| r.second - 1.0).unwrap_or(-1.0);
+        let start_id = add_node(nodes, start_state, start_second);
 
         let mut prev_node_ids = vec![start_id];
-        let layout = self.layout.clone();
-        let cost_calculator = CostCalculator::new(&layout);
 
-        for i in 0..self.rows.len() {
-            let row_clone = self.rows[i].clone();
-            let permutations = self.get_foot_placement_permutations(&row_clone);
-            let mut result_nodes_for_row: Vec<usize> = Vec::new();
+        for (i, row) in rows.iter().enumerate() {
+            let permutations = perms_for_row(permute_cache, layout, row);
+            let mut result_nodes_for_row: Vec<usize> = Vec::with_capacity(permutations.len());
+            let mut result_node_map: FastMap<usize, usize> = FastMap::default();
+            result_node_map.reserve(permutations.len());
 
             for &initial_node_id in &prev_node_ids {
-                let initial_state = Rc::clone(&self.nodes[initial_node_id].state);
-                let elapsed = row_clone.second - self.nodes[initial_node_id].second;
+                let (initial_state, initial_second) = {
+                    let node = &nodes[initial_node_id];
+                    (Rc::clone(&node.state), node.second)
+                };
+                let elapsed = row.second - initial_second;
 
                 for perm in permutations.iter() {
-                    let result_state = self.init_result_state(&initial_state, &row_clone, perm);
+                    let result_state = init_result_state(state_cache, &initial_state, row, perm);
                     let cost = cost_calculator.get_action_cost(
                         &initial_state,
                         &result_state,
-                        &self.rows,
+                        rows,
                         i,
                         elapsed,
                     );
 
-                    let result_node_id = if let Some(&id) = result_nodes_for_row
-                        .iter()
-                        .find(|&&id| Rc::ptr_eq(&self.nodes[id].state, &result_state))
-                    {
+                    // Rc pointers are stable; use the address for per-row dedupe.
+                    let state_key = Rc::as_ptr(&result_state) as usize;
+                    let result_node_id = if let Some(&id) = result_node_map.get(&state_key) {
                         id
                     } else {
-                        let id = self.add_node(
-                            Rc::clone(&result_state),
-                            row_clone.second,
-                            row_clone.row_index as isize,
-                        );
+                        let id = add_node(nodes, Rc::clone(&result_state), row.second);
                         result_nodes_for_row.push(id);
+                        result_node_map.insert(state_key, id);
                         id
                     };
 
-                    self.add_edge(initial_node_id, result_node_id, cost);
+                    add_edge(nodes, initial_node_id, result_node_id, cost);
                 }
             }
 
             prev_node_ids = result_nodes_for_row;
         }
 
-        let end_state = Rc::new(State::new(self.column_count));
-        let end_second = self.rows.last().map(|r| r.second + 1.0).unwrap_or(1.0);
-        let end_id = self.add_node(end_state, end_second, self.rows.len() as isize);
+        let end_state = Rc::new(State::new(column_count));
+        let end_second = rows.last().map(|r| r.second + 1.0).unwrap_or(1.0);
+        let end_id = add_node(nodes, end_state, end_second);
 
         for node_id in prev_node_ids {
-            self.add_edge(node_id, end_id, 0.0);
+            add_edge(nodes, node_id, end_id, 0.0);
         }
-    }
-
-    fn init_result_state(
-        &mut self,
-        initial_state: &State,
-        row: &Row,
-        columns: &[Foot],
-    ) -> Rc<State> {
-        let mut result_state = State::new(self.column_count);
-
-        for foot_idx in 0..NUM_FEET {
-            result_state.where_the_feet_are[foot_idx] = INVALID_COLUMN;
-            result_state.what_note_the_foot_is_hitting[foot_idx] = INVALID_COLUMN;
-            result_state.did_the_foot_move[foot_idx] = false;
-            result_state.is_the_foot_holding[foot_idx] = false;
-        }
-
-        for i in 0..self.column_count {
-            result_state.columns[i] = columns[i];
-            result_state.combined_columns[i] = Foot::None;
-        }
-
-        for (i, &foot) in columns.iter().enumerate() {
-            if foot == Foot::None {
-                continue;
-            }
-            let foot_index = foot.as_index();
-            result_state.what_note_the_foot_is_hitting[foot_index] = i as isize;
-
-            if row.holds[i].note_type == TapNoteType::Empty {
-                result_state.moved_feet[i] = foot;
-                result_state.did_the_foot_move[foot_index] = true;
-                continue;
-            }
-            if initial_state.combined_columns[i] != foot {
-                result_state.moved_feet[i] = foot;
-                result_state.did_the_foot_move[foot_index] = true;
-            }
-        }
-
-        for (i, &foot) in columns.iter().enumerate() {
-            if foot == Foot::None {
-                continue;
-            }
-            if row.holds[i].note_type != TapNoteType::Empty {
-                result_state.hold_feet[i] = foot;
-                result_state.is_the_foot_holding[foot.as_index()] = true;
-            }
-        }
-
-        self.merge_initial_and_result_position(initial_state, &mut result_state);
-
-        for (col, &foot) in result_state.combined_columns.iter().enumerate() {
-            if foot != Foot::None {
-                result_state.where_the_feet_are[foot.as_index()] = col as isize;
-            }
-        }
-
-        let hash = get_state_cache_key(&result_state);
-        if let Some(existing) = self.state_cache.get(&hash) {
-            return Rc::clone(existing);
-        }
-
-        let rc = Rc::new(result_state);
-        self.state_cache.insert(hash, Rc::clone(&rc));
-        rc
-    }
-
-    fn merge_initial_and_result_position(&self, initial: &State, result: &mut State) {
-        for i in 0..self.column_count {
-            if result.columns[i] != Foot::None {
-                result.combined_columns[i] = result.columns[i];
-                continue;
-            }
-
-            match initial.combined_columns[i] {
-                Foot::LeftHeel | Foot::RightHeel => {
-                    let prev = initial.combined_columns[i];
-                    if prev != Foot::None && !result.did_the_foot_move[prev.as_index()] {
-                        result.combined_columns[i] = prev;
-                    }
-                }
-                Foot::LeftToe => {
-                    if !result.did_the_foot_move[Foot::LeftToe.as_index()]
-                        && !result.did_the_foot_move[Foot::LeftHeel.as_index()]
-                    {
-                        result.combined_columns[i] = Foot::LeftToe;
-                    }
-                }
-                Foot::RightToe => {
-                    if !result.did_the_foot_move[Foot::RightToe.as_index()]
-                        && !result.did_the_foot_move[Foot::RightHeel.as_index()]
-                    {
-                        result.combined_columns[i] = Foot::RightToe;
-                    }
-                }
-                Foot::None => {}
-            }
-        }
-    }
-
-    fn get_foot_placement_permutations(&mut self, row: &Row) -> Rc<[FootPlacement]> {
-        let mut key = 0u32;
-        for i in 0..row.column_count.min(32) {
-            if row.notes[i].note_type != TapNoteType::Empty
-                || row.holds[i].note_type != TapNoteType::Empty
-            {
-                key |= 1 << i;
-            }
-        }
-
-        if let Some(perms) = self.permute_cache.get(&key) {
-            return Rc::clone(perms);
-        }
-
-        let mut columns = vec![Foot::None; row.column_count];
-        let mut perms = Vec::new();
-        self.permute_recursive(row, &mut columns, 0, false, 0, &mut perms);
-        if perms.is_empty() {
-            self.permute_recursive(row, &mut columns, 0, true, 0, &mut perms);
-        }
-        if perms.is_empty() {
-            columns.fill(Foot::None);
-            perms.push(columns);
-        }
-
-        let perms = Rc::from(perms.into_boxed_slice());
-        self.permute_cache.insert(key, Rc::clone(&perms));
-        perms
-    }
-
-    fn permute_recursive(
-        &self,
-        row: &Row,
-        columns: &mut [Foot],
-        column: usize,
-        ignore_holds: bool,
-        used_mask: u8,
-        out: &mut Vec<FootPlacement>,
-    ) {
-        if column >= columns.len() {
-            let mut left_heel = INVALID_COLUMN;
-            let mut left_toe = INVALID_COLUMN;
-            let mut right_heel = INVALID_COLUMN;
-            let mut right_toe = INVALID_COLUMN;
-
-            for (idx, foot) in columns.iter().enumerate() {
-                match foot {
-                    Foot::LeftHeel => left_heel = idx as isize,
-                    Foot::LeftToe => left_toe = idx as isize,
-                    Foot::RightHeel => right_heel = idx as isize,
-                    Foot::RightToe => right_toe = idx as isize,
-                    Foot::None => {}
-                }
-            }
-
-            if (left_heel == INVALID_COLUMN && left_toe != INVALID_COLUMN)
-                || (right_heel == INVALID_COLUMN && right_toe != INVALID_COLUMN)
-            {
-                return;
-            }
-
-            if left_heel != INVALID_COLUMN && left_toe != INVALID_COLUMN {
-                if !self
-                    .layout
-                    .bracket_check(left_heel as usize, left_toe as usize)
-                {
-                    return;
-                }
-            }
-
-            if right_heel != INVALID_COLUMN && right_toe != INVALID_COLUMN {
-                if !self
-                    .layout
-                    .bracket_check(right_heel as usize, right_toe as usize)
-                {
-                    return;
-                }
-            }
-
-            out.push(columns.to_vec());
-            return;
-        }
-
-        if row.notes[column].note_type != TapNoteType::Empty
-            || (!ignore_holds && row.holds[column].note_type != TapNoteType::Empty)
-        {
-            for &foot in &FEET {
-                let foot_mask = FOOT_MASKS[foot.as_index()];
-                if used_mask & foot_mask != 0 {
-                    continue;
-                }
-                columns[column] = foot;
-                self.permute_recursive(
-                    row,
-                    columns,
-                    column + 1,
-                    ignore_holds,
-                    used_mask | foot_mask,
-                    out,
-                );
-                columns[column] = Foot::None;
-            }
-            return;
-        }
-
-        self.permute_recursive(row, columns, column + 1, ignore_holds, used_mask, out);
     }
 
     fn compute_cheapest_path(&self) -> Vec<usize> {
@@ -1064,18 +873,225 @@ impl StepParityGenerator {
         true
     }
 
-    fn add_node(&mut self, state: Rc<State>, second: f32, _row_index: isize) -> usize {
-        let id = self.nodes.len();
-        self.nodes
-            .push(Box::new(StepParityNode::new(state, second)));
-        id
+}
+
+fn init_result_state(
+    state_cache: &mut FastMap<u64, Rc<State>>,
+    initial_state: &State,
+    row: &Row,
+    columns: &[Foot],
+) -> Rc<State> {
+    let column_count = columns.len();
+    let mut result_state = State::new(column_count);
+
+    for foot_idx in 0..NUM_FEET {
+        result_state.where_the_feet_are[foot_idx] = INVALID_COLUMN;
+        result_state.what_note_the_foot_is_hitting[foot_idx] = INVALID_COLUMN;
+        result_state.did_the_foot_move[foot_idx] = false;
+        result_state.is_the_foot_holding[foot_idx] = false;
     }
 
-    fn add_edge(&mut self, from_id: usize, to_id: usize, cost: f32) {
-        if let Some(node) = self.nodes.get_mut(from_id) {
-            node.neighbors.insert(to_id, cost);
+    for i in 0..column_count {
+        result_state.columns[i] = columns[i];
+        result_state.combined_columns[i] = Foot::None;
+    }
+
+    for (i, &foot) in columns.iter().enumerate() {
+        if foot == Foot::None {
+            continue;
+        }
+        let foot_index = foot.as_index();
+        result_state.what_note_the_foot_is_hitting[foot_index] = i as isize;
+
+        if row.holds[i].note_type == TapNoteType::Empty {
+            result_state.moved_feet[i] = foot;
+            result_state.did_the_foot_move[foot_index] = true;
+            continue;
+        }
+        if initial_state.combined_columns[i] != foot {
+            result_state.moved_feet[i] = foot;
+            result_state.did_the_foot_move[foot_index] = true;
         }
     }
+
+    for (i, &foot) in columns.iter().enumerate() {
+        if foot == Foot::None {
+            continue;
+        }
+        if row.holds[i].note_type != TapNoteType::Empty {
+            result_state.hold_feet[i] = foot;
+            result_state.is_the_foot_holding[foot.as_index()] = true;
+        }
+    }
+
+    merge_initial_and_result_position(initial_state, &mut result_state);
+
+    for (col, &foot) in result_state.combined_columns.iter().enumerate() {
+        if foot != Foot::None {
+            result_state.where_the_feet_are[foot.as_index()] = col as isize;
+        }
+    }
+
+    let hash = get_state_cache_key(&result_state);
+    if let Some(existing) = state_cache.get(&hash) {
+        return Rc::clone(existing);
+    }
+
+    let rc = Rc::new(result_state);
+    state_cache.insert(hash, Rc::clone(&rc));
+    rc
+}
+
+fn merge_initial_and_result_position(initial: &State, result: &mut State) {
+    for i in 0..result.columns.len() {
+        if result.columns[i] != Foot::None {
+            result.combined_columns[i] = result.columns[i];
+            continue;
+        }
+
+        match initial.combined_columns[i] {
+            Foot::LeftHeel | Foot::RightHeel => {
+                let prev = initial.combined_columns[i];
+                if prev != Foot::None && !result.did_the_foot_move[prev.as_index()] {
+                    result.combined_columns[i] = prev;
+                }
+            }
+            Foot::LeftToe => {
+                if !result.did_the_foot_move[Foot::LeftToe.as_index()]
+                    && !result.did_the_foot_move[Foot::LeftHeel.as_index()]
+                {
+                    result.combined_columns[i] = Foot::LeftToe;
+                }
+            }
+            Foot::RightToe => {
+                if !result.did_the_foot_move[Foot::RightToe.as_index()]
+                    && !result.did_the_foot_move[Foot::RightHeel.as_index()]
+                {
+                    result.combined_columns[i] = Foot::RightToe;
+                }
+            }
+            Foot::None => {}
+        }
+    }
+}
+
+fn add_node(nodes: &mut Vec<Box<StepParityNode>>, state: Rc<State>, second: f32) -> usize {
+    let id = nodes.len();
+    nodes.push(Box::new(StepParityNode::new(state, second)));
+    id
+}
+
+fn add_edge(nodes: &mut Vec<Box<StepParityNode>>, from_id: usize, to_id: usize, cost: f32) {
+    if let Some(node) = nodes.get_mut(from_id) {
+        node.neighbors.insert(to_id, cost);
+    }
+}
+
+fn perms_for_row(
+    permute_cache: &mut FastMap<u32, Rc<[FootPlacement]>>,
+    layout: &StageLayout,
+    row: &Row,
+) -> Rc<[FootPlacement]> {
+    let mut key = 0u32;
+    for i in 0..row.column_count.min(32) {
+        if row.notes[i].note_type != TapNoteType::Empty
+            || row.holds[i].note_type != TapNoteType::Empty
+        {
+            key |= 1 << i;
+        }
+    }
+
+    if let Some(perms) = permute_cache.get(&key) {
+        return Rc::clone(perms);
+    }
+
+    let mut columns = vec![Foot::None; row.column_count];
+    let mut perms = Vec::new();
+    permute_row(layout, row, &mut columns, 0, false, 0, &mut perms);
+    if perms.is_empty() {
+        permute_row(layout, row, &mut columns, 0, true, 0, &mut perms);
+    }
+    if perms.is_empty() {
+        columns.fill(Foot::None);
+        perms.push(columns);
+    }
+
+    let perms = Rc::from(perms.into_boxed_slice());
+    permute_cache.insert(key, Rc::clone(&perms));
+    perms
+}
+
+fn permute_row(
+    layout: &StageLayout,
+    row: &Row,
+    columns: &mut [Foot],
+    column: usize,
+    ignore_holds: bool,
+    used_mask: u8,
+    out: &mut Vec<FootPlacement>,
+) {
+    if column >= columns.len() {
+        let mut left_heel = INVALID_COLUMN;
+        let mut left_toe = INVALID_COLUMN;
+        let mut right_heel = INVALID_COLUMN;
+        let mut right_toe = INVALID_COLUMN;
+
+        for (idx, foot) in columns.iter().enumerate() {
+            match foot {
+                Foot::LeftHeel => left_heel = idx as isize,
+                Foot::LeftToe => left_toe = idx as isize,
+                Foot::RightHeel => right_heel = idx as isize,
+                Foot::RightToe => right_toe = idx as isize,
+                Foot::None => {}
+            }
+        }
+
+        if (left_heel == INVALID_COLUMN && left_toe != INVALID_COLUMN)
+            || (right_heel == INVALID_COLUMN && right_toe != INVALID_COLUMN)
+        {
+            return;
+        }
+
+        if left_heel != INVALID_COLUMN && left_toe != INVALID_COLUMN {
+            if !layout.bracket_check(left_heel as usize, left_toe as usize) {
+                return;
+            }
+        }
+
+        if right_heel != INVALID_COLUMN && right_toe != INVALID_COLUMN {
+            if !layout.bracket_check(right_heel as usize, right_toe as usize) {
+                return;
+            }
+        }
+
+        out.push(columns.to_vec());
+        return;
+    }
+
+    if row.notes[column].note_type != TapNoteType::Empty
+        || (!ignore_holds && row.holds[column].note_type != TapNoteType::Empty)
+    {
+        for &foot in &FEET {
+            let foot_mask = FOOT_MASKS[foot.as_index()];
+            if used_mask & foot_mask != 0 {
+                continue;
+            }
+            columns[column] = foot;
+            permute_row(
+                layout,
+                row,
+                columns,
+                column + 1,
+                ignore_holds,
+                used_mask | foot_mask,
+                out,
+            );
+            columns[column] = Foot::None;
+        }
+        return;
+    }
+
+    permute_row(layout, row, columns, column + 1, ignore_holds, used_mask, out);
 }
 
 fn get_state_cache_key(state: &State) -> u64 {
