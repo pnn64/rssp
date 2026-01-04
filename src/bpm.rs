@@ -738,57 +738,6 @@ fn compute_last_beat_impl<const LANES: usize>(minimized_note_data: &[u8]) -> f64
     crate::timing::note_row_to_beat(row)
 }
 
-#[inline(always)]
-fn trim_leading_ws(line: &[u8]) -> &[u8] {
-    if line.is_empty() || !line[0].is_ascii_whitespace() {
-        return line;
-    }
-    let mut start = 1usize;
-    while start < line.len() && line[start].is_ascii_whitespace() {
-        start += 1;
-    }
-    &line[start..]
-}
-
-#[inline(always)]
-fn line_is_all_zero<const LANES: usize>(line: &[u8]) -> bool {
-    for i in 0..LANES {
-        if line[i] != b'0' {
-            return false;
-        }
-    }
-    true
-}
-
-#[inline(always)]
-fn finalize_last_measure(
-    measure_idx: usize,
-    row_count: usize,
-    min_tz_nonzero: u32,
-    last_row_raw: usize,
-    has_object: bool,
-    last_measure_idx: &mut Option<usize>,
-    last_row_min: &mut usize,
-    last_rows_min: &mut usize,
-) {
-    if row_count == 0 || !has_object {
-        return;
-    }
-    let tz_rows = row_count.trailing_zeros();
-    let k = if min_tz_nonzero == u32::MAX {
-        tz_rows
-    } else if min_tz_nonzero < tz_rows {
-        min_tz_nonzero
-    } else {
-        tz_rows
-    } as usize;
-    let rows_min = row_count >> k;
-    let row_min = last_row_raw >> k;
-    *last_measure_idx = Some(measure_idx);
-    *last_row_min = row_min;
-    *last_rows_min = rows_min;
-}
-
 /// Computes the beat of the last playable object in the chart from minimized note data.
 ///
 /// The minimized format produced by `minimize_chart_and_count_with_lanes` is:
