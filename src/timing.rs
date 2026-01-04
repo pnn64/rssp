@@ -129,7 +129,7 @@ pub fn round_millis(value: f64) -> f64 {
 }
 
 #[inline(always)]
-fn round_sig_figs_itg(value: f64) -> f64 {
+pub(crate) fn round_sig_figs_itg(value: f64) -> f64 {
     // Match itgmania-reference-harness default stream formatting: 6 significant digits.
     if !value.is_finite() || value == 0.0 {
         return value;
