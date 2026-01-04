@@ -183,6 +183,7 @@ fn compute_simple_quad_parts(
 pub struct ChartSummary {
     pub step_type_str:     String,
     pub step_artist_str:   String,
+    pub description_str:   String,
     pub difficulty_str:    String,
     pub rating_str:        String,
     pub matrix_rating:     f64,

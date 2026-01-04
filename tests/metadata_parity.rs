@@ -7,11 +7,6 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::parse::{
-    extract_sections, normalize_chart_desc, parse_version, split_notes_fields, unescape_tag,
-    unescape_trim,
-};
-use rssp::timing::TimingFormat;
 use rssp::{analyze, display_metadata, AnalysisOptions};
 
 #[derive(Debug, Deserialize)]
@@ -186,54 +181,23 @@ fn parse_metadata(simfile_data: &[u8], extension: &str) -> Result<ParsedMetadata
 }
 
 fn parse_step_artists(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartStepArtist>, String> {
-    let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
-    let timing_format = TimingFormat::from_extension(extension);
-    let ssc_version = parse_version(parsed_data.version, timing_format);
-    let mut results = Vec::new();
-
-    for entry in parsed_data.notes_list {
-        let (fields, _) = split_notes_fields(&entry.notes);
-        if fields.len() < 5 {
-            continue;
-        }
-
-        let step_type_raw = std::str::from_utf8(fields[0]).unwrap_or("");
-        let step_type_unescaped = unescape_trim(step_type_raw);
-        let step_type = normalize_step_type(&step_type_unescaped);
-        if step_type.is_empty() || step_type == "lights-cabinet" {
-            continue;
-        }
-
-        let description_raw = std::str::from_utf8(fields[1]).unwrap_or("");
-        let description_raw = unescape_trim(description_raw);
-        let description = normalize_chart_desc(description_raw, timing_format, ssc_version);
-        let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("");
-        let difficulty_unescaped = unescape_trim(difficulty_raw);
-        let meter_raw = std::str::from_utf8(fields[3]).unwrap_or("");
-        let meter_unescaped = unescape_trim(meter_raw);
-        let difficulty = rssp::resolve_difficulty_label(
-            &difficulty_unescaped,
-            &description,
-            &meter_unescaped,
-            extension,
-        )
-        .to_ascii_lowercase();
-        let meter = meter_unescaped.parse::<u32>().ok();
-        let step_artist = if extension.eq_ignore_ascii_case("ssc") {
-            unescape_tag(std::str::from_utf8(fields[4]).unwrap_or(""))
-        } else {
-            description.clone()
-        };
-
+    let options = AnalysisOptions {
+        compute_tech_counts: false,
+        translate_markers: true,
+        ..AnalysisOptions::default()
+    };
+    let summary = analyze(simfile_data, extension, options).map_err(|e| e.to_string())?;
+    let mut results = Vec::with_capacity(summary.charts.len());
+    for chart in summary.charts {
+        let meter = chart.rating_str.trim().parse::<u32>().ok();
         results.push(ChartStepArtist {
-            step_type,
-            difficulty,
-            description,
-            step_artist,
+            step_type: normalize_step_type(&chart.step_type_str),
+            difficulty: chart.difficulty_str.to_ascii_lowercase(),
+            description: chart.description_str,
+            step_artist: chart.step_artist_str,
             meter,
         });
     }
-
     Ok(results)
 }
 

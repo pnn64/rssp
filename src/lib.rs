@@ -646,6 +646,7 @@ fn build_chart_summary(
     Some((ChartSummary {
         step_type_str,
         step_artist_str,
+        description_str: description,
         difficulty_str,
         rating_str,
         tech_notation_str,
