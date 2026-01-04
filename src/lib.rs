@@ -210,11 +210,11 @@ pub fn display_metadata(
     )
 }
 
-fn chart_timing_tag_pair(tag: Option<Vec<u8>>) -> (Option<String>, Option<String>) {
+fn chart_timing_tag_pair(tag: Option<&[u8]>) -> (Option<String>, Option<String>) {
     let Some(bytes) = tag else {
         return (None, None);
     };
-    let Ok(text) = std::str::from_utf8(&bytes) else {
+    let Ok(text) = std::str::from_utf8(bytes) else {
         return (None, None);
     };
     let raw = clean_timing_map(text);
@@ -224,9 +224,9 @@ fn chart_timing_tag_pair(tag: Option<Vec<u8>>) -> (Option<String>, Option<String
     (raw, norm)
 }
 
-fn chart_timing_tag_raw(tag: Option<Vec<u8>>) -> Option<String> {
+fn chart_timing_tag_raw(tag: Option<&[u8]>) -> Option<String> {
     let bytes = tag?;
-    let text = std::str::from_utf8(&bytes).ok()?;
+    let text = std::str::from_utf8(bytes).ok()?;
     let cleaned = clean_timing_map(text);
     if cleaned.is_empty() { None } else { Some(cleaned) }
 }
@@ -387,20 +387,20 @@ fn compute_derived_chart_metrics(
 
 /// Processes a single chart's data to produce a `ChartSummary`.
 fn build_chart_summary(
-    notes_data: Vec<u8>,
-    chart_bpms_opt: Option<Vec<u8>>,
-    chart_delays_opt: Option<Vec<u8>>,
-    chart_warps_opt: Option<Vec<u8>>,
-    chart_stops_opt: Option<Vec<u8>>,
-    chart_speeds_opt: Option<Vec<u8>>,
-    chart_scrolls_opt: Option<Vec<u8>>,
-    chart_fakes_opt: Option<Vec<u8>>,
-    chart_time_signatures_opt: Option<Vec<u8>>,
-    chart_labels_opt: Option<Vec<u8>>,
-    chart_tickcounts_opt: Option<Vec<u8>>,
-    chart_combos_opt: Option<Vec<u8>>,
-    chart_offset_opt: Option<Vec<u8>>,
-    chart_radar_values_opt: Option<Vec<u8>>,
+    notes_data: &[u8],
+    chart_bpms_opt: Option<&[u8]>,
+    chart_delays_opt: Option<&[u8]>,
+    chart_warps_opt: Option<&[u8]>,
+    chart_stops_opt: Option<&[u8]>,
+    chart_speeds_opt: Option<&[u8]>,
+    chart_scrolls_opt: Option<&[u8]>,
+    chart_fakes_opt: Option<&[u8]>,
+    chart_time_signatures_opt: Option<&[u8]>,
+    chart_labels_opt: Option<&[u8]>,
+    chart_tickcounts_opt: Option<&[u8]>,
+    chart_combos_opt: Option<&[u8]>,
+    chart_offset_opt: Option<&[u8]>,
+    chart_radar_values_opt: Option<&[u8]>,
     global_bpms_raw: &str,
     global_stops_raw: &str,
     global_delays_raw: &str,
@@ -419,7 +419,7 @@ fn build_chart_summary(
 ) -> Option<(ChartSummary, i32)> {
     let chart_start_time = Instant::now();
 
-    let (fields, chart_data) = split_notes_fields(&notes_data);
+    let (fields, chart_data) = split_notes_fields(notes_data);
     if fields.len() < 5 {
         return None;
     }
@@ -479,7 +479,7 @@ fn build_chart_summary(
     let chart_scrolls_timing = if allow_steps_timing { chart_scrolls.as_deref() } else { None };
     let chart_fakes_timing = if allow_steps_timing { chart_fakes.as_deref() } else { None };
     let chart_time_signatures = chart_time_signatures_opt.and_then(|bytes| {
-        let decoded = decode_bytes(&bytes);
+        let decoded = decode_bytes(bytes);
         let trimmed = decoded.trim();
         if trimmed.is_empty() {
             None
@@ -488,7 +488,7 @@ fn build_chart_summary(
         }
     });
     let chart_labels = chart_labels_opt.and_then(|bytes| {
-        let decoded = decode_bytes(&bytes);
+        let decoded = decode_bytes(bytes);
         let cleaned = clean_tag(&unescape_tag(decoded.as_ref()));
         let trimmed = cleaned.trim();
         if trimmed.is_empty() {
@@ -498,28 +498,28 @@ fn build_chart_summary(
         }
     });
     let chart_tickcounts = chart_tickcounts_opt.and_then(|bytes| {
-        std::str::from_utf8(&bytes)
+        std::str::from_utf8(bytes)
             .ok()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string)
     });
     let chart_combos = chart_combos_opt.and_then(|bytes| {
-        std::str::from_utf8(&bytes)
+        std::str::from_utf8(bytes)
             .ok()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string)
     });
     let chart_offset = if allow_steps_timing && chart_offset_opt.is_some() {
-        parse_offset_seconds(chart_offset_opt.as_deref())
+        parse_offset_seconds(chart_offset_opt)
     } else {
         song_offset
     };
     let cached_radar_values = if extension.eq_ignore_ascii_case("sm") {
         parse_radar_values_bytes(fields.get(4).copied(), false)
     } else {
-        parse_radar_values_bytes(chart_radar_values_opt.as_deref(), true)
+        parse_radar_values_bytes(chart_radar_values_opt, true)
     };
     let chart_has_timing = allow_steps_timing
         && (chart_bpms.is_some()
@@ -897,20 +897,20 @@ pub fn analyze(
             for entry in entries {
                 handles.push(scope.spawn(move || {
                     build_chart_summary(
-                        entry.notes,
-                        entry.chart_bpms,
-                        entry.chart_delays,
-                        entry.chart_warps,
-                        entry.chart_stops,
-                        entry.chart_speeds,
-                        entry.chart_scrolls,
-                        entry.chart_fakes,
-                        entry.chart_time_signatures,
-                        entry.chart_labels,
-                        entry.chart_tickcounts,
-                        entry.chart_combos,
-                        entry.chart_offset,
-                        entry.chart_radar_values,
+                        &entry.notes,
+                        entry.chart_bpms.as_deref(),
+                        entry.chart_delays.as_deref(),
+                        entry.chart_warps.as_deref(),
+                        entry.chart_stops.as_deref(),
+                        entry.chart_speeds.as_deref(),
+                        entry.chart_scrolls.as_deref(),
+                        entry.chart_fakes.as_deref(),
+                        entry.chart_time_signatures.as_deref(),
+                        entry.chart_labels.as_deref(),
+                        entry.chart_tickcounts.as_deref(),
+                        entry.chart_combos.as_deref(),
+                        entry.chart_offset.as_deref(),
+                        entry.chart_radar_values.as_deref(),
                         cleaned_global_bpms_str,
                         cleaned_global_stops_str,
                         cleaned_global_delays_str,
@@ -945,20 +945,20 @@ pub fn analyze(
     } else {
         for entry in entries {
             if let Some((summary, chart_length)) = build_chart_summary(
-                entry.notes,
-                entry.chart_bpms,
-                entry.chart_delays,
-                entry.chart_warps,
-                entry.chart_stops,
-                entry.chart_speeds,
-                entry.chart_scrolls,
-                entry.chart_fakes,
-                entry.chart_time_signatures,
-                entry.chart_labels,
-                entry.chart_tickcounts,
-                entry.chart_combos,
-                entry.chart_offset,
-                entry.chart_radar_values,
+                &entry.notes,
+                entry.chart_bpms.as_deref(),
+                entry.chart_delays.as_deref(),
+                entry.chart_warps.as_deref(),
+                entry.chart_stops.as_deref(),
+                entry.chart_speeds.as_deref(),
+                entry.chart_scrolls.as_deref(),
+                entry.chart_fakes.as_deref(),
+                entry.chart_time_signatures.as_deref(),
+                entry.chart_labels.as_deref(),
+                entry.chart_tickcounts.as_deref(),
+                entry.chart_combos.as_deref(),
+                entry.chart_offset.as_deref(),
+                entry.chart_radar_values.as_deref(),
                 cleaned_global_bpms_str,
                 cleaned_global_stops_str,
                 cleaned_global_delays_str,
@@ -1057,8 +1057,8 @@ pub fn compute_all_hashes(
         }
 
         // 5. Normalize BPMs (Required for Hash consistency)
-        let bpms_to_use = if let Some(chart_bpms) = entry.chart_bpms {
-            let normalized = normalize_float_digits(std::str::from_utf8(&chart_bpms).unwrap_or(""));
+        let bpms_to_use = if let Some(chart_bpms) = entry.chart_bpms.as_deref() {
+            let normalized = normalize_float_digits(std::str::from_utf8(chart_bpms).unwrap_or(""));
             Cow::Owned(normalized)
         } else {
             Cow::Borrowed(normalized_global_bpms.as_str())
@@ -1149,37 +1149,37 @@ pub fn compute_chart_durations(
             song_offset
         };
         let chart_bpms = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_bpms)
+            chart_timing_tag_raw(entry.chart_bpms.as_deref())
         } else {
             None
         };
         let chart_stops = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_stops)
+            chart_timing_tag_raw(entry.chart_stops.as_deref())
         } else {
             None
         };
         let chart_delays = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_delays)
+            chart_timing_tag_raw(entry.chart_delays.as_deref())
         } else {
             None
         };
         let chart_warps = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_warps)
+            chart_timing_tag_raw(entry.chart_warps.as_deref())
         } else {
             None
         };
         let chart_speeds = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_speeds)
+            chart_timing_tag_raw(entry.chart_speeds.as_deref())
         } else {
             None
         };
         let chart_scrolls = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_scrolls)
+            chart_timing_tag_raw(entry.chart_scrolls.as_deref())
         } else {
             None
         };
         let chart_fakes = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_fakes)
+            chart_timing_tag_raw(entry.chart_fakes.as_deref())
         } else {
             None
         };
@@ -1227,9 +1227,13 @@ pub fn compute_chart_durations(
             timing_fakes_global,
             timing_format,
         );
-        let duration = timing.get_time_for_beat_f32(target_beat)
-            - offsets.global_offset_seconds
-            - offsets.group_offset_seconds;
+        let duration = if target_beat <= 0.0 {
+            0.0
+        } else {
+            timing.get_time_for_beat_f32(target_beat)
+                - offsets.global_offset_seconds
+                - offsets.group_offset_seconds
+        };
 
         results.push(ChartDuration {
             step_type,
@@ -1307,37 +1311,37 @@ pub fn compute_chart_peak_nps(
         let measure_densities = stats::measure_densities(chart_data, lanes);
 
         let chart_bpms = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_bpms)
+            chart_timing_tag_raw(entry.chart_bpms.as_deref())
         } else {
             None
         };
         let chart_stops = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_stops)
+            chart_timing_tag_raw(entry.chart_stops.as_deref())
         } else {
             None
         };
         let chart_delays = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_delays)
+            chart_timing_tag_raw(entry.chart_delays.as_deref())
         } else {
             None
         };
         let chart_warps = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_warps)
+            chart_timing_tag_raw(entry.chart_warps.as_deref())
         } else {
             None
         };
         let chart_speeds = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_speeds)
+            chart_timing_tag_raw(entry.chart_speeds.as_deref())
         } else {
             None
         };
         let chart_scrolls = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_scrolls)
+            chart_timing_tag_raw(entry.chart_scrolls.as_deref())
         } else {
             None
         };
         let chart_fakes = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_fakes)
+            chart_timing_tag_raw(entry.chart_fakes.as_deref())
         } else {
             None
         };

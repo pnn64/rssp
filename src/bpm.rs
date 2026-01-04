@@ -201,7 +201,7 @@ fn timing_globals(parsed: &ParsedSimfileData<'_>, extension: &str) -> TimingGlob
     }
 }
 
-fn chart_timing_tags(entry: &ParsedChartEntry) -> ChartTimingTags {
+fn chart_timing_tags(entry: &ParsedChartEntry<'_>) -> ChartTimingTags {
     ChartTimingTags {
         bpms_raw: clean_chart_tag_bytes(entry.chart_bpms.as_deref()),
         stops_raw: clean_chart_tag_bytes(entry.chart_stops.as_deref()),
@@ -261,7 +261,10 @@ fn format_bpms_for_chart(tags: &ChartTimingTags, globals: &TimingGlobals) -> Str
     format_bpm_segments_like_itg(&bpms)
 }
 
-fn chart_bpm_snapshot(entry: &ParsedChartEntry, globals: &TimingGlobals) -> Option<ChartBpmSnapshot> {
+fn chart_bpm_snapshot(
+    entry: &ParsedChartEntry<'_>,
+    globals: &TimingGlobals,
+) -> Option<ChartBpmSnapshot> {
     let (fields, _chart_data) = split_notes_fields(&entry.notes);
     let (step_type, difficulty) = chart_metadata(&fields, globals.timing_format)?;
     let tags = chart_timing_tags(entry);

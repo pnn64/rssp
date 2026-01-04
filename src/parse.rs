@@ -120,23 +120,25 @@ pub fn normalize_chart_desc(desc: String, timing_format: TimingFormat, ssc_versi
     }
 }
 
+type TagBytes<'a> = Cow<'a, [u8]>;
+
 /// Parsed note data for a single chart found in the simfile.
 #[derive(Default)]
-pub struct ParsedChartEntry {
+pub struct ParsedChartEntry<'a> {
     pub notes: Vec<u8>,
-    pub chart_bpms: Option<Vec<u8>>,
-    pub chart_stops: Option<Vec<u8>>,
-    pub chart_delays: Option<Vec<u8>>,
-    pub chart_warps: Option<Vec<u8>>,
-    pub chart_speeds: Option<Vec<u8>>,
-    pub chart_scrolls: Option<Vec<u8>>,
-    pub chart_fakes: Option<Vec<u8>>,
-    pub chart_offset: Option<Vec<u8>>,
-    pub chart_time_signatures: Option<Vec<u8>>,
-    pub chart_labels: Option<Vec<u8>>,
-    pub chart_tickcounts: Option<Vec<u8>>,
-    pub chart_combos: Option<Vec<u8>>,
-    pub chart_radar_values: Option<Vec<u8>>,
+    pub chart_bpms: Option<TagBytes<'a>>,
+    pub chart_stops: Option<TagBytes<'a>>,
+    pub chart_delays: Option<TagBytes<'a>>,
+    pub chart_warps: Option<TagBytes<'a>>,
+    pub chart_speeds: Option<TagBytes<'a>>,
+    pub chart_scrolls: Option<TagBytes<'a>>,
+    pub chart_fakes: Option<TagBytes<'a>>,
+    pub chart_offset: Option<TagBytes<'a>>,
+    pub chart_time_signatures: Option<TagBytes<'a>>,
+    pub chart_labels: Option<TagBytes<'a>>,
+    pub chart_tickcounts: Option<TagBytes<'a>>,
+    pub chart_combos: Option<TagBytes<'a>>,
+    pub chart_radar_values: Option<TagBytes<'a>>,
 }
 
 /// A struct to hold the raw data parsed from a simfile's header tags.
@@ -167,7 +169,32 @@ pub struct ParsedSimfileData<'a> {
     pub sample_start: Option<&'a [u8]>,
     pub sample_length: Option<&'a [u8]>,
     pub display_bpm: Option<&'a [u8]>,
-    pub notes_list: Vec<ParsedChartEntry>,
+    pub notes_list: Vec<ParsedChartEntry<'a>>,
+}
+
+#[derive(Default)]
+struct NotedataFields<'a> {
+    step_type: Option<&'a [u8]>,
+    description: Option<&'a [u8]>,
+    credit: Option<&'a [u8]>,
+    difficulty: Option<&'a [u8]>,
+    meter: Option<&'a [u8]>,
+    notes: Option<&'a [u8]>,
+    notes2: Option<&'a [u8]>,
+    chart_bpms: Option<&'a [u8]>,
+    chart_stops: Option<&'a [u8]>,
+    chart_freezes: Option<&'a [u8]>,
+    chart_delays: Option<&'a [u8]>,
+    chart_warps: Option<&'a [u8]>,
+    chart_speeds: Option<&'a [u8]>,
+    chart_scrolls: Option<&'a [u8]>,
+    chart_fakes: Option<&'a [u8]>,
+    chart_offset: Option<&'a [u8]>,
+    chart_time_signatures: Option<&'a [u8]>,
+    chart_labels: Option<&'a [u8]>,
+    chart_tickcounts: Option<&'a [u8]>,
+    chart_combos: Option<&'a [u8]>,
+    chart_radar_values: Option<&'a [u8]>,
 }
 
 #[inline(always)]
@@ -183,6 +210,233 @@ fn starts_with_tag_ci(slice: &[u8], tag: &[u8]) -> bool {
         i += 1;
     }
     true
+}
+
+const TAG_NOTEDATA: &[u8] = b"#NOTEDATA:";
+const TAG_STEPSTYPE: &[u8] = b"#STEPSTYPE:";
+const TAG_DESCRIPTION: &[u8] = b"#DESCRIPTION:";
+const TAG_CREDIT: &[u8] = b"#CREDIT:";
+const TAG_DIFFICULTY: &[u8] = b"#DIFFICULTY:";
+const TAG_METER: &[u8] = b"#METER:";
+const TAG_NOTES: &[u8] = b"#NOTES:";
+const TAG_NOTES2: &[u8] = b"#NOTES2:";
+const TAG_BPMS: &[u8] = b"#BPMS:";
+const TAG_STOPS: &[u8] = b"#STOPS:";
+const TAG_FREEZES: &[u8] = b"#FREEZES:";
+const TAG_DELAYS: &[u8] = b"#DELAYS:";
+const TAG_WARPS: &[u8] = b"#WARPS:";
+const TAG_SPEEDS: &[u8] = b"#SPEEDS:";
+const TAG_SCROLLS: &[u8] = b"#SCROLLS:";
+const TAG_FAKES: &[u8] = b"#FAKES:";
+const TAG_OFFSET: &[u8] = b"#OFFSET:";
+const TAG_TIMESIGNATURES: &[u8] = b"#TIMESIGNATURES:";
+const TAG_LABELS: &[u8] = b"#LABELS:";
+const TAG_TICKCOUNTS: &[u8] = b"#TICKCOUNTS:";
+const TAG_COMBOS: &[u8] = b"#COMBOS:";
+const TAG_RADARVALUES: &[u8] = b"#RADARVALUES:";
+
+#[inline(always)]
+fn scan_tag_val(slice: &[u8], allow_newlines: bool) -> Option<(usize, usize)> {
+    let mut i = 0usize;
+    let mut bs_run = 0usize;
+    while i < slice.len() {
+        let b = slice[i];
+        match b {
+            b';' => {
+                if bs_run & 1 == 0 {
+                    return Some((i, i + 1));
+                }
+            }
+            b':' if !allow_newlines => {
+                if bs_run & 1 == 0 {
+                    return Some((i, i + 1));
+                }
+            }
+            b'\n' | b'\r' => {
+                bs_run = 0;
+                let mut j = i + 1;
+                if b == b'\r' && j < slice.len() && slice[j] == b'\n' {
+                    j += 1;
+                }
+                while j < slice.len()
+                    && slice[j].is_ascii_whitespace()
+                    && slice[j] != b'\n'
+                    && slice[j] != b'\r'
+                {
+                    j += 1;
+                }
+                if j < slice.len() && slice[j] == b'#' {
+                    return Some((i, j));
+                }
+                if !allow_newlines {
+                    if j < slice.len() && slice[j] == b';' {
+                        // Allow tags that put the terminator on the next line.
+                    } else {
+                        return None;
+                    }
+                }
+            }
+            _ => {}
+        }
+        if b == b'\\' {
+            bs_run += 1;
+        } else {
+            bs_run = 0;
+        }
+        i += 1;
+    }
+    None
+}
+
+#[inline(always)]
+fn parse_tag_into<'a>(
+    slice: &'a [u8],
+    tag: &[u8],
+    allow_newlines: bool,
+    out: &mut Option<&'a [u8]>,
+) -> Option<usize> {
+    if !starts_with_tag_ci(slice, tag) {
+        return None;
+    }
+    let tag_len = tag.len();
+    let Some((end, next)) = scan_tag_val(&slice[tag_len..], allow_newlines) else {
+        return None;
+    };
+    if out.is_none() {
+        *out = Some(&slice[tag_len..tag_len + end]);
+    }
+    Some(tag_len + next)
+}
+
+#[inline(always)]
+fn join_notes_fields(parts: [&[u8]; 6]) -> Vec<u8> {
+    let mut total = 5usize;
+    for part in parts.iter() {
+        total += part.len();
+    }
+    let mut out = Vec::with_capacity(total);
+    out.extend_from_slice(parts[0]);
+    for part in &parts[1..] {
+        out.push(b':');
+        out.extend_from_slice(part);
+    }
+    out
+}
+
+fn parse_notedata_fields<'a>(data: &'a [u8]) -> NotedataFields<'a> {
+    let mut out = NotedataFields::default();
+    let mut i = 0usize;
+
+    while i < data.len() {
+        let Some(pos) = data[i..].iter().position(|&b| b == b'#') else {
+            break;
+        };
+        i += pos;
+        let slice = &data[i..];
+
+        if starts_with_tag_ci(slice, TAG_NOTEDATA) {
+            let tag_len = TAG_NOTEDATA.len();
+            if let Some((_, next)) = scan_tag_val(&slice[tag_len..], true) {
+                i += tag_len + next;
+                continue;
+            }
+        }
+        if let Some(adv) = parse_tag_into(slice, TAG_STEPSTYPE, false, &mut out.step_type) {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) = parse_tag_into(slice, TAG_DESCRIPTION, false, &mut out.description) {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) = parse_tag_into(slice, TAG_CREDIT, false, &mut out.credit) {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) = parse_tag_into(slice, TAG_DIFFICULTY, false, &mut out.difficulty) {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) = parse_tag_into(slice, TAG_METER, false, &mut out.meter) {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) = parse_tag_into(slice, TAG_NOTES, true, &mut out.notes) {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) = parse_tag_into(slice, TAG_NOTES2, true, &mut out.notes2) {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) = parse_tag_into(slice, TAG_BPMS, true, &mut out.chart_bpms) {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) = parse_tag_into(slice, TAG_STOPS, true, &mut out.chart_stops) {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) = parse_tag_into(slice, TAG_FREEZES, true, &mut out.chart_freezes) {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) = parse_tag_into(slice, TAG_DELAYS, true, &mut out.chart_delays) {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) = parse_tag_into(slice, TAG_WARPS, true, &mut out.chart_warps) {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) = parse_tag_into(slice, TAG_SPEEDS, true, &mut out.chart_speeds) {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) = parse_tag_into(slice, TAG_SCROLLS, true, &mut out.chart_scrolls) {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) = parse_tag_into(slice, TAG_FAKES, true, &mut out.chart_fakes) {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) = parse_tag_into(slice, TAG_OFFSET, true, &mut out.chart_offset) {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) =
+            parse_tag_into(slice, TAG_TIMESIGNATURES, true, &mut out.chart_time_signatures)
+        {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) = parse_tag_into(slice, TAG_LABELS, true, &mut out.chart_labels) {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) = parse_tag_into(slice, TAG_TICKCOUNTS, true, &mut out.chart_tickcounts) {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) = parse_tag_into(slice, TAG_COMBOS, true, &mut out.chart_combos) {
+            i += adv;
+            continue;
+        }
+        if let Some(adv) = parse_tag_into(
+            slice,
+            TAG_RADARVALUES,
+            true,
+            &mut out.chart_radar_values,
+        ) {
+            i += adv;
+            continue;
+        }
+
+        i += 1;
+    }
+
+    out
 }
 
 pub fn extract_sections<'a>(
@@ -268,50 +522,31 @@ pub fn extract_sections<'a>(
                 }
 
                 let notedata_slice = &data[notedata_start..notedata_end];
-                let step_type =
-                    parse_subtag(notedata_slice, b"#STEPSTYPE:", false).unwrap_or_default();
-                let description =
-                    parse_subtag(notedata_slice, b"#DESCRIPTION:", false).unwrap_or_default();
-                let credit = parse_subtag(notedata_slice, b"#CREDIT:", false).unwrap_or_default();
-                let difficulty =
-                    parse_subtag(notedata_slice, b"#DIFFICULTY:", false).unwrap_or_default();
-                let meter = parse_subtag(notedata_slice, b"#METER:", false).unwrap_or_default();
-                let notes = parse_subtag(notedata_slice, b"#NOTES:", true)
-                    .or_else(|| parse_subtag(notedata_slice, b"#NOTES2:", true))
-                    .unwrap_or_default();
-                let chart_bpms = parse_subtag(notedata_slice, b"#BPMS:", true);
-                let chart_stops = parse_subtag(notedata_slice, b"#STOPS:", true)
-                    .or_else(|| parse_subtag(notedata_slice, b"#FREEZES:", true));
-                let chart_delays = parse_subtag(notedata_slice, b"#DELAYS:", true);
-                let chart_warps = parse_subtag(notedata_slice, b"#WARPS:", true);
-                let chart_speeds = parse_subtag(notedata_slice, b"#SPEEDS:", true);
-                let chart_scrolls = parse_subtag(notedata_slice, b"#SCROLLS:", true);
-                let chart_fakes = parse_subtag(notedata_slice, b"#FAKES:", true);
-                let chart_offset = parse_subtag(notedata_slice, b"#OFFSET:", true);
-                let chart_time_signatures =
-                    parse_subtag(notedata_slice, b"#TIMESIGNATURES:", true);
-                let chart_labels = parse_subtag(notedata_slice, b"#LABELS:", true);
-                let chart_tickcounts = parse_subtag(notedata_slice, b"#TICKCOUNTS:", true);
-                let chart_combos = parse_subtag(notedata_slice, b"#COMBOS:", true);
-                let chart_radar_values = parse_subtag(notedata_slice, b"#RADARVALUES:", true);
-
-                let concatenated =
-                    [step_type, description, difficulty, meter, credit, notes].join(&b':');
+                let fields = parse_notedata_fields(notedata_slice);
+                let notes = join_notes_fields([
+                    fields.step_type.unwrap_or_default(),
+                    fields.description.unwrap_or_default(),
+                    fields.difficulty.unwrap_or_default(),
+                    fields.meter.unwrap_or_default(),
+                    fields.credit.unwrap_or_default(),
+                    fields.notes.or(fields.notes2).unwrap_or_default(),
+                ]);
+                let chart_stops = fields.chart_stops.or(fields.chart_freezes);
                 result.notes_list.push(ParsedChartEntry {
-                    notes: concatenated,
-                    chart_bpms,
-                    chart_stops,
-                    chart_delays,
-                    chart_warps,
-                    chart_speeds,
-                    chart_scrolls,
-                    chart_fakes,
-                    chart_offset,
-                    chart_time_signatures,
-                    chart_labels,
-                    chart_tickcounts,
-                    chart_combos,
-                    chart_radar_values,
+                    notes,
+                    chart_bpms: fields.chart_bpms.map(Cow::Borrowed),
+                    chart_stops: chart_stops.map(Cow::Borrowed),
+                    chart_delays: fields.chart_delays.map(Cow::Borrowed),
+                    chart_warps: fields.chart_warps.map(Cow::Borrowed),
+                    chart_speeds: fields.chart_speeds.map(Cow::Borrowed),
+                    chart_scrolls: fields.chart_scrolls.map(Cow::Borrowed),
+                    chart_fakes: fields.chart_fakes.map(Cow::Borrowed),
+                    chart_offset: fields.chart_offset.map(Cow::Borrowed),
+                    chart_time_signatures: fields.chart_time_signatures.map(Cow::Borrowed),
+                    chart_labels: fields.chart_labels.map(Cow::Borrowed),
+                    chart_tickcounts: fields.chart_tickcounts.map(Cow::Borrowed),
+                    chart_combos: fields.chart_combos.map(Cow::Borrowed),
+                    chart_radar_values: fields.chart_radar_values.map(Cow::Borrowed),
                 });
 
                 i = notedata_end;
@@ -341,7 +576,7 @@ pub fn extract_sections<'a>(
                     chart_warps: None,
                     chart_speeds: None,
                     chart_scrolls: None,
-                    chart_fakes,
+                    chart_fakes: chart_fakes.map(Cow::Owned),
                     chart_offset: None,
                     chart_time_signatures: None,
                     chart_labels: None,
