@@ -446,26 +446,46 @@ fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
 pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> TimingSnapshot {
     let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
     let timing = &chart.timing_segments;
-    let bpms: Vec<(f64, f64)> = timing
+    let bpms_raw: Vec<(f64, f64)> = timing
         .bpms
         .iter()
         .map(|(beat, bpm)| (*beat as f64, roundtrip_bpm_itg(*bpm as f64)))
         .collect();
-    let bpms_formatted = format_bpm_segments_like_itg(&bpms);
+    let bpms_formatted = format_bpm_segments_like_itg(&bpms_raw);
+    // Match itgmania-reference-harness default float precision (6 significant digits).
+    let bpms: Vec<(f64, f64)> = bpms_raw
+        .iter()
+        .map(|(beat, bpm)| (round_sig_figs_6(*beat), round_sig_figs_6(*bpm)))
+        .collect();
     let stops = timing
         .stops
         .iter()
-        .map(|(beat, duration)| (*beat as f64, *duration as f64))
+        .map(|(beat, duration)| {
+            (
+                round_sig_figs_6(*beat as f64),
+                round_sig_figs_6(*duration as f64),
+            )
+        })
         .collect();
     let delays = timing
         .delays
         .iter()
-        .map(|(beat, duration)| (*beat as f64, *duration as f64))
+        .map(|(beat, duration)| {
+            (
+                round_sig_figs_6(*beat as f64),
+                round_sig_figs_6(*duration as f64),
+            )
+        })
         .collect();
     let warps = timing
         .warps
         .iter()
-        .map(|(beat, length)| (*beat as f64, *length as f64))
+        .map(|(beat, length)| {
+            (
+                round_sig_figs_6(*beat as f64),
+                round_sig_figs_6(*length as f64),
+            )
+        })
         .collect();
     let speeds = timing
         .speeds
@@ -476,41 +496,73 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         })
         .collect();
     let speeds = normalize_speeds_like_itg(speeds);
+    let speeds: Vec<(f64, f64, f64, i32)> = speeds
+        .into_iter()
+        .map(|(beat, ratio, delay, unit)| {
+            (
+                round_sig_figs_6(beat),
+                round_sig_figs_6(ratio),
+                round_sig_figs_6(delay),
+                unit,
+            )
+        })
+        .collect();
     let scrolls = timing
         .scrolls
         .iter()
         .map(|(beat, ratio)| (*beat as f64, *ratio as f64))
         .collect();
     let scrolls = normalize_scrolls_like_itg(scrolls);
+    let scrolls: Vec<(f64, f64)> = scrolls
+        .into_iter()
+        .map(|(beat, ratio)| (round_sig_figs_6(beat), round_sig_figs_6(ratio)))
+        .collect();
     let fakes = timing
         .fakes
         .iter()
-        .map(|(beat, length)| (*beat as f64, *length as f64))
+        .map(|(beat, length)| {
+            (
+                round_sig_figs_6(*beat as f64),
+                round_sig_figs_6(*length as f64),
+            )
+        })
         .collect();
 
-    let time_signatures = parse_time_signatures(chart_or_global(
+    let time_signatures: Vec<(f64, i32, i32)> = parse_time_signatures(chart_or_global(
         allow_steps_timing,
         &chart.chart_time_signatures,
         &simfile.normalized_time_signatures,
-    ));
-    let labels = parse_labels(chart_or_global(
+    ))
+    .into_iter()
+    .map(|(beat, numerator, denominator)| (round_sig_figs_6(beat), numerator, denominator))
+    .collect();
+    let labels: Vec<(f64, String)> = parse_labels(chart_or_global(
         allow_steps_timing,
         &chart.chart_labels,
         &simfile.normalized_labels,
-    ));
-    let tickcounts = parse_tickcounts(chart_or_global(
+    ))
+    .into_iter()
+    .map(|(beat, label)| (round_sig_figs_6(beat), label))
+    .collect();
+    let tickcounts: Vec<(f64, i32)> = parse_tickcounts(chart_or_global(
         allow_steps_timing,
         &chart.chart_tickcounts,
         &simfile.normalized_tickcounts,
-    ));
-    let combos = parse_combos(chart_or_global(
+    ))
+    .into_iter()
+    .map(|(beat, ticks)| (round_sig_figs_6(beat), ticks))
+    .collect();
+    let combos: Vec<(f64, i32, i32)> = parse_combos(chart_or_global(
         allow_steps_timing,
         &chart.chart_combos,
         &simfile.normalized_combos,
-    ));
+    ))
+    .into_iter()
+    .map(|(beat, combo, miss)| (round_sig_figs_6(beat), combo, miss))
+    .collect();
 
     TimingSnapshot {
-        beat0_offset_seconds: simfile.offset + timing.beat0_offset_adjust as f64,
+        beat0_offset_seconds: round_sig_figs_6(simfile.offset + timing.beat0_offset_adjust as f64),
         beat0_group_offset_seconds: 0.0,
         bpms,
         bpms_formatted,
