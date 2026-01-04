@@ -55,30 +55,28 @@ fn clean_tag_bytes(tag: Option<&[u8]>) -> String {
         .unwrap_or_default()
 }
 
-fn clean_chart_tag(tag: &Option<Vec<u8>>) -> Option<String> {
-    tag.as_ref()
-        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+fn clean_chart_tag(tag: Option<&[u8]>) -> Option<String> {
+    tag.and_then(|bytes| std::str::from_utf8(bytes).ok())
         .map(rssp::bpm::clean_timing_map)
         .filter(|s| !s.is_empty())
 }
 
-fn normalize_chart_tag(tag: &Option<Vec<u8>>) -> Option<String> {
-    tag.as_ref()
-        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+fn normalize_chart_tag(tag: Option<&[u8]>) -> Option<String> {
+    tag.and_then(|bytes| std::str::from_utf8(bytes).ok())
         .map(rssp::bpm::normalize_float_digits)
         .filter(|s| !s.is_empty())
 }
 
 fn chart_timing_tags(entry: &ChartTimingInput) -> ChartTimingTags {
     ChartTimingTags {
-        bpms_raw: clean_chart_tag(&entry.chart_bpms),
-        stops_raw: clean_chart_tag(&entry.chart_stops),
-        delays_raw: clean_chart_tag(&entry.chart_delays),
-        warps_raw: clean_chart_tag(&entry.chart_warps),
-        speeds_raw: clean_chart_tag(&entry.chart_speeds),
-        scrolls_raw: clean_chart_tag(&entry.chart_scrolls),
-        fakes_raw: clean_chart_tag(&entry.chart_fakes),
-        bpms_norm: normalize_chart_tag(&entry.chart_bpms),
+        bpms_raw: clean_chart_tag(entry.chart_bpms.as_deref()),
+        stops_raw: clean_chart_tag(entry.chart_stops.as_deref()),
+        delays_raw: clean_chart_tag(entry.chart_delays.as_deref()),
+        warps_raw: clean_chart_tag(entry.chart_warps.as_deref()),
+        speeds_raw: clean_chart_tag(entry.chart_speeds.as_deref()),
+        scrolls_raw: clean_chart_tag(entry.chart_scrolls.as_deref()),
+        fakes_raw: clean_chart_tag(entry.chart_fakes.as_deref()),
+        bpms_norm: normalize_chart_tag(entry.chart_bpms.as_deref()),
     }
 }
 
@@ -108,13 +106,13 @@ fn build_timing_inputs() -> (Vec<ChartTimingInput>, TimingGlobals) {
         .into_iter()
         .map(|entry| ChartTimingInput {
             notes: entry.notes,
-            chart_bpms: entry.chart_bpms,
-            chart_stops: entry.chart_stops,
-            chart_delays: entry.chart_delays,
-            chart_warps: entry.chart_warps,
-            chart_speeds: entry.chart_speeds,
-            chart_scrolls: entry.chart_scrolls,
-            chart_fakes: entry.chart_fakes,
+            chart_bpms: entry.chart_bpms.map(|v| v.into_owned()),
+            chart_stops: entry.chart_stops.map(|v| v.into_owned()),
+            chart_delays: entry.chart_delays.map(|v| v.into_owned()),
+            chart_warps: entry.chart_warps.map(|v| v.into_owned()),
+            chart_speeds: entry.chart_speeds.map(|v| v.into_owned()),
+            chart_scrolls: entry.chart_scrolls.map(|v| v.into_owned()),
+            chart_fakes: entry.chart_fakes.map(|v| v.into_owned()),
         })
         .collect();
 

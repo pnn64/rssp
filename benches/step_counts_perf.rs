@@ -37,9 +37,8 @@ fn clean_tag_bytes(tag: Option<&[u8]>) -> String {
         .unwrap_or_default()
 }
 
-fn clean_chart_tag(tag: &Option<Vec<u8>>) -> Option<String> {
-    tag.as_ref()
-        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+fn clean_chart_tag(tag: Option<&[u8]>) -> Option<String> {
+    tag.and_then(|bytes| std::str::from_utf8(bytes).ok())
         .map(rssp::bpm::clean_timing_map)
         .filter(|s| !s.is_empty())
 }
@@ -81,13 +80,13 @@ fn build_count_inputs() -> (Vec<ChartCountInput>, CountGlobals) {
             Some(ChartCountInput {
                 chart_data: chart_data.to_vec(),
                 lanes: rssp::step_type_lanes(step_type),
-                chart_bpms: clean_chart_tag(&entry.chart_bpms),
-                chart_stops: clean_chart_tag(&entry.chart_stops),
-                chart_delays: clean_chart_tag(&entry.chart_delays),
-                chart_warps: clean_chart_tag(&entry.chart_warps),
-                chart_speeds: clean_chart_tag(&entry.chart_speeds),
-                chart_scrolls: clean_chart_tag(&entry.chart_scrolls),
-                chart_fakes: clean_chart_tag(&entry.chart_fakes),
+                chart_bpms: clean_chart_tag(entry.chart_bpms.as_deref()),
+                chart_stops: clean_chart_tag(entry.chart_stops.as_deref()),
+                chart_delays: clean_chart_tag(entry.chart_delays.as_deref()),
+                chart_warps: clean_chart_tag(entry.chart_warps.as_deref()),
+                chart_speeds: clean_chart_tag(entry.chart_speeds.as_deref()),
+                chart_scrolls: clean_chart_tag(entry.chart_scrolls.as_deref()),
+                chart_fakes: clean_chart_tag(entry.chart_fakes.as_deref()),
             })
         })
         .collect();

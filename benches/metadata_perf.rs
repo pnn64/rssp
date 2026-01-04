@@ -46,11 +46,11 @@ fn bench_metadata_pipeline(c: &mut Criterion) {
                 artist = trimmed_artist.to_string();
             }
 
-            let mut title_translit = parsed
+            let title_translit = parsed
                 .title_translit
                 .map(|b| rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()))
                 .unwrap_or_default();
-            let mut subtitle_translit = parsed
+            let subtitle_translit = parsed
                 .subtitle_translit
                 .map(|b| rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()))
                 .unwrap_or_default();

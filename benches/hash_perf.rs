@@ -32,7 +32,7 @@ fn build_chart_inputs() -> (Vec<ChartInput>, String) {
         .into_iter()
         .map(|entry| ChartInput {
             notes: entry.notes,
-            chart_bpms: entry.chart_bpms,
+            chart_bpms: entry.chart_bpms.map(|v| v.into_owned()),
         })
         .collect();
     (charts, normalized_global_bpms)
