@@ -86,6 +86,10 @@ name = "hash_perf"
 harness = false
 
 [[bench]]
+name = "metadata_perf"
+harness = false
+
+[[bench]]
 name = "mono_perf"
 harness = false
 
