@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::OnceLock;
 
 const INTERNAL_CODEPOINT: u32 = 0xE000;
@@ -253,34 +252,92 @@ static ALIAS_ENTRIES: &[(&str, u32)] = &[
     ("auxback", INTERNAL_CODEPOINT),
 ];
 
-fn alias_map() -> &'static HashMap<&'static str, char> {
-    static MAP: OnceLock<HashMap<&'static str, char>> = OnceLock::new();
-    MAP.get_or_init(|| {
-        let mut map = HashMap::with_capacity(ALIAS_ENTRIES.len());
-        let mut next_internal = INTERNAL_CODEPOINT;
-        let invalid = char::from_u32(INVALID_CODEPOINT).unwrap();
-        for (alias, codepoint) in ALIAS_ENTRIES {
-            let value = if *codepoint == INTERNAL_CODEPOINT {
-                let current = next_internal;
-                next_internal += 1;
-                current
-            } else {
-                *codepoint
-            };
-            let ch = char::from_u32(value).unwrap_or(invalid);
-            map.insert(*alias, ch);
-        }
-        map
-    })
+#[derive(Clone, Copy)]
+struct AliasEntry {
+    key: &'static str,
+    value: char,
 }
 
 #[inline(always)]
-fn alias_lookup(aliases: &HashMap<&'static str, char>, element: &str) -> Option<char> {
-    if element.as_bytes().iter().all(|b| !b.is_ascii_uppercase()) {
-        return aliases.get(element).copied();
+fn lower_byte(b: u8) -> u8 {
+    if b'A' <= b && b <= b'Z' { b + 32 } else { b }
+}
+
+#[inline(always)]
+fn ascii_eq_ignore_case(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
     }
-    let lowered = element.to_ascii_lowercase();
-    aliases.get(lowered.as_str()).copied()
+    let mut i = 0usize;
+    while i < a.len() {
+        if lower_byte(a[i]) != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn alias_table() -> &'static [Vec<AliasEntry>] {
+    static TABLE: OnceLock<Vec<Vec<AliasEntry>>> = OnceLock::new();
+    TABLE
+        .get_or_init(|| {
+            let mut table: Vec<Vec<AliasEntry>> = vec![Vec::new(); 256];
+            let mut next_internal = INTERNAL_CODEPOINT;
+            let invalid = char::from_u32(INVALID_CODEPOINT).unwrap();
+            for (alias, codepoint) in ALIAS_ENTRIES {
+                let bytes = alias.as_bytes();
+                if bytes.is_empty() {
+                    continue;
+                }
+                let value = if *codepoint == INTERNAL_CODEPOINT {
+                    let current = next_internal;
+                    next_internal += 1;
+                    current
+                } else {
+                    *codepoint
+                };
+                let ch = char::from_u32(value).unwrap_or(invalid);
+                let bucket = &mut table[bytes[0] as usize];
+                let mut found = false;
+                for entry in bucket.iter_mut() {
+                    if entry.key == *alias {
+                        entry.value = ch;
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    bucket.push(AliasEntry { key: *alias, value: ch });
+                }
+            }
+            table
+        })
+        .as_slice()
+}
+
+#[inline(always)]
+fn alias_lookup(element: &str) -> Option<char> {
+    let bytes = element.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    let table = alias_table();
+    let bucket = &table[lower_byte(bytes[0]) as usize];
+    if bytes.iter().all(|b| !b.is_ascii_uppercase()) {
+        for entry in bucket {
+            if entry.key.as_bytes() == bytes {
+                return Some(entry.value);
+            }
+        }
+        return None;
+    }
+    for entry in bucket {
+        if ascii_eq_ignore_case(bytes, entry.key.as_bytes()) {
+            return Some(entry.value);
+        }
+    }
+    None
 }
 
 #[inline(always)]
@@ -352,7 +409,6 @@ pub fn replace_markers_in_place(text: &mut String) {
     if !text.contains('&') {
         return;
     }
-    let aliases = alias_map();
     let input = text.as_str();
     let len = input.len();
     let invalid = char::from_u32(INVALID_CODEPOINT).unwrap();
@@ -390,7 +446,7 @@ pub fn replace_markers_in_place(text: &mut String) {
             continue;
         };
         let element = &input[after_amp..end_idx];
-        let repl = alias_lookup(aliases, element)
+        let repl = alias_lookup(element)
             .or_else(|| parse_numeric_marker(element, invalid));
         if let Some(repl) = repl {
             out.push(repl);
