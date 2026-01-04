@@ -7,11 +7,7 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::bpm::{normalize_chart_tag, normalize_float_digits};
-use rssp::parse::{extract_sections, parse_offset_seconds, split_notes_fields};
-use rssp::stats::minimize_chart_and_count_with_lanes;
-use rssp::step_parity;
-use rssp::timing::{TimingData, TimingFormat};
+use rssp::{analyze, normalize_difficulty_label, AnalysisOptions};
 
 #[derive(Debug, Deserialize)]
 struct GoldenTechCounts {
@@ -58,100 +54,42 @@ struct Failure {
     message: String,
 }
 
+fn normalize_step_type(raw: &str) -> String {
+    raw.trim().replace('_', "-").to_ascii_lowercase()
+}
+
+fn chart_key(step_type: &str, difficulty: &str) -> Option<(String, String)> {
+    let step_type = normalize_step_type(step_type);
+    if step_type != "dance-single" && step_type != "dance-double" {
+        return None;
+    }
+    let difficulty = normalize_difficulty_label(difficulty).to_ascii_lowercase();
+    Some((step_type, difficulty))
+}
+
 fn compute_chart_tech_counts(
     simfile_data: &[u8],
     extension: &str,
 ) -> Result<Vec<ChartTechCounts>, String> {
-    let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
-
-    let offset = parse_offset_seconds(parsed_data.offset);
-
-    let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b""))
-        .unwrap_or("");
-    let normalized_global_bpms = normalize_float_digits(global_bpms_raw);
-    let global_stops_raw = std::str::from_utf8(parsed_data.stops.unwrap_or(b""))
-        .unwrap_or("");
-    let normalized_global_stops = normalize_float_digits(global_stops_raw);
-    let global_delays_raw = std::str::from_utf8(parsed_data.delays.unwrap_or(b""))
-        .unwrap_or("");
-    let normalized_global_delays = normalize_float_digits(global_delays_raw);
-    let global_warps_raw = std::str::from_utf8(parsed_data.warps.unwrap_or(b""))
-        .unwrap_or("");
-    let normalized_global_warps = normalize_float_digits(global_warps_raw);
-    let global_speeds_raw = std::str::from_utf8(parsed_data.speeds.unwrap_or(b""))
-        .unwrap_or("");
-    let normalized_global_speeds = normalize_float_digits(global_speeds_raw);
-    let global_scrolls_raw = std::str::from_utf8(parsed_data.scrolls.unwrap_or(b""))
-        .unwrap_or("");
-    let normalized_global_scrolls = normalize_float_digits(global_scrolls_raw);
-    let global_fakes_raw = std::str::from_utf8(parsed_data.fakes.unwrap_or(b""))
-        .unwrap_or("");
-    let normalized_global_fakes = normalize_float_digits(global_fakes_raw);
-    let timing_format = TimingFormat::from_extension(extension);
-
-    let mut results = Vec::new();
-
-    for entry in parsed_data.notes_list {
-        let (fields, chart_data) = split_notes_fields(&entry.notes);
-        if fields.len() < 5 {
-            continue;
-        }
-
-        let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim().to_string();
-        if step_type == "lights-cabinet" {
-            continue;
-        }
-        let difficulty_raw = std::str::from_utf8(fields[2]).unwrap_or("").trim();
-        let difficulty = rssp::normalize_difficulty_label(difficulty_raw);
-
-        let lanes = rssp::step_type_lanes(&step_type);
-        let (mut minimized_chart, _stats, _measure_densities) =
-            minimize_chart_and_count_with_lanes(chart_data, lanes);
-        if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
-            minimized_chart.truncate(pos + 1);
-        }
-
-        let chart_bpms = normalize_chart_tag(entry.chart_bpms);
-        let chart_stops = normalize_chart_tag(entry.chart_stops);
-        let chart_delays = normalize_chart_tag(entry.chart_delays);
-        let chart_warps = normalize_chart_tag(entry.chart_warps);
-        let chart_speeds = normalize_chart_tag(entry.chart_speeds);
-        let chart_scrolls = normalize_chart_tag(entry.chart_scrolls);
-        let chart_fakes = normalize_chart_tag(entry.chart_fakes);
-        let timing = TimingData::from_chart_data(
-            offset,
-            0.0,
-            chart_bpms.as_deref(),
-            &normalized_global_bpms,
-            chart_stops.as_deref(),
-            &normalized_global_stops,
-            chart_delays.as_deref(),
-            &normalized_global_delays,
-            chart_warps.as_deref(),
-            &normalized_global_warps,
-            chart_speeds.as_deref(),
-            &normalized_global_speeds,
-            chart_scrolls.as_deref(),
-            &normalized_global_scrolls,
-            chart_fakes.as_deref(),
-            &normalized_global_fakes,
-            timing_format,
-        );
-        let tech_counts =
-            step_parity::analyze_timing_lanes(&minimized_chart, &timing, lanes);
-
+    let options = AnalysisOptions {
+        mono_threshold: 6,
+        ..AnalysisOptions::default()
+    };
+    let summary = analyze(simfile_data, extension, options).map_err(|e| e.to_string())?;
+    let mut results = Vec::with_capacity(summary.charts.len());
+    for chart in summary.charts {
+        let counts = chart.tech_counts;
         results.push(ChartTechCounts {
-            step_type,
-            difficulty,
-            crossovers: tech_counts.crossovers,
-            footswitches: tech_counts.footswitches,
-            sideswitches: tech_counts.sideswitches,
-            jacks: tech_counts.jacks,
-            brackets: tech_counts.brackets,
-            doublesteps: tech_counts.doublesteps,
+            step_type: chart.step_type_str,
+            difficulty: chart.difficulty_str,
+            crossovers: counts.crossovers,
+            footswitches: counts.footswitches,
+            sideswitches: counts.sideswitches,
+            jacks: counts.jacks,
+            brackets: counts.brackets,
+            doublesteps: counts.doublesteps,
         });
     }
-
     Ok(results)
 }
 
@@ -192,22 +130,17 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
 
     let mut golden_map: HashMap<(String, String), Vec<GoldenChart>> = HashMap::new();
     for golden in golden_charts {
-        let step_type_lower = golden.step_type.to_ascii_lowercase();
-        if step_type_lower != "dance-single" && step_type_lower != "dance-double" {
+        let Some(key) = chart_key(&golden.step_type, &golden.difficulty) else {
             continue;
-        }
-        let difficulty = rssp::normalize_difficulty_label(&golden.difficulty);
-        let key = (step_type_lower, difficulty.to_ascii_lowercase());
+        };
         golden_map.entry(key).or_default().push(golden);
     }
 
     let mut rssp_map: HashMap<(String, String), Vec<ChartTechCounts>> = HashMap::new();
     for chart in rssp_charts {
-        let step_type_lower = chart.step_type.to_ascii_lowercase();
-        if step_type_lower != "dance-single" && step_type_lower != "dance-double" {
+        let Some(key) = chart_key(&chart.step_type, &chart.difficulty) else {
             continue;
-        }
-        let key = (step_type_lower, chart.difficulty.to_ascii_lowercase());
+        };
         rssp_map.entry(key).or_default().push(chart);
     }
 
