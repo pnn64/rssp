@@ -7,6 +7,7 @@ use crate::timing::{beat_to_note_row_f32_exact, TimingData, ROWS_PER_BEAT};
 const INVALID_COLUMN: isize = -1;
 const CLM_SECOND_INVALID: f32 = -1.0;
 const MAX_NOTE_ROW: i32 = 1 << 30;
+// Sentinel for unmatched hold heads (NoteData uses MAX_NOTE_ROW).
 const MISSING_HOLD_LENGTH_BEATS: f32 = MAX_NOTE_ROW as f32 / ROWS_PER_BEAT as f32;
 
 // Weights and thresholds from ITGmania source
@@ -146,11 +147,19 @@ type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<IdentityHasher>>;
 struct NeighborEntry {
     neighbor_id: usize,
     cost: f32,
+    next: Option<usize>,
+    hash_key: usize,
 }
 
+const BUCKET_EMPTY: usize = usize::MAX;
+const BUCKET_SENTINEL: usize = usize::MAX - 1;
+
+// Match libstdc++ unordered_map iteration order to keep tie-breaking aligned.
 #[derive(Debug, Clone)]
 struct NeighborMap {
     entries: Vec<NeighborEntry>,
+    head: Option<usize>,
+    bucket_before: Vec<usize>,
     bucket_count: usize,
 }
 
@@ -158,13 +167,15 @@ impl Default for NeighborMap {
     fn default() -> Self {
         Self {
             entries: Vec::new(),
+            head: None,
+            bucket_before: vec![BUCKET_EMPTY; 13],
             bucket_count: 13,
         }
     }
 }
 
 impl NeighborMap {
-    fn insert(&mut self, neighbor_id: usize, cost: f32) {
+    fn insert(&mut self, neighbor_id: usize, hash_key: usize, cost: f32) {
         if let Some(entry) = self
             .entries
             .iter_mut()
@@ -176,11 +187,17 @@ impl NeighborMap {
 
         let new_size = self.entries.len() + 1;
         if new_size > self.bucket_count {
-            self.entries.reverse();
-            self.bucket_count = next_prime(self.bucket_count.saturating_mul(2).max(1));
+            self.rehash(next_prime(self.bucket_count.saturating_mul(2).max(1)));
         }
 
-        self.entries.insert(0, NeighborEntry { neighbor_id, cost });
+        let idx = self.entries.len();
+        self.entries.push(NeighborEntry {
+            neighbor_id,
+            cost,
+            next: None,
+            hash_key,
+        });
+        self.insert_index(idx);
     }
 
     fn get(&self, neighbor_id: usize) -> Option<f32> {
@@ -194,9 +211,63 @@ impl NeighborMap {
     where
         F: FnMut(usize, f32),
     {
-        for entry in &self.entries {
+        let mut current = self.head;
+        while let Some(idx) = current {
+            let entry = &self.entries[idx];
             visit(entry.neighbor_id, entry.cost);
+            current = entry.next;
         }
+    }
+
+    fn rehash(&mut self, new_bucket_count: usize) {
+        self.bucket_count = new_bucket_count;
+        self.bucket_before = vec![BUCKET_EMPTY; new_bucket_count];
+        let mut prev = None;
+        let mut current = self.head;
+        while let Some(idx) = current {
+            let bucket = self.bucket_index(self.entries[idx].hash_key);
+            if self.bucket_before[bucket] == BUCKET_EMPTY {
+                self.bucket_before[bucket] = match prev {
+                    None => BUCKET_SENTINEL,
+                    Some(prev_idx) => prev_idx,
+                };
+            }
+            prev = Some(idx);
+            current = self.entries[idx].next;
+        }
+    }
+
+    fn insert_index(&mut self, idx: usize) {
+        let bucket = self.bucket_index(self.entries[idx].hash_key);
+        let before = self.bucket_before[bucket];
+
+        if before == BUCKET_EMPTY {
+            let old_head = self.head;
+            self.entries[idx].next = old_head;
+            self.head = Some(idx);
+            self.bucket_before[bucket] = BUCKET_SENTINEL;
+            if let Some(old_idx) = old_head {
+                let old_bucket = self.bucket_index(self.entries[old_idx].hash_key);
+                self.bucket_before[old_bucket] = idx;
+            }
+            return;
+        }
+
+        if before == BUCKET_SENTINEL {
+            let old_head = self.head;
+            self.entries[idx].next = old_head;
+            self.head = Some(idx);
+            return;
+        }
+
+        let before_idx = before;
+        let after = self.entries[before_idx].next;
+        self.entries[idx].next = after;
+        self.entries[before_idx].next = Some(idx);
+    }
+
+    fn bucket_index(&self, key: usize) -> usize {
+        key % self.bucket_count
     }
 }
 
@@ -758,6 +829,8 @@ impl StepParityGenerator {
         let end_id = self.nodes.len() - 1;
         let mut cost = vec![f32::MAX; self.nodes.len()];
         let mut predecessor = vec![usize::MAX; self.nodes.len()];
+        let dump_ties = env_flag("RSSP_STEP_PARITY_DUMP_TIES");
+        let mut tie_count = 0usize;
         cost[start_id] = 0.0;
 
         for i in start_id..=end_id {
@@ -771,8 +844,13 @@ impl StepParityGenerator {
                     if new_cost < cost[neighbor_id] {
                         cost[neighbor_id] = new_cost;
                         predecessor[neighbor_id] = i;
+                    } else if dump_ties && new_cost == cost[neighbor_id] {
+                        tie_count += 1;
                     }
                 });
+        }
+        if dump_ties {
+            eprintln!("STEP_PARITY_TIES count={tie_count}");
         }
 
         let mut path = VecDeque::new();
@@ -934,6 +1012,11 @@ fn init_result_state(
 
     let hash = get_state_cache_key(&result_state);
     if let Some(existing) = state_cache.get(&hash) {
+        if env_flag("RSSP_STEP_PARITY_DUMP_STATE_COLLISIONS")
+            && **existing != result_state
+        {
+            eprintln!("STATE_HASH_COLLISION hash={hash}");
+        }
         return Rc::clone(existing);
     }
 
@@ -982,8 +1065,12 @@ fn add_node(nodes: &mut Vec<Box<StepParityNode>>, state: Rc<State>, second: f32)
 }
 
 fn add_edge(nodes: &mut Vec<Box<StepParityNode>>, from_id: usize, to_id: usize, cost: f32) {
+    if to_id >= nodes.len() {
+        return;
+    }
+    let hash_key = nodes[to_id].as_ref() as *const StepParityNode as usize;
     if let Some(node) = nodes.get_mut(from_id) {
-        node.neighbors.insert(to_id, cost);
+        node.neighbors.insert(to_id, hash_key, cost);
     }
 }
 
@@ -2413,6 +2500,11 @@ fn parse_chart_rows_with_timing(
 }
 
 #[inline(always)]
+fn is_hold_blocker(ch: u8) -> bool {
+    matches!(ch, b'1' | b'M' | b'L' | b'F')
+}
+
+#[inline(always)]
 fn hold_lengths_for_rows(rows: &[ParsedRow], column_count: usize) -> Vec<f32> {
     if rows.is_empty() || column_count == 0 {
         return Vec::new();
@@ -2424,6 +2516,9 @@ fn hold_lengths_for_rows(rows: &[ParsedRow], column_count: usize) -> Vec<f32> {
     for (row_idx, row) in rows.iter().enumerate() {
         for col in 0..column_count {
             match row.chars[col] {
+                ch if is_hold_blocker(ch) => {
+                    hold_starts[col] = None;
+                }
                 b'2' | b'4' => {
                     hold_starts[col] = Some((row_idx, row.row));
                 }
@@ -2483,7 +2578,11 @@ fn build_intermediate_notes(rows: &[ParsedRow]) -> Vec<IntermediateNoteData> {
             };
 
             if note_type == TapNoteType::HoldHead {
-                note.hold_length = hold_lengths[row_idx * column_count + col];
+                let hold_length = hold_lengths[row_idx * column_count + col];
+                if hold_length >= MISSING_HOLD_LENGTH_BEATS {
+                    continue;
+                }
+                note.hold_length = hold_length;
             }
 
             notes.push(note);
@@ -2546,7 +2645,11 @@ fn build_intermediate_notes_with_timing(
             };
 
             if note_type == TapNoteType::HoldHead {
-                note.hold_length = hold_lengths[row_idx * column_count + col];
+                let hold_length = hold_lengths[row_idx * column_count + col];
+                if hold_length >= MISSING_HOLD_LENGTH_BEATS {
+                    continue;
+                }
+                note.hold_length = hold_length;
             }
 
             if dump_notes {
