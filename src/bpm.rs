@@ -789,99 +789,6 @@ fn finalize_last_measure(
     *last_rows_min = rows_min;
 }
 
-fn compute_last_beat_from_chart_data_impl<const LANES: usize>(notes_data: &[u8]) -> f64 {
-    let mut hold_depths = [0u32; LANES];
-    let mut last_measure_idx: Option<usize> = None;
-    let mut last_row_min = 0usize;
-    let mut last_rows_min = 0usize;
-    let mut measure_idx = 0usize;
-    let mut row_in_measure = 0usize;
-    let mut min_tz_nonzero = u32::MAX;
-    let mut last_row_raw = 0usize;
-    let mut has_object = false;
-    let mut saw_semicolon = false;
-
-    for line_raw in notes_data.split(|&b| b == b'\n') {
-        let line = trim_leading_ws(line_raw);
-        if line.is_empty() {
-            continue;
-        }
-        let first = line[0];
-        if first == b'/' {
-            continue;
-        }
-
-        match first {
-            b',' => {
-                finalize_last_measure(
-                    measure_idx,
-                    row_in_measure,
-                    min_tz_nonzero,
-                    last_row_raw,
-                    has_object,
-                    &mut last_measure_idx,
-                    &mut last_row_min,
-                    &mut last_rows_min,
-                );
-                measure_idx += 1;
-                row_in_measure = 0;
-                min_tz_nonzero = u32::MAX;
-                last_row_raw = 0;
-                has_object = false;
-                continue;
-            }
-            b';' => {
-                finalize_last_measure(
-                    measure_idx,
-                    row_in_measure,
-                    min_tz_nonzero,
-                    last_row_raw,
-                    has_object,
-                    &mut last_measure_idx,
-                    &mut last_row_min,
-                    &mut last_rows_min,
-                );
-                saw_semicolon = true;
-                break;
-            }
-            _ => {}
-        }
-
-        if line.len() < LANES {
-            continue;
-        }
-
-        if row_in_measure != 0 && !line_is_all_zero::<LANES>(line) {
-            let tz = row_in_measure.trailing_zeros();
-            if tz < min_tz_nonzero {
-                min_tz_nonzero = tz;
-            }
-        }
-
-        if crate::stats::line_has_object::<LANES>(line, &mut hold_depths) {
-            has_object = true;
-            last_row_raw = row_in_measure;
-        }
-
-        row_in_measure += 1;
-    }
-
-    if !saw_semicolon {
-        finalize_last_measure(
-            measure_idx,
-            row_in_measure,
-            min_tz_nonzero,
-            last_row_raw,
-            has_object,
-            &mut last_measure_idx,
-            &mut last_row_min,
-            &mut last_rows_min,
-        );
-    }
-
-    crate::stats::calc_last_beat(last_measure_idx, last_row_min, last_rows_min)
-}
-
 /// Computes the beat of the last playable object in the chart from minimized note data.
 ///
 /// The minimized format produced by `minimize_chart_and_count_with_lanes` is:
@@ -893,14 +800,6 @@ pub fn compute_last_beat(minimized_note_data: &[u8], lanes: usize) -> f64 {
         4 => compute_last_beat_impl::<4>(minimized_note_data),
         8 => compute_last_beat_impl::<8>(minimized_note_data),
         _ => compute_last_beat_impl::<4>(minimized_note_data),
-    }
-}
-
-pub(crate) fn compute_last_beat_from_chart_data(notes_data: &[u8], lanes: usize) -> f64 {
-    match lanes {
-        4 => compute_last_beat_from_chart_data_impl::<4>(notes_data),
-        8 => compute_last_beat_from_chart_data_impl::<8>(notes_data),
-        _ => compute_last_beat_from_chart_data_impl::<4>(notes_data),
     }
 }
 

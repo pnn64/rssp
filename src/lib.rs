@@ -99,6 +99,18 @@ impl Default for TimingOffsets {
     }
 }
 
+#[inline(always)]
+fn chart_duration_seconds(last_beat: f64, timing: &TimingData, offsets: TimingOffsets) -> f64 {
+    if last_beat <= 0.0 {
+        return 0.0;
+    }
+    round_millis(
+        timing.get_time_for_beat_f32(last_beat)
+            - offsets.global_offset_seconds
+            - offsets.group_offset_seconds,
+    )
+}
+
 /// Normalizes common difficulty labels to a canonical form (e.g. Expert -> Challenge).
 pub fn normalize_difficulty_label(raw: &str) -> String {
     old_style_difficulty_label(raw)
@@ -603,14 +615,13 @@ fn build_chart_summary(
         timing_format,
     );
 
-    let (duration_seconds, chart_length) = if last_beat <= 0.0 {
-        (0.0, 0)
+    let duration_seconds =
+        chart_duration_seconds(last_beat, &timing, TimingOffsets::default());
+    let chart_length = if last_beat <= 0.0 {
+        0
     } else {
-        let time_chart_f32 = timing.get_time_for_beat_f32(last_beat);
         let time_chart_f64 = timing.get_time_for_beat(last_beat);
-        let duration = round_millis(time_chart_f32);
-        let length = (time_chart_f64 + (song_offset - chart_offset)).floor() as i32;
-        (duration, length)
+        (time_chart_f64 + (song_offset - chart_offset)).floor() as i32
     };
 
     let measure_nps_vec = compute_measure_nps_vec_with_timing(&measure_densities, &timing);
@@ -1141,7 +1152,7 @@ pub fn compute_chart_durations(
         let difficulty = resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
 
         let lanes = step_type_lanes(&step_type);
-        let target_beat = compute_last_beat_from_chart_data(chart_data, lanes);
+        let (_, _, _, _, last_beat) = minimize_chart_count_rows(chart_data, lanes);
 
         let chart_offset = if allow_steps_timing && entry.chart_offset.is_some() {
             parse_offset_seconds(entry.chart_offset.as_deref())
@@ -1227,18 +1238,12 @@ pub fn compute_chart_durations(
             timing_fakes_global,
             timing_format,
         );
-        let duration = if target_beat <= 0.0 {
-            0.0
-        } else {
-            timing.get_time_for_beat_f32(target_beat)
-                - offsets.global_offset_seconds
-                - offsets.group_offset_seconds
-        };
+        let duration_seconds = chart_duration_seconds(last_beat, &timing, offsets);
 
         results.push(ChartDuration {
             step_type,
             difficulty,
-            duration_seconds: round_millis(duration),
+            duration_seconds,
         });
     }
 
