@@ -170,6 +170,21 @@ pub struct ParsedSimfileData<'a> {
     pub notes_list: Vec<ParsedChartEntry>,
 }
 
+#[inline(always)]
+fn starts_with_tag_ci(slice: &[u8], tag: &[u8]) -> bool {
+    if slice.len() < tag.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < tag.len() {
+        if slice[i].to_ascii_lowercase() != tag[i].to_ascii_lowercase() {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 pub fn extract_sections<'a>(
     data: &'a [u8],
     file_extension: &str,
@@ -190,76 +205,122 @@ pub fn extract_sections<'a>(
             i += pos;
             let current_slice = &data[i..];
 
-            if current_slice.starts_with(b"#TITLE:") {
+            if starts_with_tag_ci(current_slice, b"#TITLE:") {
                 result.title = parse_tag(current_slice, b"#TITLE:".len());
-            } else if current_slice.starts_with(b"#SUBTITLE:") {
+            } else if starts_with_tag_ci(current_slice, b"#SUBTITLE:") {
                 result.subtitle = parse_tag(current_slice, b"#SUBTITLE:".len());
-            } else if current_slice.starts_with(b"#ARTIST:") {
+            } else if starts_with_tag_ci(current_slice, b"#ARTIST:") {
                 result.artist = parse_tag(current_slice, b"#ARTIST:".len());
-            } else if current_slice.starts_with(b"#TITLETRANSLIT:") {
+            } else if starts_with_tag_ci(current_slice, b"#TITLETRANSLIT:") {
                 result.title_translit = parse_tag(current_slice, b"#TITLETRANSLIT:".len());
-            } else if current_slice.starts_with(b"#SUBTITLETRANSLIT:") {
+            } else if starts_with_tag_ci(current_slice, b"#SUBTITLETRANSLIT:") {
                 result.subtitle_translit = parse_tag(current_slice, b"#SUBTITLETRANSLIT:".len());
-            } else if current_slice.starts_with(b"#ARTISTTRANSLIT:") {
+            } else if starts_with_tag_ci(current_slice, b"#ARTISTTRANSLIT:") {
                 result.artist_translit = parse_tag(current_slice, b"#ARTISTTRANSLIT:".len());
-            } else if current_slice.starts_with(b"#VERSION:") {
+            } else if starts_with_tag_ci(current_slice, b"#VERSION:") {
                 result.version = parse_tag(current_slice, b"#VERSION:".len());
-            } else if current_slice.starts_with(b"#OFFSET:") {
+            } else if starts_with_tag_ci(current_slice, b"#OFFSET:") {
                 result.offset = parse_tag(current_slice, b"#OFFSET:".len());
-            } else if current_slice.starts_with(b"#BPMS:") {
+            } else if starts_with_tag_ci(current_slice, b"#BPMS:") {
                 result.bpms = parse_tag(current_slice, b"#BPMS:".len());
-            } else if current_slice.starts_with(b"#STOPS:") {
+            } else if starts_with_tag_ci(current_slice, b"#STOPS:") {
                 result.stops = parse_tag(current_slice, b"#STOPS:".len());
-            } else if current_slice.starts_with(b"#FREEZES:") {
+            } else if starts_with_tag_ci(current_slice, b"#FREEZES:") {
                 // Older charts sometimes use #FREEZES instead of #STOPS.
                 result.stops = parse_tag(current_slice, b"#FREEZES:".len());
-            } else if current_slice.starts_with(b"#FAKES:") {
+            } else if starts_with_tag_ci(current_slice, b"#FAKES:") {
                 result.fakes = parse_tag(current_slice, b"#FAKES:".len());
-            } else if current_slice.starts_with(b"#DELAYS:") {
+            } else if starts_with_tag_ci(current_slice, b"#DELAYS:") {
                 result.delays = parse_tag(current_slice, b"#DELAYS:".len());
-            } else if current_slice.starts_with(b"#WARPS:") {
+            } else if starts_with_tag_ci(current_slice, b"#WARPS:") {
                 result.warps = parse_tag(current_slice, b"#WARPS:".len());
-            } else if current_slice.starts_with(b"#SPEEDS:") {
+            } else if starts_with_tag_ci(current_slice, b"#SPEEDS:") {
                 result.speeds = parse_tag(current_slice, b"#SPEEDS:".len());
-            } else if current_slice.starts_with(b"#SCROLLS:") {
+            } else if starts_with_tag_ci(current_slice, b"#SCROLLS:") {
                 result.scrolls = parse_tag(current_slice, b"#SCROLLS:".len());
-            } else if current_slice.starts_with(b"#TIMESIGNATURES:") {
+            } else if starts_with_tag_ci(current_slice, b"#TIMESIGNATURES:") {
                 result.time_signatures = parse_tag(current_slice, b"#TIMESIGNATURES:".len());
-            } else if current_slice.starts_with(b"#LABELS:") {
+            } else if starts_with_tag_ci(current_slice, b"#LABELS:") {
                 result.labels = parse_tag(current_slice, b"#LABELS:".len());
-            } else if current_slice.starts_with(b"#TICKCOUNTS:") {
+            } else if starts_with_tag_ci(current_slice, b"#TICKCOUNTS:") {
                 result.tickcounts = parse_tag(current_slice, b"#TICKCOUNTS:".len());
-            } else if current_slice.starts_with(b"#COMBOS:") {
+            } else if starts_with_tag_ci(current_slice, b"#COMBOS:") {
                 result.combos = parse_tag(current_slice, b"#COMBOS:".len());
-            } else if current_slice.starts_with(b"#BANNER:") {
+            } else if starts_with_tag_ci(current_slice, b"#BANNER:") {
                 result.banner = parse_tag(current_slice, b"#BANNER:".len());
-            } else if current_slice.starts_with(b"#BACKGROUND:") {
+            } else if starts_with_tag_ci(current_slice, b"#BACKGROUND:") {
                 result.background = parse_tag(current_slice, b"#BACKGROUND:".len());
-            } else if current_slice.starts_with(b"#MUSIC:") {
+            } else if starts_with_tag_ci(current_slice, b"#MUSIC:") {
                 result.music = parse_tag(current_slice, b"#MUSIC:".len());
-            } else if current_slice.starts_with(b"#SAMPLESTART:") {
+            } else if starts_with_tag_ci(current_slice, b"#SAMPLESTART:") {
                 result.sample_start = parse_tag(current_slice, b"#SAMPLESTART:".len());
-            } else if current_slice.starts_with(b"#SAMPLELENGTH:") {
+            } else if starts_with_tag_ci(current_slice, b"#SAMPLELENGTH:") {
                 result.sample_length = parse_tag(current_slice, b"#SAMPLELENGTH:".len());
-            } else if current_slice.starts_with(b"#DISPLAYBPM:") {
+            } else if starts_with_tag_ci(current_slice, b"#DISPLAYBPM:") {
                 result.display_bpm = parse_tag(current_slice, b"#DISPLAYBPM:".len());    
-            } else if is_ssc && current_slice.starts_with(b"#NOTEDATA:") {
+            } else if is_ssc && starts_with_tag_ci(current_slice, b"#NOTEDATA:") {
                 let notedata_start = i;
                 let mut notedata_end = notedata_start + 1;
-                while notedata_end < data.len() && !data[notedata_end..].starts_with(b"#NOTEDATA:")
+                while notedata_end < data.len()
+                    && !starts_with_tag_ci(&data[notedata_end..], b"#NOTEDATA:")
                 {
                     notedata_end += 1;
                 }
 
                 let notedata_slice = &data[notedata_start..notedata_end];
-                result.notes_list.push(parse_ssc_notedata(notedata_slice));
+                let step_type =
+                    parse_subtag(notedata_slice, b"#STEPSTYPE:", false).unwrap_or_default();
+                let description =
+                    parse_subtag(notedata_slice, b"#DESCRIPTION:", false).unwrap_or_default();
+                let credit = parse_subtag(notedata_slice, b"#CREDIT:", false).unwrap_or_default();
+                let difficulty =
+                    parse_subtag(notedata_slice, b"#DIFFICULTY:", false).unwrap_or_default();
+                let meter = parse_subtag(notedata_slice, b"#METER:", false).unwrap_or_default();
+                let notes = parse_subtag(notedata_slice, b"#NOTES:", true)
+                    .or_else(|| parse_subtag(notedata_slice, b"#NOTES2:", true))
+                    .unwrap_or_default();
+                let chart_bpms = parse_subtag(notedata_slice, b"#BPMS:", true);
+                let chart_stops = parse_subtag(notedata_slice, b"#STOPS:", true)
+                    .or_else(|| parse_subtag(notedata_slice, b"#FREEZES:", true));
+                let chart_delays = parse_subtag(notedata_slice, b"#DELAYS:", true);
+                let chart_warps = parse_subtag(notedata_slice, b"#WARPS:", true);
+                let chart_speeds = parse_subtag(notedata_slice, b"#SPEEDS:", true);
+                let chart_scrolls = parse_subtag(notedata_slice, b"#SCROLLS:", true);
+                let chart_fakes = parse_subtag(notedata_slice, b"#FAKES:", true);
+                let chart_offset = parse_subtag(notedata_slice, b"#OFFSET:", true);
+                let chart_time_signatures =
+                    parse_subtag(notedata_slice, b"#TIMESIGNATURES:", true);
+                let chart_labels = parse_subtag(notedata_slice, b"#LABELS:", true);
+                let chart_tickcounts = parse_subtag(notedata_slice, b"#TICKCOUNTS:", true);
+                let chart_combos = parse_subtag(notedata_slice, b"#COMBOS:", true);
+                let chart_radar_values = parse_subtag(notedata_slice, b"#RADARVALUES:", true);
+
+                let concatenated =
+                    [step_type, description, difficulty, meter, credit, notes].join(&b':');
+                result.notes_list.push(ParsedChartEntry {
+                    notes: concatenated,
+                    chart_bpms,
+                    chart_stops,
+                    chart_delays,
+                    chart_warps,
+                    chart_speeds,
+                    chart_scrolls,
+                    chart_fakes,
+                    chart_offset,
+                    chart_time_signatures,
+                    chart_labels,
+                    chart_tickcounts,
+                    chart_combos,
+                    chart_radar_values,
+                });
 
                 i = notedata_end;
                 continue; // Skip the i += 1 at the end
             } else if !is_ssc
-                && (current_slice.starts_with(b"#NOTES:") || current_slice.starts_with(b"#NOTES2:"))
+                && (starts_with_tag_ci(current_slice, b"#NOTES:")
+                    || starts_with_tag_ci(current_slice, b"#NOTES2:"))
             {
-                let notes_tag_len = if current_slice.starts_with(b"#NOTES2:") {
+                let notes_tag_len = if starts_with_tag_ci(current_slice, b"#NOTES2:") {
                     b"#NOTES2:".len()
                 } else {
                     b"#NOTES:".len()
@@ -298,268 +359,6 @@ pub fn extract_sections<'a>(
     }
 
     Ok(result)
-}
-
-#[inline(always)]
-fn read_subtag_value(
-    data: &[u8],
-    start: usize,
-    allow_newlines: bool,
-) -> Option<(Vec<u8>, usize)> {
-    let slice = data.get(start..)?;
-    let mut i = 0usize;
-    let mut bs_run = 0usize;
-
-    while i < slice.len() {
-        match slice[i] {
-            b';' => {
-                if bs_run % 2 == 0 {
-                    return Some((slice[..i].to_vec(), start + i + 1));
-                }
-            }
-            b':' if !allow_newlines => {
-                if bs_run % 2 == 0 {
-                    return Some((slice[..i].to_vec(), start + i + 1));
-                }
-            }
-            // Fallback for malformed subtags missing a terminating semicolon: if the next
-            // line starts a new tag (`#...:`), stop at this line break.
-            b'\n' | b'\r' => {
-                let mut j = i + 1;
-                // Handle CRLF.
-                if slice[i] == b'\r' && j < slice.len() && slice[j] == b'\n' {
-                    j += 1;
-                }
-
-                // Skip horizontal whitespace at the start of the next line.
-                while j < slice.len()
-                    && slice[j].is_ascii_whitespace()
-                    && slice[j] != b'\n'
-                    && slice[j] != b'\r'
-                {
-                    j += 1;
-                }
-
-                if j < slice.len() && slice[j] == b'#' {
-                    return Some((slice[..i].to_vec(), start + j));
-                }
-
-                if !allow_newlines {
-                    if j < slice.len() && slice[j] == b';' {
-                        // Allow tags that put the terminator on the next line.
-                    } else {
-                        return None;
-                    }
-                }
-            }
-            _ => {}
-        }
-        if slice[i] == b'\\' {
-            bs_run += 1;
-        } else {
-            bs_run = 0;
-        }
-        i += 1;
-    }
-
-    None
-}
-
-#[inline(always)]
-fn take_subtag(
-    data: &[u8],
-    i: usize,
-    slice: &[u8],
-    tag: &[u8],
-    allow_newlines: bool,
-    out: &mut Option<Vec<u8>>,
-) -> Option<usize> {
-    if out.is_some() || !slice.starts_with(tag) {
-        return None;
-    }
-    if let Some((val, next)) = read_subtag_value(data, i + tag.len(), allow_newlines) {
-        *out = Some(val);
-        return Some(next);
-    }
-    None
-}
-
-fn parse_ssc_notedata(data: &[u8]) -> ParsedChartEntry {
-    let mut step_type = None;
-    let mut description = None;
-    let mut credit = None;
-    let mut difficulty = None;
-    let mut meter = None;
-    let mut notes = None;
-    let mut notes2 = None;
-    let mut chart_bpms = None;
-    let mut chart_stops = None;
-    let mut chart_freezes = None;
-    let mut chart_delays = None;
-    let mut chart_warps = None;
-    let mut chart_speeds = None;
-    let mut chart_scrolls = None;
-    let mut chart_fakes = None;
-    let mut chart_offset = None;
-    let mut chart_time_signatures = None;
-    let mut chart_labels = None;
-    let mut chart_tickcounts = None;
-    let mut chart_combos = None;
-    let mut chart_radar_values = None;
-
-    let mut i = 0usize;
-    while i < data.len() {
-        if data[i] != b'#' {
-            i += 1;
-            continue;
-        }
-
-        let slice = &data[i..];
-        if let Some(next) =
-            take_subtag(data, i, slice, b"#STEPSTYPE:", false, &mut step_type)
-        {
-            i = next;
-            continue;
-        }
-        if let Some(next) =
-            take_subtag(data, i, slice, b"#DESCRIPTION:", false, &mut description)
-        {
-            i = next;
-            continue;
-        }
-        if let Some(next) = take_subtag(data, i, slice, b"#CREDIT:", false, &mut credit) {
-            i = next;
-            continue;
-        }
-        if let Some(next) =
-            take_subtag(data, i, slice, b"#DIFFICULTY:", false, &mut difficulty)
-        {
-            i = next;
-            continue;
-        }
-        if let Some(next) = take_subtag(data, i, slice, b"#METER:", false, &mut meter) {
-            i = next;
-            continue;
-        }
-        if let Some(next) = take_subtag(data, i, slice, b"#NOTES:", true, &mut notes) {
-            i = next;
-            continue;
-        }
-        if notes.is_none() {
-            if let Some(next) = take_subtag(data, i, slice, b"#NOTES2:", true, &mut notes2)
-            {
-                i = next;
-                continue;
-            }
-        }
-        if let Some(next) = take_subtag(data, i, slice, b"#BPMS:", true, &mut chart_bpms) {
-            i = next;
-            continue;
-        }
-        if let Some(next) = take_subtag(data, i, slice, b"#STOPS:", true, &mut chart_stops) {
-            i = next;
-            continue;
-        }
-        if chart_stops.is_none() {
-            if let Some(next) =
-                take_subtag(data, i, slice, b"#FREEZES:", true, &mut chart_freezes)
-            {
-                i = next;
-                continue;
-            }
-        }
-        if let Some(next) = take_subtag(data, i, slice, b"#DELAYS:", true, &mut chart_delays)
-        {
-            i = next;
-            continue;
-        }
-        if let Some(next) = take_subtag(data, i, slice, b"#WARPS:", true, &mut chart_warps) {
-            i = next;
-            continue;
-        }
-        if let Some(next) = take_subtag(data, i, slice, b"#SPEEDS:", true, &mut chart_speeds)
-        {
-            i = next;
-            continue;
-        }
-        if let Some(next) =
-            take_subtag(data, i, slice, b"#SCROLLS:", true, &mut chart_scrolls)
-        {
-            i = next;
-            continue;
-        }
-        if let Some(next) = take_subtag(data, i, slice, b"#FAKES:", true, &mut chart_fakes) {
-            i = next;
-            continue;
-        }
-        if let Some(next) = take_subtag(data, i, slice, b"#OFFSET:", true, &mut chart_offset) {
-            i = next;
-            continue;
-        }
-        if let Some(next) = take_subtag(
-            data,
-            i,
-            slice,
-            b"#TIMESIGNATURES:",
-            true,
-            &mut chart_time_signatures,
-        ) {
-            i = next;
-            continue;
-        }
-        if let Some(next) = take_subtag(data, i, slice, b"#LABELS:", true, &mut chart_labels) {
-            i = next;
-            continue;
-        }
-        if let Some(next) =
-            take_subtag(data, i, slice, b"#TICKCOUNTS:", true, &mut chart_tickcounts)
-        {
-            i = next;
-            continue;
-        }
-        if let Some(next) = take_subtag(data, i, slice, b"#COMBOS:", true, &mut chart_combos)
-        {
-            i = next;
-            continue;
-        }
-        if let Some(next) =
-            take_subtag(data, i, slice, b"#RADARVALUES:", true, &mut chart_radar_values)
-        {
-            i = next;
-            continue;
-        }
-
-        i += 1;
-    }
-
-    let notes = notes.or(notes2).unwrap_or_default();
-    let chart_stops = chart_stops.or(chart_freezes);
-    let concatenated = [
-        step_type.unwrap_or_default(),
-        description.unwrap_or_default(),
-        difficulty.unwrap_or_default(),
-        meter.unwrap_or_default(),
-        credit.unwrap_or_default(),
-        notes,
-    ]
-    .join(&b':');
-
-    ParsedChartEntry {
-        notes: concatenated,
-        chart_bpms,
-        chart_stops,
-        chart_delays,
-        chart_warps,
-        chart_speeds,
-        chart_scrolls,
-        chart_fakes,
-        chart_offset,
-        chart_time_signatures,
-        chart_labels,
-        chart_tickcounts,
-        chart_combos,
-        chart_radar_values,
-    }
 }
 
 fn parse_tag(data: &[u8], tag_len: usize) -> Option<&[u8]> {
@@ -611,8 +410,72 @@ fn parse_tag(data: &[u8], tag_len: usize) -> Option<&[u8]> {
 
 fn parse_subtag(data: &[u8], tag: &[u8], allow_newlines: bool) -> Option<Vec<u8>> {
     data.windows(tag.len())
-        .position(|w| w == tag)
-        .and_then(|pos| read_subtag_value(data, pos + tag.len(), allow_newlines).map(|(v, _)| v))
+        .position(|w| starts_with_tag_ci(w, tag))
+        .and_then(|pos| {
+            let slice = &data[pos + tag.len()..];
+            let mut i = 0;
+            while i < slice.len() {
+                match slice[i] {
+                    b';' => {
+                        // Count preceding backslashes to determine if this semicolon is escaped
+                        let mut bs_count = 0;
+                        let mut j = i;
+                        while j > 0 && slice[j - 1] == b'\\' {
+                            bs_count += 1;
+                            j -= 1;
+                        }
+                        if bs_count % 2 == 0 {
+                            return Some(slice[..i].to_vec());
+                        }
+                    }
+                    b':' if !allow_newlines => {
+                        // Mimic MsdFile param splitting: stop at the first unescaped colon.
+                        let mut bs_count = 0;
+                        let mut j = i;
+                        while j > 0 && slice[j - 1] == b'\\' {
+                            bs_count += 1;
+                            j -= 1;
+                        }
+                        if bs_count % 2 == 0 {
+                            return Some(slice[..i].to_vec());
+                        }
+                    }
+                    // Fallback for malformed subtags missing a terminating semicolon: if the next
+                    // line starts a new tag (`#...:`), stop at this line break.
+                    b'\n' | b'\r' => {
+                        let mut j = i + 1;
+                        // Handle CRLF.
+                        if slice[i] == b'\r' && j < slice.len() && slice[j] == b'\n' {
+                            j += 1;
+                        }
+
+                        // Skip horizontal whitespace at the start of the next line.
+                        while j < slice.len()
+                            && slice[j].is_ascii_whitespace()
+                            && slice[j] != b'\n'
+                            && slice[j] != b'\r'
+                        {
+                            j += 1;
+                        }
+
+                        if j < slice.len() && slice[j] == b'#' {
+                            return Some(slice[..i].to_vec());
+                        }
+
+                        if !allow_newlines {
+                            if j < slice.len() && slice[j] == b';' {
+                                // Allow tags that put the terminator on the next line.
+                            } else {
+                                return None;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            None
+        })
 }
 
 pub fn split_notes_fields(notes_block: &[u8]) -> (Vec<&[u8]>, &[u8]) {
