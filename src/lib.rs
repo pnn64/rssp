@@ -437,7 +437,7 @@ fn build_chart_summary(
     let rating_str = rating_raw;
     let is_ssc = extension.eq_ignore_ascii_case("ssc");
     let credit = if is_ssc {
-        unescape_trim(decode_bytes(fields[4]).as_ref())
+        unescape_tag(decode_bytes(fields[4]).as_ref())
     } else {
         String::new()
     };

@@ -7,7 +7,10 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::parse::{extract_sections, normalize_chart_desc, parse_version, split_notes_fields, unescape_trim};
+use rssp::parse::{
+    extract_sections, normalize_chart_desc, parse_version, split_notes_fields, unescape_tag,
+    unescape_trim,
+};
 use rssp::timing::TimingFormat;
 use rssp::{analyze, display_metadata, AnalysisOptions};
 
@@ -217,7 +220,7 @@ fn parse_step_artists(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartS
         .to_ascii_lowercase();
         let meter = meter_unescaped.parse::<u32>().ok();
         let step_artist = if extension.eq_ignore_ascii_case("ssc") {
-            unescape_trim(std::str::from_utf8(fields[4]).unwrap_or(""))
+            unescape_tag(std::str::from_utf8(fields[4]).unwrap_or(""))
         } else {
             description.clone()
         };
