@@ -206,16 +206,12 @@ fn join_display_bpm_sl(bpm_min: f64, bpm_max: f64, music_rate: f64) -> String {
 
 fn resolve_display_bpm(
     chart_tag: Option<&str>,
-    song_tag: Option<&str>,
     actual_min: f64,
     actual_max: f64,
     music_rate: f64,
 ) -> (f64, f64, String) {
     let chart_tag = chart_tag.map(|s| s.trim()).filter(|s| !s.is_empty());
-    let song_tag = song_tag.map(|s| s.trim()).filter(|s| !s.is_empty());
-    let chosen = chart_tag.or(song_tag);
-
-    let (mut min, mut max) = match chosen {
+    let (mut min, mut max) = match chart_tag {
         Some(tag) => match parse_display_bpm(tag) {
             Some((min, max)) => (min, max),
             None => (actual_min, actual_max),
@@ -329,7 +325,6 @@ fn chart_metadata(fields: &[&[u8]], timing_format: TimingFormat) -> Option<(Stri
 fn chart_bpm_snapshot(
     entry: &ParsedChartEntry<'_>,
     globals: &TimingGlobals,
-    global_display_bpm: Option<&str>,
 ) -> Option<ChartBpmSnapshot> {
     let (fields, _chart_data) = split_notes_fields(&entry.notes);
     let (step_type, difficulty) = chart_metadata(&fields, globals.timing_format)?;
@@ -366,7 +361,6 @@ fn chart_bpm_snapshot(
     let chart_display_bpm = decode_display_bpm_tag(entry.chart_display_bpm.as_deref());
     let (display_bpm_min, display_bpm_max, display_bpm) = resolve_display_bpm(
         chart_display_bpm.as_deref(),
-        global_display_bpm,
         bpm_min,
         bpm_max,
         1.0,
@@ -391,11 +385,10 @@ pub fn chart_bpm_snapshots(
 ) -> Result<Vec<ChartBpmSnapshot>, String> {
     let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
     let globals = timing_globals(&parsed_data, extension);
-    let global_display_bpm = decode_display_bpm_tag(parsed_data.display_bpm);
     Ok(parsed_data
         .notes_list
         .iter()
-        .filter_map(|entry| chart_bpm_snapshot(entry, &globals, global_display_bpm.as_deref()))
+        .filter_map(|entry| chart_bpm_snapshot(entry, &globals))
         .collect())
 }
 
