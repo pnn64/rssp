@@ -12,6 +12,7 @@ use crate::parse::{
 use crate::timing::{
     compute_timing_segments,
     format_bpm_segments_like_itg,
+    round_sig_figs_itg,
     steps_timing_allowed,
     TimingData,
     TimingFormat,
@@ -154,6 +155,8 @@ pub struct ChartBpmSnapshot {
     pub difficulty: String,
     pub hash_bpms: String,
     pub bpms_formatted: String,
+    pub bpm_min: f64,
+    pub bpm_max: f64,
 }
 
 #[derive(Clone)]
@@ -234,7 +237,17 @@ fn chart_metadata(fields: &[&[u8]], timing_format: TimingFormat) -> Option<(Stri
     Some((step_type, difficulty))
 }
 
-fn format_bpms_for_chart(tags: &ChartTimingTags, globals: &TimingGlobals) -> String {
+fn chart_bpm_snapshot(
+    entry: &ParsedChartEntry<'_>,
+    globals: &TimingGlobals,
+) -> Option<ChartBpmSnapshot> {
+    let (fields, _chart_data) = split_notes_fields(&entry.notes);
+    let (step_type, difficulty) = chart_metadata(&fields, globals.timing_format)?;
+    let tags = chart_timing_tags(entry);
+    let hash_bpms = tags
+        .bpms_norm
+        .clone()
+        .unwrap_or_else(|| globals.bpms_norm.clone());
     let use_chart = globals.allow_steps_timing;
     let segments = compute_timing_segments(
         if use_chart { tags.bpms_raw.as_deref() } else { None },
@@ -258,27 +271,16 @@ fn format_bpms_for_chart(tags: &ChartTimingTags, globals: &TimingGlobals) -> Str
     for (beat, bpm) in segments.bpms {
         bpms.push((beat as f64, bpm as f64));
     }
-    format_bpm_segments_like_itg(&bpms)
-}
-
-fn chart_bpm_snapshot(
-    entry: &ParsedChartEntry<'_>,
-    globals: &TimingGlobals,
-) -> Option<ChartBpmSnapshot> {
-    let (fields, _chart_data) = split_notes_fields(&entry.notes);
-    let (step_type, difficulty) = chart_metadata(&fields, globals.timing_format)?;
-    let tags = chart_timing_tags(entry);
-    let hash_bpms = tags
-        .bpms_norm
-        .clone()
-        .unwrap_or_else(|| globals.bpms_norm.clone());
-    let bpms_formatted = format_bpms_for_chart(&tags, globals);
+    let bpms_formatted = format_bpm_segments_like_itg(&bpms);
+    let (bpm_min, bpm_max) = compute_actual_bpm_range(&bpms);
 
     Some(ChartBpmSnapshot {
         step_type,
         difficulty,
         hash_bpms,
         bpms_formatted,
+        bpm_min,
+        bpm_max,
     })
 }
 
@@ -566,7 +568,7 @@ pub fn compute_actual_bpm_range(bpm_map: &[(f64, f64)]) -> (f64, f64) {
         max_bpm = 0.0;
     }
 
-    (min_bpm, max_bpm)
+    (round_sig_figs_itg(min_bpm), round_sig_figs_itg(max_bpm))
 }
 
 /// Calculates the accurate cumulative time to reach a target beat, accounting for

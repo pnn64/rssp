@@ -7,7 +7,7 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::bpm::{chart_bpm_snapshots, compute_actual_bpm_range, parse_bpm_map};
+use rssp::bpm::chart_bpm_snapshots;
 
 #[derive(Debug, Deserialize)]
 struct GoldenChart {
@@ -58,15 +58,13 @@ fn compute_chart_bpms(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartB
     Ok(snapshots
         .into_iter()
         .map(|chart| {
-            let bpm_map = parse_bpm_map(&chart.bpms_formatted);
-            let (bpm_min, bpm_max) = compute_actual_bpm_range(&bpm_map);
             ChartBpmInfo {
                 step_type: chart.step_type,
                 difficulty: chart.difficulty,
                 hash_bpms: chart.hash_bpms,
                 bpms: chart.bpms_formatted,
-                bpm_min,
-                bpm_max,
+                bpm_min: chart.bpm_min,
+                bpm_max: chart.bpm_max,
             }
         })
         .collect())
