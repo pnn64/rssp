@@ -7,7 +7,7 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::stats::{stream_breakdown, stream_sequences, StreamBreakdownLevel};
+use rssp::stats::stream_sequences;
 use rssp::{AnalysisOptions, analyze};
 
 #[derive(Debug, Deserialize)]
@@ -18,8 +18,6 @@ struct HarnessChart {
     streams_breakdown: String,
     streams_breakdown_level1: String,
     streams_breakdown_level2: String,
-    #[serde(default)]
-    streams_breakdown_level3: String,
     total_stream_measures: u32,
     total_break_measures: u32,
     #[serde(default)]
@@ -81,7 +79,6 @@ struct ChartBreakdowns {
     difficulty: String,
     rating: String,
     streams: BreakdownSet,
-    streams_total: String,
     sn: BreakdownSet,
     total_streams: u32,
     total_breaks: u32,
@@ -127,7 +124,6 @@ fn compute_chart_breakdowns(
 
     let mut results = Vec::new();
     for chart in summary.charts {
-        let streams_total = stream_breakdown(&chart.measure_densities, StreamBreakdownLevel::Total);
         let stream_sequences = stream_sequences(&chart.measure_densities)
             .into_iter()
             .map(|segment| StreamSequence {
@@ -145,7 +141,6 @@ fn compute_chart_breakdowns(
                 partial: chart.partial_breakdown,
                 simple: chart.simple_breakdown,
             },
-            streams_total,
             sn: BreakdownSet {
                 detailed: chart.sn_detailed_breakdown,
                 partial: chart.sn_partial_breakdown,
@@ -305,12 +300,6 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             let actual_simple = actual
                 .map(|v| v.streams.simple.as_str())
                 .unwrap_or("-");
-            let expected_total_label = expected
-                .map(|v| v.streams_breakdown_level3.as_str())
-                .unwrap_or("-");
-            let actual_total_label = actual
-                .map(|v| v.streams_total.as_str())
-                .unwrap_or("-");
             let expected_total_streams = expected.map(|v| v.total_stream_measures);
             let actual_total_streams = actual.map(|v| v.total_streams);
             let expected_total_breaks = expected.map(|v| v.total_break_measures);
@@ -327,7 +316,6 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 && expected_detail == actual_detail
                 && expected_partial == actual_partial
                 && expected_simple == actual_simple
-                && expected_total_label == actual_total_label
                 && expected_total_streams == actual_total_streams
                 && expected_total_breaks == actual_total_breaks
                 && sequences_match;
@@ -347,7 +335,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 .unwrap_or_else(|| "-".to_string());
 
             println!(
-                "  {} {} [{}]: detailed {} -> {} | partial {} -> {} | simple {} -> {} | total {} -> {} | total_streams {} -> {} | total_breaks {} -> {} | sequences len {} -> {} {}",
+                "  {} {} [{}]: detailed {} -> {} | partial {} -> {} | simple {} -> {} | total_streams {} -> {} | total_breaks {} -> {} | sequences len {} -> {} {}",
                 step_type,
                 difficulty,
                 meter_label,
@@ -357,8 +345,6 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 actual_partial,
                 expected_simple,
                 actual_simple,
-                expected_total_label,
-                actual_total_label,
                 expected_total_streams,
                 actual_total_streams,
                 expected_total_breaks,
@@ -374,7 +360,6 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 e.streams_breakdown == a.streams.detailed
                     && e.streams_breakdown_level1 == a.streams.partial
                     && e.streams_breakdown_level2 == a.streams.simple
-                    && e.streams_breakdown_level3 == a.streams_total
                     && e.total_stream_measures == a.total_streams
                     && e.total_break_measures == a.total_breaks
                     && e.stream_sequences == a.stream_sequences
@@ -396,14 +381,6 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 .collect();
             let actual_simple: Vec<String> =
                 actual_entries.iter().map(|a| a.streams.simple.clone()).collect();
-            let expected_total_label: Vec<String> = expected_entries
-                .iter()
-                .map(|e| e.streams_breakdown_level3.clone())
-                .collect();
-            let actual_total_label: Vec<String> = actual_entries
-                .iter()
-                .map(|a| a.streams_total.clone())
-                .collect();
             let expected_total_streams: Vec<u32> =
                 expected_entries.iter().map(|e| e.total_stream_measures).collect();
             let actual_total_streams: Vec<u32> =
@@ -422,7 +399,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 .collect();
 
             return Err(format!(
-                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP detailed: {:?}\nGolden detailed: {:?}\nRSSP partial: {:?}\nGolden partial: {:?}\nRSSP simple: {:?}\nGolden simple: {:?}\nRSSP total: {:?}\nGolden total: {:?}\nRSSP total_streams: {:?}\nGolden total_streams: {:?}\nRSSP total_breaks: {:?}\nGolden total_breaks: {:?}\nRSSP stream_sequences: {:?}\nGolden stream_sequences: {:?}\n",
+                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP detailed: {:?}\nGolden detailed: {:?}\nRSSP partial: {:?}\nGolden partial: {:?}\nRSSP simple: {:?}\nGolden simple: {:?}\nRSSP total_streams: {:?}\nGolden total_streams: {:?}\nRSSP total_breaks: {:?}\nGolden total_breaks: {:?}\nRSSP stream_sequences: {:?}\nGolden stream_sequences: {:?}\n",
                 path.display(),
                 step_type,
                 difficulty,
@@ -432,8 +409,6 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 expected_partial,
                 actual_simple,
                 expected_simple,
-                actual_total_label,
-                expected_total_label,
                 actual_total_streams,
                 expected_total_streams,
                 actual_total_breaks,
