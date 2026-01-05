@@ -1917,6 +1917,9 @@ fn write_json_number_for_key<W: Write>(
         match key {
             None => write!(writer, "{}", round_sig_figs_6(f)),
             Some("offset") => write!(writer, "{:.3}", f),
+            Some("beat0_offset_seconds") | Some("beat0_group_offset_seconds") => {
+                write!(writer, "{}", round_sig_figs_6(f))
+            }
             Some("duration_seconds") => write!(writer, "{}", round_millis(f)),
             Some("max_nps") => write!(writer, "{}", round_sig_figs_6(f)),
             Some("bpm") => write!(writer, "{}", f),
