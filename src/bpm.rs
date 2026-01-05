@@ -13,6 +13,7 @@ use crate::timing::{
     compute_timing_segments,
     format_bpm_segments_like_itg,
     round_sig_figs_itg,
+    roundtrip_bpm_itg,
     steps_timing_allowed,
     TimingData,
     TimingFormat,
@@ -357,14 +358,18 @@ fn chart_bpm_snapshot(
         bpms.push((beat as f64, bpm as f64));
     }
     let bpms_formatted = format_bpm_segments_like_itg(&bpms);
-    let (bpm_min, bpm_max) = compute_actual_bpm_range(&bpms);
+    let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw(&bpms);
+    let bpm_min = round_sig_figs_itg(bpm_min_raw);
+    let bpm_max = round_sig_figs_itg(bpm_max_raw);
     let chart_display_bpm = decode_display_bpm_tag(entry.chart_display_bpm.as_deref());
-    let (display_bpm_min, display_bpm_max, display_bpm) = resolve_display_bpm(
+    let (display_bpm_min_raw, display_bpm_max_raw, display_bpm) = resolve_display_bpm(
         chart_display_bpm.as_deref(),
-        bpm_min,
-        bpm_max,
+        bpm_min_raw,
+        bpm_max_raw,
         1.0,
     );
+    let display_bpm_min = round_sig_figs_itg(display_bpm_min_raw);
+    let display_bpm_max = round_sig_figs_itg(display_bpm_max_raw);
 
     Some(ChartBpmSnapshot {
         step_type,
@@ -637,6 +642,11 @@ pub fn compute_bpm_range(bpm_map: &[(f64, f64)]) -> (i32, i32) {
 }
 
 pub fn compute_actual_bpm_range(bpm_map: &[(f64, f64)]) -> (f64, f64) {
+    let (min_bpm, max_bpm) = actual_bpm_range_raw(bpm_map);
+    (round_sig_figs_itg(min_bpm), round_sig_figs_itg(max_bpm))
+}
+
+fn actual_bpm_range_raw(bpm_map: &[(f64, f64)]) -> (f64, f64) {
     if bpm_map.is_empty() {
         return (0.0, 0.0);
     }
@@ -645,6 +655,10 @@ pub fn compute_actual_bpm_range(bpm_map: &[(f64, f64)]) -> (f64, f64) {
     let mut max_bpm = 0.0;
 
     for &(_, bpm) in bpm_map {
+        if !bpm.is_finite() {
+            continue;
+        }
+        let bpm = roundtrip_bpm_itg(bpm);
         if !bpm.is_finite() {
             continue;
         }
@@ -663,7 +677,7 @@ pub fn compute_actual_bpm_range(bpm_map: &[(f64, f64)]) -> (f64, f64) {
         max_bpm = 0.0;
     }
 
-    (round_sig_figs_itg(min_bpm), round_sig_figs_itg(max_bpm))
+    (min_bpm, max_bpm)
 }
 
 /// Calculates the accurate cumulative time to reach a target beat, accounting for
