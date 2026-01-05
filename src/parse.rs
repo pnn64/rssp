@@ -482,23 +482,23 @@ pub fn extract_sections<'a>(
             } else if starts_with_tag_ci(current_slice, b"#FREEZES:") {
                 // Older charts sometimes use #FREEZES instead of #STOPS.
                 result.stops = parse_tag(current_slice, b"#FREEZES:".len());
-            } else if starts_with_tag_ci(current_slice, b"#FAKES:") {
+            } else if is_ssc && starts_with_tag_ci(current_slice, b"#FAKES:") {
                 result.fakes = parse_tag(current_slice, b"#FAKES:".len());
             } else if starts_with_tag_ci(current_slice, b"#DELAYS:") {
                 result.delays = parse_tag(current_slice, b"#DELAYS:".len());
-            } else if starts_with_tag_ci(current_slice, b"#WARPS:") {
+            } else if is_ssc && starts_with_tag_ci(current_slice, b"#WARPS:") {
                 result.warps = parse_tag(current_slice, b"#WARPS:".len());
-            } else if starts_with_tag_ci(current_slice, b"#SPEEDS:") {
+            } else if is_ssc && starts_with_tag_ci(current_slice, b"#SPEEDS:") {
                 result.speeds = parse_tag(current_slice, b"#SPEEDS:".len());
-            } else if starts_with_tag_ci(current_slice, b"#SCROLLS:") {
+            } else if is_ssc && starts_with_tag_ci(current_slice, b"#SCROLLS:") {
                 result.scrolls = parse_tag(current_slice, b"#SCROLLS:".len());
             } else if starts_with_tag_ci(current_slice, b"#TIMESIGNATURES:") {
                 result.time_signatures = parse_tag(current_slice, b"#TIMESIGNATURES:".len());
-            } else if starts_with_tag_ci(current_slice, b"#LABELS:") {
+            } else if is_ssc && starts_with_tag_ci(current_slice, b"#LABELS:") {
                 result.labels = parse_tag(current_slice, b"#LABELS:".len());
             } else if starts_with_tag_ci(current_slice, b"#TICKCOUNTS:") {
                 result.tickcounts = parse_tag(current_slice, b"#TICKCOUNTS:".len());
-            } else if starts_with_tag_ci(current_slice, b"#COMBOS:") {
+            } else if is_ssc && starts_with_tag_ci(current_slice, b"#COMBOS:") {
                 result.combos = parse_tag(current_slice, b"#COMBOS:".len());
             } else if starts_with_tag_ci(current_slice, b"#BANNER:") {
                 result.banner = parse_tag(current_slice, b"#BANNER:".len());
@@ -567,7 +567,6 @@ pub fn extract_sections<'a>(
                     .map(|e| notes_start + e)
                     .unwrap_or(data.len());
                 let block = data[notes_start..notes_end].to_vec();
-                let chart_fakes = parse_subtag(&block, b"#FAKES:", true);
                 result.notes_list.push(ParsedChartEntry {
                     notes: block,
                     chart_bpms: None,
@@ -576,7 +575,7 @@ pub fn extract_sections<'a>(
                     chart_warps: None,
                     chart_speeds: None,
                     chart_scrolls: None,
-                    chart_fakes: chart_fakes.map(Cow::Owned),
+                    chart_fakes: None,
                     chart_offset: None,
                     chart_time_signatures: None,
                     chart_labels: None,

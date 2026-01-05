@@ -1,5 +1,6 @@
 use crate::bpm::{clean_timing_map_cow, parse_beat_or_row, parse_bpm_map};
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimingFormat {
@@ -338,6 +339,30 @@ fn tidy_speed_segments(speeds: Vec<SpeedSegment>) -> Vec<SpeedSegment> {
     out
 }
 
+fn tidy_row_segments<T, G, S>(segments: Vec<T>, mut beat_of: G, mut set_beat: S) -> Vec<T>
+where
+    G: FnMut(&T) -> f64,
+    S: FnMut(&mut T, f64),
+{
+    let mut out: Vec<(i32, T)> = Vec::with_capacity(segments.len());
+    let mut rows: HashMap<i32, usize> = HashMap::new();
+
+    for mut seg in segments {
+        let row = beat_to_note_row(beat_of(&seg));
+        let beat = note_row_to_beat(row);
+        set_beat(&mut seg, beat);
+        if let Some(&idx) = rows.get(&row) {
+            out[idx] = (row, seg);
+        } else {
+            rows.insert(row, out.len());
+            out.push((row, seg));
+        }
+    }
+
+    out.sort_by_key(|(row, _)| *row);
+    out.into_iter().map(|(_, seg)| seg).collect()
+}
+
 pub fn compute_row_to_beat(minimized_note_data: &[u8]) -> Vec<f32> {
     let mut row_to_beat = Vec::new();
     let mut measure_index = 0usize;
@@ -438,6 +463,9 @@ pub fn compute_timing_segments(
     let raw_stops = parse_optional_timing(chart_stops, global_stops, parse_stops);
     let (mut parsed_bpms, stops, extra_warps, beat0_offset_adjust) =
         process_bpms_and_stops(format, &parsed_bpms, &raw_stops);
+    let stops = tidy_row_segments(stops, |seg| seg.beat, |seg, beat| {
+        seg.beat = beat;
+    });
 
     if parsed_bpms.is_empty() {
         parsed_bpms.push((0.0, DEFAULT_BPM));
@@ -450,15 +478,21 @@ pub fn compute_timing_segments(
             duration: seg.duration,
         })
         .collect();
+    let delays = tidy_row_segments(delays, |seg| seg.beat, |seg, beat| {
+        seg.beat = beat;
+    });
     let mut warps = parse_optional_timing(chart_warps, global_warps, parse_warps);
     warps.extend(extra_warps);
-    let mut warps: Vec<WarpSegment> = warps
+    let warps: Vec<WarpSegment> = warps
         .into_iter()
         .map(|seg| WarpSegment {
             beat: quantize_beat_f64_from_f32(seg.beat),
             length: quantize_beat_f64_from_f32(seg.length),
         })
         .collect();
+    let warps = tidy_row_segments(warps, |seg| seg.beat, |seg, beat| {
+        seg.beat = beat;
+    });
     let speeds: Vec<SpeedSegment> =
         parse_optional_timing(chart_speeds, global_speeds, parse_speeds)
             .into_iter()
@@ -479,16 +513,16 @@ pub fn compute_timing_segments(
             })
             .collect();
     let scrolls = tidy_scroll_segments(scrolls);
-    let mut fakes: Vec<FakeSegment> = parse_optional_timing(chart_fakes, global_fakes, parse_fakes)
+    let fakes: Vec<FakeSegment> = parse_optional_timing(chart_fakes, global_fakes, parse_fakes)
         .into_iter()
         .map(|seg| FakeSegment {
             beat: quantize_beat_f64_from_f32(seg.beat),
             length: quantize_beat_f64_from_f32(seg.length),
         })
         .collect();
-
-    warps.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
-    fakes.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
+    let fakes = tidy_row_segments(fakes, |seg| seg.beat, |seg, beat| {
+        seg.beat = beat;
+    });
 
     TimingSegments {
         beat0_offset_adjust: beat0_offset_adjust as f32,
@@ -726,6 +760,9 @@ impl TimingData {
 
         let (mut parsed_bpms, stops, extra_warps, beat0_offset_adjust) =
             process_bpms_and_stops(format, &parsed_bpms, &raw_stops);
+        let stops = tidy_row_segments(stops, |seg| seg.beat, |seg, beat| {
+            seg.beat = beat;
+        });
 
         if parsed_bpms.is_empty() {
             parsed_bpms.push((0.0, DEFAULT_BPM));
@@ -764,15 +801,21 @@ impl TimingData {
                     duration: seg.duration,
                 })
                 .collect();
+        let delays = tidy_row_segments(delays, |seg| seg.beat, |seg, beat| {
+            seg.beat = beat;
+        });
         let mut warps = parse_optional_timing(chart_warps, global_warps, parse_warps);
         warps.extend(extra_warps);
-        let mut warps: Vec<WarpSegment> = warps
+        let warps: Vec<WarpSegment> = warps
             .into_iter()
             .map(|seg| WarpSegment {
                 beat: quantize_beat_f64_from_f32(seg.beat),
                 length: quantize_beat_f64_from_f32(seg.length),
             })
             .collect();
+        let warps = tidy_row_segments(warps, |seg| seg.beat, |seg, beat| {
+            seg.beat = beat;
+        });
         let speeds: Vec<SpeedSegment> =
             parse_optional_timing(chart_speeds, global_speeds, parse_speeds)
                 .into_iter()
@@ -793,7 +836,7 @@ impl TimingData {
                 })
                 .collect();
         let scrolls = tidy_scroll_segments(scrolls);
-        let mut fakes: Vec<FakeSegment> =
+        let fakes: Vec<FakeSegment> =
             parse_optional_timing(chart_fakes, global_fakes, parse_fakes)
                 .into_iter()
                 .map(|seg| FakeSegment {
@@ -801,9 +844,9 @@ impl TimingData {
                     length: quantize_beat_f64_from_f32(seg.length),
                 })
                 .collect();
-
-        warps.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
-        fakes.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
+        let fakes = tidy_row_segments(fakes, |seg| seg.beat, |seg, beat| {
+            seg.beat = beat;
+        });
 
         let stop_rows = build_stop_rows(&stops);
         let delay_rows = build_delay_rows(&delays);
