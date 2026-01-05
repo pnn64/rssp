@@ -1915,6 +1915,7 @@ fn write_json_number_for_key<W: Write>(
         write!(writer, "{}", u)
     } else if let Some(f) = number.as_f64() {
         match key {
+            None => write!(writer, "{}", round_sig_figs_6(f)),
             Some("offset") => write!(writer, "{:.3}", f),
             Some("duration_seconds") => write!(writer, "{}", round_millis(f)),
             Some("max_nps") => write!(writer, "{}", round_sig_figs_6(f)),
