@@ -162,18 +162,11 @@ pub fn format_bpm_segments_like_itg(bpms: &[(f64, f64)]) -> String {
     out
 }
 
-#[inline(always)]
-fn has_zero_beat(beat: f64) -> bool {
-    beat.abs() <= 1e-6
-}
-
 pub fn normalize_speeds_like_itg(
     mut speeds: Vec<(f64, f64, f64, i32)>,
 ) -> Vec<(f64, f64, f64, i32)> {
     if speeds.is_empty() {
         speeds.push((0.0, 1.0, 0.0, 0));
-    } else if !speeds.iter().any(|(beat, _, _, _)| has_zero_beat(*beat)) {
-        speeds.insert(0, (0.0, 1.0, 0.0, 0));
     }
     speeds
 }
@@ -181,8 +174,6 @@ pub fn normalize_speeds_like_itg(
 pub fn normalize_scrolls_like_itg(mut scrolls: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
     if scrolls.is_empty() {
         scrolls.push((0.0, 1.0));
-    } else if !scrolls.iter().any(|(beat, _)| has_zero_beat(*beat)) {
-        scrolls.insert(0, (0.0, 1.0));
     }
     scrolls
 }
