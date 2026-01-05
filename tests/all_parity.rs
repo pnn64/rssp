@@ -66,6 +66,12 @@ struct HarnessChart {
     #[serde(default)]
     bpm_max: f64,
     #[serde(default)]
+    display_bpm: String,
+    #[serde(default)]
+    display_bpm_min: f64,
+    #[serde(default)]
+    display_bpm_max: f64,
+    #[serde(default)]
     duration_seconds: f64,
     #[serde(default)]
     streams_breakdown: String,
@@ -276,6 +282,12 @@ struct RsspTiming {
     bpms_formatted: String,
     bpm_min: f64,
     bpm_max: f64,
+    #[serde(default)]
+    display_bpm: String,
+    #[serde(default)]
+    display_bpm_min: f64,
+    #[serde(default)]
+    display_bpm_max: f64,
     #[serde(default)]
     hash_bpms: Option<String>,
     #[serde(default)]
@@ -844,19 +856,37 @@ fn compare_bpm(
             let actual_min = actual.map(|entry| entry.timing.bpm_min);
             let expected_max = expected.map(|entry| entry.bpm_max);
             let actual_max = actual.map(|entry| entry.timing.bpm_max);
+            let expected_display = expected.map(|entry| entry.display_bpm.as_str());
+            let actual_display = actual.map(|entry| entry.timing.display_bpm.as_str());
+            let expected_display_min = expected.map(|entry| entry.display_bpm_min);
+            let actual_display_min = actual.map(|entry| entry.timing.display_bpm_min);
+            let expected_display_max = expected.map(|entry| entry.display_bpm_max);
+            let actual_display_max = actual.map(|entry| entry.timing.display_bpm_max);
 
             let hash_matches = expected_hash.is_some() && expected_hash == actual_hash;
             let bpms_matches = expected_bpms.is_some() && expected_bpms == actual_bpms;
             let min_matches = expected_min.is_some() && expected_min == actual_min;
             let max_matches = expected_max.is_some() && expected_max == actual_max;
-            let status = if hash_matches && bpms_matches && min_matches && max_matches {
+            let display_matches = expected_display.is_some() && expected_display == actual_display;
+            let display_min_matches =
+                expected_display_min.is_some() && expected_display_min == actual_display_min;
+            let display_max_matches =
+                expected_display_max.is_some() && expected_display_max == actual_display_max;
+            let status = if hash_matches
+                && bpms_matches
+                && min_matches
+                && max_matches
+                && display_matches
+                && display_min_matches
+                && display_max_matches
+            {
                 "....ok"
             } else {
                 "....MISMATCH"
             };
 
             println!(
-                "  {} {} [{}]: hash_bpms: {} -> {} | bpms: {} -> {} | bpm_min: {} -> {} | bpm_max: {} -> {} {}",
+                "  {} {} [{}]: hash_bpms: {} -> {} | bpms: {} -> {} | bpm_min: {} -> {} | bpm_max: {} -> {} | display_bpm: {} -> {} | display_min: {} -> {} | display_max: {} -> {} {}",
                 step_type,
                 difficulty,
                 meter_label,
@@ -876,6 +906,20 @@ fn compare_bpm(
                 actual_max
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "-".to_string()),
+                expected_display.unwrap_or("-"),
+                actual_display.unwrap_or("-"),
+                expected_display_min
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                actual_display_min
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                expected_display_max
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                actual_display_max
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
                 status
             );
         }
@@ -891,6 +935,9 @@ fn compare_bpm(
                         && expected.bpms == actual.timing.bpms_formatted
                         && expected.bpm_min == actual.timing.bpm_min
                         && expected.bpm_max == actual.timing.bpm_max
+                        && expected.display_bpm == actual.timing.display_bpm
+                        && expected.display_bpm_min == actual.timing.display_bpm_min
+                        && expected.display_bpm_max == actual.timing.display_bpm_max
                 });
         if !matches {
             let expected_hashes: Vec<String> = expected_indices
@@ -925,8 +972,32 @@ fn compare_bpm(
                 .iter()
                 .map(|&i| actual_charts[i].timing.bpm_max)
                 .collect();
+            let expected_display: Vec<String> = expected_indices
+                .iter()
+                .map(|&i| harness_charts[i].display_bpm.clone())
+                .collect();
+            let actual_display: Vec<String> = actual_indices
+                .iter()
+                .map(|&i| actual_charts[i].timing.display_bpm.clone())
+                .collect();
+            let expected_display_mins: Vec<f64> = expected_indices
+                .iter()
+                .map(|&i| harness_charts[i].display_bpm_min)
+                .collect();
+            let actual_display_mins: Vec<f64> = actual_indices
+                .iter()
+                .map(|&i| actual_charts[i].timing.display_bpm_min)
+                .collect();
+            let expected_display_maxes: Vec<f64> = expected_indices
+                .iter()
+                .map(|&i| harness_charts[i].display_bpm_max)
+                .collect();
+            let actual_display_maxes: Vec<f64> = actual_indices
+                .iter()
+                .map(|&i| actual_charts[i].timing.display_bpm_max)
+                .collect();
             return Err(format!(
-                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP hash_bpms:   {:?}\nGolden hash_bpms: {:?}\nRSSP bpms:        {:?}\nGolden bpms:      {:?}\nRSSP bpm_min:     {:?}\nGolden bpm_min:   {:?}\nRSSP bpm_max:     {:?}\nGolden bpm_max:   {:?}\n",
+                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP hash_bpms:   {:?}\nGolden hash_bpms: {:?}\nRSSP bpms:        {:?}\nGolden bpms:      {:?}\nRSSP bpm_min:     {:?}\nGolden bpm_min:   {:?}\nRSSP bpm_max:     {:?}\nGolden bpm_max:   {:?}\nRSSP display_bpm:     {:?}\nGolden display_bpm:   {:?}\nRSSP display_min:     {:?}\nGolden display_min:   {:?}\nRSSP display_max:     {:?}\nGolden display_max:   {:?}\n",
                 path.display(),
                 step_type,
                 difficulty,
@@ -937,7 +1008,13 @@ fn compare_bpm(
                 actual_mins,
                 expected_mins,
                 actual_maxes,
-                expected_maxes
+                expected_maxes,
+                actual_display,
+                expected_display,
+                actual_display_mins,
+                expected_display_mins,
+                actual_display_maxes,
+                expected_display_maxes
             ));
         }
     }

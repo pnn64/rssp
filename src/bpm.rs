@@ -205,7 +205,7 @@ fn join_display_bpm_sl(bpm_min: f64, bpm_max: f64, music_rate: f64) -> String {
     format!("{} - {}", lo, hi)
 }
 
-fn resolve_display_bpm(
+pub(crate) fn resolve_display_bpm(
     chart_tag: Option<&str>,
     actual_min: f64,
     actual_max: f64,
@@ -255,6 +255,7 @@ struct TimingGlobals {
     scrolls_raw: String,
     fakes_raw: String,
     bpms_norm: String,
+    display_bpm_raw: Option<String>,
     timing_format: TimingFormat,
     allow_steps_timing: bool,
 }
@@ -285,6 +286,7 @@ fn timing_globals(parsed: &ParsedSimfileData<'_>, extension: &str) -> TimingGlob
         scrolls_raw: clean_tag_bytes(parsed.scrolls),
         fakes_raw: clean_tag_bytes(parsed.fakes),
         bpms_norm: normalize_tag_bytes(parsed.bpms),
+        display_bpm_raw: decode_display_bpm_tag(parsed.display_bpm),
         timing_format,
         allow_steps_timing,
     }
@@ -362,8 +364,11 @@ fn chart_bpm_snapshot(
     let bpm_min = round_sig_figs_itg(bpm_min_raw);
     let bpm_max = round_sig_figs_itg(bpm_max_raw);
     let chart_display_bpm = decode_display_bpm_tag(entry.chart_display_bpm.as_deref());
+    let display_tag = chart_display_bpm
+        .as_deref()
+        .or_else(|| globals.display_bpm_raw.as_deref());
     let (display_bpm_min_raw, display_bpm_max_raw, display_bpm) = resolve_display_bpm(
-        chart_display_bpm.as_deref(),
+        display_tag,
         bpm_min_raw,
         bpm_max_raw,
         1.0,
@@ -646,7 +651,7 @@ pub fn compute_actual_bpm_range(bpm_map: &[(f64, f64)]) -> (f64, f64) {
     (round_sig_figs_itg(min_bpm), round_sig_figs_itg(max_bpm))
 }
 
-fn actual_bpm_range_raw(bpm_map: &[(f64, f64)]) -> (f64, f64) {
+pub(crate) fn actual_bpm_range_raw(bpm_map: &[(f64, f64)]) -> (f64, f64) {
     if bpm_map.is_empty() {
         return (0.0, 0.0);
     }

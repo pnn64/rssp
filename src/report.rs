@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
-use crate::bpm::{compute_actual_bpm_range, normalize_float_digits};
+use crate::bpm::{actual_bpm_range_raw, normalize_float_digits, resolve_display_bpm};
 use crate::patterns::{CustomPatternSummary, PatternVariant};
 use crate::stats::{
     measure_equally_spaced,
@@ -242,6 +242,7 @@ pub struct ChartSummary {
     pub chart_delays:      Option<String>,
     pub chart_warps:       Option<String>,
     pub chart_fakes:       Option<String>,
+    pub chart_display_bpm: Option<String>,
     pub chart_time_signatures: Option<String>,
     pub chart_labels:      Option<String>,
     pub chart_tickcounts:  Option<String>,
@@ -1544,7 +1545,31 @@ fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
         fakes,
     } = build_timing_snapshot(chart, simfile);
 
-    let (bpm_min, bpm_max) = compute_actual_bpm_range(&bpms);
+    let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw(&bpms);
+    let bpm_min = round_sig_figs_itg(bpm_min_raw);
+    let bpm_max = round_sig_figs_itg(bpm_max_raw);
+
+    let chart_display_bpm = chart
+        .chart_display_bpm
+        .as_deref()
+        .filter(|s| !s.trim().is_empty());
+    let song_display_bpm = {
+        let trimmed = simfile.display_bpm_str.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    };
+    let display_tag = chart_display_bpm.or(song_display_bpm);
+    let (display_bpm_min_raw, display_bpm_max_raw, display_bpm) = resolve_display_bpm(
+        display_tag,
+        bpm_min_raw,
+        bpm_max_raw,
+        1.0,
+    );
+    let display_bpm_min = round_sig_figs_itg(display_bpm_min_raw);
+    let display_bpm_max = round_sig_figs_itg(display_bpm_max_raw);
     let bpms: Vec<JsonValue> = bpms
         .into_iter()
         .map(|(beat, bpm)| serde_json::json!([beat, bpm]))
@@ -1588,6 +1613,9 @@ fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
         "bpms_formatted": bpms_formatted,
         "bpm_min": bpm_min,
         "bpm_max": bpm_max,
+        "display_bpm": display_bpm,
+        "display_bpm_min": display_bpm_min,
+        "display_bpm_max": display_bpm_max,
         "bpms": bpms,
         "stops": stops,
         "delays": delays,
@@ -1962,7 +1990,9 @@ fn write_json_number_for_key<W: Write>(
             }
             Some("duration_seconds") => write!(writer, "{}", round_millis(f)),
             Some("max_nps") => write!(writer, "{}", round_sig_figs_6(f)),
-            Some("bpm_min") | Some("bpm_max") => write!(writer, "{}", round_sig_figs_6(f)),
+            Some("bpm_min") | Some("bpm_max") | Some("display_bpm_min") | Some("display_bpm_max") => {
+                write!(writer, "{}", round_sig_figs_6(f))
+            }
             Some("bpm") => write!(writer, "{}", f),
             _ => write!(writer, "{:.2}", f),
         }
