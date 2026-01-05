@@ -149,6 +149,92 @@ fn clean_chart_tag_bytes(tag: Option<&[u8]>) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+fn decode_display_bpm_tag(tag: Option<&[u8]>) -> Option<String> {
+    let text = tag.map(|bytes| unescape_trim(decode_bytes(bytes).as_ref()))?;
+    if text.is_empty() {
+        return None;
+    }
+    Some(text)
+}
+
+fn parse_display_bpm(tag: &str) -> Option<(f64, f64)> {
+    let trimmed = tag.trim();
+    if trimmed.is_empty() || trimmed == "*" {
+        return None;
+    }
+    let mut parts = trimmed.split(':');
+    let min_str = parts.next()?.trim();
+    if min_str.is_empty() {
+        return None;
+    }
+    let max_str = parts.next().unwrap_or("").trim();
+
+    let min_raw = min_str.parse::<f64>().unwrap_or(0.0);
+    let min_raw = if min_raw.is_finite() { min_raw } else { 0.0 };
+    let min = (min_raw as f32) as f64;
+
+    let max_raw = if max_str.is_empty() {
+        min
+    } else {
+        max_str.parse::<f64>().unwrap_or(0.0)
+    };
+    let max_raw = if max_raw.is_finite() { max_raw } else { 0.0 };
+    let max = (max_raw as f32) as f64;
+
+    Some((min, max))
+}
+
+fn format_bpm_sl(bpm: f64, music_rate: f64) -> String {
+    if music_rate == 1.0 {
+        return format!("{:.0}", bpm);
+    }
+    let mut s = format!("{:.1}", bpm);
+    if s.ends_with(".0") {
+        s.truncate(s.len() - 2);
+    }
+    s
+}
+
+fn join_display_bpm_sl(bpm_min: f64, bpm_max: f64, music_rate: f64) -> String {
+    let lo = format_bpm_sl(bpm_min, music_rate);
+    if bpm_min == bpm_max {
+        return lo;
+    }
+    let hi = format_bpm_sl(bpm_max, music_rate);
+    format!("{} - {}", lo, hi)
+}
+
+fn resolve_display_bpm(
+    chart_tag: Option<&str>,
+    song_tag: Option<&str>,
+    actual_min: f64,
+    actual_max: f64,
+    music_rate: f64,
+) -> (f64, f64, String) {
+    let chart_tag = chart_tag.map(|s| s.trim()).filter(|s| !s.is_empty());
+    let song_tag = song_tag.map(|s| s.trim()).filter(|s| !s.is_empty());
+    let chosen = chart_tag.or(song_tag);
+
+    let (mut min, mut max) = match chosen {
+        Some(tag) => match parse_display_bpm(tag) {
+            Some((min, max)) => (min, max),
+            None => (actual_min, actual_max),
+        },
+        None => (actual_min, actual_max),
+    };
+
+    if min <= 0.0 || max <= 0.0 {
+        min = actual_min;
+        max = actual_max;
+    }
+
+    let scaled_min = min * music_rate;
+    let scaled_max = max * music_rate;
+    let display = join_display_bpm_sl(scaled_min, scaled_max, music_rate);
+
+    (scaled_min, scaled_max, display)
+}
+
 #[derive(Debug, Clone)]
 pub struct ChartBpmSnapshot {
     pub step_type: String,
@@ -157,6 +243,9 @@ pub struct ChartBpmSnapshot {
     pub bpms_formatted: String,
     pub bpm_min: f64,
     pub bpm_max: f64,
+    pub display_bpm: String,
+    pub display_bpm_min: f64,
+    pub display_bpm_max: f64,
 }
 
 #[derive(Clone)]
@@ -240,6 +329,7 @@ fn chart_metadata(fields: &[&[u8]], timing_format: TimingFormat) -> Option<(Stri
 fn chart_bpm_snapshot(
     entry: &ParsedChartEntry<'_>,
     globals: &TimingGlobals,
+    global_display_bpm: Option<&str>,
 ) -> Option<ChartBpmSnapshot> {
     let (fields, _chart_data) = split_notes_fields(&entry.notes);
     let (step_type, difficulty) = chart_metadata(&fields, globals.timing_format)?;
@@ -273,6 +363,14 @@ fn chart_bpm_snapshot(
     }
     let bpms_formatted = format_bpm_segments_like_itg(&bpms);
     let (bpm_min, bpm_max) = compute_actual_bpm_range(&bpms);
+    let chart_display_bpm = decode_display_bpm_tag(entry.chart_display_bpm.as_deref());
+    let (display_bpm_min, display_bpm_max, display_bpm) = resolve_display_bpm(
+        chart_display_bpm.as_deref(),
+        global_display_bpm,
+        bpm_min,
+        bpm_max,
+        1.0,
+    );
 
     Some(ChartBpmSnapshot {
         step_type,
@@ -281,6 +379,9 @@ fn chart_bpm_snapshot(
         bpms_formatted,
         bpm_min,
         bpm_max,
+        display_bpm,
+        display_bpm_min,
+        display_bpm_max,
     })
 }
 
@@ -290,10 +391,11 @@ pub fn chart_bpm_snapshots(
 ) -> Result<Vec<ChartBpmSnapshot>, String> {
     let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
     let globals = timing_globals(&parsed_data, extension);
+    let global_display_bpm = decode_display_bpm_tag(parsed_data.display_bpm);
     Ok(parsed_data
         .notes_list
         .iter()
-        .filter_map(|entry| chart_bpm_snapshot(entry, &globals))
+        .filter_map(|entry| chart_bpm_snapshot(entry, &globals, global_display_bpm.as_deref()))
         .collect())
 }
 

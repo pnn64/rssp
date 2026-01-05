@@ -134,6 +134,7 @@ pub struct ParsedChartEntry<'a> {
     pub chart_scrolls: Option<TagBytes<'a>>,
     pub chart_fakes: Option<TagBytes<'a>>,
     pub chart_offset: Option<TagBytes<'a>>,
+    pub chart_display_bpm: Option<TagBytes<'a>>,
     pub chart_time_signatures: Option<TagBytes<'a>>,
     pub chart_labels: Option<TagBytes<'a>>,
     pub chart_tickcounts: Option<TagBytes<'a>>,
@@ -190,6 +191,7 @@ struct NotedataFields<'a> {
     chart_scrolls: Option<&'a [u8]>,
     chart_fakes: Option<&'a [u8]>,
     chart_offset: Option<&'a [u8]>,
+    chart_display_bpm: Option<&'a [u8]>,
     chart_time_signatures: Option<&'a [u8]>,
     chart_labels: Option<&'a [u8]>,
     chart_tickcounts: Option<&'a [u8]>,
@@ -229,6 +231,7 @@ const TAG_SPEEDS: &[u8] = b"#SPEEDS:";
 const TAG_SCROLLS: &[u8] = b"#SCROLLS:";
 const TAG_FAKES: &[u8] = b"#FAKES:";
 const TAG_OFFSET: &[u8] = b"#OFFSET:";
+const TAG_DISPLAYBPM: &[u8] = b"#DISPLAYBPM:";
 const TAG_TIMESIGNATURES: &[u8] = b"#TIMESIGNATURES:";
 const TAG_LABELS: &[u8] = b"#LABELS:";
 const TAG_TICKCOUNTS: &[u8] = b"#TICKCOUNTS:";
@@ -405,6 +408,10 @@ fn parse_notedata_fields<'a>(data: &'a [u8]) -> NotedataFields<'a> {
             i += adv;
             continue;
         }
+        if let Some(adv) = parse_tag_into(slice, TAG_DISPLAYBPM, true, &mut out.chart_display_bpm) {
+            i += adv;
+            continue;
+        }
         if let Some(adv) =
             parse_tag_into(slice, TAG_TIMESIGNATURES, true, &mut out.chart_time_signatures)
         {
@@ -542,6 +549,7 @@ pub fn extract_sections<'a>(
                     chart_scrolls: fields.chart_scrolls.map(Cow::Borrowed),
                     chart_fakes: fields.chart_fakes.map(Cow::Borrowed),
                     chart_offset: fields.chart_offset.map(Cow::Borrowed),
+                    chart_display_bpm: fields.chart_display_bpm.map(Cow::Borrowed),
                     chart_time_signatures: fields.chart_time_signatures.map(Cow::Borrowed),
                     chart_labels: fields.chart_labels.map(Cow::Borrowed),
                     chart_tickcounts: fields.chart_tickcounts.map(Cow::Borrowed),
@@ -577,6 +585,7 @@ pub fn extract_sections<'a>(
                     chart_scrolls: None,
                     chart_fakes: None,
                     chart_offset: None,
+                    chart_display_bpm: None,
                     chart_time_signatures: None,
                     chart_labels: None,
                     chart_tickcounts: None,
