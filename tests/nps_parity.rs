@@ -7,7 +7,8 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::ChartNpsInfo;
+use rssp::stats::measure_equally_spaced;
+use rssp::{analyze, AnalysisOptions, step_type_lanes};
 
 #[derive(Debug, Deserialize)]
 struct GoldenChart {
@@ -15,8 +16,21 @@ struct GoldenChart {
     #[serde(rename = "steps_type")]
     step_type: String,
     peak_nps: f64,
+    notes_per_measure: Vec<u32>,
+    nps_per_measure: Vec<f64>,
+    equally_spaced_per_measure: Vec<bool>,
     #[serde(default)]
     meter: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+struct ChartMeasureInfo {
+    step_type: String,
+    difficulty: String,
+    peak_nps: f64,
+    notes_per_measure: Vec<u32>,
+    nps_per_measure: Vec<f64>,
+    equally_spaced_per_measure: Vec<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -30,6 +44,49 @@ struct TestCase {
 struct Failure {
     name: String,
     message: String,
+}
+
+const NPS_EPS: f64 = 1e-4;
+
+fn approx_eq(a: f64, b: f64) -> bool {
+    (a - b).abs() <= NPS_EPS
+}
+
+fn format_len<T>(opt: Option<&[T]>) -> String {
+    opt.map(|v| v.len().to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn compute_chart_nps(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartMeasureInfo>, String> {
+    let options = AnalysisOptions {
+        compute_tech_counts: false,
+        compute_pattern_counts: false,
+        ..AnalysisOptions::default()
+    };
+    let summary = analyze(simfile_data, extension, options).map_err(|e| e.to_string())?;
+
+    Ok(summary
+        .charts
+        .into_iter()
+        .map(|chart| {
+            let lanes = step_type_lanes(&chart.step_type_str);
+            ChartMeasureInfo {
+                step_type: chart.step_type_str,
+                difficulty: chart.difficulty_str,
+                peak_nps: chart.max_nps,
+                notes_per_measure: chart
+                    .measure_densities
+                    .iter()
+                    .map(|&v| v as u32)
+                    .collect(),
+                nps_per_measure: chart.measure_nps_vec,
+                equally_spaced_per_measure: measure_equally_spaced(
+                    &chart.minimized_note_data,
+                    lanes,
+                ),
+            }
+        })
+        .collect())
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
@@ -64,7 +121,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     let golden_charts: Vec<GoldenChart> = serde_json::from_slice(&json_bytes)
         .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
 
-    let rssp_charts = rssp::compute_chart_peak_nps(&raw_bytes, extension)
+    let rssp_charts = compute_chart_nps(&raw_bytes, extension)
         .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
 
     let mut golden_map: HashMap<(String, String), Vec<GoldenChart>> = HashMap::new();
@@ -78,7 +135,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         golden_map.entry(key).or_default().push(golden);
     }
 
-    let mut rssp_map: HashMap<(String, String), Vec<ChartNpsInfo>> = HashMap::new();
+    let mut rssp_map: HashMap<(String, String), Vec<ChartMeasureInfo>> = HashMap::new();
     for chart in rssp_charts {
         let step_type_lower = chart.step_type.to_ascii_lowercase();
         if step_type_lower != "dance-single" && step_type_lower != "dance-double" {
@@ -118,14 +175,37 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
 
             let expected_val = expected.map(|e| e.peak_nps);
             let actual_val = actual.map(|a| a.peak_nps);
-            let matches = match (expected_val, actual_val) {
-                (Some(exp), Some(act)) => (exp - act).abs() <= 0.0001,
+            let peak_matches = match (expected_val, actual_val) {
+                (Some(exp), Some(act)) => approx_eq(exp, act),
                 _ => false,
             };
-            let status = if matches { "....ok" } else { "....MISMATCH" };
+            let notes_matches = match (expected, actual) {
+                (Some(exp), Some(act)) => exp.notes_per_measure == act.notes_per_measure,
+                _ => false,
+            };
+            let nps_matches = match (expected, actual) {
+                (Some(exp), Some(act)) => {
+                    exp.nps_per_measure.len() == act.nps_per_measure.len()
+                        && exp.nps_per_measure.iter().zip(&act.nps_per_measure).all(|(e, a)| {
+                            approx_eq(*e, *a)
+                        })
+                }
+                _ => false,
+            };
+            let spacing_matches = match (expected, actual) {
+                (Some(exp), Some(act)) => {
+                    exp.equally_spaced_per_measure == act.equally_spaced_per_measure
+                }
+                _ => false,
+            };
+            let status = if peak_matches && notes_matches && nps_matches && spacing_matches {
+                "....ok"
+            } else {
+                "....MISMATCH"
+            };
 
             println!(
-                "  {} {} [{}]: peak_nps: {} -> {} {}",
+                "  {} {} [{}]: peak_nps: {} -> {} | notes_per_measure len {} -> {} | nps_per_measure len {} -> {} | equally_spaced len {} -> {} {}",
                 step_type,
                 difficulty,
                 meter_label,
@@ -135,24 +215,67 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 actual_val
                     .map(|v| format!("{:.5}", v))
                     .unwrap_or_else(|| "-".to_string()),
+                format_len(expected.map(|e| e.notes_per_measure.as_slice())),
+                format_len(actual.map(|a| a.notes_per_measure.as_slice())),
+                format_len(expected.map(|e| e.nps_per_measure.as_slice())),
+                format_len(actual.map(|a| a.nps_per_measure.as_slice())),
+                format_len(expected.map(|e| e.equally_spaced_per_measure.as_slice())),
+                format_len(actual.map(|a| a.equally_spaced_per_measure.as_slice())),
                 status
             );
         }
 
         let matches = expected_entries.len() == actual_entries.len()
             && expected_entries.iter().zip(&actual_entries).all(|(e, a)| {
-                (e.peak_nps - a.peak_nps).abs() <= 0.0001
+                approx_eq(e.peak_nps, a.peak_nps)
+                    && e.notes_per_measure == a.notes_per_measure
+                    && e.nps_per_measure.len() == a.nps_per_measure.len()
+                    && e.nps_per_measure
+                        .iter()
+                        .zip(&a.nps_per_measure)
+                        .all(|(exp, act)| approx_eq(*exp, *act))
+                    && e.equally_spaced_per_measure == a.equally_spaced_per_measure
             });
         if !matches {
             let expected_values: Vec<f64> = expected_entries.iter().map(|e| e.peak_nps).collect();
             let actual_values: Vec<f64> = actual_entries.iter().map(|a| a.peak_nps).collect();
+            let expected_notes: Vec<Vec<u32>> = expected_entries
+                .iter()
+                .map(|e| e.notes_per_measure.clone())
+                .collect();
+            let actual_notes: Vec<Vec<u32>> = actual_entries
+                .iter()
+                .map(|a| a.notes_per_measure.clone())
+                .collect();
+            let expected_nps: Vec<Vec<f64>> = expected_entries
+                .iter()
+                .map(|e| e.nps_per_measure.clone())
+                .collect();
+            let actual_nps: Vec<Vec<f64>> = actual_entries
+                .iter()
+                .map(|a| a.nps_per_measure.clone())
+                .collect();
+            let expected_spaced: Vec<Vec<bool>> = expected_entries
+                .iter()
+                .map(|e| e.equally_spaced_per_measure.clone())
+                .collect();
+            let actual_spaced: Vec<Vec<bool>> = actual_entries
+                .iter()
+                .map(|a| a.equally_spaced_per_measure.clone())
+                .collect();
             return Err(format!(
-                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP peak_nps:   {:?}\nGolden peak_nps: {:?}\n",
+                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP peak_nps:   {:?}\nGolden peak_nps: {:?}\nRSSP notes_per_measure:   {:?}\nGolden notes_per_measure: {:?}\nRSSP nps_per_measure:     {:?}\nGolden nps_per_measure:   {:?}\nRSSP equally_spaced_per_measure:   {:?}\nGolden equally_spaced_per_measure: {:?}\n",
                 path.display(),
                 step_type,
                 difficulty,
                 actual_values,
-                expected_values
+                expected_values,
+                actual_notes,
+                expected_notes,
+                actual_nps,
+                expected_nps,
+                actual_spaced,
+                expected_spaced
             ));
         }
     }

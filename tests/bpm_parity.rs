@@ -7,7 +7,7 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::bpm::chart_bpm_snapshots;
+use rssp::bpm::{chart_bpm_snapshots, compute_actual_bpm_range, parse_bpm_map};
 
 #[derive(Debug, Deserialize)]
 struct GoldenChart {
@@ -16,6 +16,8 @@ struct GoldenChart {
     step_type: String,
     bpms: String,
     hash_bpms: String,
+    bpm_min: f64,
+    bpm_max: f64,
     #[serde(default)]
     meter: Option<u32>,
 }
@@ -26,6 +28,8 @@ struct ChartBpmInfo {
     difficulty: String,
     hash_bpms: String,
     bpms: String,
+    bpm_min: f64,
+    bpm_max: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -41,17 +45,29 @@ struct Failure {
     message: String,
 }
 
+const BPM_EPS: f64 = 1e-3;
+
+fn approx_eq(a: f64, b: f64) -> bool {
+    (a - b).abs() <= BPM_EPS
+}
+
 fn compute_chart_bpms(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartBpmInfo>, String> {
     let snapshots = chart_bpm_snapshots(simfile_data, extension)
         .map_err(|e| e.to_string())?;
 
     Ok(snapshots
         .into_iter()
-        .map(|chart| ChartBpmInfo {
-            step_type: chart.step_type,
-            difficulty: chart.difficulty,
-            hash_bpms: chart.hash_bpms,
-            bpms: chart.bpms_formatted,
+        .map(|chart| {
+            let bpm_map = parse_bpm_map(&chart.bpms_formatted);
+            let (bpm_min, bpm_max) = compute_actual_bpm_range(&bpm_map);
+            ChartBpmInfo {
+                step_type: chart.step_type,
+                difficulty: chart.difficulty,
+                hash_bpms: chart.hash_bpms,
+                bpms: chart.bpms_formatted,
+                bpm_min,
+                bpm_max,
+            }
         })
         .collect())
 }
@@ -143,17 +159,29 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             let actual_hash = actual.map(|entry| entry.hash_bpms.as_str());
             let expected_bpms = expected.map(|entry| entry.bpms.as_str());
             let actual_bpms = actual.map(|entry| entry.bpms.as_str());
+            let expected_min = expected.map(|entry| entry.bpm_min);
+            let actual_min = actual.map(|entry| entry.bpm_min);
+            let expected_max = expected.map(|entry| entry.bpm_max);
+            let actual_max = actual.map(|entry| entry.bpm_max);
 
             let hash_matches = expected_hash.is_some() && expected_hash == actual_hash;
             let bpms_matches = expected_bpms.is_some() && expected_bpms == actual_bpms;
-            let status = if hash_matches && bpms_matches {
+            let min_matches = match (expected_min, actual_min) {
+                (Some(exp), Some(act)) => approx_eq(exp, act),
+                _ => false,
+            };
+            let max_matches = match (expected_max, actual_max) {
+                (Some(exp), Some(act)) => approx_eq(exp, act),
+                _ => false,
+            };
+            let status = if hash_matches && bpms_matches && min_matches && max_matches {
                 "....ok"
             } else {
                 "....MISMATCH"
             };
 
             println!(
-                "  {} {} [{}]: hash_bpms: {} -> {} | bpms: {} -> {} {}",
+                "  {} {} [{}]: hash_bpms: {} -> {} | bpms: {} -> {} | bpm_min: {} -> {} | bpm_max: {} -> {} {}",
                 step_type,
                 difficulty,
                 meter_label,
@@ -161,6 +189,18 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 actual_hash.unwrap_or("-"),
                 expected_bpms.unwrap_or("-"),
                 actual_bpms.unwrap_or("-"),
+                expected_min
+                    .map(|v| format!("{:.3}", v))
+                    .unwrap_or_else(|| "-".to_string()),
+                actual_min
+                    .map(|v| format!("{:.3}", v))
+                    .unwrap_or_else(|| "-".to_string()),
+                expected_max
+                    .map(|v| format!("{:.3}", v))
+                    .unwrap_or_else(|| "-".to_string()),
+                actual_max
+                    .map(|v| format!("{:.3}", v))
+                    .unwrap_or_else(|| "-".to_string()),
                 status
             );
         }
@@ -170,7 +210,10 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 .iter()
                 .zip(&actual_entries)
                 .all(|(expected, actual)| {
-                    expected.hash_bpms == actual.hash_bpms && expected.bpms == actual.bpms
+                    expected.hash_bpms == actual.hash_bpms
+                        && expected.bpms == actual.bpms
+                        && approx_eq(expected.bpm_min, actual.bpm_min)
+                        && approx_eq(expected.bpm_max, actual.bpm_max)
                 });
         if !matches {
             let expected_hashes: Vec<String> = expected_entries
@@ -189,15 +232,23 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 .iter()
                 .map(|entry| entry.bpms.clone())
                 .collect();
+            let expected_min: Vec<f64> = expected_entries.iter().map(|entry| entry.bpm_min).collect();
+            let actual_min: Vec<f64> = actual_entries.iter().map(|entry| entry.bpm_min).collect();
+            let expected_max: Vec<f64> = expected_entries.iter().map(|entry| entry.bpm_max).collect();
+            let actual_max: Vec<f64> = actual_entries.iter().map(|entry| entry.bpm_max).collect();
             return Err(format!(
-                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP hash_bpms:   {:?}\nGolden hash_bpms: {:?}\nRSSP bpms:        {:?}\nGolden bpms:      {:?}\n",
+                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP hash_bpms:   {:?}\nGolden hash_bpms: {:?}\nRSSP bpms:        {:?}\nGolden bpms:      {:?}\nRSSP bpm_min:     {:?}\nGolden bpm_min:   {:?}\nRSSP bpm_max:     {:?}\nGolden bpm_max:   {:?}\n",
                 path.display(),
                 step_type,
                 difficulty,
                 actual_hashes,
                 expected_hashes,
                 actual_bpms,
-                expected_bpms
+                expected_bpms,
+                actual_min,
+                expected_min,
+                actual_max,
+                expected_max
             ));
         }
     }

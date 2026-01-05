@@ -948,6 +948,55 @@ pub fn measure_densities(notes_data: &[u8], lanes: usize) -> Vec<usize> {
     }
 }
 
+pub fn measure_equally_spaced(minimized_note_data: &[u8], lanes: usize) -> Vec<bool> {
+    match lanes {
+        4 => measure_equally_spaced_impl::<4>(minimized_note_data),
+        8 => measure_equally_spaced_impl::<8>(minimized_note_data),
+        _ => measure_equally_spaced_impl::<4>(minimized_note_data),
+    }
+}
+
+fn measure_equally_spaced_impl<const LANES: usize>(minimized_note_data: &[u8]) -> Vec<bool> {
+    let mut results = Vec::new();
+    let mut rows_in_measure = 0usize;
+    let mut notes_in_measure = 0usize;
+    let mut saw_terminator = false;
+
+    for line_raw in minimized_note_data.split(|&b| b == b'\n') {
+        let line = trim_cr(line_raw);
+        if line.is_empty() {
+            continue;
+        }
+
+        match line[0] {
+            b',' => {
+                results.push(notes_in_measure == rows_in_measure);
+                rows_in_measure = 0;
+                notes_in_measure = 0;
+            }
+            b';' => {
+                results.push(notes_in_measure == rows_in_measure);
+                saw_terminator = true;
+                break;
+            }
+            _ => {
+                if line.len() >= LANES {
+                    rows_in_measure += 1;
+                    if has_step::<LANES>(line) {
+                        notes_in_measure += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    if !saw_terminator {
+        results.push(notes_in_measure == rows_in_measure);
+    }
+
+    results
+}
+
 pub fn minimize_chart_for_hash(notes_data: &[u8], lanes: usize) -> Vec<u8> {
     match lanes {
         4 => minimize_chart_for_hash_impl::<4>(notes_data),
@@ -1178,18 +1227,18 @@ pub fn format_run_symbol(cat: RunDensity, length: usize, star: bool) -> String {
     out
 }
 
-#[derive(Debug, Clone, Copy)]
-struct StreamSegment {
-    start: usize,
-    end: usize,
-    is_break: bool,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StreamSegment {
+    pub start: usize,
+    pub end: usize,
+    pub is_break: bool,
 }
 
 const STREAM_NOTES_THRESHOLD: usize = 16;
 const STREAM_SEQUENCE_THRESHOLD: usize = 1;
 const STREAM_BREAK_THRESHOLD: usize = 2;
 
-fn stream_sequences(notes_per_measure: &[usize]) -> Vec<StreamSegment> {
+pub fn stream_sequences(notes_per_measure: &[usize]) -> Vec<StreamSegment> {
     let mut stream_measures = Vec::new();
     for (idx, &n) in notes_per_measure.iter().enumerate() {
         if n >= STREAM_NOTES_THRESHOLD {

@@ -539,6 +539,36 @@ pub fn compute_bpm_range(bpm_map: &[(f64, f64)]) -> (i32, i32) {
     (min_bpm.round() as i32, max_bpm.round() as i32)
 }
 
+pub fn compute_actual_bpm_range(bpm_map: &[(f64, f64)]) -> (f64, f64) {
+    if bpm_map.is_empty() {
+        return (0.0, 0.0);
+    }
+
+    let mut min_bpm = f64::MAX;
+    let mut max_bpm = 0.0;
+
+    for &(_, bpm) in bpm_map {
+        if !bpm.is_finite() {
+            continue;
+        }
+        if bpm < min_bpm {
+            min_bpm = bpm;
+        }
+        if bpm > max_bpm {
+            max_bpm = bpm;
+        }
+    }
+
+    if !min_bpm.is_finite() {
+        min_bpm = 0.0;
+    }
+    if max_bpm < 0.0 {
+        max_bpm = 0.0;
+    }
+
+    (min_bpm, max_bpm)
+}
+
 /// Calculates the accurate cumulative time to reach a target beat, accounting for
 /// BPM changes, Stops, Delays, and Warps.
 ///

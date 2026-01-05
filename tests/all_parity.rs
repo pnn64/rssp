@@ -111,6 +111,25 @@ struct HarnessChart {
     step_artist: String,
     #[serde(default)]
     description: String,
+    #[serde(default)]
+    timing: Option<HarnessTiming>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HarnessTiming {
+    beat0_offset_seconds: f64,
+    beat0_group_offset_seconds: f64,
+    bpms: Vec<(f64, f64)>,
+    stops: Vec<(f64, f64)>,
+    delays: Vec<(f64, f64)>,
+    time_signatures: Vec<(f64, i32, i32)>,
+    warps: Vec<(f64, f64)>,
+    labels: Vec<(f64, String)>,
+    tickcounts: Vec<(f64, i32)>,
+    combos: Vec<(f64, i32, i32)>,
+    speeds: Vec<(f64, f64, f64, i32)>,
+    scrolls: Vec<(f64, f64)>,
+    fakes: Vec<(f64, f64)>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -212,6 +231,19 @@ struct RsspStreamBreakdown {
 
 #[derive(Debug, Deserialize)]
 struct RsspTiming {
+    beat0_offset_seconds: f64,
+    beat0_group_offset_seconds: f64,
+    bpms: Vec<(f64, f64)>,
+    stops: Vec<(f64, f64)>,
+    delays: Vec<(f64, f64)>,
+    time_signatures: Vec<(f64, i32, i32)>,
+    warps: Vec<(f64, f64)>,
+    labels: Vec<(f64, String)>,
+    tickcounts: Vec<(f64, i32)>,
+    combos: Vec<(f64, i32, i32)>,
+    speeds: Vec<(f64, f64, f64, i32)>,
+    scrolls: Vec<(f64, f64)>,
+    fakes: Vec<(f64, f64)>,
     bpms_formatted: String,
     #[serde(default)]
     hash_bpms: Option<String>,
@@ -351,6 +383,169 @@ fn format_count(value: Option<u32>) -> String {
     value
         .map(|v| v.to_string())
         .unwrap_or_else(|| "-".to_string())
+}
+
+const TIMING_EPS: f64 = 1e-3;
+
+fn timing_approx_eq(a: f64, b: f64) -> bool {
+    (a - b).abs() <= TIMING_EPS
+}
+
+fn timing_matches(expected: &HarnessTiming, actual: &RsspTiming) -> bool {
+    if !timing_approx_eq(expected.beat0_offset_seconds, actual.beat0_offset_seconds) {
+        return false;
+    }
+    if !timing_approx_eq(
+        expected.beat0_group_offset_seconds,
+        actual.beat0_group_offset_seconds,
+    ) {
+        return false;
+    }
+    if !compare_pairs(&expected.bpms, &actual.bpms) {
+        return false;
+    }
+    if !compare_pairs(&expected.stops, &actual.stops) {
+        return false;
+    }
+    if !compare_pairs(&expected.delays, &actual.delays) {
+        return false;
+    }
+    if !compare_pairs(&expected.warps, &actual.warps) {
+        return false;
+    }
+    if !compare_pairs(&expected.scrolls, &actual.scrolls) {
+        return false;
+    }
+    if !compare_pairs(&expected.fakes, &actual.fakes) {
+        return false;
+    }
+    if !compare_time_signatures(&expected.time_signatures, &actual.time_signatures) {
+        return false;
+    }
+    if !compare_labels(&expected.labels, &actual.labels) {
+        return false;
+    }
+    if !compare_tickcounts(&expected.tickcounts, &actual.tickcounts) {
+        return false;
+    }
+    if !compare_combos(&expected.combos, &actual.combos) {
+        return false;
+    }
+    if !compare_speeds(&expected.speeds, &actual.speeds) {
+        return false;
+    }
+
+    true
+}
+
+fn compare_pairs(expected: &[(f64, f64)], actual: &[(f64, f64)]) -> bool {
+    expected.len() == actual.len()
+        && expected
+            .iter()
+            .zip(actual)
+            .all(|(e, a)| timing_approx_eq(e.0, a.0) && timing_approx_eq(e.1, a.1))
+}
+
+fn compare_time_signatures(expected: &[(f64, i32, i32)], actual: &[(f64, i32, i32)]) -> bool {
+    expected.len() == actual.len()
+        && expected.iter().zip(actual).all(|(e, a)| {
+            timing_approx_eq(e.0, a.0) && e.1 == a.1 && e.2 == a.2
+        })
+}
+
+fn compare_labels(expected: &[(f64, String)], actual: &[(f64, String)]) -> bool {
+    expected.len() == actual.len()
+        && expected
+            .iter()
+            .zip(actual)
+            .all(|(e, a)| timing_approx_eq(e.0, a.0) && e.1 == a.1)
+}
+
+fn compare_tickcounts(expected: &[(f64, i32)], actual: &[(f64, i32)]) -> bool {
+    expected.len() == actual.len()
+        && expected
+            .iter()
+            .zip(actual)
+            .all(|(e, a)| timing_approx_eq(e.0, a.0) && e.1 == a.1)
+}
+
+fn compare_combos(expected: &[(f64, i32, i32)], actual: &[(f64, i32, i32)]) -> bool {
+    expected.len() == actual.len()
+        && expected
+            .iter()
+            .zip(actual)
+            .all(|(e, a)| timing_approx_eq(e.0, a.0) && e.1 == a.1 && e.2 == a.2)
+}
+
+fn compare_speeds(expected: &[(f64, f64, f64, i32)], actual: &[(f64, f64, f64, i32)]) -> bool {
+    expected.len() == actual.len()
+        && expected.iter().zip(actual).all(|(e, a)| {
+            timing_approx_eq(e.0, a.0)
+                && timing_approx_eq(e.1, a.1)
+                && timing_approx_eq(e.2, a.2)
+                && e.3 == a.3
+        })
+}
+
+fn format_timing_counts(
+    bpms: usize,
+    stops: usize,
+    delays: usize,
+    warps: usize,
+    speeds: usize,
+    scrolls: usize,
+    time_signatures: usize,
+    labels: usize,
+    tickcounts: usize,
+    combos: usize,
+    fakes: usize,
+) -> String {
+    format!(
+        "bpms:{} stops:{} delays:{} warps:{} speeds:{} scrolls:{} time_sigs:{} labels:{} tickcounts:{} combos:{} fakes:{}",
+        bpms,
+        stops,
+        delays,
+        warps,
+        speeds,
+        scrolls,
+        time_signatures,
+        labels,
+        tickcounts,
+        combos,
+        fakes
+    )
+}
+
+fn timing_counts_expected(timing: &HarnessTiming) -> String {
+    format_timing_counts(
+        timing.bpms.len(),
+        timing.stops.len(),
+        timing.delays.len(),
+        timing.warps.len(),
+        timing.speeds.len(),
+        timing.scrolls.len(),
+        timing.time_signatures.len(),
+        timing.labels.len(),
+        timing.tickcounts.len(),
+        timing.combos.len(),
+        timing.fakes.len(),
+    )
+}
+
+fn timing_counts_actual(timing: &RsspTiming) -> String {
+    format_timing_counts(
+        timing.bpms.len(),
+        timing.stops.len(),
+        timing.delays.len(),
+        timing.warps.len(),
+        timing.speeds.len(),
+        timing.scrolls.len(),
+        timing.time_signatures.len(),
+        timing.labels.len(),
+        timing.tickcounts.len(),
+        timing.combos.len(),
+        timing.fakes.len(),
+    )
 }
 
 fn has_hash_prefix(value: &str) -> bool {
@@ -841,6 +1036,90 @@ fn compare_durations(
                 difficulty,
                 actual_vals,
                 expected_vals
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn compare_timing(
+    path: &Path,
+    harness_entries: &[((String, String), Vec<usize>)],
+    harness_charts: &[HarnessChart],
+    actual_map: &HashMap<(String, String), Vec<usize>>,
+    actual_charts: &[RsspJsonChart],
+) -> Result<(), String> {
+    for ((step_type, difficulty), expected_indices) in harness_entries {
+        let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
+            println!(
+                "  {} {}: baseline present, RSSP missing chart",
+                step_type, difficulty
+            );
+            return Err(format!(
+                "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
+                path.display(),
+                step_type,
+                difficulty
+            ));
+        };
+
+        let count = expected_indices.len().max(actual_indices.len());
+        for idx in 0..count {
+            let expected = expected_indices.get(idx).map(|&i| &harness_charts[i]);
+            let actual = actual_indices.get(idx).map(|&i| &actual_charts[i]);
+            let meter_label = expected
+                .and_then(|entry| entry.meter)
+                .map(|meter| meter.to_string())
+                .unwrap_or_else(|| (idx + 1).to_string());
+
+            let expected_timing = expected.and_then(|entry| entry.timing.as_ref());
+            let actual_timing = actual.map(|entry| &entry.timing);
+            let matches = match (expected_timing, actual_timing) {
+                (Some(exp), Some(act)) => timing_matches(exp, act),
+                _ => false,
+            };
+            let status = if matches { "....ok" } else { "....MISMATCH" };
+
+            println!(
+                "  {} {} [{}]: timing {} -> {} {}",
+                step_type,
+                difficulty,
+                meter_label,
+                expected_timing
+                    .map_or_else(|| "-".to_string(), timing_counts_expected),
+                actual_timing
+                    .map_or_else(|| "-".to_string(), timing_counts_actual),
+                status
+            );
+        }
+
+        let matches = expected_indices.len() == actual_indices.len()
+            && expected_indices
+                .iter()
+                .zip(actual_indices)
+                .all(|(expected_idx, actual_idx)| {
+                    let Some(expected_timing) = harness_charts[*expected_idx].timing.as_ref() else {
+                        return false;
+                    };
+                    timing_matches(expected_timing, &actual_charts[*actual_idx].timing)
+                });
+        if !matches {
+            let expected_values: Vec<&HarnessTiming> = expected_indices
+                .iter()
+                .filter_map(|&i| harness_charts[i].timing.as_ref())
+                .collect();
+            let actual_values: Vec<&RsspTiming> = actual_indices
+                .iter()
+                .map(|&i| &actual_charts[i].timing)
+                .collect();
+            return Err(format!(
+                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP timing:   {:?}\nGolden timing: {:?}\n",
+                path.display(),
+                step_type,
+                difficulty,
+                actual_values,
+                expected_values
             ));
         }
     }
@@ -2063,6 +2342,7 @@ fn check_file(
     compare_bpm(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
     compare_hashes(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
     compare_durations(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
+    compare_timing(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
     compare_nps(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
     compare_step_counts(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
     compare_tech_counts(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
