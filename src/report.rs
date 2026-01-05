@@ -452,11 +452,12 @@ fn parse_time_signatures(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
         return vec![(0.0, 4, 4)];
     }
 
-    if !raw
-        .iter()
-        .any(|(beat, _)| beat_to_note_row(*beat) == 0)
-    {
-        raw.push((0.0, (4, 4)));
+    let needs_default = raw
+        .first()
+        .map(|(beat, _)| beat_to_note_row(*beat) > 0)
+        .unwrap_or(false);
+    if needs_default {
+        raw.insert(0, (0.0, (4, 4)));
     }
 
     tidy_indefinite_segments(raw)
@@ -488,13 +489,6 @@ fn parse_tickcounts(opt: Option<&str>) -> Vec<(f64, i32)> {
         return vec![(0.0, 4)];
     }
 
-    if !raw
-        .iter()
-        .any(|(beat, _)| beat_to_note_row(*beat) == 0)
-    {
-        raw.push((0.0, 4));
-    }
-
     tidy_indefinite_segments(raw)
 }
 
@@ -521,13 +515,6 @@ fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
 
     if raw.is_empty() {
         return vec![(0.0, 1, 1)];
-    }
-
-    if !raw
-        .iter()
-        .any(|(beat, _)| beat_to_note_row(*beat) == 0)
-    {
-        raw.push((0.0, (1, 1)));
     }
 
     tidy_indefinite_segments(raw)
