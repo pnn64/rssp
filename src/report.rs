@@ -4,9 +4,15 @@ use std::time::Duration;
 
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
-use crate::bpm::normalize_float_digits;
+use crate::bpm::{compute_actual_bpm_range, normalize_float_digits};
 use crate::patterns::{CustomPatternSummary, PatternVariant};
-use crate::stats::{ArrowStats, StreamCounts, RADAR_CATEGORY_COUNT};
+use crate::stats::{
+    measure_equally_spaced,
+    stream_sequences,
+    ArrowStats,
+    StreamCounts,
+    RADAR_CATEGORY_COUNT,
+};
 use crate::step_parity::TechCounts;
 use crate::timing::{
     beat_to_note_row,
@@ -1381,6 +1387,16 @@ fn json_stream_info(chart: &ChartSummary) -> JsonValue {
     let (stream_percent, adj_stream_percent, break_percent) =
         compute_stream_percentages(total_stream, total_break, total_measures);
 
+    let segments = stream_sequences(&chart.measure_densities);
+    let mut stream_sequences = Vec::with_capacity(segments.len());
+    for segment in segments {
+        stream_sequences.push(serde_json::json!({
+            "stream_start": segment.start as u32,
+            "stream_end": segment.end as u32,
+            "is_break": segment.is_break,
+        }));
+    }
+
     serde_json::json!({
         "total_streams": total_stream,
         "16th_streams": chart.stream_counts.run16_streams,
@@ -1392,13 +1408,34 @@ fn json_stream_info(chart: &ChartSummary) -> JsonValue {
         "stream_percent": stream_percent,
         "adj_stream_percent": adj_stream_percent,
         "break_percent": break_percent,
+        "stream_sequences": stream_sequences,
     })
 }
 
 fn json_nps(chart: &ChartSummary) -> JsonValue {
+    let mut notes_per_measure = Vec::with_capacity(chart.measure_densities.len());
+    for &count in &chart.measure_densities {
+        notes_per_measure.push(JsonValue::from(count as u32));
+    }
+
+    let mut nps_per_measure = Vec::with_capacity(chart.measure_nps_vec.len());
+    for &value in &chart.measure_nps_vec {
+        nps_per_measure.push(JsonValue::from(value));
+    }
+
+    let lanes = crate::step_type_lanes(&chart.step_type_str);
+    let spaced = measure_equally_spaced(&chart.minimized_note_data, lanes);
+    let mut equally_spaced_per_measure = Vec::with_capacity(spaced.len());
+    for value in spaced {
+        equally_spaced_per_measure.push(JsonValue::from(value));
+    }
+
     serde_json::json!({
         "max_nps": chart.max_nps,
         "median_nps": chart.median_nps,
+        "notes_per_measure": notes_per_measure,
+        "nps_per_measure": nps_per_measure,
+        "equally_spaced_per_measure": equally_spaced_per_measure,
     })
 }
 
@@ -1507,6 +1544,7 @@ fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
         fakes,
     } = build_timing_snapshot(chart, simfile);
 
+    let (bpm_min, bpm_max) = compute_actual_bpm_range(&bpms);
     let bpms: Vec<JsonValue> = bpms
         .into_iter()
         .map(|(beat, bpm)| serde_json::json!([beat, bpm]))
@@ -1548,6 +1586,8 @@ fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
         "beat0_group_offset_seconds": beat0_group_offset_seconds,
         "hash_bpms": hash_bpms,
         "bpms_formatted": bpms_formatted,
+        "bpm_min": bpm_min,
+        "bpm_max": bpm_max,
         "bpms": bpms,
         "stops": stops,
         "delays": delays,
@@ -1922,6 +1962,7 @@ fn write_json_number_for_key<W: Write>(
             }
             Some("duration_seconds") => write!(writer, "{}", round_millis(f)),
             Some("max_nps") => write!(writer, "{}", round_sig_figs_6(f)),
+            Some("bpm_min") | Some("bpm_max") => write!(writer, "{}", round_sig_figs_6(f)),
             Some("bpm") => write!(writer, "{}", f),
             _ => write!(writer, "{:.2}", f),
         }
