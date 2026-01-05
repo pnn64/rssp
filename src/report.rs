@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::cmp::Ordering;
 use std::io::{self, Write};
 use std::time::Duration;
 
@@ -10,7 +9,9 @@ use crate::patterns::{CustomPatternSummary, PatternVariant};
 use crate::stats::{ArrowStats, StreamCounts, RADAR_CATEGORY_COUNT};
 use crate::step_parity::TechCounts;
 use crate::timing::{
+    beat_to_note_row,
     format_bpm_segments_like_itg,
+    note_row_to_beat,
     normalize_scrolls_like_itg,
     normalize_speeds_like_itg,
     round_millis,
@@ -350,17 +351,83 @@ fn chart_or_global<'a>(
     }
 }
 
-fn has_zero_beat(beat: f64) -> bool {
-    beat.abs() <= 1e-6
+#[inline(always)]
+fn segment_index_at_row<T>(segments: &[(f64, T)], row: i32) -> usize {
+    let pos = segments.partition_point(|(beat, _)| beat_to_note_row(*beat) <= row);
+    if pos == 0 { 0 } else { pos - 1 }
+}
+
+fn add_indefinite_segment<T: PartialEq>(
+    segments: &mut Vec<(f64, T)>,
+    beat: f64,
+    value: T,
+) {
+    let row = beat_to_note_row(beat);
+    let beat = note_row_to_beat(row);
+    if segments.is_empty() {
+        segments.push((beat, value));
+        return;
+    }
+
+    let idx = segment_index_at_row(segments, row);
+    let b_on_same_row = beat_to_note_row(segments[idx].0) == row;
+    let prev_idx = if b_on_same_row && idx > 0 { idx - 1 } else { idx };
+
+    if idx + 1 < segments.len() {
+        let next_idx = idx + 1;
+        if segments[next_idx].1 == value {
+            if segments[prev_idx].1 == value {
+                segments.remove(next_idx);
+                if prev_idx != idx {
+                    segments.remove(idx);
+                }
+                return;
+            }
+            segments[next_idx].0 = beat;
+            if prev_idx != idx {
+                segments.remove(idx);
+            }
+            return;
+        }
+        if segments[prev_idx].1 == value {
+            if prev_idx != idx {
+                segments.remove(idx);
+            }
+            return;
+        }
+    } else if segments[prev_idx].1 == value {
+        if prev_idx != idx {
+            segments.remove(idx);
+        }
+        return;
+    }
+
+    if b_on_same_row && segments[idx].1 == value {
+        return;
+    }
+
+    if b_on_same_row {
+        segments[idx] = (beat, value);
+    } else {
+        let insert_pos = segments.partition_point(|(b, _)| beat_to_note_row(*b) <= row);
+        segments.insert(insert_pos, (beat, value));
+    }
+}
+
+fn tidy_indefinite_segments<T: PartialEq>(segments: Vec<(f64, T)>) -> Vec<(f64, T)> {
+    let mut out = Vec::with_capacity(segments.len());
+    for (beat, value) in segments {
+        add_indefinite_segment(&mut out, beat, value);
+    }
+    out
 }
 
 fn parse_time_signatures(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
-    let mut out = Vec::new();
     let Some(s) = opt else {
-        out.push((0.0, 4, 4));
-        return out;
+        return vec![(0.0, 4, 4)];
     };
 
+    let mut raw = Vec::new();
     for segment in s.split(',') {
         let segment = segment.trim();
         if segment.is_empty() {
@@ -373,25 +440,32 @@ fn parse_time_signatures(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
         let Ok(beat) = beat_str.trim().parse::<f64>() else { continue };
         let Ok(num) = num_str.trim().parse::<i32>() else { continue };
         let Ok(den) = den_str.trim().parse::<i32>() else { continue };
-        out.push((beat, num, den));
+        raw.push((beat, (num, den)));
     }
 
-    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-    if out.is_empty() {
-        out.push((0.0, 4, 4));
-    } else if !out.iter().any(|(beat, _, _)| has_zero_beat(*beat)) {
-        out.insert(0, (0.0, 4, 4));
+    if raw.is_empty() {
+        return vec![(0.0, 4, 4)];
     }
-    out
+
+    if !raw
+        .iter()
+        .any(|(beat, _)| beat_to_note_row(*beat) == 0)
+    {
+        raw.push((0.0, (4, 4)));
+    }
+
+    tidy_indefinite_segments(raw)
+        .into_iter()
+        .map(|(beat, (num, den))| (beat, num, den))
+        .collect()
 }
 
 fn parse_tickcounts(opt: Option<&str>) -> Vec<(f64, i32)> {
-    let mut out = Vec::new();
     let Some(s) = opt else {
-        out.push((0.0, 4));
-        return out;
+        return vec![(0.0, 4)];
     };
 
+    let mut raw = Vec::new();
     for segment in s.split(',') {
         let segment = segment.trim();
         if segment.is_empty() {
@@ -402,25 +476,29 @@ fn parse_tickcounts(opt: Option<&str>) -> Vec<(f64, i32)> {
         let Some(count_str) = parts.next() else { continue };
         let Ok(beat) = beat_str.trim().parse::<f64>() else { continue };
         let Ok(count) = count_str.trim().parse::<i32>() else { continue };
-        out.push((beat, count));
+        raw.push((beat, count));
     }
 
-    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-    if out.is_empty() {
-        out.push((0.0, 4));
-    } else if !out.iter().any(|(beat, _)| has_zero_beat(*beat)) {
-        out.insert(0, (0.0, 4));
+    if raw.is_empty() {
+        return vec![(0.0, 4)];
     }
-    out
+
+    if !raw
+        .iter()
+        .any(|(beat, _)| beat_to_note_row(*beat) == 0)
+    {
+        raw.push((0.0, 4));
+    }
+
+    tidy_indefinite_segments(raw)
 }
 
 fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
-    let mut out = Vec::new();
     let Some(s) = opt else {
-        out.push((0.0, 1, 1));
-        return out;
+        return vec![(0.0, 1, 1)];
     };
 
+    let mut raw = Vec::new();
     for segment in s.split(',') {
         let segment = segment.trim();
         if segment.is_empty() {
@@ -433,16 +511,24 @@ fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
         let Ok(beat) = beat_str.trim().parse::<f64>() else { continue };
         let Ok(combo) = combo_str.trim().parse::<i32>() else { continue };
         let Ok(miss) = miss_str.trim().parse::<i32>() else { continue };
-        out.push((beat, combo, miss));
+        raw.push((beat, (combo, miss)));
     }
 
-    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-    if out.is_empty() {
-        out.push((0.0, 1, 1));
-    } else if !out.iter().any(|(beat, _, _)| has_zero_beat(*beat)) {
-        out.insert(0, (0.0, 1, 1));
+    if raw.is_empty() {
+        return vec![(0.0, 1, 1)];
     }
-    out
+
+    if !raw
+        .iter()
+        .any(|(beat, _)| beat_to_note_row(*beat) == 0)
+    {
+        raw.push((0.0, (1, 1)));
+    }
+
+    tidy_indefinite_segments(raw)
+        .into_iter()
+        .map(|(beat, (combo, miss))| (beat, combo, miss))
+        .collect()
 }
 
 pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> TimingSnapshot {
@@ -584,12 +670,11 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
 }
 
 fn parse_labels(opt: Option<&str>) -> Vec<(f64, String)> {
-    let mut out = Vec::new();
     let Some(s) = opt else {
-        out.push((0.0, "Song Start".to_string()));
-        return out;
+        return vec![(0.0, "Song Start".to_string())];
     };
 
+    let mut raw = Vec::new();
     for segment in s.split(',') {
         let segment = segment.trim();
         if segment.is_empty() {
@@ -605,16 +690,14 @@ fn parse_labels(opt: Option<&str>) -> Vec<(f64, String)> {
         if label.is_empty() {
             continue;
         }
-        out.push((beat, label));
+        raw.push((beat, label));
     }
 
-    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-    if out.is_empty() {
-        out.push((0.0, "Song Start".to_string()));
-    } else if !out.iter().any(|(beat, _)| has_zero_beat(*beat)) {
-        out.insert(0, (0.0, "Song Start".to_string()));
+    if raw.is_empty() {
+        return vec![(0.0, "Song Start".to_string())];
     }
-    out
+
+    tidy_indefinite_segments(raw)
 }
 
 fn count_timing_segments_from_str(s: &str) -> u32 {

@@ -25,6 +25,7 @@ const DEFAULT_BPM_F32: f32 = 60.0;
 const FAST_BPM_WARP_F32: f32 = 9_999_999.0;
 
 pub const ROWS_PER_BEAT: i32 = 48;
+const SEGMENT_EPSILON: f64 = 1e-6;
 
 #[inline(always)]
 pub fn steps_timing_allowed(version: f32, format: TimingFormat) -> bool {
@@ -178,6 +179,165 @@ pub fn normalize_scrolls_like_itg(mut scrolls: Vec<(f64, f64)>) -> Vec<(f64, f64
     scrolls
 }
 
+#[inline(always)]
+fn float_eq(a: f64, b: f64) -> bool {
+    (a - b).abs() < SEGMENT_EPSILON
+}
+
+#[inline(always)]
+fn scrolls_equal(a: &ScrollSegment, b: &ScrollSegment) -> bool {
+    float_eq(a.ratio, b.ratio)
+}
+
+#[inline(always)]
+fn speeds_equal(a: &SpeedSegment, b: &SpeedSegment) -> bool {
+    float_eq(a.ratio, b.ratio) && float_eq(a.delay, b.delay) && a.unit == b.unit
+}
+
+#[inline(always)]
+fn scroll_row(seg: &ScrollSegment) -> i32 {
+    beat_to_note_row(seg.beat)
+}
+
+#[inline(always)]
+fn speed_row(seg: &SpeedSegment) -> i32 {
+    beat_to_note_row(seg.beat)
+}
+
+#[inline(always)]
+fn scroll_index_at_row(segs: &[ScrollSegment], row: i32) -> usize {
+    let pos = segs.partition_point(|seg| scroll_row(seg) <= row);
+    if pos == 0 { 0 } else { pos - 1 }
+}
+
+#[inline(always)]
+fn speed_index_at_row(segs: &[SpeedSegment], row: i32) -> usize {
+    let pos = segs.partition_point(|seg| speed_row(seg) <= row);
+    if pos == 0 { 0 } else { pos - 1 }
+}
+
+fn add_scroll_segment(out: &mut Vec<ScrollSegment>, mut seg: ScrollSegment) {
+    let row = beat_to_note_row(seg.beat);
+    seg.beat = note_row_to_beat(row);
+    if out.is_empty() {
+        out.push(seg);
+        return;
+    }
+
+    let idx = scroll_index_at_row(out, row);
+    let b_on_same_row = scroll_row(&out[idx]) == row;
+    let prev_idx = if b_on_same_row && idx > 0 { idx - 1 } else { idx };
+
+    if idx + 1 < out.len() {
+        let next_idx = idx + 1;
+        if scrolls_equal(&seg, &out[next_idx]) {
+            if scrolls_equal(&seg, &out[prev_idx]) {
+                out.remove(next_idx);
+                if prev_idx != idx {
+                    out.remove(idx);
+                }
+                return;
+            }
+            out[next_idx].beat = seg.beat;
+            if prev_idx != idx {
+                out.remove(idx);
+            }
+            return;
+        }
+        if scrolls_equal(&seg, &out[prev_idx]) {
+            if prev_idx != idx {
+                out.remove(idx);
+            }
+            return;
+        }
+    } else if scrolls_equal(&seg, &out[prev_idx]) {
+        if prev_idx != idx {
+            out.remove(idx);
+        }
+        return;
+    }
+
+    if b_on_same_row && scrolls_equal(&seg, &out[idx]) {
+        return;
+    }
+
+    if b_on_same_row {
+        out[idx] = seg;
+    } else {
+        let insert_pos = out.partition_point(|s| scroll_row(s) <= row);
+        out.insert(insert_pos, seg);
+    }
+}
+
+fn add_speed_segment(out: &mut Vec<SpeedSegment>, mut seg: SpeedSegment) {
+    let row = beat_to_note_row(seg.beat);
+    seg.beat = note_row_to_beat(row);
+    if out.is_empty() {
+        out.push(seg);
+        return;
+    }
+
+    let idx = speed_index_at_row(out, row);
+    let b_on_same_row = speed_row(&out[idx]) == row;
+    let prev_idx = if b_on_same_row && idx > 0 { idx - 1 } else { idx };
+
+    if idx + 1 < out.len() {
+        let next_idx = idx + 1;
+        if speeds_equal(&seg, &out[next_idx]) {
+            if speeds_equal(&seg, &out[prev_idx]) {
+                out.remove(next_idx);
+                if prev_idx != idx {
+                    out.remove(idx);
+                }
+                return;
+            }
+            out[next_idx].beat = seg.beat;
+            if prev_idx != idx {
+                out.remove(idx);
+            }
+            return;
+        }
+        if speeds_equal(&seg, &out[prev_idx]) {
+            if prev_idx != idx {
+                out.remove(idx);
+            }
+            return;
+        }
+    } else if speeds_equal(&seg, &out[prev_idx]) {
+        if prev_idx != idx {
+            out.remove(idx);
+        }
+        return;
+    }
+
+    if b_on_same_row && speeds_equal(&seg, &out[idx]) {
+        return;
+    }
+
+    if b_on_same_row {
+        out[idx] = seg;
+    } else {
+        let insert_pos = out.partition_point(|s| speed_row(s) <= row);
+        out.insert(insert_pos, seg);
+    }
+}
+
+fn tidy_scroll_segments(scrolls: Vec<ScrollSegment>) -> Vec<ScrollSegment> {
+    let mut out = Vec::with_capacity(scrolls.len());
+    for seg in scrolls {
+        add_scroll_segment(&mut out, seg);
+    }
+    out
+}
+
+fn tidy_speed_segments(speeds: Vec<SpeedSegment>) -> Vec<SpeedSegment> {
+    let mut out = Vec::with_capacity(speeds.len());
+    for seg in speeds {
+        add_speed_segment(&mut out, seg);
+    }
+    out
+}
+
 pub fn compute_row_to_beat(minimized_note_data: &[u8]) -> Vec<f32> {
     let mut row_to_beat = Vec::new();
     let mut measure_index = 0usize;
@@ -299,7 +459,7 @@ pub fn compute_timing_segments(
             length: quantize_beat_f64_from_f32(seg.length),
         })
         .collect();
-    let mut speeds: Vec<SpeedSegment> =
+    let speeds: Vec<SpeedSegment> =
         parse_optional_timing(chart_speeds, global_speeds, parse_speeds)
             .into_iter()
             .map(|seg| SpeedSegment {
@@ -309,7 +469,8 @@ pub fn compute_timing_segments(
                 unit: seg.unit,
             })
             .collect();
-    let mut scrolls: Vec<ScrollSegment> =
+    let speeds = tidy_speed_segments(speeds);
+    let scrolls: Vec<ScrollSegment> =
         parse_optional_timing(chart_scrolls, global_scrolls, parse_scrolls)
             .into_iter()
             .map(|seg| ScrollSegment {
@@ -317,6 +478,7 @@ pub fn compute_timing_segments(
                 ratio: seg.ratio,
             })
             .collect();
+    let scrolls = tidy_scroll_segments(scrolls);
     let mut fakes: Vec<FakeSegment> = parse_optional_timing(chart_fakes, global_fakes, parse_fakes)
         .into_iter()
         .map(|seg| FakeSegment {
@@ -325,8 +487,6 @@ pub fn compute_timing_segments(
         })
         .collect();
 
-    speeds.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
-    scrolls.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
     warps.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
     fakes.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
 
@@ -613,7 +773,7 @@ impl TimingData {
                 length: quantize_beat_f64_from_f32(seg.length),
             })
             .collect();
-        let mut speeds: Vec<SpeedSegment> =
+        let speeds: Vec<SpeedSegment> =
             parse_optional_timing(chart_speeds, global_speeds, parse_speeds)
                 .into_iter()
                 .map(|seg| SpeedSegment {
@@ -623,7 +783,8 @@ impl TimingData {
                     unit: seg.unit,
                 })
                 .collect();
-        let mut scrolls: Vec<ScrollSegment> =
+        let speeds = tidy_speed_segments(speeds);
+        let scrolls: Vec<ScrollSegment> =
             parse_optional_timing(chart_scrolls, global_scrolls, parse_scrolls)
                 .into_iter()
                 .map(|seg| ScrollSegment {
@@ -631,6 +792,7 @@ impl TimingData {
                     ratio: seg.ratio,
                 })
                 .collect();
+        let scrolls = tidy_scroll_segments(scrolls);
         let mut fakes: Vec<FakeSegment> =
             parse_optional_timing(chart_fakes, global_fakes, parse_fakes)
                 .into_iter()
@@ -640,8 +802,6 @@ impl TimingData {
                 })
                 .collect();
 
-        speeds.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
-        scrolls.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
         warps.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
         fakes.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
 
