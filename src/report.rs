@@ -225,6 +225,7 @@ pub struct ChartSummary {
     pub measure_nps_vec:   Vec<f64>,
     pub row_to_beat:       Vec<f32>,
     pub timing_segments:   TimingSegments,
+    pub chart_offset_seconds: f64,
     pub minimized_note_data: Vec<u8>,
     pub chart_stops:       Option<String>,
     pub chart_speeds:      Option<String>,
@@ -563,7 +564,9 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
     .collect();
 
     TimingSnapshot {
-        beat0_offset_seconds: round_sig_figs_itg(simfile.offset + timing.beat0_offset_adjust as f64),
+        beat0_offset_seconds: round_sig_figs_itg(
+            chart.chart_offset_seconds + timing.beat0_offset_adjust as f64,
+        ),
         beat0_group_offset_seconds: 0.0,
         bpms,
         bpms_formatted,

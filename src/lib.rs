@@ -686,6 +686,7 @@ fn build_chart_summary(
         measure_nps_vec,
         row_to_beat,
         timing_segments,
+        chart_offset_seconds: chart_offset,
         minimized_note_data: minimized_chart,
         chart_stops,
         chart_speeds,
