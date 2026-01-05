@@ -243,6 +243,21 @@ fn chart_timing_tag_raw(tag: Option<&[u8]>) -> Option<String> {
     if cleaned.is_empty() { None } else { Some(cleaned) }
 }
 
+fn msd_first_param_bytes(bytes: &[u8]) -> &[u8] {
+    let mut bs_run = 0usize;
+    for (idx, &b) in bytes.iter().enumerate() {
+        if b == b':' && bs_run % 2 == 0 {
+            return &bytes[..idx];
+        }
+        if b == b'\\' {
+            bs_run += 1;
+        } else {
+            bs_run = 0;
+        }
+    }
+    bytes
+}
+
 const RADAR_CATEGORY_NOTES: usize = 5;
 
 fn parse_radar_values_bytes(
@@ -500,7 +515,8 @@ fn build_chart_summary(
         }
     });
     let chart_labels = chart_labels_opt.and_then(|bytes| {
-        let decoded = decode_bytes(bytes);
+        let first_param = msd_first_param_bytes(bytes);
+        let decoded = decode_bytes(first_param);
         let cleaned = clean_tag(&unescape_tag(decoded.as_ref()));
         let trimmed = cleaned.trim();
         if trimmed.is_empty() {
@@ -533,16 +549,21 @@ fn build_chart_summary(
     } else {
         parse_radar_values_bytes(chart_radar_values_opt, true)
     };
-    let chart_has_timing = allow_steps_timing
-        && (chart_bpms.is_some()
-            || chart_stops.is_some()
-            || chart_delays.is_some()
-            || chart_warps.is_some()
-            || chart_speeds.is_some()
-            || chart_scrolls.is_some()
-            || chart_fakes.is_some());
+    let chart_has_own_timing = allow_steps_timing
+        && (chart_bpms_opt.is_some()
+            || chart_stops_opt.is_some()
+            || chart_delays_opt.is_some()
+            || chart_warps_opt.is_some()
+            || chart_speeds_opt.is_some()
+            || chart_scrolls_opt.is_some()
+            || chart_fakes_opt.is_some()
+            || chart_time_signatures_opt.is_some()
+            || chart_labels_opt.is_some()
+            || chart_tickcounts_opt.is_some()
+            || chart_combos_opt.is_some()
+            || chart_offset_opt.is_some());
     let (timing_bpms_global, timing_stops_global, timing_delays_global, timing_warps_global,
-        timing_speeds_global, timing_scrolls_global, timing_fakes_global) = if chart_has_timing {
+        timing_speeds_global, timing_scrolls_global, timing_fakes_global) = if chart_has_own_timing {
         ("", "", "", "", "", "", "")
     } else {
         (global_bpms_raw, global_stops_raw, global_delays_raw, global_warps_raw,
@@ -687,6 +708,7 @@ fn build_chart_summary(
         row_to_beat,
         timing_segments,
         chart_offset_seconds: chart_offset,
+        chart_has_own_timing,
         minimized_note_data: minimized_chart,
         chart_stops,
         chart_speeds,
@@ -834,7 +856,11 @@ pub fn analyze(
         .to_string();
     let normalized_global_labels = parsed_data
         .labels
-        .map(|b| clean_tag(&unescape_tag(decode_bytes(b).as_ref())))
+        .map(|b| {
+            let first_param = msd_first_param_bytes(b);
+            let decoded = decode_bytes(first_param);
+            clean_tag(&unescape_tag(decoded.as_ref()))
+        })
         .unwrap_or_default();
     let normalized_global_tickcounts = parsed_data
         .tickcounts
@@ -1197,17 +1223,22 @@ pub fn compute_chart_durations(
             None
         };
 
-        let chart_has_timing = allow_steps_timing
-            && (chart_bpms.is_some()
-                || chart_stops.is_some()
-                || chart_delays.is_some()
-                || chart_warps.is_some()
-                || chart_speeds.is_some()
-                || chart_scrolls.is_some()
-                || chart_fakes.is_some());
+        let chart_has_own_timing = allow_steps_timing
+            && (entry.chart_bpms.is_some()
+                || entry.chart_stops.is_some()
+                || entry.chart_delays.is_some()
+                || entry.chart_warps.is_some()
+                || entry.chart_speeds.is_some()
+                || entry.chart_scrolls.is_some()
+                || entry.chart_fakes.is_some()
+                || entry.chart_time_signatures.is_some()
+                || entry.chart_labels.is_some()
+                || entry.chart_tickcounts.is_some()
+                || entry.chart_combos.is_some()
+                || entry.chart_offset.is_some());
         let (timing_bpms_global, timing_stops_global, timing_delays_global, timing_warps_global,
             timing_speeds_global, timing_scrolls_global, timing_fakes_global) =
-            if chart_has_timing {
+            if chart_has_own_timing {
                 ("", "", "", "", "", "", "")
             } else {
                 (
@@ -1358,17 +1389,22 @@ pub fn compute_chart_peak_nps(
             song_offset
         };
 
-        let chart_has_timing = allow_steps_timing
-            && (chart_bpms.is_some()
-                || chart_stops.is_some()
-                || chart_delays.is_some()
-                || chart_warps.is_some()
-                || chart_speeds.is_some()
-                || chart_scrolls.is_some()
-                || chart_fakes.is_some());
+        let chart_has_own_timing = allow_steps_timing
+            && (entry.chart_bpms.is_some()
+                || entry.chart_stops.is_some()
+                || entry.chart_delays.is_some()
+                || entry.chart_warps.is_some()
+                || entry.chart_speeds.is_some()
+                || entry.chart_scrolls.is_some()
+                || entry.chart_fakes.is_some()
+                || entry.chart_time_signatures.is_some()
+                || entry.chart_labels.is_some()
+                || entry.chart_tickcounts.is_some()
+                || entry.chart_combos.is_some()
+                || entry.chart_offset.is_some());
         let (timing_bpms_global, timing_stops_global, timing_delays_global, timing_warps_global,
             timing_speeds_global, timing_scrolls_global, timing_fakes_global) =
-            if chart_has_timing {
+            if chart_has_own_timing {
                 ("", "", "", "", "", "", "")
             } else {
                 (

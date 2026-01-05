@@ -227,6 +227,7 @@ pub struct ChartSummary {
     pub row_to_beat:       Vec<f32>,
     pub timing_segments:   TimingSegments,
     pub chart_offset_seconds: f64,
+    pub chart_has_own_timing: bool,
     pub minimized_note_data: Vec<u8>,
     pub chart_stops:       Option<String>,
     pub chart_speeds:      Option<String>,
@@ -334,9 +335,16 @@ fn count(map: &HashMap<PatternVariant, u32>, variant: PatternVariant) -> u32 {
 
 fn chart_or_global<'a>(
     allow_chart: bool,
+    chart_has_own_timing: bool,
     chart_value: &'a Option<String>,
     global_value: &'a str,
 ) -> Option<&'a str> {
+    if allow_chart && chart_has_own_timing {
+        return chart_value
+            .as_deref()
+            .filter(|s| !s.is_empty());
+    }
+
     if allow_chart {
         if let Some(s) = chart_value {
             if !s.is_empty() {
@@ -344,11 +352,8 @@ fn chart_or_global<'a>(
             }
         }
     }
-    if !global_value.is_empty() {
-        Some(global_value)
-    } else {
-        None
-    }
+
+    if !global_value.is_empty() { Some(global_value) } else { None }
 }
 
 #[inline(always)]
@@ -618,6 +623,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
 
     let time_signatures: Vec<(f64, i32, i32)> = parse_time_signatures(chart_or_global(
         allow_steps_timing,
+        chart.chart_has_own_timing,
         &chart.chart_time_signatures,
         &simfile.normalized_time_signatures,
     ))
@@ -626,6 +632,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
     .collect();
     let labels: Vec<(f64, String)> = parse_labels(chart_or_global(
         allow_steps_timing,
+        chart.chart_has_own_timing,
         &chart.chart_labels,
         &simfile.normalized_labels,
     ))
@@ -634,6 +641,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
     .collect();
     let tickcounts: Vec<(f64, i32)> = parse_tickcounts(chart_or_global(
         allow_steps_timing,
+        chart.chart_has_own_timing,
         &chart.chart_tickcounts,
         &simfile.normalized_tickcounts,
     ))
@@ -642,6 +650,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
     .collect();
     let combos: Vec<(f64, i32, i32)> = parse_combos(chart_or_global(
         allow_steps_timing,
+        chart.chart_has_own_timing,
         &chart.chart_combos,
         &simfile.normalized_combos,
     ))
@@ -772,11 +781,36 @@ fn print_gimmicks(chart: &ChartSummary, simfile: &SimfileSummary) {
     let (_, fakes) = chart_mine_fake_counts(chart);
     let has_fakes = fakes > 0;
     let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
-    let stops = chart_or_global(allow_steps_timing, &chart.chart_stops, &simfile.normalized_stops);
-    let delays = chart_or_global(allow_steps_timing, &chart.chart_delays, &simfile.normalized_delays);
-    let warps = chart_or_global(allow_steps_timing, &chart.chart_warps, &simfile.normalized_warps);
-    let speeds = chart_or_global(allow_steps_timing, &chart.chart_speeds, &simfile.normalized_speeds);
-    let scrolls = chart_or_global(allow_steps_timing, &chart.chart_scrolls, &simfile.normalized_scrolls);
+    let stops = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_stops,
+        &simfile.normalized_stops,
+    );
+    let delays = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_delays,
+        &simfile.normalized_delays,
+    );
+    let warps = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_warps,
+        &simfile.normalized_warps,
+    );
+    let speeds = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_speeds,
+        &simfile.normalized_speeds,
+    );
+    let scrolls = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_scrolls,
+        &simfile.normalized_scrolls,
+    );
 
     let stop_count = count_timing_segments(stops);
     let delay_count = count_timing_segments(delays);
@@ -1418,11 +1452,36 @@ fn json_gimmicks(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
     let lifts = chart.stats.lifts;
     let (_, fakes) = chart_mine_fake_counts(chart);
     let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
-    let stops = chart_or_global(allow_steps_timing, &chart.chart_stops, &simfile.normalized_stops);
-    let delays = chart_or_global(allow_steps_timing, &chart.chart_delays, &simfile.normalized_delays);
-    let warps = chart_or_global(allow_steps_timing, &chart.chart_warps, &simfile.normalized_warps);
-    let speeds = chart_or_global(allow_steps_timing, &chart.chart_speeds, &simfile.normalized_speeds);
-    let scrolls = chart_or_global(allow_steps_timing, &chart.chart_scrolls, &simfile.normalized_scrolls);
+    let stops = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_stops,
+        &simfile.normalized_stops,
+    );
+    let delays = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_delays,
+        &simfile.normalized_delays,
+    );
+    let warps = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_warps,
+        &simfile.normalized_warps,
+    );
+    let speeds = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_speeds,
+        &simfile.normalized_speeds,
+    );
+    let scrolls = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_scrolls,
+        &simfile.normalized_scrolls,
+    );
 
     let stop_count = count_timing_segments(stops);
     let delay_count = count_timing_segments(delays);
@@ -2110,11 +2169,36 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
     push_num(&mut row, fakes);
 
     let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
-    let stops = chart_or_global(allow_steps_timing, &chart.chart_stops, &simfile.normalized_stops);
-    let delays = chart_or_global(allow_steps_timing, &chart.chart_delays, &simfile.normalized_delays);
-    let warps = chart_or_global(allow_steps_timing, &chart.chart_warps, &simfile.normalized_warps);
-    let speeds = chart_or_global(allow_steps_timing, &chart.chart_speeds, &simfile.normalized_speeds);
-    let scrolls = chart_or_global(allow_steps_timing, &chart.chart_scrolls, &simfile.normalized_scrolls);
+    let stops = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_stops,
+        &simfile.normalized_stops,
+    );
+    let delays = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_delays,
+        &simfile.normalized_delays,
+    );
+    let warps = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_warps,
+        &simfile.normalized_warps,
+    );
+    let speeds = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_speeds,
+        &simfile.normalized_speeds,
+    );
+    let scrolls = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_scrolls,
+        &simfile.normalized_scrolls,
+    );
 
     let stop_count = count_timing_segments(stops);
     let delay_count = count_timing_segments(delays);
