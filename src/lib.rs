@@ -244,6 +244,12 @@ fn chart_timing_tag_raw(tag: Option<&[u8]>) -> Option<String> {
     if cleaned.is_empty() { None } else { Some(cleaned) }
 }
 
+fn chart_display_bpm_tag(tag: Option<&[u8]>) -> Option<String> {
+    let bytes = tag?;
+    let text = unescape_trim(decode_bytes(bytes).as_ref());
+    if text.is_empty() { None } else { Some(text) }
+}
+
 fn msd_first_param_bytes(bytes: &[u8]) -> &[u8] {
     let mut bs_run = 0usize;
     for (idx, &b) in bytes.iter().enumerate() {
@@ -427,6 +433,7 @@ fn build_chart_summary(
     chart_labels_opt: Option<&[u8]>,
     chart_tickcounts_opt: Option<&[u8]>,
     chart_combos_opt: Option<&[u8]>,
+    chart_display_bpm_opt: Option<&[u8]>,
     chart_offset_opt: Option<&[u8]>,
     chart_radar_values_opt: Option<&[u8]>,
     global_bpms_raw: &str,
@@ -540,6 +547,7 @@ fn build_chart_summary(
             .filter(|s| !s.is_empty())
             .map(str::to_string)
     });
+    let chart_display_bpm = chart_display_bpm_tag(chart_display_bpm_opt);
     let chart_offset = if allow_steps_timing && chart_offset_opt.is_some() {
         parse_offset_seconds(chart_offset_opt)
     } else {
@@ -718,6 +726,7 @@ fn build_chart_summary(
         chart_delays,
         chart_warps,
         chart_fakes,
+        chart_display_bpm,
         chart_time_signatures,
         chart_labels,
         chart_tickcounts,
@@ -949,6 +958,7 @@ pub fn analyze(
                         entry.chart_labels.as_deref(),
                         entry.chart_tickcounts.as_deref(),
                         entry.chart_combos.as_deref(),
+                        entry.chart_display_bpm.as_deref(),
                         entry.chart_offset.as_deref(),
                         entry.chart_radar_values.as_deref(),
                         cleaned_global_bpms_str,
@@ -997,6 +1007,7 @@ pub fn analyze(
                 entry.chart_labels.as_deref(),
                 entry.chart_tickcounts.as_deref(),
                 entry.chart_combos.as_deref(),
+                entry.chart_display_bpm.as_deref(),
                 entry.chart_offset.as_deref(),
                 entry.chart_radar_values.as_deref(),
                 cleaned_global_bpms_str,

@@ -13,6 +13,7 @@ use crate::timing::{
     compute_timing_segments,
     format_bpm_segments_like_itg,
     round_sig_figs_itg,
+    roundtrip_bpm_itg,
     steps_timing_allowed,
     TimingData,
     TimingFormat,
@@ -204,18 +205,14 @@ fn join_display_bpm_sl(bpm_min: f64, bpm_max: f64, music_rate: f64) -> String {
     format!("{} - {}", lo, hi)
 }
 
-fn resolve_display_bpm(
+pub(crate) fn resolve_display_bpm(
     chart_tag: Option<&str>,
-    song_tag: Option<&str>,
     actual_min: f64,
     actual_max: f64,
     music_rate: f64,
 ) -> (f64, f64, String) {
     let chart_tag = chart_tag.map(|s| s.trim()).filter(|s| !s.is_empty());
-    let song_tag = song_tag.map(|s| s.trim()).filter(|s| !s.is_empty());
-    let chosen = chart_tag.or(song_tag);
-
-    let (mut min, mut max) = match chosen {
+    let (mut min, mut max) = match chart_tag {
         Some(tag) => match parse_display_bpm(tag) {
             Some((min, max)) => (min, max),
             None => (actual_min, actual_max),
@@ -258,6 +255,7 @@ struct TimingGlobals {
     scrolls_raw: String,
     fakes_raw: String,
     bpms_norm: String,
+    display_bpm_raw: Option<String>,
     timing_format: TimingFormat,
     allow_steps_timing: bool,
 }
@@ -288,6 +286,7 @@ fn timing_globals(parsed: &ParsedSimfileData<'_>, extension: &str) -> TimingGlob
         scrolls_raw: clean_tag_bytes(parsed.scrolls),
         fakes_raw: clean_tag_bytes(parsed.fakes),
         bpms_norm: normalize_tag_bytes(parsed.bpms),
+        display_bpm_raw: decode_display_bpm_tag(parsed.display_bpm),
         timing_format,
         allow_steps_timing,
     }
@@ -329,7 +328,6 @@ fn chart_metadata(fields: &[&[u8]], timing_format: TimingFormat) -> Option<(Stri
 fn chart_bpm_snapshot(
     entry: &ParsedChartEntry<'_>,
     globals: &TimingGlobals,
-    global_display_bpm: Option<&str>,
 ) -> Option<ChartBpmSnapshot> {
     let (fields, _chart_data) = split_notes_fields(&entry.notes);
     let (step_type, difficulty) = chart_metadata(&fields, globals.timing_format)?;
@@ -362,15 +360,21 @@ fn chart_bpm_snapshot(
         bpms.push((beat as f64, bpm as f64));
     }
     let bpms_formatted = format_bpm_segments_like_itg(&bpms);
-    let (bpm_min, bpm_max) = compute_actual_bpm_range(&bpms);
+    let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw(&bpms);
+    let bpm_min = round_sig_figs_itg(bpm_min_raw);
+    let bpm_max = round_sig_figs_itg(bpm_max_raw);
     let chart_display_bpm = decode_display_bpm_tag(entry.chart_display_bpm.as_deref());
-    let (display_bpm_min, display_bpm_max, display_bpm) = resolve_display_bpm(
-        chart_display_bpm.as_deref(),
-        global_display_bpm,
-        bpm_min,
-        bpm_max,
+    let display_tag = chart_display_bpm
+        .as_deref()
+        .or_else(|| globals.display_bpm_raw.as_deref());
+    let (display_bpm_min_raw, display_bpm_max_raw, display_bpm) = resolve_display_bpm(
+        display_tag,
+        bpm_min_raw,
+        bpm_max_raw,
         1.0,
     );
+    let display_bpm_min = round_sig_figs_itg(display_bpm_min_raw);
+    let display_bpm_max = round_sig_figs_itg(display_bpm_max_raw);
 
     Some(ChartBpmSnapshot {
         step_type,
@@ -391,11 +395,10 @@ pub fn chart_bpm_snapshots(
 ) -> Result<Vec<ChartBpmSnapshot>, String> {
     let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
     let globals = timing_globals(&parsed_data, extension);
-    let global_display_bpm = decode_display_bpm_tag(parsed_data.display_bpm);
     Ok(parsed_data
         .notes_list
         .iter()
-        .filter_map(|entry| chart_bpm_snapshot(entry, &globals, global_display_bpm.as_deref()))
+        .filter_map(|entry| chart_bpm_snapshot(entry, &globals))
         .collect())
 }
 
@@ -644,6 +647,11 @@ pub fn compute_bpm_range(bpm_map: &[(f64, f64)]) -> (i32, i32) {
 }
 
 pub fn compute_actual_bpm_range(bpm_map: &[(f64, f64)]) -> (f64, f64) {
+    let (min_bpm, max_bpm) = actual_bpm_range_raw(bpm_map);
+    (round_sig_figs_itg(min_bpm), round_sig_figs_itg(max_bpm))
+}
+
+pub(crate) fn actual_bpm_range_raw(bpm_map: &[(f64, f64)]) -> (f64, f64) {
     if bpm_map.is_empty() {
         return (0.0, 0.0);
     }
@@ -652,6 +660,10 @@ pub fn compute_actual_bpm_range(bpm_map: &[(f64, f64)]) -> (f64, f64) {
     let mut max_bpm = 0.0;
 
     for &(_, bpm) in bpm_map {
+        if !bpm.is_finite() {
+            continue;
+        }
+        let bpm = roundtrip_bpm_itg(bpm);
         if !bpm.is_finite() {
             continue;
         }
@@ -670,7 +682,7 @@ pub fn compute_actual_bpm_range(bpm_map: &[(f64, f64)]) -> (f64, f64) {
         max_bpm = 0.0;
     }
 
-    (round_sig_figs_itg(min_bpm), round_sig_figs_itg(max_bpm))
+    (min_bpm, max_bpm)
 }
 
 /// Calculates the accurate cumulative time to reach a target beat, accounting for

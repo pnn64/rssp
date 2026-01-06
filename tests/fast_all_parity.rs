@@ -62,6 +62,16 @@ struct HarnessChart {
     #[serde(default)]
     bpms: String,
     #[serde(default)]
+    bpm_min: f64,
+    #[serde(default)]
+    bpm_max: f64,
+    #[serde(default)]
+    display_bpm: String,
+    #[serde(default)]
+    display_bpm_min: f64,
+    #[serde(default)]
+    display_bpm_max: f64,
+    #[serde(default)]
     duration_seconds: f64,
     #[serde(default)]
     streams_breakdown: String,
@@ -74,7 +84,15 @@ struct HarnessChart {
     #[serde(default)]
     total_break_measures: u32,
     #[serde(default)]
+    stream_sequences: Vec<StreamSequence>,
+    #[serde(default)]
     peak_nps: f64,
+    #[serde(default)]
+    notes_per_measure: Vec<u32>,
+    #[serde(default)]
+    nps_per_measure: Vec<f64>,
+    #[serde(default)]
+    equally_spaced_per_measure: Vec<bool>,
     #[serde(default)]
     holds: u32,
     #[serde(default)]
@@ -109,6 +127,34 @@ struct HarnessChart {
     step_artist: String,
     #[serde(default)]
     description: String,
+    #[serde(default)]
+    timing: Option<HarnessTiming>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+struct StreamSequence {
+    #[serde(rename = "stream_start")]
+    stream_start: u32,
+    #[serde(rename = "stream_end")]
+    stream_end: u32,
+    is_break: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct HarnessTiming {
+    beat0_offset_seconds: f64,
+    beat0_group_offset_seconds: f64,
+    bpms: Vec<(f64, f64)>,
+    stops: Vec<(f64, f64)>,
+    delays: Vec<(f64, f64)>,
+    time_signatures: Vec<(f64, i32, i32)>,
+    warps: Vec<(f64, f64)>,
+    labels: Vec<(f64, String)>,
+    tickcounts: Vec<(f64, i32)>,
+    combos: Vec<(f64, i32, i32)>,
+    speeds: Vec<(f64, f64, f64, i32)>,
+    scrolls: Vec<(f64, f64)>,
+    fakes: Vec<(f64, f64)>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -175,11 +221,19 @@ struct RsspStreamInfo {
     total_streams: u32,
     total_breaks: u32,
     sn_breaks: u32,
+    #[serde(default)]
+    stream_sequences: Vec<StreamSequence>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RsspNps {
     max_nps: f64,
+    #[serde(default)]
+    notes_per_measure: Vec<u32>,
+    #[serde(default)]
+    nps_per_measure: Vec<f64>,
+    #[serde(default)]
+    equally_spaced_per_measure: Vec<bool>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -198,7 +252,28 @@ struct RsspStreamBreakdown {
 
 #[derive(Debug, Deserialize)]
 struct RsspTiming {
+    beat0_offset_seconds: f64,
+    beat0_group_offset_seconds: f64,
+    bpms: Vec<(f64, f64)>,
+    stops: Vec<(f64, f64)>,
+    delays: Vec<(f64, f64)>,
+    time_signatures: Vec<(f64, i32, i32)>,
+    warps: Vec<(f64, f64)>,
+    labels: Vec<(f64, String)>,
+    tickcounts: Vec<(f64, i32)>,
+    combos: Vec<(f64, i32, i32)>,
+    speeds: Vec<(f64, f64, f64, i32)>,
+    scrolls: Vec<(f64, f64)>,
+    fakes: Vec<(f64, f64)>,
     bpms_formatted: String,
+    bpm_min: f64,
+    bpm_max: f64,
+    #[serde(default)]
+    display_bpm: String,
+    #[serde(default)]
+    display_bpm_min: f64,
+    #[serde(default)]
+    display_bpm_max: f64,
     #[serde(default)]
     hash_bpms: Option<String>,
     #[serde(default)]
@@ -337,6 +412,175 @@ fn format_count(value: Option<u32>) -> String {
     value
         .map(|v| v.to_string())
         .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_len<T>(value: Option<&[T]>) -> String {
+    value
+        .map(|v| v.len().to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+const TIMING_EPS: f64 = 1e-3;
+
+fn timing_approx_eq(a: f64, b: f64) -> bool {
+    (a - b).abs() <= TIMING_EPS
+}
+
+fn timing_matches(expected: &HarnessTiming, actual: &RsspTiming) -> bool {
+    if !timing_approx_eq(expected.beat0_offset_seconds, actual.beat0_offset_seconds) {
+        return false;
+    }
+    if !timing_approx_eq(
+        expected.beat0_group_offset_seconds,
+        actual.beat0_group_offset_seconds,
+    ) {
+        return false;
+    }
+    if !compare_pairs(&expected.bpms, &actual.bpms) {
+        return false;
+    }
+    if !compare_pairs(&expected.stops, &actual.stops) {
+        return false;
+    }
+    if !compare_pairs(&expected.delays, &actual.delays) {
+        return false;
+    }
+    if !compare_pairs(&expected.warps, &actual.warps) {
+        return false;
+    }
+    if !compare_pairs(&expected.scrolls, &actual.scrolls) {
+        return false;
+    }
+    if !compare_pairs(&expected.fakes, &actual.fakes) {
+        return false;
+    }
+    if !compare_time_signatures(&expected.time_signatures, &actual.time_signatures) {
+        return false;
+    }
+    if !compare_labels(&expected.labels, &actual.labels) {
+        return false;
+    }
+    if !compare_tickcounts(&expected.tickcounts, &actual.tickcounts) {
+        return false;
+    }
+    if !compare_combos(&expected.combos, &actual.combos) {
+        return false;
+    }
+    if !compare_speeds(&expected.speeds, &actual.speeds) {
+        return false;
+    }
+
+    true
+}
+
+fn compare_pairs(expected: &[(f64, f64)], actual: &[(f64, f64)]) -> bool {
+    expected.len() == actual.len()
+        && expected
+            .iter()
+            .zip(actual)
+            .all(|(e, a)| timing_approx_eq(e.0, a.0) && timing_approx_eq(e.1, a.1))
+}
+
+fn compare_time_signatures(expected: &[(f64, i32, i32)], actual: &[(f64, i32, i32)]) -> bool {
+    expected.len() == actual.len()
+        && expected.iter().zip(actual).all(|(e, a)| {
+            timing_approx_eq(e.0, a.0) && e.1 == a.1 && e.2 == a.2
+        })
+}
+
+fn compare_labels(expected: &[(f64, String)], actual: &[(f64, String)]) -> bool {
+    expected.len() == actual.len()
+        && expected
+            .iter()
+            .zip(actual)
+            .all(|(e, a)| timing_approx_eq(e.0, a.0) && e.1 == a.1)
+}
+
+fn compare_tickcounts(expected: &[(f64, i32)], actual: &[(f64, i32)]) -> bool {
+    expected.len() == actual.len()
+        && expected
+            .iter()
+            .zip(actual)
+            .all(|(e, a)| timing_approx_eq(e.0, a.0) && e.1 == a.1)
+}
+
+fn compare_combos(expected: &[(f64, i32, i32)], actual: &[(f64, i32, i32)]) -> bool {
+    expected.len() == actual.len()
+        && expected
+            .iter()
+            .zip(actual)
+            .all(|(e, a)| timing_approx_eq(e.0, a.0) && e.1 == a.1 && e.2 == a.2)
+}
+
+fn compare_speeds(expected: &[(f64, f64, f64, i32)], actual: &[(f64, f64, f64, i32)]) -> bool {
+    expected.len() == actual.len()
+        && expected.iter().zip(actual).all(|(e, a)| {
+            timing_approx_eq(e.0, a.0)
+                && timing_approx_eq(e.1, a.1)
+                && timing_approx_eq(e.2, a.2)
+                && e.3 == a.3
+        })
+}
+
+fn format_timing_counts(
+    bpms: usize,
+    stops: usize,
+    delays: usize,
+    warps: usize,
+    speeds: usize,
+    scrolls: usize,
+    time_signatures: usize,
+    labels: usize,
+    tickcounts: usize,
+    combos: usize,
+    fakes: usize,
+) -> String {
+    format!(
+        "bpms:{} stops:{} delays:{} warps:{} speeds:{} scrolls:{} time_sigs:{} labels:{} tickcounts:{} combos:{} fakes:{}",
+        bpms,
+        stops,
+        delays,
+        warps,
+        speeds,
+        scrolls,
+        time_signatures,
+        labels,
+        tickcounts,
+        combos,
+        fakes
+    )
+}
+
+fn timing_counts_expected(timing: &HarnessTiming) -> String {
+    format_timing_counts(
+        timing.bpms.len(),
+        timing.stops.len(),
+        timing.delays.len(),
+        timing.warps.len(),
+        timing.speeds.len(),
+        timing.scrolls.len(),
+        timing.time_signatures.len(),
+        timing.labels.len(),
+        timing.tickcounts.len(),
+        timing.combos.len(),
+        timing.fakes.len(),
+    )
+}
+
+fn timing_counts_actual(timing: &RsspTiming) -> String {
+    format_timing_counts(
+        timing.bpms.len(),
+        timing.stops.len(),
+        timing.delays.len(),
+        timing.warps.len(),
+        timing.speeds.len(),
+        timing.scrolls.len(),
+        timing.time_signatures.len(),
+        timing.labels.len(),
+        timing.tickcounts.len(),
+        timing.combos.len(),
+        timing.fakes.len(),
+    )
 }
 
 fn has_hash_prefix(value: &str) -> bool {
@@ -594,17 +838,41 @@ fn compare_bpm(
             let actual_hash = actual.and_then(|entry| entry.timing.hash_bpms.as_deref());
             let expected_bpms = expected.map(|entry| entry.bpms.as_str());
             let actual_bpms = actual.map(|entry| entry.timing.bpms_formatted.as_str());
+            let expected_min = expected.map(|entry| entry.bpm_min);
+            let actual_min = actual.map(|entry| entry.timing.bpm_min);
+            let expected_max = expected.map(|entry| entry.bpm_max);
+            let actual_max = actual.map(|entry| entry.timing.bpm_max);
+            let expected_display = expected.map(|entry| entry.display_bpm.as_str());
+            let actual_display = actual.map(|entry| entry.timing.display_bpm.as_str());
+            let expected_display_min = expected.map(|entry| entry.display_bpm_min);
+            let actual_display_min = actual.map(|entry| entry.timing.display_bpm_min);
+            let expected_display_max = expected.map(|entry| entry.display_bpm_max);
+            let actual_display_max = actual.map(|entry| entry.timing.display_bpm_max);
 
             let hash_matches = expected_hash.is_some() && expected_hash == actual_hash;
             let bpms_matches = expected_bpms.is_some() && expected_bpms == actual_bpms;
-            let status = if hash_matches && bpms_matches {
+            let min_matches = expected_min.is_some() && expected_min == actual_min;
+            let max_matches = expected_max.is_some() && expected_max == actual_max;
+            let display_matches = expected_display.is_some() && expected_display == actual_display;
+            let display_min_matches =
+                expected_display_min.is_some() && expected_display_min == actual_display_min;
+            let display_max_matches =
+                expected_display_max.is_some() && expected_display_max == actual_display_max;
+            let status = if hash_matches
+                && bpms_matches
+                && min_matches
+                && max_matches
+                && display_matches
+                && display_min_matches
+                && display_max_matches
+            {
                 "....ok"
             } else {
                 "....MISMATCH"
             };
 
             println!(
-                "  {} {} [{}]: hash_bpms: {} -> {} | bpms: {} -> {} {}",
+                "  {} {} [{}]: hash_bpms: {} -> {} | bpms: {} -> {} | bpm_min: {} -> {} | bpm_max: {} -> {} | display_bpm: {} -> {} | display_min: {} -> {} | display_max: {} -> {} {}",
                 step_type,
                 difficulty,
                 meter_label,
@@ -612,6 +880,32 @@ fn compare_bpm(
                 actual_hash.unwrap_or("-"),
                 expected_bpms.unwrap_or("-"),
                 actual_bpms.unwrap_or("-"),
+                expected_min
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                actual_min
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                expected_max
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                actual_max
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                expected_display.unwrap_or("-"),
+                actual_display.unwrap_or("-"),
+                expected_display_min
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                actual_display_min
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                expected_display_max
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                actual_display_max
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
                 status
             );
         }
@@ -625,6 +919,11 @@ fn compare_bpm(
                     let actual = &actual_charts[*actual_idx];
                     expected.hash_bpms == actual.timing.hash_bpms.clone().unwrap_or_default()
                         && expected.bpms == actual.timing.bpms_formatted
+                        && expected.bpm_min == actual.timing.bpm_min
+                        && expected.bpm_max == actual.timing.bpm_max
+                        && expected.display_bpm == actual.timing.display_bpm
+                        && expected.display_bpm_min == actual.timing.display_bpm_min
+                        && expected.display_bpm_max == actual.timing.display_bpm_max
                 });
         if !matches {
             let expected_hashes: Vec<String> = expected_indices
@@ -643,15 +942,65 @@ fn compare_bpm(
                 .iter()
                 .map(|&i| actual_charts[i].timing.bpms_formatted.clone())
                 .collect();
+            let expected_mins: Vec<f64> = expected_indices
+                .iter()
+                .map(|&i| harness_charts[i].bpm_min)
+                .collect();
+            let actual_mins: Vec<f64> = actual_indices
+                .iter()
+                .map(|&i| actual_charts[i].timing.bpm_min)
+                .collect();
+            let expected_maxes: Vec<f64> = expected_indices
+                .iter()
+                .map(|&i| harness_charts[i].bpm_max)
+                .collect();
+            let actual_maxes: Vec<f64> = actual_indices
+                .iter()
+                .map(|&i| actual_charts[i].timing.bpm_max)
+                .collect();
+            let expected_display: Vec<String> = expected_indices
+                .iter()
+                .map(|&i| harness_charts[i].display_bpm.clone())
+                .collect();
+            let actual_display: Vec<String> = actual_indices
+                .iter()
+                .map(|&i| actual_charts[i].timing.display_bpm.clone())
+                .collect();
+            let expected_display_mins: Vec<f64> = expected_indices
+                .iter()
+                .map(|&i| harness_charts[i].display_bpm_min)
+                .collect();
+            let actual_display_mins: Vec<f64> = actual_indices
+                .iter()
+                .map(|&i| actual_charts[i].timing.display_bpm_min)
+                .collect();
+            let expected_display_maxes: Vec<f64> = expected_indices
+                .iter()
+                .map(|&i| harness_charts[i].display_bpm_max)
+                .collect();
+            let actual_display_maxes: Vec<f64> = actual_indices
+                .iter()
+                .map(|&i| actual_charts[i].timing.display_bpm_max)
+                .collect();
             return Err(format!(
-                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP hash_bpms:   {:?}\nGolden hash_bpms: {:?}\nRSSP bpms:        {:?}\nGolden bpms:      {:?}\n",
+                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP hash_bpms:   {:?}\nGolden hash_bpms: {:?}\nRSSP bpms:        {:?}\nGolden bpms:      {:?}\nRSSP bpm_min:     {:?}\nGolden bpm_min:   {:?}\nRSSP bpm_max:     {:?}\nGolden bpm_max:   {:?}\nRSSP display_bpm:     {:?}\nGolden display_bpm:   {:?}\nRSSP display_min:     {:?}\nGolden display_min:   {:?}\nRSSP display_max:     {:?}\nGolden display_max:   {:?}\n",
                 path.display(),
                 step_type,
                 difficulty,
                 actual_hashes,
                 expected_hashes,
                 actual_bpms,
-                expected_bpms
+                expected_bpms,
+                actual_mins,
+                expected_mins,
+                actual_maxes,
+                expected_maxes,
+                actual_display,
+                expected_display,
+                actual_display_mins,
+                expected_display_mins,
+                actual_display_maxes,
+                expected_display_maxes
             ));
         }
     }
@@ -834,6 +1183,90 @@ fn compare_durations(
     Ok(())
 }
 
+fn compare_timing(
+    path: &Path,
+    harness_entries: &[((String, String), Vec<usize>)],
+    harness_charts: &[HarnessChart],
+    actual_map: &HashMap<(String, String), Vec<usize>>,
+    actual_charts: &[RsspJsonChart],
+) -> Result<(), String> {
+    for ((step_type, difficulty), expected_indices) in harness_entries {
+        let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
+            println!(
+                "  {} {}: baseline present, RSSP missing chart",
+                step_type, difficulty
+            );
+            return Err(format!(
+                "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
+                path.display(),
+                step_type,
+                difficulty
+            ));
+        };
+
+        let count = expected_indices.len().max(actual_indices.len());
+        for idx in 0..count {
+            let expected = expected_indices.get(idx).map(|&i| &harness_charts[i]);
+            let actual = actual_indices.get(idx).map(|&i| &actual_charts[i]);
+            let meter_label = expected
+                .and_then(|entry| entry.meter)
+                .map(|meter| meter.to_string())
+                .unwrap_or_else(|| (idx + 1).to_string());
+
+            let expected_timing = expected.and_then(|entry| entry.timing.as_ref());
+            let actual_timing = actual.map(|entry| &entry.timing);
+            let matches = match (expected_timing, actual_timing) {
+                (Some(exp), Some(act)) => timing_matches(exp, act),
+                _ => false,
+            };
+            let status = if matches { "....ok" } else { "....MISMATCH" };
+
+            println!(
+                "  {} {} [{}]: timing {} -> {} {}",
+                step_type,
+                difficulty,
+                meter_label,
+                expected_timing
+                    .map_or_else(|| "-".to_string(), timing_counts_expected),
+                actual_timing
+                    .map_or_else(|| "-".to_string(), timing_counts_actual),
+                status
+            );
+        }
+
+        let matches = expected_indices.len() == actual_indices.len()
+            && expected_indices
+                .iter()
+                .zip(actual_indices)
+                .all(|(expected_idx, actual_idx)| {
+                    let Some(expected_timing) = harness_charts[*expected_idx].timing.as_ref() else {
+                        return false;
+                    };
+                    timing_matches(expected_timing, &actual_charts[*actual_idx].timing)
+                });
+        if !matches {
+            let expected_values: Vec<&HarnessTiming> = expected_indices
+                .iter()
+                .filter_map(|&i| harness_charts[i].timing.as_ref())
+                .collect();
+            let actual_values: Vec<&RsspTiming> = actual_indices
+                .iter()
+                .map(|&i| &actual_charts[i].timing)
+                .collect();
+            return Err(format!(
+                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP timing:   {:?}\nGolden timing: {:?}\n",
+                path.display(),
+                step_type,
+                difficulty,
+                actual_values,
+                expected_values
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn compare_nps(
     path: &Path,
     harness_entries: &[((String, String), Vec<usize>)],
@@ -864,25 +1297,54 @@ fn compare_nps(
                 .map(|meter| meter.to_string())
                 .unwrap_or_else(|| (idx + 1).to_string());
 
-            let expected_val = expected.map(|e| e.peak_nps);
-            let actual_val = actual.map(|a| a.nps.max_nps);
-            let status = if expected_val.is_some() && expected_val == actual_val {
+            let expected_peak = expected.map(|e| e.peak_nps);
+            let actual_peak = actual.map(|a| a.nps.max_nps);
+            let expected_notes = expected.map(|e| e.notes_per_measure.as_slice());
+            let actual_notes = actual.map(|a| a.nps.notes_per_measure.as_slice());
+            let notes_match = match (expected_notes, actual_notes) {
+                (Some(exp), Some(act)) => exp == act,
+                _ => false,
+            };
+            let expected_nps = expected.map(|e| e.nps_per_measure.as_slice());
+            let actual_nps = actual.map(|a| a.nps.nps_per_measure.as_slice());
+            let nps_match = match (expected_nps, actual_nps) {
+                (Some(exp), Some(act)) => exp == act,
+                _ => false,
+            };
+            let expected_spaced = expected.map(|e| e.equally_spaced_per_measure.as_slice());
+            let actual_spaced = actual.map(|a| a.nps.equally_spaced_per_measure.as_slice());
+            let spaced_match = match (expected_spaced, actual_spaced) {
+                (Some(exp), Some(act)) => exp == act,
+                _ => false,
+            };
+            let status = if expected_peak.is_some()
+                && expected_peak == actual_peak
+                && notes_match
+                && nps_match
+                && spaced_match
+            {
                 "....ok"
             } else {
                 "....MISMATCH"
             };
 
             println!(
-                "  {} {} [{}]: peak_nps {} -> {} {}",
+                "  {} {} [{}]: peak_nps {} -> {} | notes_per_measure len {} -> {} | nps_per_measure len {} -> {} | equally_spaced len {} -> {} {}",
                 step_type,
                 difficulty,
                 meter_label,
-                expected_val
+                expected_peak
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "-".to_string()),
-                actual_val
+                actual_peak
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "-".to_string()),
+                format_len(expected_notes),
+                format_len(actual_notes),
+                format_len(expected_nps),
+                format_len(actual_nps),
+                format_len(expected_spaced),
+                format_len(actual_spaced),
                 status
             );
         }
@@ -892,7 +1354,13 @@ fn compare_nps(
                 .iter()
                 .zip(actual_indices)
                 .all(|(expected_idx, actual_idx)| {
-                    harness_charts[*expected_idx].peak_nps == actual_charts[*actual_idx].nps.max_nps
+                    let expected = &harness_charts[*expected_idx];
+                    let actual = &actual_charts[*actual_idx];
+                    expected.peak_nps == actual.nps.max_nps
+                        && expected.notes_per_measure == actual.nps.notes_per_measure
+                        && expected.nps_per_measure == actual.nps.nps_per_measure
+                        && expected.equally_spaced_per_measure
+                            == actual.nps.equally_spaced_per_measure
                 });
         if !matches {
             let expected_vals: Vec<f64> = expected_indices
@@ -903,13 +1371,43 @@ fn compare_nps(
                 .iter()
                 .map(|&i| actual_charts[i].nps.max_nps)
                 .collect();
+            let expected_notes: Vec<Vec<u32>> = expected_indices
+                .iter()
+                .map(|&i| harness_charts[i].notes_per_measure.clone())
+                .collect();
+            let actual_notes: Vec<Vec<u32>> = actual_indices
+                .iter()
+                .map(|&i| actual_charts[i].nps.notes_per_measure.clone())
+                .collect();
+            let expected_nps: Vec<Vec<f64>> = expected_indices
+                .iter()
+                .map(|&i| harness_charts[i].nps_per_measure.clone())
+                .collect();
+            let actual_nps: Vec<Vec<f64>> = actual_indices
+                .iter()
+                .map(|&i| actual_charts[i].nps.nps_per_measure.clone())
+                .collect();
+            let expected_spaced: Vec<Vec<bool>> = expected_indices
+                .iter()
+                .map(|&i| harness_charts[i].equally_spaced_per_measure.clone())
+                .collect();
+            let actual_spaced: Vec<Vec<bool>> = actual_indices
+                .iter()
+                .map(|&i| actual_charts[i].nps.equally_spaced_per_measure.clone())
+                .collect();
             return Err(format!(
-                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP peak_nps:   {:?}\nGolden peak_nps: {:?}\n",
+                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP peak_nps:   {:?}\nGolden peak_nps: {:?}\nRSSP notes_per_measure:   {:?}\nGolden notes_per_measure: {:?}\nRSSP nps_per_measure:     {:?}\nGolden nps_per_measure:   {:?}\nRSSP equally_spaced_per_measure:   {:?}\nGolden equally_spaced_per_measure: {:?}\n",
                 path.display(),
                 step_type,
                 difficulty,
                 actual_vals,
-                expected_vals
+                expected_vals,
+                actual_notes,
+                expected_notes,
+                actual_nps,
+                expected_nps,
+                actual_spaced,
+                expected_spaced
             ));
         }
     }
@@ -1171,6 +1669,12 @@ fn compare_stream_breakdown(
             let actual_total_streams = actual.map(|v| v.stream_info.total_streams);
             let expected_total_breaks = expected.map(|v| v.total_break_measures);
             let actual_total_breaks = actual.map(|v| v.stream_info.total_breaks);
+            let expected_sequences = expected.map(|v| v.stream_sequences.as_slice());
+            let actual_sequences = actual.map(|v| v.stream_info.stream_sequences.as_slice());
+            let sequences_match = match (expected_sequences, actual_sequences) {
+                (Some(exp), Some(act)) => exp == act,
+                _ => false,
+            };
 
             let matches = expected.is_some()
                 && actual.is_some()
@@ -1178,7 +1682,8 @@ fn compare_stream_breakdown(
                 && expected_partial == actual_partial
                 && expected_simple == actual_simple
                 && expected_total_streams == actual_total_streams
-                && expected_total_breaks == actual_total_breaks;
+                && expected_total_breaks == actual_total_breaks
+                && sequences_match;
             let status = if matches { "....ok" } else { "....MISMATCH" };
 
             let expected_total_streams = expected_total_streams
@@ -1195,7 +1700,7 @@ fn compare_stream_breakdown(
                 .unwrap_or_else(|| "-".to_string());
 
             println!(
-                "  {} {} [{}]: detailed {} -> {} | partial {} -> {} | simple {} -> {} | total_streams {} -> {} | total_breaks {} -> {} {}",
+                "  {} {} [{}]: detailed {} -> {} | partial {} -> {} | simple {} -> {} | total_streams {} -> {} | total_breaks {} -> {} | sequences len {} -> {} {}",
                 step_type,
                 difficulty,
                 meter_label,
@@ -1209,6 +1714,8 @@ fn compare_stream_breakdown(
                 actual_total_streams,
                 expected_total_breaks,
                 actual_total_breaks,
+                format_len(expected_sequences),
+                format_len(actual_sequences),
                 status
             );
         }
@@ -1225,6 +1732,7 @@ fn compare_stream_breakdown(
                         && expected.streams_breakdown_level2 == actual.stream_breakdown.simple_breakdown
                         && expected.total_stream_measures == actual.stream_info.total_streams
                         && expected.total_break_measures == actual.stream_info.total_breaks
+                        && expected.stream_sequences == actual.stream_info.stream_sequences
                 });
         if !matches {
             let expected_detail: Vec<String> = expected_indices
@@ -1267,9 +1775,17 @@ fn compare_stream_breakdown(
                 .iter()
                 .map(|&i| actual_charts[i].stream_info.total_breaks)
                 .collect();
+            let expected_sequences: Vec<Vec<StreamSequence>> = expected_indices
+                .iter()
+                .map(|&i| harness_charts[i].stream_sequences.clone())
+                .collect();
+            let actual_sequences: Vec<Vec<StreamSequence>> = actual_indices
+                .iter()
+                .map(|&i| actual_charts[i].stream_info.stream_sequences.clone())
+                .collect();
 
             return Err(format!(
-                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP detailed: {:?}\nGolden detailed: {:?}\nRSSP partial: {:?}\nGolden partial: {:?}\nRSSP simple: {:?}\nGolden simple: {:?}\nRSSP total_streams: {:?}\nGolden total_streams: {:?}\nRSSP total_breaks: {:?}\nGolden total_breaks: {:?}\n",
+                "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP detailed: {:?}\nGolden detailed: {:?}\nRSSP partial: {:?}\nGolden partial: {:?}\nRSSP simple: {:?}\nGolden simple: {:?}\nRSSP total_streams: {:?}\nGolden total_streams: {:?}\nRSSP total_breaks: {:?}\nGolden total_breaks: {:?}\nRSSP stream_sequences: {:?}\nGolden stream_sequences: {:?}\n",
                 path.display(),
                 step_type,
                 difficulty,
@@ -1282,7 +1798,9 @@ fn compare_stream_breakdown(
                 actual_total_streams,
                 expected_total_streams,
                 actual_total_breaks,
-                expected_total_breaks
+                expected_total_breaks,
+                actual_sequences,
+                expected_sequences
             ));
         }
     }
@@ -1842,6 +2360,7 @@ fn check_file(
     compare_bpm(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
     compare_hashes(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
     compare_durations(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
+    compare_timing(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
     compare_nps(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
     compare_step_counts(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
     compare_stream_breakdown(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
