@@ -360,6 +360,31 @@ pub fn compute_timing_aware_stats(
     }
 }
 
+pub(crate) fn compute_timing_aware_stats_with_row_to_beat(
+    minimized_note_data: &[u8],
+    lanes: usize,
+    timing: &TimingData,
+    row_to_beat: &[f32],
+) -> ArrowStats {
+    match lanes {
+        4 => compute_timing_aware_stats_impl_with_row_to_beat::<4>(
+            minimized_note_data,
+            timing,
+            row_to_beat,
+        ),
+        8 => compute_timing_aware_stats_impl_with_row_to_beat::<8>(
+            minimized_note_data,
+            timing,
+            row_to_beat,
+        ),
+        _ => compute_timing_aware_stats_impl_with_row_to_beat::<4>(
+            minimized_note_data,
+            timing,
+            row_to_beat,
+        ),
+    }
+}
+
 fn compute_timing_aware_stats_impl<const LANES: usize>(
     minimized_note_data: &[u8],
     timing: &TimingData,
@@ -513,6 +538,147 @@ fn compute_timing_aware_stats_impl<const LANES: usize>(
 
         row_idx += 1;
         row_in_measure += 1;
+    }
+
+    stats
+}
+
+fn compute_timing_aware_stats_impl_with_row_to_beat<const LANES: usize>(
+    minimized_note_data: &[u8],
+    timing: &TimingData,
+    row_to_beat: &[f32],
+) -> ArrowStats {
+    let (hold_ends, _) = scan_minimized_rows_for_holds::<LANES>(minimized_note_data);
+    if hold_ends.is_empty() {
+        return ArrowStats::default();
+    }
+    debug_assert!(row_to_beat.len() >= hold_ends.len());
+
+    let mut stats = ArrowStats::default();
+    let mut ends_per_row = vec![0u32; hold_ends.len()];
+    let mut row_idx = 0usize;
+    let mut active_holds = 0i32;
+
+    for line_raw in minimized_note_data.split(|&b| b == b'\n') {
+        let line = trim_cr(line_raw);
+        if line.is_empty() {
+            continue;
+        }
+
+        match line[0] {
+            b',' => continue,
+            b';' => break,
+            _ => {}
+        }
+
+        if line.len() < LANES {
+            continue;
+        }
+
+        if row_idx > 0 {
+            active_holds -= ends_per_row[row_idx - 1] as i32;
+            debug_assert!(active_holds >= 0);
+        }
+
+        let beat = row_to_beat[row_idx];
+        let judgable = timing.is_judgable_at_beat(beat as f64);
+        let row_hold_ends = &hold_ends[row_idx];
+
+        if judgable {
+            let mut notes_on_line = 0u32;
+            let mut has_note = false;
+            let mut new_holds = 0u32;
+
+            for (col, &ch) in line[..LANES].iter().enumerate() {
+                match ch {
+                    b'1' => {
+                        has_note = true;
+                        notes_on_line += 1;
+                        stats.total_arrows += 1;
+                        match col & 3 {
+                            0 => stats.left += 1,
+                            1 => stats.down += 1,
+                            2 => stats.up += 1,
+                            3 => stats.right += 1,
+                            _ => unreachable!(),
+                        }
+                    }
+                    b'2' | b'4' => {
+                        let end_row = row_hold_ends[col];
+                        if end_row != HOLD_END_NONE {
+                            has_note = true;
+                            notes_on_line += 1;
+                            stats.total_arrows += 1;
+                            new_holds += 1;
+                            ends_per_row[end_row] += 1;
+                            if ch == b'2' {
+                                stats.holds += 1;
+                            } else {
+                                stats.rolls += 1;
+                            }
+                            match col & 3 {
+                                0 => stats.left += 1,
+                                1 => stats.down += 1,
+                                2 => stats.up += 1,
+                                3 => stats.right += 1,
+                                _ => unreachable!(),
+                            }
+                        }
+                    }
+                    b'L' | b'l' => {
+                        has_note = true;
+                        notes_on_line += 1;
+                        stats.total_arrows += 1;
+                        stats.lifts += 1;
+                        match col & 3 {
+                            0 => stats.left += 1,
+                            1 => stats.down += 1,
+                            2 => stats.up += 1,
+                            3 => stats.right += 1,
+                            _ => unreachable!(),
+                        }
+                    }
+                    b'M' | b'm' => {
+                        has_note = true;
+                        stats.mines += 1;
+                    }
+                    b'F' | b'f' => {
+                        has_note = true;
+                        stats.fakes += 1;
+                    }
+                    _ => {}
+                }
+            }
+
+            if notes_on_line > 0 {
+                stats.total_steps += 1;
+                if notes_on_line >= 2 {
+                    stats.jumps += 1;
+                }
+            }
+
+            if has_note && (notes_on_line as i32 + active_holds) >= 3 {
+                stats.hands += 1;
+            }
+
+            if new_holds > 0 {
+                active_holds += new_holds as i32;
+            }
+        } else {
+            for (col, &ch) in line[..LANES].iter().enumerate() {
+                match ch {
+                    b'1' | b'L' | b'l' | b'M' | b'm' | b'F' | b'f' => stats.fakes += 1,
+                    b'2' | b'4' => {
+                        if row_hold_ends[col] != HOLD_END_NONE {
+                            stats.fakes += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        row_idx += 1;
     }
 
     stats

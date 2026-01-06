@@ -669,7 +669,8 @@ fn build_chart_summary(
 
     let raw_total_steps = stats.total_steps;
     let raw_holding = stats.holding;
-    let mut timing_stats = compute_timing_aware_stats(&minimized_chart, lanes, &timing);
+    let mut timing_stats =
+        compute_timing_aware_stats_with_row_to_beat(&minimized_chart, lanes, &timing, &row_to_beat);
     timing_stats.total_steps = raw_total_steps;
     timing_stats.holding = raw_holding;
     let mines_nonfake = timing_stats.mines;
