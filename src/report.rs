@@ -296,6 +296,8 @@ pub struct TimingSnapshot {
     pub beat0_group_offset_seconds: f64,
     pub bpms: Vec<(f64, f64)>,
     pub bpms_formatted: String,
+    pub bpm_min_raw: f64,
+    pub bpm_max_raw: f64,
     pub stops: Vec<(f64, f64)>,
     pub delays: Vec<(f64, f64)>,
     pub time_signatures: Vec<(f64, i32, i32)>,
@@ -539,6 +541,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         .map(|(beat, bpm)| (*beat as f64, roundtrip_bpm_itg(*bpm as f64)))
         .collect();
     let bpms_formatted = format_bpm_segments_like_itg(&bpms_raw);
+    let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw(&bpms_raw);
     // Match itgmania-reference-harness default float precision (6 significant digits).
     let bpms: Vec<(f64, f64)> = bpms_raw
         .iter()
@@ -659,6 +662,8 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         beat0_group_offset_seconds: 0.0,
         bpms,
         bpms_formatted,
+        bpm_min_raw,
+        bpm_max_raw,
         stops,
         delays,
         time_signatures,
@@ -1533,6 +1538,8 @@ fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
         beat0_group_offset_seconds,
         bpms,
         bpms_formatted,
+        bpm_min_raw,
+        bpm_max_raw,
         stops,
         delays,
         time_signatures,
@@ -1545,7 +1552,6 @@ fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
         fakes,
     } = build_timing_snapshot(chart, simfile);
 
-    let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw(&bpms);
     let bpm_min = round_sig_figs_itg(bpm_min_raw);
     let bpm_max = round_sig_figs_itg(bpm_max_raw);
 
