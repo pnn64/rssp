@@ -277,6 +277,12 @@ fn timing_globals(parsed: &ParsedSimfileData<'_>, extension: &str) -> TimingGlob
     let allow_steps_timing =
         steps_timing_allowed(parse_version(parsed.version, timing_format), timing_format);
 
+    let display_bpm_raw = if timing_format == TimingFormat::Ssc {
+        decode_display_bpm_tag(parsed.display_bpm)
+    } else {
+        None
+    };
+
     TimingGlobals {
         bpms_raw: clean_tag_bytes(parsed.bpms),
         stops_raw: clean_tag_bytes(parsed.stops),
@@ -286,7 +292,7 @@ fn timing_globals(parsed: &ParsedSimfileData<'_>, extension: &str) -> TimingGlob
         scrolls_raw: clean_tag_bytes(parsed.scrolls),
         fakes_raw: clean_tag_bytes(parsed.fakes),
         bpms_norm: normalize_tag_bytes(parsed.bpms),
-        display_bpm_raw: decode_display_bpm_tag(parsed.display_bpm),
+        display_bpm_raw,
         timing_format,
         allow_steps_timing,
     }

@@ -795,10 +795,15 @@ pub fn analyze(
         .music
         .map(|b| unescape_tag(decode_bytes(b).as_ref()))
         .unwrap_or_default();
-    let display_bpm_str = parsed_data
-        .display_bpm
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
-        .unwrap_or_default();
+    let timing_format = TimingFormat::from_extension(extension);
+    let display_bpm_str = if timing_format == TimingFormat::Ssc {
+        parsed_data
+            .display_bpm
+            .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
 
     if options.translate_markers {
         crate::translate::replace_markers_in_place(&mut title_str);
@@ -813,7 +818,6 @@ pub fn analyze(
         artist_str = unknown.clone();
         artisttranslit_str = unknown;
     }
-    let timing_format = TimingFormat::from_extension(extension);
     let offset = parse_offset_seconds(parsed_data.offset);
     let ssc_version = parse_version(parsed_data.version, timing_format);
     let sample_start = parsed_data.sample_start.and_then(|b| std::str::from_utf8(b).ok()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
