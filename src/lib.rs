@@ -796,14 +796,10 @@ pub fn analyze(
         .map(|b| unescape_tag(decode_bytes(b).as_ref()))
         .unwrap_or_default();
     let timing_format = TimingFormat::from_extension(extension);
-    let display_bpm_str = if timing_format == TimingFormat::Ssc {
-        parsed_data
-            .display_bpm
-            .map(|b| unescape_tag(decode_bytes(b).as_ref()))
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
+    let display_bpm_str = parsed_data
+        .display_bpm
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .unwrap_or_default();
 
     if options.translate_markers {
         crate::translate::replace_markers_in_place(&mut title_str);

@@ -255,7 +255,6 @@ struct TimingGlobals {
     scrolls_raw: String,
     fakes_raw: String,
     bpms_norm: String,
-    display_bpm_raw: Option<String>,
     timing_format: TimingFormat,
     allow_steps_timing: bool,
 }
@@ -277,12 +276,6 @@ fn timing_globals(parsed: &ParsedSimfileData<'_>, extension: &str) -> TimingGlob
     let allow_steps_timing =
         steps_timing_allowed(parse_version(parsed.version, timing_format), timing_format);
 
-    let display_bpm_raw = if timing_format == TimingFormat::Ssc {
-        decode_display_bpm_tag(parsed.display_bpm)
-    } else {
-        None
-    };
-
     TimingGlobals {
         bpms_raw: clean_tag_bytes(parsed.bpms),
         stops_raw: clean_tag_bytes(parsed.stops),
@@ -292,7 +285,6 @@ fn timing_globals(parsed: &ParsedSimfileData<'_>, extension: &str) -> TimingGlob
         scrolls_raw: clean_tag_bytes(parsed.scrolls),
         fakes_raw: clean_tag_bytes(parsed.fakes),
         bpms_norm: normalize_tag_bytes(parsed.bpms),
-        display_bpm_raw,
         timing_format,
         allow_steps_timing,
     }
@@ -370,11 +362,8 @@ fn chart_bpm_snapshot(
     let bpm_min = round_sig_figs_itg(bpm_min_raw);
     let bpm_max = round_sig_figs_itg(bpm_max_raw);
     let chart_display_bpm = decode_display_bpm_tag(entry.chart_display_bpm.as_deref());
-    let display_tag = chart_display_bpm
-        .as_deref()
-        .or_else(|| globals.display_bpm_raw.as_deref());
     let (display_bpm_min_raw, display_bpm_max_raw, display_bpm) = resolve_display_bpm(
-        display_tag,
+        chart_display_bpm.as_deref(),
         bpm_min_raw,
         bpm_max_raw,
         1.0,

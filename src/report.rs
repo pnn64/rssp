@@ -1553,15 +1553,7 @@ fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
         .chart_display_bpm
         .as_deref()
         .filter(|s| !s.trim().is_empty());
-    let song_display_bpm = {
-        let trimmed = simfile.display_bpm_str.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed)
-        }
-    };
-    let display_tag = chart_display_bpm.or(song_display_bpm);
+    let display_tag = chart_display_bpm;
     let (display_bpm_min_raw, display_bpm_max_raw, display_bpm) = resolve_display_bpm(
         display_tag,
         bpm_min_raw,
