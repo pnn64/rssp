@@ -144,8 +144,6 @@ fn has_phantom_holds<const LANES: usize>(minimized: &[u8]) -> bool {
     depths.iter().any(|&depth| depth != 0)
 }
 
-const HOLD_END_NONE: usize = usize::MAX;
-
 #[inline(always)]
 fn trim_cr(line: &[u8]) -> &[u8] {
     if line.last() == Some(&b'\r') {
@@ -180,9 +178,10 @@ fn has_step<const LANES: usize>(line: &[u8]) -> bool {
 
 fn scan_minimized_rows_for_holds<const LANES: usize>(
     minimized_note_data: &[u8],
-) -> (Vec<[usize; LANES]>, Vec<usize>) {
+) -> (Vec<u16>, Vec<u32>, Vec<usize>) {
     let estimated_rows = minimized_note_data.len() / (LANES + 1);
-    let mut hold_ends = Vec::with_capacity(estimated_rows);
+    let mut hold_starts = Vec::with_capacity(estimated_rows);
+    let mut ends_per_row = Vec::with_capacity(estimated_rows);
     let mut measure_rows = Vec::new();
     let mut stacks: [Vec<usize>; LANES] = std::array::from_fn(|_| Vec::new());
     let mut current_measure_rows = 0usize;
@@ -213,14 +212,16 @@ fn scan_minimized_rows_for_holds<const LANES: usize>(
             continue;
         }
 
-        hold_ends.push([HOLD_END_NONE; LANES]);
+        hold_starts.push(0);
+        ends_per_row.push(0);
         for (col, &ch) in line[..LANES].iter().enumerate() {
             match ch {
                 ch if is_hold_blocker(ch) => stacks[col].clear(),
                 b'2' | b'4' => stacks[col].push(row_idx),
                 b'3' => {
                     if let Some(start_idx) = stacks[col].pop() {
-                        hold_ends[start_idx][col] = row_idx;
+                        hold_starts[start_idx] |= 1u16 << col;
+                        ends_per_row[row_idx] += 1;
                     }
                 }
                 _ => {}
@@ -235,7 +236,7 @@ fn scan_minimized_rows_for_holds<const LANES: usize>(
         measure_rows.push(current_measure_rows);
     }
 
-    (hold_ends, measure_rows)
+    (hold_starts, ends_per_row, measure_rows)
 }
 
 /// Minimizes measure lines if every other line is all-zero.
@@ -364,13 +365,13 @@ fn compute_timing_aware_stats_impl<const LANES: usize>(
     minimized_note_data: &[u8],
     timing: &TimingData,
 ) -> ArrowStats {
-    let (hold_ends, measure_rows) = scan_minimized_rows_for_holds::<LANES>(minimized_note_data);
-    if hold_ends.is_empty() {
+    let (hold_starts, ends_per_row, measure_rows) =
+        scan_minimized_rows_for_holds::<LANES>(minimized_note_data);
+    if hold_starts.is_empty() {
         return ArrowStats::default();
     }
 
     let mut stats = ArrowStats::default();
-    let mut ends_per_row = vec![0u32; hold_ends.len()];
     let mut row_idx = 0usize;
     let mut measure_idx = 0usize;
     let mut row_in_measure = 0usize;
@@ -415,7 +416,7 @@ fn compute_timing_aware_stats_impl<const LANES: usize>(
             0
         };
         let judgable = timing.is_judgable_at_row(note_row);
-        let row_hold_ends = &hold_ends[row_idx];
+        let row_hold_mask = hold_starts[row_idx];
 
         if judgable {
             let mut notes_on_line = 0u32;
@@ -437,13 +438,11 @@ fn compute_timing_aware_stats_impl<const LANES: usize>(
                         }
                     }
                     b'2' | b'4' => {
-                        let end_row = row_hold_ends[col];
-                        if end_row != HOLD_END_NONE {
+                        if (row_hold_mask & (1u16 << col)) != 0 {
                             has_note = true;
                             notes_on_line += 1;
                             stats.total_arrows += 1;
                             new_holds += 1;
-                            ends_per_row[end_row] += 1;
                             if ch == b'2' {
                                 stats.holds += 1;
                             } else {
@@ -502,7 +501,7 @@ fn compute_timing_aware_stats_impl<const LANES: usize>(
                 match ch {
                     b'1' | b'L' | b'l' | b'M' | b'm' | b'F' | b'f' => stats.fakes += 1,
                     b'2' | b'4' => {
-                        if row_hold_ends[col] != HOLD_END_NONE {
+                        if (row_hold_mask & (1u16 << col)) != 0 {
                             stats.fakes += 1;
                         }
                     }
