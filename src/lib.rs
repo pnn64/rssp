@@ -8,6 +8,7 @@ pub mod hashing;
 pub mod matrix;
 pub mod notes;
 pub mod parse;
+pub mod pack;
 pub mod patterns;
 pub mod report;
 pub mod stats;
