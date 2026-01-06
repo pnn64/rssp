@@ -1,11 +1,11 @@
 use std::borrow::Cow;
+use crate::unescape_trim;
 
 use crate::parse::{
     decode_bytes,
     extract_sections,
     parse_version,
     split_notes_fields,
-    unescape_trim,
     ParsedChartEntry,
     ParsedSimfileData,
 };
@@ -151,11 +151,89 @@ fn clean_chart_tag_bytes(tag: Option<&[u8]>) -> Option<String> {
 }
 
 fn decode_display_bpm_tag(tag: Option<&[u8]>) -> Option<String> {
-    let text = tag.map(|bytes| unescape_trim(decode_bytes(bytes).as_ref()))?;
-    if text.is_empty() {
+    let text = tag.map(|bytes| decode_bytes(bytes))?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn split_display_bpm_params(tag: &str) -> (String, Option<String>) {
+    let mut first = String::new();
+    let mut second = String::new();
+    let mut current = &mut first;
+    let mut in_second = false;
+    let mut chars = tag.chars();
+
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(next) = chars.next() {
+                current.push(next);
+            }
+            continue;
+        }
+        if c == ':' {
+            if !in_second {
+                in_second = true;
+                current = &mut second;
+                continue;
+            }
+            break;
+        }
+        current.push(c);
+    }
+
+    if in_second {
+        (first, Some(second))
+    } else {
+        (first, None)
+    }
+}
+
+fn parse_float_prefix(s: &str) -> Option<f64> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    let start = i;
+    if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+        i += 1;
+    }
+    let mut saw_digit = false;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        saw_digit = true;
+        i += 1;
+    }
+    if i < bytes.len() && bytes[i] == b'.' {
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            saw_digit = true;
+            i += 1;
+        }
+    }
+    if !saw_digit {
         return None;
     }
-    Some(text)
+    if i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
+        let exp_start = i;
+        i += 1;
+        if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+            i += 1;
+        }
+        let exp_digits_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if exp_digits_start == i {
+            i = exp_start;
+        }
+    }
+
+    let value = s[start..i].parse::<f64>().ok()?;
+    if value.is_finite() { Some(value) } else { Some(0.0) }
 }
 
 fn parse_display_bpm(tag: &str) -> Option<(f64, f64)> {
@@ -163,21 +241,26 @@ fn parse_display_bpm(tag: &str) -> Option<(f64, f64)> {
     if trimmed.is_empty() || trimmed == "*" {
         return None;
     }
-    let mut parts = trimmed.split(':');
-    let min_str = parts.next()?.trim();
+    let (min_str, max_str) = split_display_bpm_params(trimmed);
+    let min_str = min_str.trim();
     if min_str.is_empty() {
         return None;
     }
-    let max_str = parts.next().unwrap_or("").trim();
 
-    let min_raw = min_str.parse::<f64>().unwrap_or(0.0);
+    let min_raw = parse_float_prefix(min_str).unwrap_or(0.0);
     let min_raw = if min_raw.is_finite() { min_raw } else { 0.0 };
     let min = (min_raw as f32) as f64;
 
-    let max_raw = if max_str.is_empty() {
-        min
-    } else {
-        max_str.parse::<f64>().unwrap_or(0.0)
+    let max_raw = match max_str {
+        Some(max_str) => {
+            let max_str = max_str.trim();
+            if max_str.is_empty() {
+                min
+            } else {
+                parse_float_prefix(max_str).unwrap_or(0.0)
+            }
+        }
+        None => min,
     };
     let max_raw = if max_raw.is_finite() { max_raw } else { 0.0 };
     let max = (max_raw as f32) as f64;

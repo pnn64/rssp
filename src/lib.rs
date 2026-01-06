@@ -245,8 +245,13 @@ fn chart_timing_tag_raw(tag: Option<&[u8]>) -> Option<String> {
 
 fn chart_display_bpm_tag(tag: Option<&[u8]>) -> Option<String> {
     let bytes = tag?;
-    let text = unescape_trim(decode_bytes(bytes).as_ref());
-    if text.is_empty() { None } else { Some(text) }
+    let text = decode_bytes(bytes);
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn msd_first_param_bytes(bytes: &[u8]) -> &[u8] {
