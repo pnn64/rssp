@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
+use std::sync::OnceLock;
 
 use crate::timing::{beat_to_note_row_f32_exact, TimingData, ROWS_PER_BEAT};
 
@@ -829,7 +830,7 @@ impl StepParityGenerator {
         let end_id = self.nodes.len() - 1;
         let mut cost = vec![f32::MAX; self.nodes.len()];
         let mut predecessor = vec![usize::MAX; self.nodes.len()];
-        let dump_ties = env_flag("RSSP_STEP_PARITY_DUMP_TIES");
+        let dump_ties = env_flags().dump_ties;
         let mut tie_count = 0usize;
         cost[start_id] = 0.0;
 
@@ -881,7 +882,7 @@ impl StepParityGenerator {
         if nodes_for_rows.len() != self.rows.len() {
             return false;
         }
-        let dump_path = env_flag("RSSP_STEP_PARITY_DUMP_PATH");
+        let dump_path = env_flags().dump_path;
         let mut total_cost = 0.0f32;
         if dump_path {
             let end_id = self.nodes.len().saturating_sub(1);
@@ -1012,7 +1013,7 @@ fn init_result_state(
 
     let hash = get_state_cache_key(&result_state);
     if let Some(existing) = state_cache.get(&hash) {
-        if env_flag("RSSP_STEP_PARITY_DUMP_STATE_COLLISIONS")
+        if env_flags().dump_state_collisions
             && **existing != result_state
         {
             eprintln!("STATE_HASH_COLLISION hash={hash}");
@@ -2295,6 +2296,25 @@ struct ParsedRow {
     second: f32,
 }
 
+struct StepParityEnvFlags {
+    dump_ties: bool,
+    dump_path: bool,
+    dump_state_collisions: bool,
+    dump_rows: bool,
+    dump_notes: bool,
+}
+
+fn env_flags() -> &'static StepParityEnvFlags {
+    static FLAGS: OnceLock<StepParityEnvFlags> = OnceLock::new();
+    FLAGS.get_or_init(|| StepParityEnvFlags {
+        dump_ties: env_flag("RSSP_STEP_PARITY_DUMP_TIES"),
+        dump_path: env_flag("RSSP_STEP_PARITY_DUMP_PATH"),
+        dump_state_collisions: env_flag("RSSP_STEP_PARITY_DUMP_STATE_COLLISIONS"),
+        dump_rows: env_flag("RSSP_STEP_PARITY_DUMP_ROWS"),
+        dump_notes: env_flag("RSSP_STEP_PARITY_DUMP_NOTES"),
+    })
+}
+
 fn env_flag(name: &str) -> bool {
     match std::env::var(name) {
         Ok(value) => {
@@ -2420,7 +2440,7 @@ fn parse_chart_rows_with_timing(
 ) -> Vec<ParsedRow> {
     let mut rows = Vec::new();
     let mut measure_index = 0usize;
-    let dump_rows = env_flag("RSSP_STEP_PARITY_DUMP_ROWS");
+    let dump_rows = env_flags().dump_rows;
     if column_count == 0 || column_count > 8 {
         return rows;
     }
@@ -2599,7 +2619,7 @@ fn build_intermediate_notes_with_timing(
     if column_count == 0 {
         return Vec::new();
     }
-    let dump_notes = env_flag("RSSP_STEP_PARITY_DUMP_NOTES");
+    let dump_notes = env_flags().dump_notes;
     let hold_lengths = hold_lengths_for_rows(rows, column_count);
 
     let mut notes = Vec::new();
