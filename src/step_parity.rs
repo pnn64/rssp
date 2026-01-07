@@ -314,26 +314,30 @@ struct StageLayout {
     up_arrows: Vec<usize>,
     down_arrows: Vec<usize>,
     side_arrows: Vec<usize>,
+    pair_stride: usize,
+    avg_points: Vec<StagePoint>,
+    x_diffs: Vec<f32>,
+    y_diffs: Vec<f32>,
 }
 
 impl StageLayout {
     fn new_dance_single() -> Self {
-        Self {
-            columns: vec![
+        Self::new(
+            vec![
                 StagePoint { x: 0.0, y: 1.0 },
                 StagePoint { x: 1.0, y: 0.0 },
                 StagePoint { x: 1.0, y: 2.0 },
                 StagePoint { x: 2.0, y: 1.0 },
             ],
-            up_arrows: vec![2],
-            down_arrows: vec![1],
-            side_arrows: vec![0, 3],
-        }
+            vec![2],
+            vec![1],
+            vec![0, 3],
+        )
     }
 
     fn new_dance_double() -> Self {
-        Self {
-            columns: vec![
+        Self::new(
+            vec![
                 StagePoint { x: 0.0, y: 1.0 },
                 StagePoint { x: 1.0, y: 0.0 },
                 StagePoint { x: 1.0, y: 2.0 },
@@ -343,9 +347,86 @@ impl StageLayout {
                 StagePoint { x: 4.0, y: 2.0 },
                 StagePoint { x: 5.0, y: 1.0 },
             ],
-            up_arrows: vec![2, 6],
-            down_arrows: vec![1, 5],
-            side_arrows: vec![0, 3, 4, 7],
+            vec![2, 6],
+            vec![1, 5],
+            vec![0, 3, 4, 7],
+        )
+    }
+
+    fn new(
+        columns: Vec<StagePoint>,
+        up_arrows: Vec<usize>,
+        down_arrows: Vec<usize>,
+        side_arrows: Vec<usize>,
+    ) -> Self {
+        let pair_stride = columns.len() + 1;
+        let pair_len = pair_stride * pair_stride;
+        let invalid_index = columns.len();
+        let mut avg_points = vec![StagePoint::default(); pair_len];
+        let mut x_diffs = vec![0.0f32; pair_len];
+        let mut y_diffs = vec![0.0f32; pair_len];
+
+        for left in 0..pair_stride {
+            for right in 0..pair_stride {
+                let idx = left * pair_stride + right;
+                let left_point = if left == invalid_index {
+                    None
+                } else {
+                    Some(columns[left])
+                };
+                let right_point = if right == invalid_index {
+                    None
+                } else {
+                    Some(columns[right])
+                };
+
+                avg_points[idx] = match (left_point, right_point) {
+                    (None, None) => StagePoint::default(),
+                    (None, Some(r)) => r,
+                    (Some(l), None) => l,
+                    (Some(l), Some(r)) => StagePoint {
+                        x: (l.x + r.x) / 2.0,
+                        y: (l.y + r.y) / 2.0,
+                    },
+                };
+
+                if left == right || left == invalid_index || right == invalid_index {
+                    continue;
+                }
+
+                let left = columns[left];
+                let right = columns[right];
+                let dx = (right.x - left.x) as f64;
+                let dy = (right.y - left.y) as f64;
+                let distance = (dx * dx + dy * dy).sqrt();
+                if distance == 0.0 {
+                    continue;
+                }
+
+                let norm_dx = dx / distance;
+                let norm_dy = dy / distance;
+                let mut x_mag = norm_dx.abs().powf(4.0) as f32;
+                let mut y_mag = norm_dy.abs().powf(4.0) as f32;
+                if norm_dx <= 0.0 {
+                    x_mag = -x_mag;
+                }
+                if norm_dy <= 0.0 {
+                    y_mag = -y_mag;
+                }
+                x_diffs[idx] = x_mag;
+                y_diffs[idx] = y_mag;
+            }
+        }
+
+        Self {
+            columns,
+            up_arrows,
+            down_arrows,
+            side_arrows,
+            pair_stride,
+            avg_points,
+            x_diffs,
+            y_diffs,
         }
     }
 
@@ -370,71 +451,26 @@ impl StageLayout {
     }
 
     fn get_x_difference(&self, left_index: isize, right_index: isize) -> f32 {
-        if left_index == right_index {
-            return 0.0;
-        }
-        if left_index == INVALID_COLUMN || right_index == INVALID_COLUMN {
-            return 0.0;
-        }
-
-        let left = self.columns[left_index as usize];
-        let right = self.columns[right_index as usize];
-
-        let dx = (right.x - left.x) as f64;
-        let dy = (right.y - left.y) as f64;
-        let distance = (dx * dx + dy * dy).sqrt();
-        if distance == 0.0 {
-            return 0.0;
-        }
-
-        let dx = dx / distance;
-        let negative = dx <= 0.0;
-        let mut magnitude = dx.abs().powf(4.0) as f32;
-        if negative {
-            magnitude = -magnitude;
-        }
-
-        magnitude
+        let idx = self.pair_index(left_index, right_index);
+        self.x_diffs[idx]
     }
 
     fn get_y_difference(&self, left_index: isize, right_index: isize) -> f32 {
-        if left_index == right_index {
-            return 0.0;
-        }
-        if left_index == INVALID_COLUMN || right_index == INVALID_COLUMN {
-            return 0.0;
-        }
-
-        let left = self.columns[left_index as usize];
-        let right = self.columns[right_index as usize];
-
-        let dy = (right.y - left.y) as f64;
-        let dx = (right.x - left.x) as f64;
-        let distance = (dx * dx + dy * dy).sqrt();
-        if distance == 0.0 {
-            return 0.0;
-        }
-
-        let dy = dy / distance;
-        let negative = dy <= 0.0;
-        let mut magnitude = dy.abs().powf(4.0) as f32;
-        if negative {
-            magnitude = -magnitude;
-        }
-
-        magnitude
+        let idx = self.pair_index(left_index, right_index);
+        self.y_diffs[idx]
     }
 
     fn average_point(&self, left_index: isize, right_index: isize) -> StagePoint {
-        match (left_index, right_index) {
-            (INVALID_COLUMN, INVALID_COLUMN) => StagePoint { x: 0.0, y: 0.0 },
-            (INVALID_COLUMN, r) => self.columns[r as usize],
-            (l, INVALID_COLUMN) => self.columns[l as usize],
-            (l, r) => StagePoint {
-                x: (self.columns[l as usize].x + self.columns[r as usize].x) / 2.0,
-                y: (self.columns[l as usize].y + self.columns[r as usize].y) / 2.0,
-            },
-        }
+        let idx = self.pair_index(left_index, right_index);
+        self.avg_points[idx]
+    }
+
+    fn pair_index(&self, left_index: isize, right_index: isize) -> usize {
+        let max_index = self.pair_stride - 1;
+        let to_index = |idx| if idx == INVALID_COLUMN { max_index } else { idx as usize };
+        let left = to_index(left_index);
+        let right = to_index(right_index);
+        left * self.pair_stride + right
     }
 }
 
@@ -633,6 +669,21 @@ struct StepParityGenerator {
     rows: Vec<Row>,
 }
 
+#[derive(Default)]
+struct StepParityStats {
+    rows: usize,
+    perms_total: usize,
+    perm_calls_total: usize,
+    prev_nodes_peak: usize,
+    result_nodes_new: usize,
+    nodes_total: usize,
+    edges_total: usize,
+    state_cache_hits: usize,
+    state_cache_misses: usize,
+    perm_cache_hits: usize,
+    perm_cache_misses: usize,
+}
+
 impl StepParityGenerator {
     fn new(layout: StageLayout) -> Self {
         Self {
@@ -645,6 +696,7 @@ impl StepParityGenerator {
         }
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn analyze_note_data(
         &mut self,
         note_data: Vec<IntermediateNoteData>,
@@ -663,6 +715,7 @@ impl StepParityGenerator {
         self.analyze_graph()
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn create_rows(&mut self, note_data: Vec<IntermediateNoteData>) {
         let column_count = self.column_count;
         let mut counter = RowCounter::new(column_count);
@@ -723,6 +776,7 @@ impl StepParityGenerator {
         self.add_row(&mut counter);
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn add_row(&mut self, counter: &mut RowCounter) {
         if counter.last_column_second == CLM_SECOND_INVALID {
             return;
@@ -732,6 +786,7 @@ impl StepParityGenerator {
         self.rows.push(row);
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn create_row(&self, counter: &RowCounter) -> Row {
         let mut row = Row::new(self.column_count);
         row.notes.clone_from(&counter.notes);
@@ -753,6 +808,7 @@ impl StepParityGenerator {
         row
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn build_state_graph(&mut self) {
         self.nodes.clear();
         self.state_cache.clear();
@@ -764,15 +820,37 @@ impl StepParityGenerator {
         let permute_cache = &mut self.permute_cache;
         let state_cache = &mut self.state_cache;
         let nodes = &mut self.nodes;
+        let track_stats = env_flags().dump_stats;
+        let mut stats = StepParityStats::default();
+        if track_stats {
+            stats.rows = rows.len();
+        }
 
         let start_state = Rc::new(State::new(column_count));
         let start_second = rows.first().map(|r| r.second - 1.0).unwrap_or(-1.0);
+        if track_stats {
+            stats.nodes_total += 1;
+        }
         let start_id = add_node(nodes, start_state, start_second);
 
         let mut prev_node_ids = vec![start_id];
+        if track_stats {
+            stats.prev_nodes_peak = prev_node_ids.len();
+        }
 
         for (i, row) in rows.iter().enumerate() {
-            let permutations = perms_for_row(permute_cache, layout, row);
+            let permutations = perms_for_row(
+                permute_cache,
+                layout,
+                row,
+                if track_stats { Some(&mut stats) } else { None },
+            );
+            if track_stats {
+                stats.perms_total += permutations.len();
+                stats.prev_nodes_peak = stats.prev_nodes_peak.max(prev_node_ids.len());
+                stats.perm_calls_total += prev_node_ids.len() * permutations.len();
+                stats.edges_total += prev_node_ids.len() * permutations.len();
+            }
             let mut result_nodes_for_row: Vec<usize> = Vec::with_capacity(permutations.len());
             let mut result_node_map: FastMap<usize, usize> = FastMap::default();
             result_node_map.reserve(permutations.len());
@@ -785,7 +863,13 @@ impl StepParityGenerator {
                 let elapsed = row.second - initial_second;
 
                 for perm in permutations.iter() {
-                    let result_state = init_result_state(state_cache, &initial_state, row, perm);
+                    let result_state = init_result_state(
+                        state_cache,
+                        &initial_state,
+                        row,
+                        perm,
+                        if track_stats { Some(&mut stats) } else { None },
+                    );
                     let cost = cost_calculator.get_action_cost(
                         &initial_state,
                         &result_state,
@@ -799,6 +883,9 @@ impl StepParityGenerator {
                     let result_node_id = if let Some(&id) = result_node_map.get(&state_key) {
                         id
                     } else {
+                        if track_stats {
+                            stats.nodes_total += 1;
+                        }
                         let id = add_node(nodes, Rc::clone(&result_state), row.second);
                         result_nodes_for_row.push(id);
                         result_node_map.insert(state_key, id);
@@ -809,18 +896,49 @@ impl StepParityGenerator {
                 }
             }
 
+            if track_stats {
+                stats.result_nodes_new += result_nodes_for_row.len();
+            }
             prev_node_ids = result_nodes_for_row;
         }
 
         let end_state = Rc::new(State::new(column_count));
         let end_second = rows.last().map(|r| r.second + 1.0).unwrap_or(1.0);
+        if track_stats {
+            stats.nodes_total += 1;
+        }
         let end_id = add_node(nodes, end_state, end_second);
 
-        for node_id in prev_node_ids {
+        let end_edge_count = prev_node_ids.len();
+        for &node_id in &prev_node_ids {
             add_edge(nodes, node_id, end_id, 0.0);
+        }
+        if track_stats {
+            stats.edges_total += end_edge_count;
+            let result_nodes_reused = stats
+                .perm_calls_total
+                .saturating_sub(stats.result_nodes_new);
+            eprintln!(
+                "STEP_PARITY_STATS rows={} perms_total={} perm_calls={} nodes={} edges={} prev_nodes_peak={} result_nodes_new={} result_nodes_reused={} state_cache_hits={} state_cache_misses={} state_cache_len={} perm_cache_hits={} perm_cache_misses={} perm_cache_len={}",
+                stats.rows,
+                stats.perms_total,
+                stats.perm_calls_total,
+                stats.nodes_total,
+                stats.edges_total,
+                stats.prev_nodes_peak,
+                stats.result_nodes_new,
+                result_nodes_reused,
+                stats.state_cache_hits,
+                stats.state_cache_misses,
+                state_cache.len(),
+                stats.perm_cache_hits,
+                stats.perm_cache_misses,
+                permute_cache.len()
+            );
         }
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn compute_cheapest_path(&self) -> Vec<usize> {
         if self.nodes.is_empty() {
             return Vec::new();
@@ -877,6 +995,7 @@ impl StepParityGenerator {
         path.into_iter().collect()
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn analyze_graph(&mut self) -> bool {
         let nodes_for_rows = self.compute_cheapest_path();
         if nodes_for_rows.len() != self.rows.len() {
@@ -954,11 +1073,13 @@ impl StepParityGenerator {
 
 }
 
+#[cfg_attr(feature = "profile", inline(never))]
 fn init_result_state(
     state_cache: &mut FastMap<u64, Rc<State>>,
     initial_state: &State,
     row: &Row,
     columns: &[Foot],
+    mut stats: Option<&mut StepParityStats>,
 ) -> Rc<State> {
     let column_count = columns.len();
     let mut result_state = State::new(column_count);
@@ -1013,6 +1134,9 @@ fn init_result_state(
 
     let hash = get_state_cache_key(&result_state);
     if let Some(existing) = state_cache.get(&hash) {
+        if let Some(stats) = stats.as_deref_mut() {
+            stats.state_cache_hits += 1;
+        }
         if env_flags().dump_state_collisions
             && **existing != result_state
         {
@@ -1021,11 +1145,15 @@ fn init_result_state(
         return Rc::clone(existing);
     }
 
+    if let Some(stats) = stats.as_deref_mut() {
+        stats.state_cache_misses += 1;
+    }
     let rc = Rc::new(result_state);
     state_cache.insert(hash, Rc::clone(&rc));
     rc
 }
 
+#[cfg_attr(feature = "profile", inline(never))]
 fn merge_initial_and_result_position(initial: &State, result: &mut State) {
     for i in 0..result.columns.len() {
         if result.columns[i] != Foot::None {
@@ -1059,12 +1187,14 @@ fn merge_initial_and_result_position(initial: &State, result: &mut State) {
     }
 }
 
+#[cfg_attr(feature = "profile", inline(never))]
 fn add_node(nodes: &mut Vec<Box<StepParityNode>>, state: Rc<State>, second: f32) -> usize {
     let id = nodes.len();
     nodes.push(Box::new(StepParityNode::new(state, second)));
     id
 }
 
+#[cfg_attr(feature = "profile", inline(never))]
 fn add_edge(nodes: &mut Vec<Box<StepParityNode>>, from_id: usize, to_id: usize, cost: f32) {
     if to_id >= nodes.len() {
         return;
@@ -1075,10 +1205,12 @@ fn add_edge(nodes: &mut Vec<Box<StepParityNode>>, from_id: usize, to_id: usize, 
     }
 }
 
+#[cfg_attr(feature = "profile", inline(never))]
 fn perms_for_row(
     permute_cache: &mut FastMap<u32, Rc<[FootPlacement]>>,
     layout: &StageLayout,
     row: &Row,
+    mut stats: Option<&mut StepParityStats>,
 ) -> Rc<[FootPlacement]> {
     let mut key = 0u32;
     for i in 0..row.column_count.min(32) {
@@ -1090,7 +1222,13 @@ fn perms_for_row(
     }
 
     if let Some(perms) = permute_cache.get(&key) {
+        if let Some(stats) = stats.as_deref_mut() {
+            stats.perm_cache_hits += 1;
+        }
         return Rc::clone(perms);
+    }
+    if let Some(stats) = stats.as_deref_mut() {
+        stats.perm_cache_misses += 1;
     }
 
     let mut columns = vec![Foot::None; row.column_count];
@@ -1109,6 +1247,7 @@ fn perms_for_row(
     perms
 }
 
+#[cfg_attr(feature = "profile", inline(never))]
 fn permute_row(
     layout: &StageLayout,
     row: &Row,
@@ -1212,6 +1351,7 @@ impl<'a> CostCalculator<'a> {
         Self { layout }
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn get_action_cost(
         &self,
         initial: &State,
@@ -1314,6 +1454,7 @@ impl<'a> CostCalculator<'a> {
         cost
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn calc_mine_cost(&self, result: &State, row: &Row, column_count: usize) -> f32 {
         for i in 0..column_count {
             if result.combined_columns[i] != Foot::None && row.mines[i] != 0.0 {
@@ -1323,6 +1464,7 @@ impl<'a> CostCalculator<'a> {
         0.0
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn calc_hold_switch_cost(
         &self,
         initial: &State,
@@ -1361,6 +1503,7 @@ impl<'a> CostCalculator<'a> {
         cost
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn calc_bracket_tap_cost(
         &self,
         initial: &State,
@@ -1423,6 +1566,7 @@ impl<'a> CostCalculator<'a> {
         cost
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn calc_bracket_jack_cost(
         &self,
         _initial: &State,
@@ -1457,6 +1601,7 @@ impl<'a> CostCalculator<'a> {
         cost
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn calc_doublestep_cost(
         &self,
         initial: &State,
@@ -1489,6 +1634,7 @@ impl<'a> CostCalculator<'a> {
         0.0
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn calc_slow_bracket_cost(
         &self,
         row: &Row,
@@ -1511,6 +1657,7 @@ impl<'a> CostCalculator<'a> {
         0.0
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn calc_twisted_foot_cost(&self, result: &State) -> f32 {
         let left_heel = result.what_note_the_foot_is_hitting[Foot::LeftHeel.as_index()];
         let left_toe = result.what_note_the_foot_is_hitting[Foot::LeftToe.as_index()];
@@ -1539,21 +1686,12 @@ impl<'a> CostCalculator<'a> {
         }
     }
 
-    fn calc_facing_cost(&self, _initial: &State, result: &State, column_count: usize) -> f32 {
-        let mut end_left_heel = INVALID_COLUMN;
-        let mut end_left_toe = INVALID_COLUMN;
-        let mut end_right_heel = INVALID_COLUMN;
-        let mut end_right_toe = INVALID_COLUMN;
-
-        for i in 0..column_count {
-            match result.combined_columns[i] {
-                Foot::LeftHeel => end_left_heel = i as isize,
-                Foot::LeftToe => end_left_toe = i as isize,
-                Foot::RightHeel => end_right_heel = i as isize,
-                Foot::RightToe => end_right_toe = i as isize,
-                Foot::None => {}
-            }
-        }
+    #[cfg_attr(feature = "profile", inline(never))]
+    fn calc_facing_cost(&self, _initial: &State, result: &State, _column_count: usize) -> f32 {
+        let end_left_heel = result.where_the_feet_are[Foot::LeftHeel.as_index()];
+        let mut end_left_toe = result.where_the_feet_are[Foot::LeftToe.as_index()];
+        let end_right_heel = result.where_the_feet_are[Foot::RightHeel.as_index()];
+        let mut end_right_toe = result.where_the_feet_are[Foot::RightToe.as_index()];
 
         if end_left_toe == INVALID_COLUMN {
             end_left_toe = end_left_heel;
@@ -1610,21 +1748,12 @@ impl<'a> CostCalculator<'a> {
         cost
     }
 
-    fn calc_spin_cost(&self, initial: &State, result: &State, column_count: usize) -> f32 {
-        let mut end_left_heel = INVALID_COLUMN;
-        let mut end_left_toe = INVALID_COLUMN;
-        let mut end_right_heel = INVALID_COLUMN;
-        let mut end_right_toe = INVALID_COLUMN;
-
-        for i in 0..column_count {
-            match result.combined_columns[i] {
-                Foot::LeftHeel => end_left_heel = i as isize,
-                Foot::LeftToe => end_left_toe = i as isize,
-                Foot::RightHeel => end_right_heel = i as isize,
-                Foot::RightToe => end_right_toe = i as isize,
-                Foot::None => {}
-            }
-        }
+    #[cfg_attr(feature = "profile", inline(never))]
+    fn calc_spin_cost(&self, initial: &State, result: &State, _column_count: usize) -> f32 {
+        let end_left_heel = result.where_the_feet_are[Foot::LeftHeel.as_index()];
+        let mut end_left_toe = result.where_the_feet_are[Foot::LeftToe.as_index()];
+        let end_right_heel = result.where_the_feet_are[Foot::RightHeel.as_index()];
+        let mut end_right_toe = result.where_the_feet_are[Foot::RightToe.as_index()];
 
         if end_left_toe == INVALID_COLUMN {
             end_left_toe = end_left_heel;
@@ -1662,6 +1791,7 @@ impl<'a> CostCalculator<'a> {
         cost
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn calc_footswitch_cost(
         &self,
         initial: &State,
@@ -1697,6 +1827,7 @@ impl<'a> CostCalculator<'a> {
         0.0
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn calc_sideswitch_cost(&self, initial: &State, result: &State) -> f32 {
         let mut cost = 0.0;
         for &column in &self.layout.side_arrows {
@@ -1711,6 +1842,7 @@ impl<'a> CostCalculator<'a> {
         cost
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn calc_missed_footswitch_cost(&self, row: &Row, jacked_left: bool, jacked_right: bool) -> f32 {
         if (jacked_left || jacked_right)
             && (row.mines.iter().any(|mine| (*mine as i32) != 0)
@@ -1722,6 +1854,7 @@ impl<'a> CostCalculator<'a> {
         }
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn calc_jack_cost(
         &self,
         moved_left: bool,
@@ -1741,6 +1874,7 @@ impl<'a> CostCalculator<'a> {
         0.0
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn calc_big_movements_quickly_cost(
         &self,
         initial: &State,
@@ -1781,6 +1915,7 @@ impl<'a> CostCalculator<'a> {
         cost
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn did_double_step(
         &self,
         initial: &State,
@@ -1833,6 +1968,7 @@ impl<'a> CostCalculator<'a> {
         doublestepped
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn did_jack_left(
         &self,
         initial: &State,
@@ -1871,6 +2007,7 @@ impl<'a> CostCalculator<'a> {
         false
     }
 
+    #[cfg_attr(feature = "profile", inline(never))]
     fn did_jack_right(
         &self,
         initial: &State,
@@ -2302,6 +2439,7 @@ struct StepParityEnvFlags {
     dump_state_collisions: bool,
     dump_rows: bool,
     dump_notes: bool,
+    dump_stats: bool,
 }
 
 fn env_flags() -> &'static StepParityEnvFlags {
@@ -2312,6 +2450,7 @@ fn env_flags() -> &'static StepParityEnvFlags {
         dump_state_collisions: env_flag("RSSP_STEP_PARITY_DUMP_STATE_COLLISIONS"),
         dump_rows: env_flag("RSSP_STEP_PARITY_DUMP_ROWS"),
         dump_notes: env_flag("RSSP_STEP_PARITY_DUMP_NOTES"),
+        dump_stats: env_flag("RSSP_STEP_PARITY_DUMP_STATS"),
     })
 }
 
