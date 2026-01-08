@@ -593,7 +593,11 @@ struct Row {
     row_index: usize,
     column_count: usize,
     note_count: usize,
+    note_mask: u8,
     hold_mask: u8,
+    mine_mask: u8,
+    mine_i32_mask: u8,
+    fake_mine_mask: u8,
 }
 
 impl Row {
@@ -610,21 +614,25 @@ impl Row {
             row_index: 0,
             column_count,
             note_count: 0,
+            note_mask: 0,
             hold_mask: 0,
+            mine_mask: 0,
+            mine_i32_mask: 0,
+            fake_mine_mask: 0,
         }
     }
 
     fn set_foot_placement(&mut self, foot_placement: &[Foot]) {
-        self.note_count = 0;
+        self.note_count = self.note_mask.count_ones() as usize;
+        debug_assert!(self.column_count <= MAX_COLUMNS);
         for c in 0..self.column_count {
-            if self.notes[c].note_type != TapNoteType::Empty {
+            if (self.note_mask & (1u8 << c)) != 0 {
                 let foot = foot_placement[c];
                 self.notes[c].parity = foot;
                 self.columns[c] = foot;
                 if foot != Foot::None {
                     self.where_the_feet_are[foot.as_index()] = c as isize;
                 }
-                self.note_count += 1;
             } else {
                 self.columns[c] = Foot::None;
             }
@@ -943,6 +951,9 @@ impl StepParityGenerator {
         for c in 0..self.column_count {
             if row.notes[c].note_type != TapNoteType::Empty {
                 row.note_count += 1;
+                if c < MAX_COLUMNS {
+                    row.note_mask |= 1u8 << c;
+                }
             }
             if counter.active_holds[c].note_type == TapNoteType::Empty
                 || counter.active_holds[c].second >= counter.last_column_second
@@ -953,6 +964,15 @@ impl StepParityGenerator {
             }
             if row.holds[c].note_type != TapNoteType::Empty && c < MAX_COLUMNS {
                 row.hold_mask |= 1u8 << c;
+            }
+            if row.mines[c] != 0.0 && c < MAX_COLUMNS {
+                row.mine_mask |= 1u8 << c;
+            }
+            if (row.mines[c] as i32) != 0 && c < MAX_COLUMNS {
+                row.mine_i32_mask |= 1u8 << c;
+            }
+            if (row.fake_mines[c] as i32) != 0 && c < MAX_COLUMNS {
+                row.fake_mine_mask |= 1u8 << c;
             }
         }
 
@@ -1590,11 +1610,15 @@ fn perms_for_row(
     mut stats: Option<&mut StepParityStats>,
 ) -> Rc<[FootPlacement]> {
     let mut key = 0u32;
-    for i in 0..row.column_count.min(32) {
-        if row.notes[i].note_type != TapNoteType::Empty
-            || row.holds[i].note_type != TapNoteType::Empty
-        {
-            key |= 1 << i;
+    if row.column_count <= MAX_COLUMNS {
+        key = (row.note_mask | row.hold_mask) as u32;
+    } else {
+        for i in 0..row.column_count.min(32) {
+            if row.notes[i].note_type != TapNoteType::Empty
+                || row.holds[i].note_type != TapNoteType::Empty
+            {
+                key |= 1 << i;
+            }
         }
     }
 
@@ -1672,9 +1696,19 @@ fn permute_row(
         return;
     }
 
-    if row.notes[column].note_type != TapNoteType::Empty
-        || (!ignore_holds && row.holds[column].note_type != TapNoteType::Empty)
-    {
+    let active = if column < MAX_COLUMNS {
+        let mask = if ignore_holds {
+            row.note_mask
+        } else {
+            row.note_mask | row.hold_mask
+        };
+        (mask & (1u8 << column)) != 0
+    } else {
+        row.notes[column].note_type != TapNoteType::Empty
+            || (!ignore_holds && row.holds[column].note_type != TapNoteType::Empty)
+    };
+
+    if active {
         for &foot in &FEET {
             let foot_mask = FOOT_MASKS[foot.as_index()];
             if used_mask & foot_mask != 0 {
@@ -1844,10 +1878,16 @@ impl<'a> CostCalculator<'a> {
 
     #[cfg_attr(feature = "profile", inline(never))]
     fn calc_mine_cost(&self, result: &State, row: &Row, column_count: usize) -> f32 {
-        for i in 0..column_count {
-            if result.combined_columns[i] != Foot::None && row.mines[i] != 0.0 {
+        if row.mine_mask == 0 {
+            return 0.0;
+        }
+        let mut mask = row.mine_mask;
+        while mask != 0 {
+            let idx = mask.trailing_zeros() as usize;
+            if idx < column_count && result.combined_columns[idx] != Foot::None {
                 return MINE_WEIGHT;
             }
+            mask &= mask - 1;
         }
         0.0
     }
@@ -2203,9 +2243,7 @@ impl<'a> CostCalculator<'a> {
             return 0.0;
         }
 
-        if row.mines.iter().all(|mine| (*mine as i32) == 0)
-            && row.fake_mines.iter().all(|mine| (*mine as i32) == 0)
-        {
+        if row.mine_i32_mask == 0 && row.fake_mine_mask == 0 {
             let time_scaled = elapsed - SLOW_FOOTSWITCH_THRESHOLD;
             for i in 0..column_count {
                 if initial.combined_columns[i] == Foot::None || result.columns[i] == Foot::None {
@@ -2244,8 +2282,7 @@ impl<'a> CostCalculator<'a> {
     #[cfg_attr(feature = "profile", inline(never))]
     fn calc_missed_footswitch_cost(&self, row: &Row, jacked_left: bool, jacked_right: bool) -> f32 {
         if (jacked_left || jacked_right)
-            && (row.mines.iter().any(|mine| (*mine as i32) != 0)
-                || row.fake_mines.iter().any(|mine| (*mine as i32) != 0))
+            && (row.mine_i32_mask != 0 || row.fake_mine_mask != 0)
         {
             MISSED_FOOTSWITCH_WEIGHT
         } else {
