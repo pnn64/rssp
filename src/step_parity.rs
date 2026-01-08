@@ -895,6 +895,8 @@ impl StepParityGenerator {
         let start_id = add_node(nodes, start_state, start_second);
 
         let mut prev_node_ids = vec![start_id];
+        let mut next_node_ids: Vec<usize> = Vec::new();
+        let mut result_node_map: FastMap<usize, usize> = FastMap::default();
         if track_stats {
             stats.prev_nodes_peak = prev_node_ids.len();
         }
@@ -912,8 +914,11 @@ impl StepParityGenerator {
                 stats.perm_calls_total += prev_node_ids.len() * permutations.len();
                 stats.edges_total += prev_node_ids.len() * permutations.len();
             }
-            let mut result_nodes_for_row: Vec<usize> = Vec::with_capacity(permutations.len());
-            let mut result_node_map: FastMap<usize, usize> = FastMap::default();
+            next_node_ids.clear();
+            result_node_map.clear();
+            if next_node_ids.capacity() < permutations.len() {
+                next_node_ids.reserve(permutations.len() - next_node_ids.capacity());
+            }
             result_node_map.reserve(permutations.len());
 
             for &initial_node_id in &prev_node_ids {
@@ -952,7 +957,7 @@ impl StepParityGenerator {
                             stats.nodes_total += 1;
                         }
                         let id = add_node(nodes, Rc::clone(&result_state), row.second);
-                        result_nodes_for_row.push(id);
+                        next_node_ids.push(id);
                         result_node_map.insert(state_key, id);
                         id
                     };
@@ -962,9 +967,9 @@ impl StepParityGenerator {
             }
 
             if track_stats {
-                stats.result_nodes_new += result_nodes_for_row.len();
+                stats.result_nodes_new += next_node_ids.len();
             }
-            prev_node_ids = result_nodes_for_row;
+            std::mem::swap(&mut prev_node_ids, &mut next_node_ids);
         }
 
         let end_state = Rc::new(State::new(column_count));
@@ -2016,10 +2021,26 @@ impl<'a> CostCalculator<'a> {
         let left_base = -(left_facing.min(0.0));
         let right_base = -(right_facing.min(0.0));
 
-        let heel_penalty = (heel_base as f64).powf(1.8) as f32 * 100.0;
-        let toe_penalty = (toe_base as f64).powf(1.8) as f32 * 100.0;
-        let left_penalty = (left_base as f64).powf(1.8) as f32 * 100.0;
-        let right_penalty = (right_base as f64).powf(1.8) as f32 * 100.0;
+        let heel_penalty = if heel_base > 0.0 {
+            (heel_base as f64).powf(1.8) as f32 * 100.0
+        } else {
+            0.0
+        };
+        let toe_penalty = if toe_base > 0.0 {
+            (toe_base as f64).powf(1.8) as f32 * 100.0
+        } else {
+            0.0
+        };
+        let left_penalty = if left_base > 0.0 {
+            (left_base as f64).powf(1.8) as f32 * 100.0
+        } else {
+            0.0
+        };
+        let right_penalty = if right_base > 0.0 {
+            (right_base as f64).powf(1.8) as f32 * 100.0
+        } else {
+            0.0
+        };
 
         let mut cost = 0.0;
         if heel_penalty > 0.0 {
