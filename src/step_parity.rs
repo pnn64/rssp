@@ -856,6 +856,9 @@ impl StepParityGenerator {
         row.beat = counter.last_column_beat;
 
         for c in 0..self.column_count {
+            if row.notes[c].note_type != TapNoteType::Empty {
+                row.note_count += 1;
+            }
             if counter.active_holds[c].note_type == TapNoteType::Empty
                 || counter.active_holds[c].second >= counter.last_column_second
             {
@@ -1582,20 +1585,10 @@ impl<'a> CostCalculator<'a> {
         let row = &rows[row_index];
         let column_count = row.column_count;
 
-        let mut left_heel = INVALID_COLUMN;
-        let mut left_toe = INVALID_COLUMN;
-        let mut right_heel = INVALID_COLUMN;
-        let mut right_toe = INVALID_COLUMN;
-
-        for (i, &foot) in result.columns.iter().enumerate() {
-            match foot {
-                Foot::LeftHeel => left_heel = i as isize,
-                Foot::LeftToe => left_toe = i as isize,
-                Foot::RightHeel => right_heel = i as isize,
-                Foot::RightToe => right_toe = i as isize,
-                Foot::None => {}
-            }
-        }
+        let left_heel = result.what_note_the_foot_is_hitting[Foot::LeftHeel.as_index()];
+        let left_toe = result.what_note_the_foot_is_hitting[Foot::LeftToe.as_index()];
+        let right_heel = result.what_note_the_foot_is_hitting[Foot::RightHeel.as_index()];
+        let right_toe = result.what_note_the_foot_is_hitting[Foot::RightToe.as_index()];
 
         let moved_left = result.did_the_foot_move[Foot::LeftHeel.as_index()]
             || result.did_the_foot_move[Foot::LeftToe.as_index()];
@@ -1863,12 +1856,7 @@ impl<'a> CostCalculator<'a> {
     ) -> f32 {
         if elapsed > SLOW_BRACKET_THRESHOLD
             && moved_left != moved_right
-            && row
-                .notes
-                .iter()
-                .filter(|note| note.note_type != TapNoteType::Empty)
-                .count()
-                >= 2
+            && row.note_count >= 2
         {
             let time_diff = elapsed - SLOW_BRACKET_THRESHOLD;
             return time_diff * SLOW_BRACKET_WEIGHT;
