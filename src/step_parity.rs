@@ -177,6 +177,7 @@ impl Default for NeighborMap {
 }
 
 impl NeighborMap {
+    #[cfg(debug_assertions)]
     fn insert(&mut self, neighbor_id: usize, hash_key: usize, cost: f32) {
         if let Some(entry) = self
             .entries
@@ -187,6 +188,26 @@ impl NeighborMap {
             return;
         }
 
+        self.insert_new(neighbor_id, hash_key, cost);
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn insert_unique(&mut self, neighbor_id: usize, hash_key: usize, cost: f32) {
+        self.insert_new(neighbor_id, hash_key, cost);
+    }
+
+    fn reserve(&mut self, additional: usize) {
+        if additional == 0 {
+            return;
+        }
+        let target = self.entries.len().saturating_add(additional);
+        if target > self.bucket_count {
+            self.rehash(next_prime(target.max(1)));
+        }
+        self.entries.reserve(additional);
+    }
+
+    fn insert_new(&mut self, neighbor_id: usize, hash_key: usize, cost: f32) {
         let new_size = self.entries.len() + 1;
         if new_size > self.bucket_count {
             self.rehash(next_prime(self.bucket_count.saturating_mul(2).max(1)));
@@ -857,6 +878,10 @@ impl StepParityGenerator {
             result_node_map.reserve(permutations.len());
 
             for &initial_node_id in &prev_node_ids {
+                {
+                    let node = &mut nodes[initial_node_id];
+                    node.neighbors.reserve(permutations.len());
+                }
                 let (initial_state, initial_second) = {
                     let node = &nodes[initial_node_id];
                     (Rc::clone(&node.state), node.second)
@@ -912,6 +937,7 @@ impl StepParityGenerator {
 
         let end_edge_count = prev_node_ids.len();
         for &node_id in &prev_node_ids {
+            nodes[node_id].neighbors.reserve(1);
             add_edge(nodes, node_id, end_id, 0.0);
         }
         if track_stats {
@@ -1280,7 +1306,10 @@ fn add_edge(nodes: &mut Vec<Box<StepParityNode>>, from_id: usize, to_id: usize, 
     }
     let hash_key = nodes[to_id].as_ref() as *const StepParityNode as usize;
     if let Some(node) = nodes.get_mut(from_id) {
+        #[cfg(debug_assertions)]
         node.neighbors.insert(to_id, hash_key, cost);
+        #[cfg(not(debug_assertions))]
+        node.neighbors.insert_unique(to_id, hash_key, cost);
     }
 }
 
