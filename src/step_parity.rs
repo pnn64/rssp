@@ -599,6 +599,7 @@ struct Row {
     row_index: usize,
     column_count: usize,
     note_count: usize,
+    hold_mask: u8,
 }
 
 impl Row {
@@ -615,6 +616,7 @@ impl Row {
             row_index: 0,
             column_count,
             note_count: 0,
+            hold_mask: 0,
         }
     }
 
@@ -865,6 +867,9 @@ impl StepParityGenerator {
                 row.holds[c] = IntermediateNoteData::default();
             } else {
                 row.holds[c] = counter.active_holds[c].clone();
+            }
+            if row.holds[c].note_type != TapNoteType::Empty && c < MAX_COLUMNS {
+                row.hold_mask |= 1u8 << c;
             }
         }
 
@@ -1208,7 +1213,7 @@ fn init_result_state(
         let mut hold_buf = [Foot::None; MAX_COLUMNS];
         let mut did_move = [false; NUM_FEET];
         let initial_combined = &initial_state.combined_columns;
-        let holds = &row.holds;
+        let hold_mask = row.hold_mask;
 
         for (i, &foot) in columns.iter().enumerate() {
             columns_buf[i] = foot;
@@ -1216,7 +1221,7 @@ fn init_result_state(
                 continue;
             }
             let foot_index = foot.as_index();
-            let hold_empty = holds[i].note_type == TapNoteType::Empty;
+            let hold_empty = (hold_mask & (1u8 << i)) == 0;
             if hold_empty || initial_combined[i] != foot {
                 moved_buf[i] = foot;
                 did_move[foot_index] = true;
