@@ -329,6 +329,9 @@ struct StageLayout {
     avg_points: Vec<StagePoint>,
     x_diffs: Vec<f32>,
     y_diffs: Vec<f32>,
+    dist_stride: usize,
+    dist_sq: Vec<f32>,
+    dist_weighted: Vec<f64>,
 }
 
 impl StageLayout {
@@ -429,6 +432,23 @@ impl StageLayout {
             }
         }
 
+        let dist_stride = columns.len();
+        let dist_len = dist_stride * dist_stride;
+        let mut dist_sq = vec![0.0f32; dist_len];
+        let mut dist_weighted = vec![0.0f64; dist_len];
+        for left in 0..dist_stride {
+            for right in 0..dist_stride {
+                let p1 = columns[left];
+                let p2 = columns[right];
+                let dx = p1.x - p2.x;
+                let dy = p1.y - p2.y;
+                let sq = dx * dx + dy * dy;
+                let idx = left * dist_stride + right;
+                dist_sq[idx] = sq;
+                dist_weighted[idx] = (sq as f64).sqrt() * DISTANCE_WEIGHT as f64;
+            }
+        }
+
         Self {
             columns,
             up_arrows,
@@ -438,6 +458,9 @@ impl StageLayout {
             avg_points,
             x_diffs,
             y_diffs,
+            dist_stride,
+            dist_sq,
+            dist_weighted,
         }
     }
 
@@ -452,13 +475,17 @@ impl StageLayout {
     }
 
     fn get_distance_sq(&self, c1: usize, c2: usize) -> f32 {
-        self.get_distance_sq_points(self.columns[c1], self.columns[c2])
+        self.dist_sq[c1 * self.dist_stride + c2]
     }
 
     fn get_distance_sq_points(&self, p1: StagePoint, p2: StagePoint) -> f32 {
         let dx = p1.x - p2.x;
         let dy = p1.y - p2.y;
         dx * dx + dy * dy
+    }
+
+    fn get_distance_weighted(&self, c1: usize, c2: usize) -> f64 {
+        self.dist_weighted[c1 * self.dist_stride + c2]
     }
 
     fn get_x_difference(&self, left_index: isize, right_index: isize) -> f32 {
@@ -964,6 +991,7 @@ impl StepParityGenerator {
         let node_len = nodes.len();
         let start_id = 0;
         let end_id = node_len - 1;
+
         let mut cost = vec![f32::MAX; node_len];
         let mut predecessor = vec![usize::MAX; node_len];
         let dump_ties = env_flags().dump_ties;
@@ -2051,12 +2079,11 @@ impl<'a> CostCalculator<'a> {
             }
             let result_position = result.what_note_the_foot_is_hitting[foot.as_index()];
 
-            let distance_sq = self
-                .layout
-                .get_distance_sq(initial_position as usize, result_position as usize)
-                as f64;
-            let mut distance =
-                ((distance_sq.sqrt() * DISTANCE_WEIGHT as f64) / elapsed as f64) as f32;
+            let distance_base = self.layout.get_distance_weighted(
+                initial_position as usize,
+                result_position as usize,
+            );
+            let mut distance = (distance_base / elapsed as f64) as f32;
 
             let other = OTHER_PART_OF_FOOT[foot.as_index()];
             let is_bracketing =
