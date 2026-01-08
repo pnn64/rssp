@@ -407,13 +407,22 @@ fn count_measure_rows(measure: &[u8]) -> usize {
     count
 }
 
-fn parse_optional_timing<T, F>(chart_val: Option<&str>, global_val: &str, parser: F) -> Vec<T>
+fn parse_optional_timing_inner<T, F>(
+    chart_val: Option<&str>,
+    global_val: &str,
+    parser: F,
+    assume_cleaned: bool,
+) -> Vec<T>
 where
     F: Fn(&str) -> Result<Vec<T>, &'static str>,
 {
     let s = chart_val.filter(|s| !s.is_empty()).unwrap_or(global_val);
-    let cleaned = clean_timing_map_cow(s);
-    parser(cleaned.as_ref()).unwrap_or_else(|_| vec![])
+    if assume_cleaned {
+        parser(s).unwrap_or_else(|_| vec![])
+    } else {
+        let cleaned = clean_timing_map_cow(s);
+        parser(cleaned.as_ref()).unwrap_or_else(|_| vec![])
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -452,15 +461,97 @@ pub fn compute_timing_segments(
     global_fakes: &str,
     format: TimingFormat,
 ) -> TimingSegments {
+    compute_timing_segments_inner(
+        chart_bpms,
+        global_bpms,
+        chart_stops,
+        global_stops,
+        chart_delays,
+        global_delays,
+        chart_warps,
+        global_warps,
+        chart_speeds,
+        global_speeds,
+        chart_scrolls,
+        global_scrolls,
+        chart_fakes,
+        global_fakes,
+        format,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn compute_timing_segments_cleaned(
+    chart_bpms: Option<&str>,
+    global_bpms: &str,
+    chart_stops: Option<&str>,
+    global_stops: &str,
+    chart_delays: Option<&str>,
+    global_delays: &str,
+    chart_warps: Option<&str>,
+    global_warps: &str,
+    chart_speeds: Option<&str>,
+    global_speeds: &str,
+    chart_scrolls: Option<&str>,
+    global_scrolls: &str,
+    chart_fakes: Option<&str>,
+    global_fakes: &str,
+    format: TimingFormat,
+) -> TimingSegments {
+    compute_timing_segments_inner(
+        chart_bpms,
+        global_bpms,
+        chart_stops,
+        global_stops,
+        chart_delays,
+        global_delays,
+        chart_warps,
+        global_warps,
+        chart_speeds,
+        global_speeds,
+        chart_scrolls,
+        global_scrolls,
+        chart_fakes,
+        global_fakes,
+        format,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_timing_segments_inner(
+    chart_bpms: Option<&str>,
+    global_bpms: &str,
+    chart_stops: Option<&str>,
+    global_stops: &str,
+    chart_delays: Option<&str>,
+    global_delays: &str,
+    chart_warps: Option<&str>,
+    global_warps: &str,
+    chart_speeds: Option<&str>,
+    global_speeds: &str,
+    chart_scrolls: Option<&str>,
+    global_scrolls: &str,
+    chart_fakes: Option<&str>,
+    global_fakes: &str,
+    format: TimingFormat,
+    assume_cleaned: bool,
+) -> TimingSegments {
     let bpms_str = chart_bpms.filter(|s| !s.is_empty()).unwrap_or(global_bpms);
-    let cleaned_bpms = clean_timing_map_cow(bpms_str);
-    let mut parsed_bpms: Vec<(f64, f64)> = parse_bpm_map(cleaned_bpms.as_ref());
+    let mut parsed_bpms: Vec<(f64, f64)> = if assume_cleaned {
+        parse_bpm_map(bpms_str)
+    } else {
+        let cleaned_bpms = clean_timing_map_cow(bpms_str);
+        parse_bpm_map(cleaned_bpms.as_ref())
+    };
 
     if parsed_bpms.is_empty() {
         parsed_bpms.push((0.0, DEFAULT_BPM));
     }
 
-    let raw_stops = parse_optional_timing(chart_stops, global_stops, parse_stops);
+    let raw_stops =
+        parse_optional_timing_inner(chart_stops, global_stops, parse_stops, assume_cleaned);
     let (mut parsed_bpms, stops, extra_warps, beat0_offset_adjust) =
         process_bpms_and_stops(format, &parsed_bpms, &raw_stops);
     let stops = tidy_row_segments(stops, |seg| seg.beat, |seg, beat| {
@@ -471,17 +562,23 @@ pub fn compute_timing_segments(
         parsed_bpms.push((0.0, DEFAULT_BPM));
     }
 
-    let delays: Vec<DelaySegment> = parse_optional_timing(chart_delays, global_delays, parse_delays)
-        .into_iter()
-        .map(|seg| DelaySegment {
-            beat: quantize_beat_f64_from_f32(seg.beat),
-            duration: seg.duration,
-        })
-        .collect();
+    let delays: Vec<DelaySegment> = parse_optional_timing_inner(
+        chart_delays,
+        global_delays,
+        parse_delays,
+        assume_cleaned,
+    )
+    .into_iter()
+    .map(|seg| DelaySegment {
+        beat: quantize_beat_f64_from_f32(seg.beat),
+        duration: seg.duration,
+    })
+    .collect();
     let delays = tidy_row_segments(delays, |seg| seg.beat, |seg, beat| {
         seg.beat = beat;
     });
-    let mut warps = parse_optional_timing(chart_warps, global_warps, parse_warps);
+    let mut warps =
+        parse_optional_timing_inner(chart_warps, global_warps, parse_warps, assume_cleaned);
     warps.extend(extra_warps);
     let warps: Vec<WarpSegment> = warps
         .into_iter()
@@ -493,33 +590,46 @@ pub fn compute_timing_segments(
     let warps = tidy_row_segments(warps, |seg| seg.beat, |seg, beat| {
         seg.beat = beat;
     });
-    let speeds: Vec<SpeedSegment> =
-        parse_optional_timing(chart_speeds, global_speeds, parse_speeds)
-            .into_iter()
-            .map(|seg| SpeedSegment {
-                beat: quantize_beat_f64_from_f32(seg.beat),
-                ratio: seg.ratio,
-                delay: seg.delay,
-                unit: seg.unit,
-            })
-            .collect();
+    let speeds: Vec<SpeedSegment> = parse_optional_timing_inner(
+        chart_speeds,
+        global_speeds,
+        parse_speeds,
+        assume_cleaned,
+    )
+    .into_iter()
+    .map(|seg| SpeedSegment {
+        beat: quantize_beat_f64_from_f32(seg.beat),
+        ratio: seg.ratio,
+        delay: seg.delay,
+        unit: seg.unit,
+    })
+    .collect();
     let speeds = tidy_speed_segments(speeds);
-    let scrolls: Vec<ScrollSegment> =
-        parse_optional_timing(chart_scrolls, global_scrolls, parse_scrolls)
-            .into_iter()
-            .map(|seg| ScrollSegment {
-                beat: quantize_beat_f64_from_f32(seg.beat),
-                ratio: seg.ratio,
-            })
-            .collect();
+    let scrolls: Vec<ScrollSegment> = parse_optional_timing_inner(
+        chart_scrolls,
+        global_scrolls,
+        parse_scrolls,
+        assume_cleaned,
+    )
+    .into_iter()
+    .map(|seg| ScrollSegment {
+        beat: quantize_beat_f64_from_f32(seg.beat),
+        ratio: seg.ratio,
+    })
+    .collect();
     let scrolls = tidy_scroll_segments(scrolls);
-    let fakes: Vec<FakeSegment> = parse_optional_timing(chart_fakes, global_fakes, parse_fakes)
-        .into_iter()
-        .map(|seg| FakeSegment {
-            beat: quantize_beat_f64_from_f32(seg.beat),
-            length: quantize_beat_f64_from_f32(seg.length),
-        })
-        .collect();
+    let fakes: Vec<FakeSegment> = parse_optional_timing_inner(
+        chart_fakes,
+        global_fakes,
+        parse_fakes,
+        assume_cleaned,
+    )
+    .into_iter()
+    .map(|seg| FakeSegment {
+        beat: quantize_beat_f64_from_f32(seg.beat),
+        length: quantize_beat_f64_from_f32(seg.length),
+    })
+    .collect();
     let fakes = tidy_row_segments(fakes, |seg| seg.beat, |seg, beat| {
         seg.beat = beat;
     });
@@ -748,15 +858,105 @@ impl TimingData {
         global_fakes: &str,
         format: TimingFormat,
     ) -> Self {
+        Self::from_chart_data_inner(
+            song_offset_sec,
+            global_offset_sec,
+            chart_bpms,
+            global_bpms,
+            chart_stops,
+            global_stops,
+            chart_delays,
+            global_delays,
+            chart_warps,
+            global_warps,
+            chart_speeds,
+            global_speeds,
+            chart_scrolls,
+            global_scrolls,
+            chart_fakes,
+            global_fakes,
+            format,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_chart_data_cleaned(
+        song_offset_sec: f64,
+        global_offset_sec: f64,
+        chart_bpms: Option<&str>,
+        global_bpms: &str,
+        chart_stops: Option<&str>,
+        global_stops: &str,
+        chart_delays: Option<&str>,
+        global_delays: &str,
+        chart_warps: Option<&str>,
+        global_warps: &str,
+        chart_speeds: Option<&str>,
+        global_speeds: &str,
+        chart_scrolls: Option<&str>,
+        global_scrolls: &str,
+        chart_fakes: Option<&str>,
+        global_fakes: &str,
+        format: TimingFormat,
+    ) -> Self {
+        Self::from_chart_data_inner(
+            song_offset_sec,
+            global_offset_sec,
+            chart_bpms,
+            global_bpms,
+            chart_stops,
+            global_stops,
+            chart_delays,
+            global_delays,
+            chart_warps,
+            global_warps,
+            chart_speeds,
+            global_speeds,
+            chart_scrolls,
+            global_scrolls,
+            chart_fakes,
+            global_fakes,
+            format,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_chart_data_inner(
+        song_offset_sec: f64,
+        global_offset_sec: f64,
+        chart_bpms: Option<&str>,
+        global_bpms: &str,
+        chart_stops: Option<&str>,
+        global_stops: &str,
+        chart_delays: Option<&str>,
+        global_delays: &str,
+        chart_warps: Option<&str>,
+        global_warps: &str,
+        chart_speeds: Option<&str>,
+        global_speeds: &str,
+        chart_scrolls: Option<&str>,
+        global_scrolls: &str,
+        chart_fakes: Option<&str>,
+        global_fakes: &str,
+        format: TimingFormat,
+        assume_cleaned: bool,
+    ) -> Self {
         let bpms_str = chart_bpms.filter(|s| !s.is_empty()).unwrap_or(global_bpms);
-        let cleaned_bpms = clean_timing_map_cow(bpms_str);
-        let mut parsed_bpms: Vec<(f64, f64)> = parse_bpm_map(cleaned_bpms.as_ref());
+        let mut parsed_bpms: Vec<(f64, f64)> = if assume_cleaned {
+            parse_bpm_map(bpms_str)
+        } else {
+            let cleaned_bpms = clean_timing_map_cow(bpms_str);
+            parse_bpm_map(cleaned_bpms.as_ref())
+        };
 
         if parsed_bpms.is_empty() {
             parsed_bpms.push((0.0, DEFAULT_BPM));
         }
 
-        let raw_stops = parse_optional_timing(chart_stops, global_stops, parse_stops);
+        let raw_stops =
+            parse_optional_timing_inner(chart_stops, global_stops, parse_stops, assume_cleaned);
 
         let (mut parsed_bpms, stops, extra_warps, beat0_offset_adjust) =
             process_bpms_and_stops(format, &parsed_bpms, &raw_stops);
@@ -793,18 +993,23 @@ impl TimingData {
             last_bpm = bpm;
         }
 
-        let delays: Vec<DelaySegment> =
-            parse_optional_timing(chart_delays, global_delays, parse_delays)
-                .into_iter()
-                .map(|seg| DelaySegment {
-                    beat: quantize_beat_f64_from_f32(seg.beat),
-                    duration: seg.duration,
-                })
-                .collect();
+        let delays: Vec<DelaySegment> = parse_optional_timing_inner(
+            chart_delays,
+            global_delays,
+            parse_delays,
+            assume_cleaned,
+        )
+        .into_iter()
+        .map(|seg| DelaySegment {
+            beat: quantize_beat_f64_from_f32(seg.beat),
+            duration: seg.duration,
+        })
+        .collect();
         let delays = tidy_row_segments(delays, |seg| seg.beat, |seg, beat| {
             seg.beat = beat;
         });
-        let mut warps = parse_optional_timing(chart_warps, global_warps, parse_warps);
+        let mut warps =
+            parse_optional_timing_inner(chart_warps, global_warps, parse_warps, assume_cleaned);
         warps.extend(extra_warps);
         let warps: Vec<WarpSegment> = warps
             .into_iter()
@@ -816,34 +1021,46 @@ impl TimingData {
         let warps = tidy_row_segments(warps, |seg| seg.beat, |seg, beat| {
             seg.beat = beat;
         });
-        let speeds: Vec<SpeedSegment> =
-            parse_optional_timing(chart_speeds, global_speeds, parse_speeds)
-                .into_iter()
-                .map(|seg| SpeedSegment {
-                    beat: quantize_beat_f64_from_f32(seg.beat),
-                    ratio: seg.ratio,
-                    delay: seg.delay,
-                    unit: seg.unit,
-                })
-                .collect();
+        let speeds: Vec<SpeedSegment> = parse_optional_timing_inner(
+            chart_speeds,
+            global_speeds,
+            parse_speeds,
+            assume_cleaned,
+        )
+        .into_iter()
+        .map(|seg| SpeedSegment {
+            beat: quantize_beat_f64_from_f32(seg.beat),
+            ratio: seg.ratio,
+            delay: seg.delay,
+            unit: seg.unit,
+        })
+        .collect();
         let speeds = tidy_speed_segments(speeds);
-        let scrolls: Vec<ScrollSegment> =
-            parse_optional_timing(chart_scrolls, global_scrolls, parse_scrolls)
-                .into_iter()
-                .map(|seg| ScrollSegment {
-                    beat: quantize_beat_f64_from_f32(seg.beat),
-                    ratio: seg.ratio,
-                })
-                .collect();
+        let scrolls: Vec<ScrollSegment> = parse_optional_timing_inner(
+            chart_scrolls,
+            global_scrolls,
+            parse_scrolls,
+            assume_cleaned,
+        )
+        .into_iter()
+        .map(|seg| ScrollSegment {
+            beat: quantize_beat_f64_from_f32(seg.beat),
+            ratio: seg.ratio,
+        })
+        .collect();
         let scrolls = tidy_scroll_segments(scrolls);
-        let fakes: Vec<FakeSegment> =
-            parse_optional_timing(chart_fakes, global_fakes, parse_fakes)
-                .into_iter()
-                .map(|seg| FakeSegment {
-                    beat: quantize_beat_f64_from_f32(seg.beat),
-                    length: quantize_beat_f64_from_f32(seg.length),
-                })
-                .collect();
+        let fakes: Vec<FakeSegment> = parse_optional_timing_inner(
+            chart_fakes,
+            global_fakes,
+            parse_fakes,
+            assume_cleaned,
+        )
+        .into_iter()
+        .map(|seg| FakeSegment {
+            beat: quantize_beat_f64_from_f32(seg.beat),
+            length: quantize_beat_f64_from_f32(seg.length),
+        })
+        .collect();
         let fakes = tidy_row_segments(fakes, |seg| seg.beat, |seg, beat| {
             seg.beat = beat;
         });

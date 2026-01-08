@@ -30,7 +30,7 @@ use crate::patterns::*;
 use crate::stats::*;
 use crate::tech::parse_tech_notation;
 use crate::timing::{
-    compute_timing_segments,
+    compute_timing_segments_cleaned,
     round_millis,
     steps_timing_allowed,
     TimingData,
@@ -582,7 +582,7 @@ fn build_chart_summary(
         (global_bpms_raw, global_stops_raw, global_delays_raw, global_warps_raw,
             global_speeds_raw, global_scrolls_raw, global_fakes_raw)
     };
-    let timing_segments = compute_timing_segments(
+    let timing_segments = compute_timing_segments_cleaned(
         chart_bpms_timing,
         timing_bpms_global,
         chart_stops_timing,
@@ -629,7 +629,7 @@ fn build_chart_summary(
         Vec::new()
     };
 
-    let timing = TimingData::from_chart_data(
+    let timing = TimingData::from_chart_data_cleaned(
         chart_offset,
         0.0,
         chart_bpms_timing,
@@ -896,7 +896,7 @@ pub fn analyze(
     } else {
         Vec::new()
     };
-    let global_timing_segments = compute_timing_segments(
+    let global_timing_segments = compute_timing_segments_cleaned(
         None,
         &cleaned_global_bpms,
         None,
@@ -1269,7 +1269,7 @@ pub fn compute_chart_durations(
                 )
             };
 
-        let timing = TimingData::from_chart_data(
+        let timing = TimingData::from_chart_data_cleaned(
             chart_offset,
             0.0,
             chart_bpms.as_deref(),
@@ -1435,7 +1435,7 @@ pub fn compute_chart_peak_nps(
                 )
             };
 
-        let timing = TimingData::from_chart_data(
+        let timing = TimingData::from_chart_data_cleaned(
             chart_offset,
             0.0,
             chart_bpms.as_deref(),

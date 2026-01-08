@@ -10,7 +10,7 @@ use crate::parse::{
     ParsedSimfileData,
 };
 use crate::timing::{
-    compute_timing_segments,
+    compute_timing_segments_cleaned,
     format_bpm_segments_like_itg,
     round_sig_figs_itg,
     roundtrip_bpm_itg,
@@ -418,7 +418,7 @@ fn chart_bpm_snapshot(
         .clone()
         .unwrap_or_else(|| globals.bpms_norm.clone());
     let use_chart = globals.allow_steps_timing;
-    let segments = compute_timing_segments(
+    let segments = compute_timing_segments_cleaned(
         if use_chart { tags.bpms_raw.as_deref() } else { None },
         &globals.bpms_raw,
         if use_chart { tags.stops_raw.as_deref() } else { None },
