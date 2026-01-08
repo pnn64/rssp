@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
+use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 use std::sync::OnceLock;
 
@@ -715,12 +716,101 @@ impl StepParityNode {
     }
 }
 
+const NODE_CHUNK_SIZE: usize = 1024;
+
+struct NodeArena {
+    chunks: Vec<Vec<StepParityNode>>,
+    len: usize,
+}
+
+impl NodeArena {
+    fn new() -> Self {
+        Self {
+            chunks: Vec::new(),
+            len: 0,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn clear(&mut self) {
+        for chunk in &mut self.chunks {
+            chunk.clear();
+        }
+        self.len = 0;
+    }
+
+    fn push(&mut self, node: StepParityNode) -> usize {
+        let idx = self.len;
+        let needs_chunk = self
+            .chunks
+            .last()
+            .map_or(true, |chunk| chunk.len() == NODE_CHUNK_SIZE);
+        if needs_chunk {
+            self.chunks.push(Vec::with_capacity(NODE_CHUNK_SIZE));
+        }
+        self.chunks.last_mut().unwrap().push(node);
+        self.len = idx + 1;
+        idx
+    }
+
+    fn get(&self, idx: usize) -> Option<&StepParityNode> {
+        if idx < self.len {
+            let chunk_index = idx / NODE_CHUNK_SIZE;
+            let offset = idx % NODE_CHUNK_SIZE;
+            self.chunks
+                .get(chunk_index)
+                .and_then(|chunk| chunk.get(offset))
+        } else {
+            None
+        }
+    }
+
+    fn get_mut(&mut self, idx: usize) -> Option<&mut StepParityNode> {
+        if idx < self.len {
+            let chunk_index = idx / NODE_CHUNK_SIZE;
+            let offset = idx % NODE_CHUNK_SIZE;
+            self.chunks
+                .get_mut(chunk_index)
+                .and_then(|chunk| chunk.get_mut(offset))
+        } else {
+            None
+        }
+    }
+
+    fn ptr(&self, idx: usize) -> *const StepParityNode {
+        self.get(idx)
+            .map(|node| node as *const StepParityNode)
+            .unwrap_or(std::ptr::null())
+    }
+}
+
+impl Index<usize> for NodeArena {
+    type Output = StepParityNode;
+
+    fn index(&self, idx: usize) -> &Self::Output {
+        self.get(idx).expect("node index out of bounds")
+    }
+}
+
+impl IndexMut<usize> for NodeArena {
+    fn index_mut(&mut self, idx: usize) -> &mut Self::Output {
+        self.get_mut(idx).expect("node index out of bounds")
+    }
+}
+
 struct StepParityGenerator {
     layout: StageLayout,
     column_count: usize,
     permute_cache: FastMap<u32, Rc<[FootPlacement]>>,
     state_cache: FastMap<u64, Rc<State>>,
-    nodes: Vec<Box<StepParityNode>>,
+    nodes: NodeArena,
     rows: Vec<Row>,
 }
 
@@ -746,7 +836,7 @@ impl StepParityGenerator {
             layout,
             permute_cache: FastMap::default(),
             state_cache: FastMap::default(),
-            nodes: Vec::new(),
+            nodes: NodeArena::new(),
             rows: Vec::new(),
         }
     }
@@ -1474,18 +1564,16 @@ fn merge_initial_and_result_position_parts(
 }
 
 #[cfg_attr(feature = "profile", inline(never))]
-fn add_node(nodes: &mut Vec<Box<StepParityNode>>, state: Rc<State>, second: f32) -> usize {
-    let id = nodes.len();
-    nodes.push(Box::new(StepParityNode::new(state, second)));
-    id
+fn add_node(nodes: &mut NodeArena, state: Rc<State>, second: f32) -> usize {
+    nodes.push(StepParityNode::new(state, second))
 }
 
 #[cfg_attr(feature = "profile", inline(never))]
-fn add_edge(nodes: &mut Vec<Box<StepParityNode>>, from_id: usize, to_id: usize, cost: f32) {
+fn add_edge(nodes: &mut NodeArena, from_id: usize, to_id: usize, cost: f32) {
     if to_id >= nodes.len() {
         return;
     }
-    let hash_key = nodes[to_id].as_ref() as *const StepParityNode as usize;
+    let hash_key = nodes.ptr(to_id) as usize;
     if let Some(node) = nodes.get_mut(from_id) {
         #[cfg(debug_assertions)]
         node.neighbors.insert(to_id, hash_key, cost);
