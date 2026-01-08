@@ -77,6 +77,40 @@ pub struct CustomPatternSummary {
 pub(crate) struct CompiledPattern {
     pattern: String,
     bits: Vec<u8>,
+    packed: Option<PackedPattern>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PackedPattern {
+    value: u64,
+    mask: u64,
+}
+
+#[inline]
+fn pack_pattern(bits: &[u8]) -> Option<PackedPattern> {
+    let len = bits.len();
+    if len == 0 || len > 8 {
+        return None;
+    }
+    let mut value = 0u64;
+    for (i, &b) in bits.iter().enumerate() {
+        value |= (b as u64) << (i * 8);
+    }
+    let mask = if len == 8 {
+        u64::MAX
+    } else {
+        (1u64 << (len * 8)) - 1
+    };
+    Some(PackedPattern { value, mask })
+}
+
+#[inline]
+fn pack_u64_prefix(bytes: &[u8]) -> u64 {
+    let mut value = 0u64;
+    for (i, &b) in bytes.iter().enumerate() {
+        value |= (b as u64) << (i * 8);
+    }
+    value
 }
 
 pub static DEFAULT_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::new(|| {
@@ -200,6 +234,13 @@ pub static ALL_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::ne
     patterns
 });
 
+static ALL_PATTERNS_PACKED: LazyLock<Vec<Option<PackedPattern>>> = LazyLock::new(|| {
+    ALL_PATTERNS
+        .iter()
+        .map(|(_, bits)| pack_pattern(bits))
+        .collect()
+});
+
 static ALL_PATTERN_INDICES_BY_FIRST: LazyLock<Vec<Vec<usize>>> = LazyLock::new(|| {
     let mut groups = vec![Vec::new(); 16];
     for (idx, (_, bits)) in ALL_PATTERNS.iter().enumerate() {
@@ -247,6 +288,7 @@ pub(crate) fn detect_default_patterns(bitmasks: &[u8]) -> HashMap<PatternVariant
     let mut results = HashMap::new();
     let groups = &*ALL_PATTERN_INDICES_BY_FIRST;
     let patterns = &*ALL_PATTERNS;
+    let packed_patterns = &*ALL_PATTERNS_PACKED;
     for i in 0..bitmasks.len() {
         let mask = bitmasks[i] as usize;
         if mask >= groups.len() {
@@ -257,10 +299,32 @@ pub(crate) fn detect_default_patterns(bitmasks: &[u8]) -> HashMap<PatternVariant
             continue;
         }
         let remaining = bitmasks.len() - i;
+        let mut chunk_ready = false;
+        let mut chunk = 0u64;
         for &idx in group {
             let (variant, pat_bits) = &patterns[idx];
             let plen = pat_bits.len();
-            if plen <= remaining && bitmasks[i..i + plen] == pat_bits[..] {
+            if plen == 0 || plen > remaining {
+                continue;
+            }
+            if let Some(packed) = packed_patterns[idx] {
+                if remaining >= 8 {
+                    if !chunk_ready {
+                        let mut bytes = [0u8; 8];
+                        bytes.copy_from_slice(&bitmasks[i..i + 8]);
+                        chunk = u64::from_le_bytes(bytes);
+                        chunk_ready = true;
+                    }
+                    if (chunk & packed.mask) == packed.value {
+                        *results.entry(*variant).or_insert(0) += 1;
+                    }
+                } else {
+                    let value = pack_u64_prefix(&bitmasks[i..i + plen]);
+                    if value == packed.value {
+                        *results.entry(*variant).or_insert(0) += 1;
+                    }
+                }
+            } else if bitmasks[i..i + plen] == pat_bits[..] {
                 *results.entry(*variant).or_insert(0) += 1;
             }
         }
@@ -282,9 +346,11 @@ pub(crate) fn compile_custom_patterns(patterns: &[String]) -> Vec<CompiledPatter
             continue;
         }
         let bits = string_to_pattern_bits(&upper);
+        let packed = pack_pattern(&bits);
         compiled.push(CompiledPattern {
             pattern: upper,
             bits,
+            packed,
         });
     }
     compiled
@@ -302,9 +368,29 @@ pub(crate) fn detect_custom_patterns_compiled(
         let mut count = 0u32;
 
         if plen > 0 && bitmasks.len() >= plen {
-            for i in 0..=bitmasks.len() - plen {
-                if bitmasks[i..i + plen] == pat_bits[..] {
-                    count += 1;
+            let remaining_max = bitmasks.len() - plen;
+            if let Some(packed) = pattern.packed {
+                for i in 0..=remaining_max {
+                    let remaining = bitmasks.len() - i;
+                    if remaining >= 8 {
+                        let mut bytes = [0u8; 8];
+                        bytes.copy_from_slice(&bitmasks[i..i + 8]);
+                        let chunk = u64::from_le_bytes(bytes);
+                        if (chunk & packed.mask) == packed.value {
+                            count += 1;
+                        }
+                    } else {
+                        let value = pack_u64_prefix(&bitmasks[i..i + plen]);
+                        if value == packed.value {
+                            count += 1;
+                        }
+                    }
+                }
+            } else {
+                for i in 0..=remaining_max {
+                    if bitmasks[i..i + plen] == pat_bits[..] {
+                        count += 1;
+                    }
                 }
             }
         }
