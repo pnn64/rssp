@@ -61,6 +61,9 @@ const FEET: [Foot; 4] = [
     Foot::RightToe,
 ];
 const FOOT_MASKS: [u8; NUM_FEET] = [0, 1, 2, 4, 8];
+const LEFT_FOOT_MASK: u8 = FOOT_MASKS[Foot::LeftHeel as usize] | FOOT_MASKS[Foot::LeftToe as usize];
+const RIGHT_FOOT_MASK: u8 =
+    FOOT_MASKS[Foot::RightHeel as usize] | FOOT_MASKS[Foot::RightToe as usize];
 const OTHER_PART_OF_FOOT: [Foot; NUM_FEET] = [
     Foot::None,
     Foot::LeftToe,
@@ -1345,30 +1348,32 @@ fn merge_initial_and_result_position_parts(
     combined_columns: &mut [Foot],
     moved_mask: u8,
 ) {
-    let left_mask = FOOT_MASKS[Foot::LeftHeel.as_index()] | FOOT_MASKS[Foot::LeftToe.as_index()];
-    let right_mask =
-        FOOT_MASKS[Foot::RightHeel.as_index()] | FOOT_MASKS[Foot::RightToe.as_index()];
-    for i in 0..columns.len() {
-        if columns[i] != Foot::None {
-            combined_columns[i] = columns[i];
+    let moved_left = (moved_mask & LEFT_FOOT_MASK) != 0;
+    let moved_right = (moved_mask & RIGHT_FOOT_MASK) != 0;
+    for (i, &column) in columns.iter().enumerate() {
+        if column != Foot::None {
+            combined_columns[i] = column;
             continue;
         }
 
-        match initial.combined_columns[i] {
+        let prev = initial.combined_columns[i];
+        if prev == Foot::None {
+            continue;
+        }
+        match prev {
             Foot::LeftHeel | Foot::RightHeel => {
-                let prev = initial.combined_columns[i];
-                if prev != Foot::None && (moved_mask & FOOT_MASKS[prev.as_index()]) == 0 {
+                if (moved_mask & FOOT_MASKS[prev.as_index()]) == 0 {
                     combined_columns[i] = prev;
                 }
             }
             Foot::LeftToe => {
-                if (moved_mask & left_mask) == 0 {
-                    combined_columns[i] = Foot::LeftToe;
+                if !moved_left {
+                    combined_columns[i] = prev;
                 }
             }
             Foot::RightToe => {
-                if (moved_mask & right_mask) == 0 {
-                    combined_columns[i] = Foot::RightToe;
+                if !moved_right {
+                    combined_columns[i] = prev;
                 }
             }
             Foot::None => {}
