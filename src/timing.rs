@@ -677,11 +677,6 @@ impl Default for GetBeatStartsF32 {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct BeatTimeCursorF32 {
-    start: GetBeatStartsF32,
-}
-
 #[derive(Debug, Clone, Copy, Default)]
 struct GetBeatArgs {
     pub elapsed_time: f64,
@@ -1060,24 +1055,11 @@ impl TimingData {
     }
 
     pub(crate) fn get_time_for_beat_f32(&self, target_beat: f64) -> f64 {
-        let mut cursor = self.beat_time_cursor_f32();
-        self.get_time_for_beat_f32_with_cursor(&mut cursor, target_beat as f32) as f64
-    }
-
-    pub(crate) fn beat_time_cursor_f32(&self) -> BeatTimeCursorF32 {
         let mut start = GetBeatStartsF32::default();
         start.last_time =
             (-self.beat0_offset_seconds() - self.beat0_group_offset_seconds()) as f32;
-        BeatTimeCursorF32 { start }
-    }
-
-    pub(crate) fn get_time_for_beat_f32_with_cursor(
-        &self,
-        cursor: &mut BeatTimeCursorF32,
-        target_beat: f32,
-    ) -> f32 {
-        self.get_elapsed_time_internal_f32(&mut cursor.start, target_beat, u32::MAX as usize);
-        cursor.start.last_time - self.global_offset_sec as f32
+        self.get_elapsed_time_internal_f32(&mut start, target_beat as f32, u32::MAX as usize);
+        start.last_time as f64 - self.global_offset_sec
     }
 
     pub fn get_bpm_for_beat(&self, target_beat: f64) -> f64 {

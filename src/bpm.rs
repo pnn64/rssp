@@ -1131,21 +1131,28 @@ pub fn compute_measure_nps_vec_with_timing(
     if measure_densities.is_empty() {
         return out;
     }
-    let mut cursor = timing.beat_time_cursor_f32();
-    let mut start_time = timing.get_time_for_beat_f32_with_cursor(&mut cursor, 0.0) as f64;
-    let mut end_beat = 4.0_f32;
+    let mut start_beat = 0.0_f64;
+    let mut end_beat = 4.0_f64;
 
     for &density in measure_densities {
-        let end_time = timing.get_time_for_beat_f32_with_cursor(&mut cursor, end_beat) as f64;
-        let duration = end_time - start_time;
         if density == 0 {
             out.push(0.0);
-        } else if duration <= 0.12_f64 {
+            start_beat = end_beat;
+            end_beat += 4.0;
+            continue;
+        }
+
+        let start_time = timing.get_time_for_beat_f32(start_beat);
+        let end_time = timing.get_time_for_beat_f32(end_beat);
+        let duration = end_time - start_time;
+
+        if duration <= 0.12_f64 {
             out.push(0.0);
         } else {
             out.push(density as f64 / duration);
         }
-        start_time = end_time;
+
+        start_beat = end_beat;
         end_beat += 4.0;
     }
     out
