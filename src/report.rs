@@ -1957,8 +1957,64 @@ fn write_indent<W: Write>(writer: &mut W, indent: usize) -> io::Result<()> {
 }
 
 fn write_json_string<W: Write>(writer: &mut W, s: &str) -> io::Result<()> {
-    let encoded = serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string());
-    writer.write_all(encoded.as_bytes())
+    let bytes = s.as_bytes();
+    let mut needs_escape = false;
+    for &b in bytes {
+        if b < 0x20 || b == b'"' || b == b'\\' {
+            needs_escape = true;
+            break;
+        }
+    }
+
+    writer.write_all(b"\"")?;
+    if !needs_escape {
+        writer.write_all(bytes)?;
+        writer.write_all(b"\"")?;
+        return Ok(());
+    }
+
+    let hex = |value: u8| -> u8 {
+        if value < 10 {
+            b'0' + value
+        } else {
+            b'a' + (value - 10)
+        }
+    };
+
+    let mut start = 0usize;
+    for (i, &b) in bytes.iter().enumerate() {
+        let escape = match b {
+            b'"' => Some(b"\\\"".as_slice()),
+            b'\\' => Some(b"\\\\".as_slice()),
+            b'\n' => Some(b"\\n".as_slice()),
+            b'\r' => Some(b"\\r".as_slice()),
+            b'\t' => Some(b"\\t".as_slice()),
+            b'\x08' => Some(b"\\b".as_slice()),
+            b'\x0c' => Some(b"\\f".as_slice()),
+            0x00..=0x1F => None,
+            _ => continue,
+        };
+
+        if start < i {
+            writer.write_all(&bytes[start..i])?;
+        }
+
+        if let Some(escape) = escape {
+            writer.write_all(escape)?;
+        } else {
+            let mut buf = [b'\\', b'u', b'0', b'0', b'0', b'0'];
+            buf[4] = hex((b >> 4) & 0x0f);
+            buf[5] = hex(b & 0x0f);
+            writer.write_all(&buf)?;
+        }
+
+        start = i + 1;
+    }
+
+    if start < bytes.len() {
+        writer.write_all(&bytes[start..])?;
+    }
+    writer.write_all(b"\"")
 }
 
 #[inline(always)]
