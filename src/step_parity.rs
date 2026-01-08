@@ -115,6 +115,24 @@ fn format_foot_flags(flags: &[bool]) -> String {
     )
 }
 
+#[inline]
+fn did_move_mask(did_the_foot_move: &[bool]) -> u8 {
+    let mut mask = 0u8;
+    if did_the_foot_move[Foot::LeftHeel.as_index()] {
+        mask |= FOOT_MASKS[Foot::LeftHeel.as_index()];
+    }
+    if did_the_foot_move[Foot::LeftToe.as_index()] {
+        mask |= FOOT_MASKS[Foot::LeftToe.as_index()];
+    }
+    if did_the_foot_move[Foot::RightHeel.as_index()] {
+        mask |= FOOT_MASKS[Foot::RightHeel.as_index()];
+    }
+    if did_the_foot_move[Foot::RightToe.as_index()] {
+        mask |= FOOT_MASKS[Foot::RightToe.as_index()];
+    }
+    mask
+}
+
 #[derive(Default)]
 struct IdentityHasher(u64);
 
@@ -1202,11 +1220,12 @@ fn init_result_state(
             }
         }
 
+        let moved_mask = did_move_mask(&did_move);
         merge_initial_and_result_position_parts(
             initial_state,
             &columns_buf[..column_count],
             &mut combined_buf[..column_count],
-            &did_move,
+            moved_mask,
         );
 
         let hash = state_hash_from_parts(
@@ -1286,11 +1305,12 @@ fn init_result_state(
         }
     }
 
+    let moved_mask = did_move_mask(&result_state.did_the_foot_move);
     merge_initial_and_result_position_parts(
         initial_state,
         &result_state.columns,
         &mut result_state.combined_columns,
-        &result_state.did_the_foot_move,
+        moved_mask,
     );
 
     for (col, &foot) in result_state.combined_columns.iter().enumerate() {
@@ -1323,8 +1343,11 @@ fn merge_initial_and_result_position_parts(
     initial: &State,
     columns: &[Foot],
     combined_columns: &mut [Foot],
-    did_the_foot_move: &[bool],
+    moved_mask: u8,
 ) {
+    let left_mask = FOOT_MASKS[Foot::LeftHeel.as_index()] | FOOT_MASKS[Foot::LeftToe.as_index()];
+    let right_mask =
+        FOOT_MASKS[Foot::RightHeel.as_index()] | FOOT_MASKS[Foot::RightToe.as_index()];
     for i in 0..columns.len() {
         if columns[i] != Foot::None {
             combined_columns[i] = columns[i];
@@ -1334,21 +1357,17 @@ fn merge_initial_and_result_position_parts(
         match initial.combined_columns[i] {
             Foot::LeftHeel | Foot::RightHeel => {
                 let prev = initial.combined_columns[i];
-                if prev != Foot::None && !did_the_foot_move[prev.as_index()] {
+                if prev != Foot::None && (moved_mask & FOOT_MASKS[prev.as_index()]) == 0 {
                     combined_columns[i] = prev;
                 }
             }
             Foot::LeftToe => {
-                if !did_the_foot_move[Foot::LeftToe.as_index()]
-                    && !did_the_foot_move[Foot::LeftHeel.as_index()]
-                {
+                if (moved_mask & left_mask) == 0 {
                     combined_columns[i] = Foot::LeftToe;
                 }
             }
             Foot::RightToe => {
-                if !did_the_foot_move[Foot::RightToe.as_index()]
-                    && !did_the_foot_move[Foot::RightHeel.as_index()]
-                {
+                if (moved_mask & right_mask) == 0 {
                     combined_columns[i] = Foot::RightToe;
                 }
             }
