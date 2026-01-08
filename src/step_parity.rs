@@ -1250,21 +1250,22 @@ fn init_result_state(
 
         let mut what_note = [INVALID_COLUMN; NUM_FEET];
         let mut is_holding = [false; NUM_FEET];
-        for (i, &foot) in columns_buf[..column_count].iter().enumerate() {
-            if foot == Foot::None {
-                continue;
-            }
-            let foot_index = foot.as_index();
-            what_note[foot_index] = i as isize;
-            if holds[i].note_type != TapNoteType::Empty {
-                is_holding[foot_index] = true;
-            }
-        }
-
         let mut where_the_feet_are = [INVALID_COLUMN; NUM_FEET];
-        for (col, &foot) in combined_buf[..column_count].iter().enumerate() {
+        let columns_slice = &columns_buf[..column_count];
+        let combined_slice = &combined_buf[..column_count];
+        let hold_slice = &hold_buf[..column_count];
+        for i in 0..column_count {
+            let foot = columns_slice[i];
             if foot != Foot::None {
-                where_the_feet_are[foot.as_index()] = col as isize;
+                let foot_index = foot.as_index();
+                what_note[foot_index] = i as isize;
+                if hold_slice[i] != Foot::None {
+                    is_holding[foot_index] = true;
+                }
+            }
+            let combined = combined_slice[i];
+            if combined != Foot::None {
+                where_the_feet_are[combined.as_index()] = i as isize;
             }
         }
 
