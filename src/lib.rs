@@ -629,24 +629,10 @@ fn build_chart_summary(
         Vec::new()
     };
 
-    let timing = TimingData::from_chart_data_cleaned(
+    let timing = TimingData::from_segments(
         chart_offset,
         0.0,
-        chart_bpms_timing,
-        timing_bpms_global,
-        chart_stops_timing,
-        timing_stops_global,
-        chart_delays_timing,
-        timing_delays_global,
-        chart_warps_timing,
-        timing_warps_global,
-        chart_speeds_timing,
-        timing_speeds_global,
-        chart_scrolls_timing,
-        timing_scrolls_global,
-        chart_fakes_timing,
-        timing_fakes_global,
-        timing_format,
+        &timing_segments,
     );
 
     let duration_seconds =

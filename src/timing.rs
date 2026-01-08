@@ -922,6 +922,174 @@ impl TimingData {
         )
     }
 
+    pub(crate) fn from_segments(
+        song_offset_sec: f64,
+        global_offset_sec: f64,
+        segments: &TimingSegments,
+    ) -> Self {
+        let mut parsed_bpms: Vec<(f64, f64)> = segments
+            .bpms
+            .iter()
+            .map(|(beat, bpm)| (*beat as f64, *bpm as f64))
+            .collect();
+        if parsed_bpms.is_empty() {
+            parsed_bpms.push((0.0, DEFAULT_BPM));
+        }
+
+        let stops: Vec<StopSegment> = segments
+            .stops
+            .iter()
+            .map(|(beat, duration)| StopSegment {
+                beat: *beat as f64,
+                duration: *duration as f64,
+            })
+            .collect();
+        let delays: Vec<DelaySegment> = segments
+            .delays
+            .iter()
+            .map(|(beat, duration)| DelaySegment {
+                beat: *beat as f64,
+                duration: *duration as f64,
+            })
+            .collect();
+        let warps: Vec<WarpSegment> = segments
+            .warps
+            .iter()
+            .map(|(beat, length)| WarpSegment {
+                beat: *beat as f64,
+                length: *length as f64,
+            })
+            .collect();
+        let speeds: Vec<SpeedSegment> = segments
+            .speeds
+            .iter()
+            .map(|(beat, ratio, delay, unit)| SpeedSegment {
+                beat: *beat as f64,
+                ratio: *ratio as f64,
+                delay: *delay as f64,
+                unit: *unit,
+            })
+            .collect();
+        let scrolls: Vec<ScrollSegment> = segments
+            .scrolls
+            .iter()
+            .map(|(beat, ratio)| ScrollSegment {
+                beat: *beat as f64,
+                ratio: *ratio as f64,
+            })
+            .collect();
+        let fakes: Vec<FakeSegment> = segments
+            .fakes
+            .iter()
+            .map(|(beat, length)| FakeSegment {
+                beat: *beat as f64,
+                length: *length as f64,
+            })
+            .collect();
+
+        let song_offset_sec = song_offset_sec + segments.beat0_offset_adjust as f64;
+        let beat0_offset_sec = song_offset_sec;
+
+        let mut beat_to_time = Vec::with_capacity(parsed_bpms.len());
+        let mut current_time = 0.0;
+        let mut last_beat = 0.0;
+        let mut last_bpm = parsed_bpms[0].1;
+        let mut max_bpm = 0.0;
+
+        for &(beat, bpm) in &parsed_bpms {
+            if beat > last_beat && last_bpm > 0.0 {
+                current_time += (beat - last_beat) * (60.0 / last_bpm);
+            }
+            beat_to_time.push(BeatTimePoint {
+                beat,
+                time_sec: song_offset_sec + current_time,
+                bpm,
+            });
+            if bpm.is_finite() && bpm > max_bpm {
+                max_bpm = bpm;
+            }
+            last_beat = beat;
+            last_bpm = bpm;
+        }
+
+        let stop_rows = build_stop_rows(&stops);
+        let delay_rows = build_delay_rows(&delays);
+        let warp_start_rows = build_warp_start_rows(&warps);
+        let fake_start_rows = build_fake_start_rows(&fakes);
+
+        let mut timing = Self {
+            beat_to_time,
+            stops,
+            stop_rows,
+            delays,
+            delay_rows,
+            warps,
+            warp_start_rows,
+            speeds,
+            scrolls,
+            fakes,
+            fake_start_rows,
+            speed_runtime: Vec::new(),
+            scroll_prefix: Vec::new(),
+            beat0_offset_sec,
+            global_offset_sec,
+            max_bpm,
+        };
+
+        let re_beat_to_time: Vec<_> = timing
+            .beat_to_time
+            .iter()
+            .map(|point| {
+                let mut new_point = *point;
+                new_point.time_sec = timing.get_time_for_beat_internal(point.beat);
+                new_point
+            })
+            .collect();
+        timing.beat_to_time = re_beat_to_time;
+
+        if !timing.speeds.is_empty() {
+            let mut runtime = Vec::with_capacity(timing.speeds.len());
+            let mut prev_ratio = 1.0_f64;
+            for seg in &timing.speeds {
+                let start_time = timing.get_time_for_beat(seg.beat);
+                let end_time = if seg.delay <= 0.0 {
+                    start_time
+                } else if seg.unit == SpeedUnit::Seconds {
+                    start_time + seg.delay
+                } else {
+                    timing.get_time_for_beat(seg.beat + seg.delay)
+                };
+                runtime.push(SpeedRuntime {
+                    start_time,
+                    end_time,
+                    prev_ratio,
+                });
+                prev_ratio = seg.ratio;
+            }
+            timing.speed_runtime = runtime;
+        }
+
+        if !timing.scrolls.is_empty() {
+            let mut prefixes = Vec::with_capacity(timing.scrolls.len());
+            let mut cum_displayed = 0.0_f64;
+            let mut last_real_beat = 0.0_f64;
+            let mut last_ratio = 1.0_f64;
+            for seg in &timing.scrolls {
+                cum_displayed += (seg.beat - last_real_beat) * last_ratio;
+                prefixes.push(ScrollPrefix {
+                    beat: seg.beat,
+                    cum_displayed,
+                    ratio: seg.ratio,
+                });
+                last_real_beat = seg.beat;
+                last_ratio = seg.ratio;
+            }
+            timing.scroll_prefix = prefixes;
+        }
+
+        timing
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn from_chart_data_inner(
         song_offset_sec: f64,
