@@ -1932,7 +1932,41 @@ impl<'a> CostCalculator<'a> {
         row: &Row,
         column_count: usize,
     ) -> f32 {
+        if row.hold_mask == 0 {
+            return 0.0;
+        }
         let mut cost = 0.0;
+        if column_count <= MAX_COLUMNS {
+            let mut mask = row.hold_mask;
+            while mask != 0 {
+                let c = mask.trailing_zeros() as usize;
+                mask &= mask - 1;
+                let current_foot = result.combined_columns[c];
+                if current_foot == Foot::None {
+                    continue;
+                }
+
+                let is_left = matches!(current_foot, Foot::LeftHeel | Foot::LeftToe);
+                let initial_foot = initial.combined_columns[c];
+                let initial_is_left = matches!(initial_foot, Foot::LeftHeel | Foot::LeftToe);
+                let initial_is_right = matches!(initial_foot, Foot::RightHeel | Foot::RightToe);
+                let switch_left = is_left && !initial_is_left;
+                let switch_right = !is_left && !initial_is_right;
+
+                if switch_left || switch_right {
+                    let previous_col = initial.where_the_feet_are[current_foot.as_index()];
+                    let distance = if previous_col == INVALID_COLUMN {
+                        1.0
+                    } else {
+                        (self.layout.get_distance_sq(c, previous_col as usize) as f64)
+                            .sqrt() as f32
+                    };
+                    cost += (HOLDSWITCH_WEIGHT as f64 * distance as f64) as f32;
+                }
+            }
+            return cost;
+        }
+
         for c in 0..column_count {
             if row.holds[c].note_type == TapNoteType::Empty {
                 continue;
@@ -1974,9 +2008,17 @@ impl<'a> CostCalculator<'a> {
         right_heel: isize,
         right_toe: isize,
         elapsed: f32,
-        _column_count: usize,
+        column_count: usize,
     ) -> f32 {
         let mut cost = 0.0;
+        let hold_mask = if column_count <= MAX_COLUMNS {
+            row.hold_mask
+        } else {
+            0
+        };
+        if hold_mask == 0 {
+            return cost;
+        }
         if left_heel != INVALID_COLUMN && left_toe != INVALID_COLUMN {
             let jack_penalty = if initial.did_the_foot_move[Foot::LeftHeel.as_index()]
                 || initial.did_the_foot_move[Foot::LeftToe.as_index()]
@@ -1988,14 +2030,12 @@ impl<'a> CostCalculator<'a> {
 
             let lh = left_heel as usize;
             let lt = left_toe as usize;
-            if row.holds[lh].note_type != TapNoteType::Empty
-                && row.holds[lt].note_type == TapNoteType::Empty
-            {
+            let lh_hold = (hold_mask & (1u8 << lh)) != 0;
+            let lt_hold = (hold_mask & (1u8 << lt)) != 0;
+            if lh_hold && !lt_hold {
                 cost += BRACKETTAP_WEIGHT * jack_penalty;
             }
-            if row.holds[lt].note_type != TapNoteType::Empty
-                && row.holds[lh].note_type == TapNoteType::Empty
-            {
+            if lt_hold && !lh_hold {
                 cost += BRACKETTAP_WEIGHT * jack_penalty;
             }
         }
@@ -2011,14 +2051,12 @@ impl<'a> CostCalculator<'a> {
 
             let rh = right_heel as usize;
             let rt = right_toe as usize;
-            if row.holds[rh].note_type != TapNoteType::Empty
-                && row.holds[rt].note_type == TapNoteType::Empty
-            {
+            let rh_hold = (hold_mask & (1u8 << rh)) != 0;
+            let rt_hold = (hold_mask & (1u8 << rt)) != 0;
+            if rh_hold && !rt_hold {
                 cost += BRACKETTAP_WEIGHT * jack_penalty;
             }
-            if row.holds[rt].note_type != TapNoteType::Empty
-                && row.holds[rh].note_type == TapNoteType::Empty
-            {
+            if rt_hold && !rh_hold {
                 cost += BRACKETTAP_WEIGHT * jack_penalty;
             }
         }
@@ -2416,18 +2454,34 @@ impl<'a> CostCalculator<'a> {
 
         if row_index > 0 {
             let last_row = &rows[row_index - 1];
-            for hold in &last_row.holds {
-                if hold.note_type == TapNoteType::Empty {
-                    continue;
+            let end_beat = rows[row_index].beat;
+            let start_beat = last_row.beat;
+            if last_row.column_count <= MAX_COLUMNS {
+                let mut mask = last_row.hold_mask;
+                while mask != 0 {
+                    let idx = mask.trailing_zeros() as usize;
+                    mask &= mask - 1;
+                    let hold = &last_row.holds[idx];
+                    let hold_end = hold.beat + hold.hold_length;
+                    if hold_end > start_beat && hold_end < end_beat {
+                        doublestepped = false;
+                    }
+                    if hold_end >= end_beat {
+                        doublestepped = false;
+                    }
                 }
-                let end_beat = rows[row_index].beat;
-                let start_beat = last_row.beat;
-                let hold_end = hold.beat + hold.hold_length;
-                if hold_end > start_beat && hold_end < end_beat {
-                    doublestepped = false;
-                }
-                if hold_end >= end_beat {
-                    doublestepped = false;
+            } else {
+                for hold in &last_row.holds {
+                    if hold.note_type == TapNoteType::Empty {
+                        continue;
+                    }
+                    let hold_end = hold.beat + hold.hold_length;
+                    if hold_end > start_beat && hold_end < end_beat {
+                        doublestepped = false;
+                    }
+                    if hold_end >= end_beat {
+                        doublestepped = false;
+                    }
                 }
             }
         }
