@@ -194,7 +194,7 @@ impl Default for NeighborMap {
 
 impl NeighborMap {
     #[cfg(debug_assertions)]
-    fn insert(&mut self, neighbor_id: usize, hash_key: usize, cost: f32) {
+    fn insert_reserved(&mut self, neighbor_id: usize, hash_key: usize, cost: f32) {
         if let Some(entry) = self
             .entries
             .iter_mut()
@@ -204,12 +204,12 @@ impl NeighborMap {
             return;
         }
 
-        self.insert_new(neighbor_id, hash_key, cost);
+        self.insert_new_reserved(neighbor_id, hash_key, cost);
     }
 
     #[cfg(not(debug_assertions))]
-    fn insert_unique(&mut self, neighbor_id: usize, hash_key: usize, cost: f32) {
-        self.insert_new(neighbor_id, hash_key, cost);
+    fn insert_unique_reserved(&mut self, neighbor_id: usize, hash_key: usize, cost: f32) {
+        self.insert_new_reserved(neighbor_id, hash_key, cost);
     }
 
     fn reserve(&mut self, additional: usize) {
@@ -223,12 +223,11 @@ impl NeighborMap {
         self.entries.reserve(additional);
     }
 
-    fn insert_new(&mut self, neighbor_id: usize, hash_key: usize, cost: f32) {
-        let new_size = self.entries.len() + 1;
-        if new_size > self.bucket_count {
-            self.rehash(next_prime(self.bucket_count.saturating_mul(2).max(1)));
-        }
-
+    fn insert_new_reserved(&mut self, neighbor_id: usize, hash_key: usize, cost: f32) {
+        debug_assert!(
+            self.entries.len() + 1 <= self.bucket_count,
+            "NeighborMap insert without reserve"
+        );
         let idx = self.entries.len();
         self.entries.push(NeighborEntry {
             neighbor_id,
@@ -1596,15 +1595,13 @@ fn add_node(nodes: &mut NodeArena, state: Rc<State>, second: f32) -> usize {
 
 #[cfg_attr(feature = "profile", inline(never))]
 fn add_edge(nodes: &mut NodeArena, from_id: usize, to_id: usize, cost: f32) {
-    if to_id >= nodes.len() {
-        return;
-    }
+    debug_assert!(to_id < nodes.len());
     let hash_key = nodes.ptr(to_id) as usize;
     if let Some(node) = nodes.get_mut(from_id) {
         #[cfg(debug_assertions)]
-        node.neighbors.insert(to_id, hash_key, cost);
+        node.neighbors.insert_reserved(to_id, hash_key, cost);
         #[cfg(not(debug_assertions))]
-        node.neighbors.insert_unique(to_id, hash_key, cost);
+        node.neighbors.insert_unique_reserved(to_id, hash_key, cost);
     }
 }
 
