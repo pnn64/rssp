@@ -118,24 +118,6 @@ fn format_foot_flags(flags: &[bool]) -> String {
     )
 }
 
-#[inline]
-fn did_move_mask(did_the_foot_move: &[bool]) -> u8 {
-    let mut mask = 0u8;
-    if did_the_foot_move[Foot::LeftHeel.as_index()] {
-        mask |= FOOT_MASKS[Foot::LeftHeel.as_index()];
-    }
-    if did_the_foot_move[Foot::LeftToe.as_index()] {
-        mask |= FOOT_MASKS[Foot::LeftToe.as_index()];
-    }
-    if did_the_foot_move[Foot::RightHeel.as_index()] {
-        mask |= FOOT_MASKS[Foot::RightHeel.as_index()];
-    }
-    if did_the_foot_move[Foot::RightToe.as_index()] {
-        mask |= FOOT_MASKS[Foot::RightToe.as_index()];
-    }
-    mask
-}
-
 #[derive(Default)]
 struct IdentityHasher(u64);
 
@@ -1212,6 +1194,7 @@ fn init_result_state(
         let mut moved_buf = [Foot::None; MAX_COLUMNS];
         let mut hold_buf = [Foot::None; MAX_COLUMNS];
         let mut did_move = [false; NUM_FEET];
+        let mut moved_mask = 0u8;
         let initial_combined = &initial_state.combined_columns;
         let hold_mask = row.hold_mask;
 
@@ -1225,13 +1208,13 @@ fn init_result_state(
             if hold_empty || initial_combined[i] != foot {
                 moved_buf[i] = foot;
                 did_move[foot_index] = true;
+                moved_mask |= FOOT_MASKS[foot_index];
             }
             if !hold_empty {
                 hold_buf[i] = foot;
             }
         }
 
-        let moved_mask = did_move_mask(&did_move);
         merge_initial_and_result_position_parts(
             initial_state,
             &columns_buf[..column_count],
@@ -1294,6 +1277,7 @@ fn init_result_state(
     }
 
     let mut result_state = State::new(column_count);
+    let mut moved_mask = 0u8;
     for (i, &foot) in columns.iter().enumerate() {
         result_state.columns[i] = foot;
         if foot == Foot::None {
@@ -1306,9 +1290,11 @@ fn init_result_state(
         if hold_empty {
             result_state.moved_feet[i] = foot;
             result_state.did_the_foot_move[foot_index] = true;
+            moved_mask |= FOOT_MASKS[foot_index];
         } else if initial_state.combined_columns[i] != foot {
             result_state.moved_feet[i] = foot;
             result_state.did_the_foot_move[foot_index] = true;
+            moved_mask |= FOOT_MASKS[foot_index];
         }
 
         if !hold_empty {
@@ -1317,7 +1303,6 @@ fn init_result_state(
         }
     }
 
-    let moved_mask = did_move_mask(&result_state.did_the_foot_move);
     merge_initial_and_result_position_parts(
         initial_state,
         &result_state.columns,
