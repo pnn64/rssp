@@ -200,6 +200,17 @@ pub static ALL_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::ne
     patterns
 });
 
+static ALL_PATTERN_INDICES_BY_FIRST: LazyLock<Vec<Vec<usize>>> = LazyLock::new(|| {
+    let mut groups = vec![Vec::new(); 16];
+    for (idx, (_, bits)) in ALL_PATTERNS.iter().enumerate() {
+        let first = bits.first().copied().unwrap_or(0) as usize;
+        if first < groups.len() {
+            groups[first].push(idx);
+        }
+    }
+    groups
+});
+
 fn string_to_pattern_bits(p: &str) -> Vec<u8> {
     let mut result = Vec::with_capacity(p.len());
     for c in p.chars() {
@@ -225,6 +236,31 @@ pub fn detect_patterns(
         for (variant, pat_bits) in patterns {
             let plen = pat_bits.len();
             if i + plen <= bitmasks.len() && bitmasks[i..i + plen] == pat_bits[..] {
+                *results.entry(*variant).or_insert(0) += 1;
+            }
+        }
+    }
+    results
+}
+
+pub(crate) fn detect_default_patterns(bitmasks: &[u8]) -> HashMap<PatternVariant, u32> {
+    let mut results = HashMap::new();
+    let groups = &*ALL_PATTERN_INDICES_BY_FIRST;
+    let patterns = &*ALL_PATTERNS;
+    for i in 0..bitmasks.len() {
+        let mask = bitmasks[i] as usize;
+        if mask >= groups.len() {
+            continue;
+        }
+        let group = &groups[mask];
+        if group.is_empty() {
+            continue;
+        }
+        let remaining = bitmasks.len() - i;
+        for &idx in group {
+            let (variant, pat_bits) = &patterns[idx];
+            let plen = pat_bits.len();
+            if plen <= remaining && bitmasks[i..i + plen] == pat_bits[..] {
                 *results.entry(*variant).or_insert(0) += 1;
             }
         }

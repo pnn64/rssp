@@ -331,7 +331,7 @@ fn parse_radar_values_str(
 fn compute_pattern_and_anchor_stats(
     bitmasks: &[u8],
 ) -> (HashMap<PatternVariant, u32>, (u32, u32, u32, u32)) {
-    let detected_patterns = detect_patterns(bitmasks, &ALL_PATTERNS);
+    let detected_patterns = detect_default_patterns(bitmasks);
     let anchors = count_anchors(bitmasks);
     (detected_patterns, anchors)
 }
