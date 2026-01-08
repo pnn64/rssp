@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
 use std::sync::OnceLock;
@@ -149,7 +149,7 @@ type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<IdentityHasher>>;
 struct NeighborEntry {
     neighbor_id: usize,
     cost: f32,
-    next: Option<usize>,
+    next: usize,
     hash_key: usize,
 }
 
@@ -160,7 +160,7 @@ const BUCKET_SENTINEL: usize = usize::MAX - 1;
 #[derive(Debug, Clone)]
 struct NeighborMap {
     entries: Vec<NeighborEntry>,
-    head: Option<usize>,
+    head: usize,
     bucket_before: Vec<usize>,
     bucket_count: usize,
 }
@@ -169,7 +169,7 @@ impl Default for NeighborMap {
     fn default() -> Self {
         Self {
             entries: Vec::new(),
-            head: None,
+            head: BUCKET_EMPTY,
             bucket_before: vec![BUCKET_EMPTY; 13],
             bucket_count: 13,
         }
@@ -217,7 +217,7 @@ impl NeighborMap {
         self.entries.push(NeighborEntry {
             neighbor_id,
             cost,
-            next: None,
+            next: BUCKET_EMPTY,
             hash_key,
         });
         self.insert_index(idx);
@@ -230,24 +230,13 @@ impl NeighborMap {
             .map(|entry| entry.cost)
     }
 
-    fn for_each_in_order<F>(&self, mut visit: F)
-    where
-        F: FnMut(usize, f32),
-    {
-        let mut current = self.head;
-        while let Some(idx) = current {
-            let entry = &self.entries[idx];
-            visit(entry.neighbor_id, entry.cost);
-            current = entry.next;
-        }
-    }
-
     fn rehash(&mut self, new_bucket_count: usize) {
         self.bucket_count = new_bucket_count;
         self.bucket_before = vec![BUCKET_EMPTY; new_bucket_count];
         let mut prev = None;
         let mut current = self.head;
-        while let Some(idx) = current {
+        while current != BUCKET_EMPTY {
+            let idx = current;
             let bucket = self.bucket_index(self.entries[idx].hash_key);
             if self.bucket_before[bucket] == BUCKET_EMPTY {
                 self.bucket_before[bucket] = match prev {
@@ -267,10 +256,10 @@ impl NeighborMap {
         if before == BUCKET_EMPTY {
             let old_head = self.head;
             self.entries[idx].next = old_head;
-            self.head = Some(idx);
+            self.head = idx;
             self.bucket_before[bucket] = BUCKET_SENTINEL;
-            if let Some(old_idx) = old_head {
-                let old_bucket = self.bucket_index(self.entries[old_idx].hash_key);
+            if old_head != BUCKET_EMPTY {
+                let old_bucket = self.bucket_index(self.entries[old_head].hash_key);
                 self.bucket_before[old_bucket] = idx;
             }
             return;
@@ -279,14 +268,14 @@ impl NeighborMap {
         if before == BUCKET_SENTINEL {
             let old_head = self.head;
             self.entries[idx].next = old_head;
-            self.head = Some(idx);
+            self.head = idx;
             return;
         }
 
         let before_idx = before;
         let after = self.entries[before_idx].next;
         self.entries[idx].next = after;
-        self.entries[before_idx].next = Some(idx);
+        self.entries[before_idx].next = idx;
     }
 
     fn bucket_index(&self, key: usize) -> usize {
@@ -971,55 +960,103 @@ impl StepParityGenerator {
             return Vec::new();
         }
 
+        let nodes = &self.nodes;
+        let node_len = nodes.len();
         let start_id = 0;
-        let end_id = self.nodes.len() - 1;
-        let mut cost = vec![f32::MAX; self.nodes.len()];
-        let mut predecessor = vec![usize::MAX; self.nodes.len()];
+        let end_id = node_len - 1;
+        let mut cost = vec![f32::MAX; node_len];
+        let mut predecessor = vec![usize::MAX; node_len];
         let dump_ties = env_flags().dump_ties;
         let mut tie_count = 0usize;
         cost[start_id] = 0.0;
+        let cost_ptr = cost.as_mut_ptr();
+        let pred_ptr = predecessor.as_mut_ptr();
 
-        for i in start_id..=end_id {
-            if cost[i] == f32::MAX {
-                continue;
-            }
-            self.nodes[i]
-                .neighbors
-                .for_each_in_order(|neighbor_id, weight| {
-                    let new_cost = cost[i] + weight;
-                    if new_cost < cost[neighbor_id] {
-                        cost[neighbor_id] = new_cost;
-                        predecessor[neighbor_id] = i;
-                    } else if dump_ties && new_cost == cost[neighbor_id] {
-                        tie_count += 1;
+        if dump_ties {
+            for i in start_id..=end_id {
+                let current_cost = unsafe { *cost_ptr.add(i) };
+                if current_cost == f32::MAX {
+                    continue;
+                }
+                let neighbors = &nodes[i].neighbors;
+                let entries = &neighbors.entries;
+                let mut current = neighbors.head;
+                while current != BUCKET_EMPTY {
+                    // SAFETY: neighbor indices come from this map's entries list.
+                    let entry = unsafe { entries.get_unchecked(current) };
+                    let neighbor_id = entry.neighbor_id;
+                    let new_cost = current_cost + entry.cost;
+                    unsafe {
+                        debug_assert!(neighbor_id < node_len);
+                        let cost_slot = cost_ptr.add(neighbor_id);
+                        if new_cost < *cost_slot {
+                            *cost_slot = new_cost;
+                            *pred_ptr.add(neighbor_id) = i;
+                        } else if new_cost == *cost_slot {
+                            tie_count += 1;
+                        }
                     }
-                });
+                    current = entry.next;
+                }
+            }
+        } else {
+            for i in start_id..=end_id {
+                let current_cost = unsafe { *cost_ptr.add(i) };
+                if current_cost == f32::MAX {
+                    continue;
+                }
+                let neighbors = &nodes[i].neighbors;
+                let entries = &neighbors.entries;
+                let mut current = neighbors.head;
+                while current != BUCKET_EMPTY {
+                    // SAFETY: neighbor indices come from this map's entries list.
+                    let entry = unsafe { entries.get_unchecked(current) };
+                    let neighbor_id = entry.neighbor_id;
+                    let new_cost = current_cost + entry.cost;
+                    unsafe {
+                        debug_assert!(neighbor_id < node_len);
+                        let cost_slot = cost_ptr.add(neighbor_id);
+                        if new_cost < *cost_slot {
+                            *cost_slot = new_cost;
+                            *pred_ptr.add(neighbor_id) = i;
+                        }
+                    }
+                    current = entry.next;
+                }
+            }
         }
         if dump_ties {
             eprintln!("STEP_PARITY_TIES count={tie_count}");
         }
 
-        let mut path = VecDeque::new();
-        let mut current = end_id;
-        if predecessor[current] == usize::MAX {
+        if predecessor[end_id] == usize::MAX {
             return Vec::new();
         }
 
+        let rows_len = self.rows.len();
+        let mut path = vec![usize::MAX; rows_len];
+        let mut current = end_id;
+        let mut write = rows_len;
         while current != start_id {
-            if current == usize::MAX {
+            let prev = predecessor[current];
+            if prev == usize::MAX {
                 return Vec::new();
             }
-            if current != end_id {
-                path.push_front(current);
+            current = prev;
+            if current == start_id {
+                break;
             }
-            let next = predecessor[current];
-            if next == usize::MAX && current != start_id {
+            if write == 0 {
                 return Vec::new();
             }
-            current = next;
+            write -= 1;
+            path[write] = current;
+        }
+        if write != 0 {
+            return Vec::new();
         }
 
-        path.into_iter().collect()
+        path
     }
 
     #[cfg_attr(feature = "profile", inline(never))]
