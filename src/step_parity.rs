@@ -68,6 +68,7 @@ const OTHER_PART_OF_FOOT: [Foot; NUM_FEET] = [
     Foot::RightToe,
     Foot::RightHeel,
 ];
+const STATE_HASH_PRIME: u64 = 31;
 
 fn foot_label(foot: Foot) -> &'static str {
     match foot {
@@ -1182,6 +1183,8 @@ fn init_result_state(
         let mut moved_buf = [Foot::None; MAX_COLUMNS];
         let mut hold_buf = [Foot::None; MAX_COLUMNS];
         let mut did_move = [false; NUM_FEET];
+        let initial_combined = &initial_state.combined_columns;
+        let holds = &row.holds;
 
         for (i, &foot) in columns.iter().enumerate() {
             columns_buf[i] = foot;
@@ -1189,11 +1192,8 @@ fn init_result_state(
                 continue;
             }
             let foot_index = foot.as_index();
-            let hold_empty = row.holds[i].note_type == TapNoteType::Empty;
-            if hold_empty {
-                moved_buf[i] = foot;
-                did_move[foot_index] = true;
-            } else if initial_state.combined_columns[i] != foot {
+            let hold_empty = holds[i].note_type == TapNoteType::Empty;
+            if hold_empty || initial_combined[i] != foot {
                 moved_buf[i] = foot;
                 did_move[foot_index] = true;
             }
@@ -1234,7 +1234,7 @@ fn init_result_state(
             }
             let foot_index = foot.as_index();
             what_note[foot_index] = i as isize;
-            if row.holds[i].note_type != TapNoteType::Empty {
+            if holds[i].note_type != TapNoteType::Empty {
                 is_holding[foot_index] = true;
             }
         }
@@ -1501,20 +1501,27 @@ fn state_hash_from_parts(
     hold_feet: &[Foot],
 ) -> u64 {
     let mut value = 0u64;
-    let prime = 31u64;
     for &foot in columns {
-        value = value.wrapping_mul(prime).wrapping_add(foot as u64);
+        value = value
+            .wrapping_mul(STATE_HASH_PRIME)
+            .wrapping_add(foot as u64);
     }
     for &foot in combined_columns {
-        value = value.wrapping_mul(prime).wrapping_add(foot as u64);
+        value = value
+            .wrapping_mul(STATE_HASH_PRIME)
+            .wrapping_add(foot as u64);
     }
 
     for &foot in moved_feet {
-        value = value.wrapping_mul(prime).wrapping_add(foot as u64);
+        value = value
+            .wrapping_mul(STATE_HASH_PRIME)
+            .wrapping_add(foot as u64);
     }
 
     for &foot in hold_feet {
-        value = value.wrapping_mul(prime).wrapping_add(foot as u64);
+        value = value
+            .wrapping_mul(STATE_HASH_PRIME)
+            .wrapping_add(foot as u64);
     }
 
     value
