@@ -42,7 +42,6 @@ fn build_breakdown_inputs() -> Vec<ChartBreakdownInput> {
 fn bench_breakdown_pipeline(c: &mut Criterion) {
     let fixture = FIXTURE.as_bytes();
     let options = rssp::AnalysisOptions {
-        parallel: false,
         compute_tech_counts: false,
         ..rssp::AnalysisOptions::default()
     };

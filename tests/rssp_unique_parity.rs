@@ -242,7 +242,6 @@ fn compute_chart_values(
         compute_tech_counts: true,
         compute_pattern_counts: true,
         translate_markers: false,
-        parallel: true,
     };
 
     let summary = analyze(simfile_data, extension, options).map_err(|e| e.to_string())?;

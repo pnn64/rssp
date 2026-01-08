@@ -48,7 +48,6 @@ pub struct AnalysisOptions {
     pub compute_tech_counts: bool,
     pub compute_pattern_counts: bool,
     pub translate_markers: bool,
-    pub parallel: bool,
 }
 
 impl Default for AnalysisOptions {
@@ -60,7 +59,6 @@ impl Default for AnalysisOptions {
             compute_tech_counts: true,
             compute_pattern_counts: true,
             translate_markers: false,
-            parallel: true,
         }
     }
 }
@@ -981,105 +979,43 @@ pub fn analyze(
     let mut total_length = 0i32;
     let options_ref = &options;
     let compiled_custom_patterns_ref = &compiled_custom_patterns;
-    let allow_parallel = options.parallel
-        && entry_count > 1
-        && std::thread::available_parallelism()
-            .map(|count| count.get())
-            .unwrap_or(1)
-            > 1;
-
-    if allow_parallel {
-        let mut results = Vec::with_capacity(entry_count);
-        std::thread::scope(|scope| {
-            let mut handles = Vec::with_capacity(entry_count);
-            for entry in entries {
-                handles.push(scope.spawn(move || {
-                    build_chart_summary(
-                        &entry.notes,
-                        entry.chart_bpms.as_deref(),
-                        entry.chart_delays.as_deref(),
-                        entry.chart_warps.as_deref(),
-                        entry.chart_stops.as_deref(),
-                        entry.chart_speeds.as_deref(),
-                        entry.chart_scrolls.as_deref(),
-                        entry.chart_fakes.as_deref(),
-                        entry.chart_time_signatures.as_deref(),
-                        entry.chart_labels.as_deref(),
-                        entry.chart_tickcounts.as_deref(),
-                        entry.chart_combos.as_deref(),
-                        entry.chart_display_bpm.as_deref(),
-                        entry.chart_offset.as_deref(),
-                        entry.chart_radar_values.as_deref(),
-                        cleaned_global_bpms_str,
-                        cleaned_global_stops_str,
-                        cleaned_global_delays_str,
-                        cleaned_global_warps_str,
-                        cleaned_global_speeds_str,
-                        cleaned_global_scrolls_str,
-                        cleaned_global_fakes_str,
-                        normalized_global_bpms_str,
-                        offset,
-                        extension,
-                        timing_format,
-                        ssc_version,
-                        allow_steps_timing,
-                        compiled_custom_patterns_ref,
-                        options_ref,
-                    )
-                }));
+    for entry in entries {
+        if let Some((summary, chart_length)) = build_chart_summary(
+            &entry.notes,
+            entry.chart_bpms.as_deref(),
+            entry.chart_delays.as_deref(),
+            entry.chart_warps.as_deref(),
+            entry.chart_stops.as_deref(),
+            entry.chart_speeds.as_deref(),
+            entry.chart_scrolls.as_deref(),
+            entry.chart_fakes.as_deref(),
+            entry.chart_time_signatures.as_deref(),
+            entry.chart_labels.as_deref(),
+            entry.chart_tickcounts.as_deref(),
+            entry.chart_combos.as_deref(),
+            entry.chart_display_bpm.as_deref(),
+            entry.chart_offset.as_deref(),
+            entry.chart_radar_values.as_deref(),
+            cleaned_global_bpms_str,
+            cleaned_global_stops_str,
+            cleaned_global_delays_str,
+            cleaned_global_warps_str,
+            cleaned_global_speeds_str,
+            cleaned_global_scrolls_str,
+            cleaned_global_fakes_str,
+            normalized_global_bpms_str,
+            offset,
+            extension,
+            timing_format,
+            ssc_version,
+            allow_steps_timing,
+            compiled_custom_patterns_ref,
+            options_ref,
+        ) {
+            if chart_length > total_length {
+                total_length = chart_length;
             }
-            for handle in handles {
-                results.push(handle.join().unwrap());
-            }
-        });
-
-        for result in results {
-            if let Some((summary, chart_length)) = result {
-                if chart_length > total_length {
-                    total_length = chart_length;
-                }
-                chart_summaries.push(summary);
-            }
-        }
-    } else {
-        for entry in entries {
-            if let Some((summary, chart_length)) = build_chart_summary(
-                &entry.notes,
-                entry.chart_bpms.as_deref(),
-                entry.chart_delays.as_deref(),
-                entry.chart_warps.as_deref(),
-                entry.chart_stops.as_deref(),
-                entry.chart_speeds.as_deref(),
-                entry.chart_scrolls.as_deref(),
-                entry.chart_fakes.as_deref(),
-                entry.chart_time_signatures.as_deref(),
-                entry.chart_labels.as_deref(),
-                entry.chart_tickcounts.as_deref(),
-                entry.chart_combos.as_deref(),
-                entry.chart_display_bpm.as_deref(),
-                entry.chart_offset.as_deref(),
-                entry.chart_radar_values.as_deref(),
-                cleaned_global_bpms_str,
-                cleaned_global_stops_str,
-                cleaned_global_delays_str,
-                cleaned_global_warps_str,
-                cleaned_global_speeds_str,
-                cleaned_global_scrolls_str,
-                cleaned_global_fakes_str,
-                normalized_global_bpms_str,
-                offset,
-                extension,
-                timing_format,
-                ssc_version,
-                allow_steps_timing,
-                compiled_custom_patterns_ref,
-                options_ref,
-            ) {
-                if chart_length > total_length {
-                    total_length = chart_length;
-                }
-                chart_summaries.push(summary);
-            }
+            chart_summaries.push(summary);
         }
     }
 
