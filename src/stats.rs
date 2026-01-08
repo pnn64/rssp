@@ -265,6 +265,54 @@ fn scan_minimized_rows_for_holds<const LANES: usize>(
     (hold_ends, measure_rows)
 }
 
+/// Parse minimized chart bytes into lane rows, skipping separators.
+pub(crate) fn parse_minimized_rows<const LANES: usize>(
+    minimized_note_data: &[u8],
+) -> Vec<[u8; LANES]> {
+    let estimated_rows = minimized_note_data.len() / (LANES + 1);
+    let mut rows = Vec::with_capacity(estimated_rows);
+    for line_raw in minimized_note_data.split(|&b| b == b'\n') {
+        let line = trim_cr(line_raw);
+        if line.is_empty() {
+            continue;
+        }
+        match line[0] {
+            b',' | b';' => continue,
+            _ => {}
+        }
+        if line.len() < LANES {
+            continue;
+        }
+        let mut arr = [0u8; LANES];
+        arr.copy_from_slice(&line[..LANES]);
+        rows.push(arr);
+    }
+    rows
+}
+
+fn scan_rows_for_holds<const LANES: usize>(rows: &[[u8; LANES]]) -> Vec<[usize; LANES]> {
+    let mut hold_ends = Vec::with_capacity(rows.len());
+    let mut stacks: [Vec<usize>; LANES] = std::array::from_fn(|_| Vec::new());
+
+    for (row_idx, row) in rows.iter().enumerate() {
+        hold_ends.push([HOLD_END_NONE; LANES]);
+        for (col, &ch) in row.iter().enumerate().take(LANES) {
+            match ch {
+                ch if is_hold_blocker(ch) => stacks[col].clear(),
+                b'2' | b'4' => stacks[col].push(row_idx),
+                b'3' => {
+                    if let Some(start_idx) = stacks[col].pop() {
+                        hold_ends[start_idx][col] = row_idx;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    hold_ends
+}
+
 /// Minimizes measure lines if every other line is all-zero.
 #[inline(always)]
 pub fn minimize_measure<const LANES: usize>(measure: &mut Vec<[u8; LANES]>) {
@@ -490,6 +538,43 @@ pub(crate) fn compute_timing_aware_stats_with_row_to_beat(
             row_to_beat,
         ),
     }
+}
+
+pub(crate) fn compute_timing_aware_stats_from_rows_with_row_to_beat<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    timing: &TimingData,
+    row_to_beat: &[f32],
+) -> ArrowStats {
+    if rows.is_empty() {
+        return ArrowStats::default();
+    }
+    debug_assert!(row_to_beat.len() >= rows.len());
+    let hold_ends = scan_rows_for_holds::<LANES>(rows);
+    let mut stats = ArrowStats::default();
+    let mut ends_per_row = vec![0u32; hold_ends.len()];
+    let mut active_holds = 0i32;
+
+    for (row_idx, line) in rows.iter().enumerate() {
+        if row_idx > 0 {
+            active_holds -= ends_per_row[row_idx - 1] as i32;
+            debug_assert!(active_holds >= 0);
+        }
+
+        let beat = row_to_beat[row_idx];
+        let judgable = timing.is_judgable_at_beat(beat as f64);
+        let row_hold_ends = &hold_ends[row_idx];
+
+        process_timing_line::<LANES>(
+            line,
+            row_hold_ends,
+            judgable,
+            &mut stats,
+            &mut ends_per_row,
+            &mut active_holds,
+        );
+    }
+
+    stats
 }
 
 fn compute_timing_aware_stats_impl<const LANES: usize>(

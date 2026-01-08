@@ -2709,6 +2709,30 @@ pub fn analyze_timing_lanes(
     calculate_tech_counts_from_rows_with_timing(&generator.rows, &generator.layout, timing)
 }
 
+pub(crate) fn analyze_timing_rows<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    minimized_note_data: &[u8],
+) -> TechCounts {
+    let Some(layout) = layout_for_lanes(LANES) else {
+        return TechCounts::default();
+    };
+    let parsed_rows = parse_chart_rows_with_timing_from_rows(
+        rows,
+        row_to_beat,
+        timing,
+        layout.column_count(),
+        Some(minimized_note_data),
+    );
+    let note_data = build_intermediate_notes_with_timing(&parsed_rows, timing);
+    let mut generator = StepParityGenerator::new(layout.clone());
+    if !generator.analyze_note_data(note_data, layout.column_count()) {
+        return TechCounts::default();
+    }
+    calculate_tech_counts_from_rows_with_timing(&generator.rows, &generator.layout, timing)
+}
+
 fn beat_to_time(beat: f64, bpm_map: &[(f64, f64)], offset: f64) -> f64 {
     time_between_beats(0.0, beat as f32, bpm_map) - offset
 }
@@ -2771,6 +2795,15 @@ fn hash_rows(rows: &[ParsedRow]) -> u64 {
     hasher.finish()
 }
 
+fn hash_row_bytes<const LANES: usize>(rows: &[[u8; LANES]], column_count: usize) -> u64 {
+    let mut hasher = IdentityHasher::default();
+    let copy_len = column_count.min(LANES);
+    for row in rows {
+        hasher.write(&row[..copy_len]);
+    }
+    hasher.finish()
+}
+
 #[inline(always)]
 fn trim_ascii_whitespace(mut line: &[u8]) -> &[u8] {
     while let Some((&first, rest)) = line.split_first() {
@@ -2806,6 +2839,22 @@ fn count_measure_rows(measure: &[u8]) -> usize {
         .split(|&b| b == b'\n')
         .filter(|line| !trim_ascii_whitespace(*line).is_empty())
         .count()
+}
+
+fn measure_rows_from_row_to_beat(row_to_beat: &[f32]) -> Vec<usize> {
+    let mut measure_rows = Vec::new();
+    let mut last_measure = None;
+    for &beat in row_to_beat {
+        let measure_idx = (beat / 4.0).floor() as usize;
+        if Some(measure_idx) != last_measure {
+            if measure_rows.len() <= measure_idx {
+                measure_rows.resize(measure_idx + 1, 0);
+            }
+            last_measure = Some(measure_idx);
+        }
+        measure_rows[measure_idx] += 1;
+    }
+    measure_rows
 }
 
 fn parse_chart_rows(
@@ -2945,6 +2994,100 @@ fn parse_chart_rows_with_timing(
     }
 
     rows
+}
+
+fn parse_chart_rows_with_timing_from_rows<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    column_count: usize,
+    note_data: Option<&[u8]>,
+) -> Vec<ParsedRow> {
+    let mut parsed_rows = Vec::new();
+    if column_count == 0 || column_count > 8 {
+        return parsed_rows;
+    }
+    if rows.is_empty() {
+        return parsed_rows;
+    }
+    debug_assert!(row_to_beat.len() >= rows.len());
+
+    let dump_rows = env_flags().dump_rows;
+    let mut measure_rows = Vec::new();
+    if dump_rows {
+        let hash = note_data
+            .map(hash_bytes)
+            .unwrap_or_else(|| hash_row_bytes::<LANES>(rows, column_count));
+        eprintln!(
+            "STEP_PARITY_ROWS start hash={:016x} columns={}",
+            hash, column_count
+        );
+        measure_rows = measure_rows_from_row_to_beat(row_to_beat);
+    }
+
+    let mut current_measure = usize::MAX;
+    let mut row_in_measure = 0usize;
+    let mut rows_in_measure = 0usize;
+    let copy_len = column_count.min(LANES);
+
+    for (row_idx, row) in rows.iter().enumerate() {
+        let beat_raw = row_to_beat[row_idx];
+        let mut measure_idx = 0usize;
+        if dump_rows {
+            measure_idx = (beat_raw / 4.0).floor() as usize;
+            if measure_idx != current_measure {
+                current_measure = measure_idx;
+                row_in_measure = 0;
+                rows_in_measure = *measure_rows.get(measure_idx).unwrap_or(&0);
+            }
+        }
+
+        if row_has_obj(&row[..copy_len]) {
+            let note_row = beat_to_note_row_f32_exact(beat_raw);
+            let beat = note_row as f32 / ROWS_PER_BEAT as f32;
+            let second = timing.get_time_for_beat_f32(beat as f64);
+            let mut chars = [b'0'; 8];
+            chars[..copy_len].copy_from_slice(&row[..copy_len]);
+            parsed_rows.push(ParsedRow {
+                chars,
+                columns: column_count as u8,
+                row: note_row,
+                beat,
+                second: second as f32,
+            });
+            if dump_rows {
+                let row_index = parsed_rows.len() - 1;
+                let cols = parsed_rows[row_index].columns as usize;
+                let row_text = String::from_utf8_lossy(&parsed_rows[row_index].chars[..cols]);
+                eprintln!(
+                    "STEP_PARITY_ROW idx={} measure={} line={}/{} row={} beat={:.6} second={:.6} data={}",
+                    row_index,
+                    measure_idx,
+                    row_in_measure,
+                    rows_in_measure,
+                    note_row,
+                    beat,
+                    second as f32,
+                    row_text
+                );
+            }
+        }
+
+        if dump_rows {
+            row_in_measure += 1;
+        }
+    }
+
+    if dump_rows {
+        let rows_hash = hash_rows(&parsed_rows);
+        eprintln!(
+            "STEP_PARITY_ROWS end total={} rows_hash={:016x}",
+            parsed_rows.len(),
+            rows_hash
+        );
+    }
+
+    parsed_rows
 }
 
 #[inline(always)]

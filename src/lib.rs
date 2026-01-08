@@ -647,16 +647,62 @@ fn build_chart_summary(
     let measure_nps_vec = compute_measure_nps_vec_with_timing(&measure_densities, &timing);
     let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
 
-    let tech_counts = if options.compute_tech_counts {
-        step_parity::analyze_timing_lanes(&minimized_chart, &timing, lanes)
-    } else {
-        step_parity::TechCounts::default()
-    };
-
     let raw_total_steps = stats.total_steps;
     let raw_holding = stats.holding;
-    let mut timing_stats =
-        compute_timing_aware_stats_with_row_to_beat(&minimized_chart, lanes, &timing, &row_to_beat);
+    let (tech_counts, mut timing_stats) = match lanes {
+        4 => {
+            let rows = parse_minimized_rows::<4>(&minimized_chart);
+            let timing_stats = compute_timing_aware_stats_from_rows_with_row_to_beat::<4>(
+                &rows,
+                &timing,
+                &row_to_beat,
+            );
+            let tech_counts = if options.compute_tech_counts {
+                step_parity::analyze_timing_rows::<4>(
+                    &rows,
+                    &row_to_beat,
+                    &timing,
+                    &minimized_chart,
+                )
+            } else {
+                step_parity::TechCounts::default()
+            };
+            (tech_counts, timing_stats)
+        }
+        8 => {
+            let rows = parse_minimized_rows::<8>(&minimized_chart);
+            let timing_stats = compute_timing_aware_stats_from_rows_with_row_to_beat::<8>(
+                &rows,
+                &timing,
+                &row_to_beat,
+            );
+            let tech_counts = if options.compute_tech_counts {
+                step_parity::analyze_timing_rows::<8>(
+                    &rows,
+                    &row_to_beat,
+                    &timing,
+                    &minimized_chart,
+                )
+            } else {
+                step_parity::TechCounts::default()
+            };
+            (tech_counts, timing_stats)
+        }
+        _ => {
+            let tech_counts = if options.compute_tech_counts {
+                step_parity::analyze_timing_lanes(&minimized_chart, &timing, lanes)
+            } else {
+                step_parity::TechCounts::default()
+            };
+            let timing_stats = compute_timing_aware_stats_with_row_to_beat(
+                &minimized_chart,
+                lanes,
+                &timing,
+                &row_to_beat,
+            );
+            (tech_counts, timing_stats)
+        }
+    };
     timing_stats.total_steps = raw_total_steps;
     timing_stats.holding = raw_holding;
     let mines_nonfake = timing_stats.mines;
