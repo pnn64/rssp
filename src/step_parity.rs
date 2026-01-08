@@ -705,7 +705,7 @@ impl PartialEq for State {
 
 impl Eq for State {}
 
-type FootPlacement = Vec<Foot>;
+type FootPlacement = [Foot; MAX_COLUMNS];
 
 #[derive(Debug, Clone)]
 struct StepParityNode {
@@ -1048,6 +1048,7 @@ impl StepParityGenerator {
                         &initial_state,
                         row,
                         perm,
+                        column_count,
                         if track_stats { Some(&mut stats) } else { None },
                     );
                     let cost = cost_calculator.get_action_cost(
@@ -1308,10 +1309,10 @@ fn init_result_state(
     state_cache: &mut FastMap<u64, Rc<State>>,
     initial_state: &State,
     row: &Row,
-    columns: &[Foot],
+    columns: &[Foot; MAX_COLUMNS],
+    column_count: usize,
     mut stats: Option<&mut StepParityStats>,
 ) -> Rc<State> {
-    let column_count = columns.len();
     let dump_collisions = env_flags().dump_state_collisions;
 
     if !dump_collisions && column_count <= MAX_COLUMNS {
@@ -1433,6 +1434,7 @@ fn init_result_state(
         merge_initial_and_result_position_parts(
             initial_state,
             columns,
+            column_count,
             &mut combined_buf[..column_count],
             moved_mask,
             &mut where_the_feet_are,
@@ -1451,7 +1453,7 @@ fn init_result_state(
         debug_assert_eq!(
             hash,
             state_hash_from_parts(
-                columns,
+                &columns[..column_count],
                 &combined_buf[..column_count],
                 &moved_buf[..column_count],
                 &hold_buf[..column_count],
@@ -1459,7 +1461,7 @@ fn init_result_state(
         );
 
         let result_state = State {
-            columns: columns.to_vec(),
+            columns: columns[..column_count].to_vec(),
             combined_columns: combined_buf[..column_count].to_vec(),
             moved_feet: moved_buf[..column_count].to_vec(),
             hold_feet: hold_buf[..column_count].to_vec(),
@@ -1476,7 +1478,8 @@ fn init_result_state(
 
     let mut result_state = State::new(column_count);
     let mut moved_mask = 0u8;
-    for (i, &foot) in columns.iter().enumerate() {
+    for i in 0..column_count {
+        let foot = columns[i];
         result_state.columns[i] = foot;
         if foot == Foot::None {
             continue;
@@ -1507,6 +1510,7 @@ fn init_result_state(
         merge_initial_and_result_position_parts(
             initial_state,
             &result_state.columns,
+            column_count,
             combined_columns,
             moved_mask,
             where_the_feet_are,
@@ -1536,13 +1540,15 @@ fn init_result_state(
 fn merge_initial_and_result_position_parts(
     initial: &State,
     columns: &[Foot],
+    column_count: usize,
     combined_columns: &mut [Foot],
     moved_mask: u8,
     where_the_feet_are: &mut [isize; NUM_FEET],
 ) {
     let moved_left = (moved_mask & LEFT_FOOT_MASK) != 0;
     let moved_right = (moved_mask & RIGHT_FOOT_MASK) != 0;
-    for (i, &column) in columns.iter().enumerate() {
+    for i in 0..column_count {
+        let column = columns[i];
         let combined = if column != Foot::None {
             column
         } else {
@@ -1632,11 +1638,29 @@ fn perms_for_row(
         stats.perm_cache_misses += 1;
     }
 
-    let mut columns = vec![Foot::None; row.column_count];
-    let mut perms = Vec::new();
-    permute_row(layout, row, &mut columns, 0, false, 0, &mut perms);
+    let mut columns = [Foot::None; MAX_COLUMNS];
+    let mut perms: Vec<FootPlacement> = Vec::new();
+    permute_row(
+        layout,
+        row,
+        &mut columns,
+        0,
+        row.column_count,
+        false,
+        0,
+        &mut perms,
+    );
     if perms.is_empty() {
-        permute_row(layout, row, &mut columns, 0, true, 0, &mut perms);
+        permute_row(
+            layout,
+            row,
+            &mut columns,
+            0,
+            row.column_count,
+            true,
+            0,
+            &mut perms,
+        );
     }
     if perms.is_empty() {
         columns.fill(Foot::None);
@@ -1652,19 +1676,20 @@ fn perms_for_row(
 fn permute_row(
     layout: &StageLayout,
     row: &Row,
-    columns: &mut [Foot],
+    columns: &mut [Foot; MAX_COLUMNS],
     column: usize,
+    column_count: usize,
     ignore_holds: bool,
     used_mask: u8,
     out: &mut Vec<FootPlacement>,
 ) {
-    if column >= columns.len() {
+    if column >= column_count {
         let mut left_heel = INVALID_COLUMN;
         let mut left_toe = INVALID_COLUMN;
         let mut right_heel = INVALID_COLUMN;
         let mut right_toe = INVALID_COLUMN;
 
-        for (idx, foot) in columns.iter().enumerate() {
+        for (idx, foot) in columns.iter().enumerate().take(column_count) {
             match foot {
                 Foot::LeftHeel => left_heel = idx as isize,
                 Foot::LeftToe => left_toe = idx as isize,
@@ -1692,7 +1717,7 @@ fn permute_row(
             }
         }
 
-        out.push(columns.to_vec());
+        out.push(*columns);
         return;
     }
 
@@ -1720,6 +1745,7 @@ fn permute_row(
                 row,
                 columns,
                 column + 1,
+                column_count,
                 ignore_holds,
                 used_mask | foot_mask,
                 out,
@@ -1729,7 +1755,16 @@ fn permute_row(
         return;
     }
 
-    permute_row(layout, row, columns, column + 1, ignore_holds, used_mask, out);
+    permute_row(
+        layout,
+        row,
+        columns,
+        column + 1,
+        column_count,
+        ignore_holds,
+        used_mask,
+        out,
+    );
 }
 
 fn state_hash_from_parts(
