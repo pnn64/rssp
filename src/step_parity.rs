@@ -72,6 +72,17 @@ const OTHER_PART_OF_FOOT: [Foot; NUM_FEET] = [
     Foot::RightHeel,
 ];
 const STATE_HASH_PRIME: u64 = 31;
+const STATE_HASH_POWERS: [u64; MAX_COLUMNS + 1] = [
+    1,
+    31,
+    961,
+    29791,
+    923521,
+    28629151,
+    887503681,
+    27512614111,
+    852891037441,
+];
 
 fn foot_label(foot: Foot) -> &'static str {
     match foot {
@@ -1189,45 +1200,87 @@ fn init_result_state(
     let dump_collisions = env_flags().dump_state_collisions;
 
     if !dump_collisions && column_count <= MAX_COLUMNS {
-        let mut columns_buf = [Foot::None; MAX_COLUMNS];
-        let mut combined_buf = [Foot::None; MAX_COLUMNS];
-        let mut moved_buf = [Foot::None; MAX_COLUMNS];
-        let mut hold_buf = [Foot::None; MAX_COLUMNS];
-        let mut did_move = [false; NUM_FEET];
-        let mut moved_mask = 0u8;
         let initial_combined = &initial_state.combined_columns;
         let hold_mask = row.hold_mask;
+        let mut moved_mask = 0u8;
 
-        for (i, &foot) in columns.iter().enumerate() {
-            columns_buf[i] = foot;
-            if foot == Foot::None {
-                continue;
-            }
-            let foot_index = foot.as_index();
+        let mut hash_columns = 0u64;
+        let mut hash_moved = 0u64;
+        let mut hash_hold = 0u64;
+        for i in 0..column_count {
+            let foot = columns[i];
+            hash_columns = hash_columns
+                .wrapping_mul(STATE_HASH_PRIME)
+                .wrapping_add(foot as u64);
+
             let hold_empty = (hold_mask & (1u8 << i)) == 0;
-            if hold_empty || initial_combined[i] != foot {
-                moved_buf[i] = foot;
-                did_move[foot_index] = true;
-                moved_mask |= FOOT_MASKS[foot_index];
+            let mut moved = Foot::None;
+            let mut hold = Foot::None;
+            if foot != Foot::None {
+                if hold_empty || initial_combined[i] != foot {
+                    moved = foot;
+                    moved_mask |= FOOT_MASKS[foot.as_index()];
+                }
+                if !hold_empty {
+                    hold = foot;
+                }
             }
-            if !hold_empty {
-                hold_buf[i] = foot;
-            }
+            hash_moved = hash_moved
+                .wrapping_mul(STATE_HASH_PRIME)
+                .wrapping_add(moved as u64);
+            hash_hold = hash_hold
+                .wrapping_mul(STATE_HASH_PRIME)
+                .wrapping_add(hold as u64);
         }
 
-        merge_initial_and_result_position_parts(
-            initial_state,
-            &columns_buf[..column_count],
-            &mut combined_buf[..column_count],
-            moved_mask,
-        );
+        let moved_left = (moved_mask & LEFT_FOOT_MASK) != 0;
+        let moved_right = (moved_mask & RIGHT_FOOT_MASK) != 0;
+        let mut hash_combined = 0u64;
+        for i in 0..column_count {
+            let foot = columns[i];
+            let combined = if foot != Foot::None {
+                foot
+            } else {
+                let prev = initial_combined[i];
+                if prev == Foot::None {
+                    Foot::None
+                } else {
+                    match prev {
+                        Foot::LeftHeel | Foot::RightHeel => {
+                            if (moved_mask & FOOT_MASKS[prev.as_index()]) == 0 {
+                                prev
+                            } else {
+                                Foot::None
+                            }
+                        }
+                        Foot::LeftToe => {
+                            if !moved_left {
+                                prev
+                            } else {
+                                Foot::None
+                            }
+                        }
+                        Foot::RightToe => {
+                            if !moved_right {
+                                prev
+                            } else {
+                                Foot::None
+                            }
+                        }
+                        Foot::None => Foot::None,
+                    }
+                }
+            };
+            hash_combined = hash_combined
+                .wrapping_mul(STATE_HASH_PRIME)
+                .wrapping_add(combined as u64);
+        }
 
-        let hash = state_hash_from_parts(
-            &columns_buf[..column_count],
-            &combined_buf[..column_count],
-            &moved_buf[..column_count],
-            &hold_buf[..column_count],
-        );
+        let pow = STATE_HASH_POWERS[column_count];
+        let mut hash = hash_columns;
+        hash = hash.wrapping_mul(pow).wrapping_add(hash_combined);
+        hash = hash.wrapping_mul(pow).wrapping_add(hash_moved);
+        hash = hash.wrapping_mul(pow).wrapping_add(hash_hold);
         if let Some(existing) = state_cache.get(&hash) {
             if let Some(stats) = stats.as_deref_mut() {
                 stats.state_cache_hits += 1;
@@ -1239,26 +1292,63 @@ fn init_result_state(
             stats.state_cache_misses += 1;
         }
 
+        let mut columns_buf = [Foot::None; MAX_COLUMNS];
+        let mut combined_buf = [Foot::None; MAX_COLUMNS];
+        let mut moved_buf = [Foot::None; MAX_COLUMNS];
+        let mut hold_buf = [Foot::None; MAX_COLUMNS];
+        columns_buf[..column_count].copy_from_slice(columns);
+
         let mut what_note = [INVALID_COLUMN; NUM_FEET];
         let mut is_holding = [false; NUM_FEET];
         let mut where_the_feet_are = [INVALID_COLUMN; NUM_FEET];
-        let columns_slice = &columns_buf[..column_count];
-        let combined_slice = &combined_buf[..column_count];
-        let hold_slice = &hold_buf[..column_count];
         for i in 0..column_count {
-            let foot = columns_slice[i];
+            let foot = columns_buf[i];
             if foot != Foot::None {
                 let foot_index = foot.as_index();
-                what_note[foot_index] = i as isize;
-                if hold_slice[i] != Foot::None {
+                let hold_empty = (hold_mask & (1u8 << i)) == 0;
+                if hold_empty || initial_combined[i] != foot {
+                    moved_buf[i] = foot;
+                }
+                if !hold_empty {
+                    hold_buf[i] = foot;
                     is_holding[foot_index] = true;
                 }
-            }
-            let combined = combined_slice[i];
-            if combined != Foot::None {
-                where_the_feet_are[combined.as_index()] = i as isize;
+                what_note[foot_index] = i as isize;
             }
         }
+
+        merge_initial_and_result_position_parts(
+            initial_state,
+            &columns_buf[..column_count],
+            &mut combined_buf[..column_count],
+            moved_mask,
+        );
+
+        for (col, &foot) in combined_buf[..column_count].iter().enumerate() {
+            if foot != Foot::None {
+                where_the_feet_are[foot.as_index()] = col as isize;
+            }
+        }
+
+        let mut did_move = [false; NUM_FEET];
+        did_move[Foot::LeftHeel.as_index()] =
+            (moved_mask & FOOT_MASKS[Foot::LeftHeel.as_index()]) != 0;
+        did_move[Foot::LeftToe.as_index()] =
+            (moved_mask & FOOT_MASKS[Foot::LeftToe.as_index()]) != 0;
+        did_move[Foot::RightHeel.as_index()] =
+            (moved_mask & FOOT_MASKS[Foot::RightHeel.as_index()]) != 0;
+        did_move[Foot::RightToe.as_index()] =
+            (moved_mask & FOOT_MASKS[Foot::RightToe.as_index()]) != 0;
+
+        debug_assert_eq!(
+            hash,
+            state_hash_from_parts(
+                &columns_buf[..column_count],
+                &combined_buf[..column_count],
+                &moved_buf[..column_count],
+                &hold_buf[..column_count],
+            )
+        );
 
         let result_state = State {
             columns: columns_buf[..column_count].to_vec(),
