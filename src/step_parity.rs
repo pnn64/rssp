@@ -1292,17 +1292,15 @@ fn init_result_state(
             stats.state_cache_misses += 1;
         }
 
-        let mut columns_buf = [Foot::None; MAX_COLUMNS];
         let mut combined_buf = [Foot::None; MAX_COLUMNS];
         let mut moved_buf = [Foot::None; MAX_COLUMNS];
         let mut hold_buf = [Foot::None; MAX_COLUMNS];
-        columns_buf[..column_count].copy_from_slice(columns);
 
         let mut what_note = [INVALID_COLUMN; NUM_FEET];
         let mut is_holding = [false; NUM_FEET];
         let mut where_the_feet_are = [INVALID_COLUMN; NUM_FEET];
         for i in 0..column_count {
-            let foot = columns_buf[i];
+            let foot = columns[i];
             if foot != Foot::None {
                 let foot_index = foot.as_index();
                 let hold_empty = (hold_mask & (1u8 << i)) == 0;
@@ -1319,16 +1317,11 @@ fn init_result_state(
 
         merge_initial_and_result_position_parts(
             initial_state,
-            &columns_buf[..column_count],
+            columns,
             &mut combined_buf[..column_count],
             moved_mask,
+            &mut where_the_feet_are,
         );
-
-        for (col, &foot) in combined_buf[..column_count].iter().enumerate() {
-            if foot != Foot::None {
-                where_the_feet_are[foot.as_index()] = col as isize;
-            }
-        }
 
         let mut did_move = [false; NUM_FEET];
         did_move[Foot::LeftHeel.as_index()] =
@@ -1343,7 +1336,7 @@ fn init_result_state(
         debug_assert_eq!(
             hash,
             state_hash_from_parts(
-                &columns_buf[..column_count],
+                columns,
                 &combined_buf[..column_count],
                 &moved_buf[..column_count],
                 &hold_buf[..column_count],
@@ -1351,7 +1344,7 @@ fn init_result_state(
         );
 
         let result_state = State {
-            columns: columns_buf[..column_count].to_vec(),
+            columns: columns.to_vec(),
             combined_columns: combined_buf[..column_count].to_vec(),
             moved_feet: moved_buf[..column_count].to_vec(),
             hold_feet: hold_buf[..column_count].to_vec(),
@@ -1393,17 +1386,16 @@ fn init_result_state(
         }
     }
 
-    merge_initial_and_result_position_parts(
-        initial_state,
-        &result_state.columns,
-        &mut result_state.combined_columns,
-        moved_mask,
-    );
-
-    for (col, &foot) in result_state.combined_columns.iter().enumerate() {
-        if foot != Foot::None {
-            result_state.where_the_feet_are[foot.as_index()] = col as isize;
-        }
+    {
+        let combined_columns = &mut result_state.combined_columns;
+        let where_the_feet_are = &mut result_state.where_the_feet_are;
+        merge_initial_and_result_position_parts(
+            initial_state,
+            &result_state.columns,
+            combined_columns,
+            moved_mask,
+            where_the_feet_are,
+        );
     }
 
     let hash = get_state_cache_key(&result_state);
@@ -1431,36 +1423,47 @@ fn merge_initial_and_result_position_parts(
     columns: &[Foot],
     combined_columns: &mut [Foot],
     moved_mask: u8,
+    where_the_feet_are: &mut [isize; NUM_FEET],
 ) {
     let moved_left = (moved_mask & LEFT_FOOT_MASK) != 0;
     let moved_right = (moved_mask & RIGHT_FOOT_MASK) != 0;
     for (i, &column) in columns.iter().enumerate() {
-        if column != Foot::None {
-            combined_columns[i] = column;
-            continue;
-        }
-
-        let prev = initial.combined_columns[i];
-        if prev == Foot::None {
-            continue;
-        }
-        match prev {
-            Foot::LeftHeel | Foot::RightHeel => {
-                if (moved_mask & FOOT_MASKS[prev.as_index()]) == 0 {
-                    combined_columns[i] = prev;
+        let combined = if column != Foot::None {
+            column
+        } else {
+            let prev = initial.combined_columns[i];
+            if prev == Foot::None {
+                Foot::None
+            } else {
+                match prev {
+                    Foot::LeftHeel | Foot::RightHeel => {
+                        if (moved_mask & FOOT_MASKS[prev.as_index()]) == 0 {
+                            prev
+                        } else {
+                            Foot::None
+                        }
+                    }
+                    Foot::LeftToe => {
+                        if !moved_left {
+                            prev
+                        } else {
+                            Foot::None
+                        }
+                    }
+                    Foot::RightToe => {
+                        if !moved_right {
+                            prev
+                        } else {
+                            Foot::None
+                        }
+                    }
+                    Foot::None => Foot::None,
                 }
             }
-            Foot::LeftToe => {
-                if !moved_left {
-                    combined_columns[i] = prev;
-                }
-            }
-            Foot::RightToe => {
-                if !moved_right {
-                    combined_columns[i] = prev;
-                }
-            }
-            Foot::None => {}
+        };
+        if combined != Foot::None {
+            combined_columns[i] = combined;
+            where_the_feet_are[combined.as_index()] = i as isize;
         }
     }
 }
