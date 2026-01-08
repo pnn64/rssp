@@ -6,6 +6,7 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use crate::bpm::{actual_bpm_range_raw, normalize_float_digits, resolve_display_bpm};
 use crate::patterns::{CustomPatternSummary, PatternVariant};
+use crate::rounding::{round_2, round_sig_figs_6};
 use crate::stats::{
     measure_equally_spaced,
     stream_sequences,
@@ -20,7 +21,6 @@ use crate::timing::{
     note_row_to_beat,
     normalize_scrolls_like_itg,
     normalize_speeds_like_itg,
-    round_millis,
     round_sig_figs_itg,
     roundtrip_bpm_itg,
     steps_timing_allowed,
@@ -49,7 +49,11 @@ fn compute_stream_percentages(
 
     let break_percent = 100.0 - adj_stream_percent;
 
-    (stream_percent, adj_stream_percent, break_percent)
+    (
+        round_2(stream_percent),
+        round_2(adj_stream_percent),
+        round_2(break_percent),
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -535,6 +539,7 @@ fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
 pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> TimingSnapshot {
     let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
     let timing = &chart.timing_segments;
+    let finalize = |value: f64| round_sig_figs_6(round_sig_figs_itg(value));
     let bpms_raw: Vec<(f64, f64)> = timing
         .bpms
         .iter()
@@ -545,15 +550,15 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
     // Match itgmania-reference-harness default float precision (6 significant digits).
     let bpms: Vec<(f64, f64)> = bpms_raw
         .iter()
-        .map(|(beat, bpm)| (round_sig_figs_itg(*beat), round_sig_figs_itg(*bpm)))
+        .map(|(beat, bpm)| (finalize(*beat), finalize(*bpm)))
         .collect();
     let stops = timing
         .stops
         .iter()
         .map(|(beat, duration)| {
             (
-                round_sig_figs_itg(*beat as f64),
-                round_sig_figs_itg(*duration as f64),
+                finalize(*beat as f64),
+                finalize(*duration as f64),
             )
         })
         .collect();
@@ -562,8 +567,8 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         .iter()
         .map(|(beat, duration)| {
             (
-                round_sig_figs_itg(*beat as f64),
-                round_sig_figs_itg(*duration as f64),
+                finalize(*beat as f64),
+                finalize(*duration as f64),
             )
         })
         .collect();
@@ -572,8 +577,8 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         .iter()
         .map(|(beat, length)| {
             (
-                round_sig_figs_itg(*beat as f64),
-                round_sig_figs_itg(*length as f64),
+                finalize(*beat as f64),
+                finalize(*length as f64),
             )
         })
         .collect();
@@ -590,9 +595,9 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         .into_iter()
         .map(|(beat, ratio, delay, unit)| {
             (
-                round_sig_figs_itg(beat),
-                round_sig_figs_itg(ratio),
-                round_sig_figs_itg(delay),
+                finalize(beat),
+                finalize(ratio),
+                finalize(delay),
                 unit,
             )
         })
@@ -605,15 +610,15 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
     let scrolls = normalize_scrolls_like_itg(scrolls);
     let scrolls: Vec<(f64, f64)> = scrolls
         .into_iter()
-        .map(|(beat, ratio)| (round_sig_figs_itg(beat), round_sig_figs_itg(ratio)))
+        .map(|(beat, ratio)| (finalize(beat), finalize(ratio)))
         .collect();
     let fakes = timing
         .fakes
         .iter()
         .map(|(beat, length)| {
             (
-                round_sig_figs_itg(*beat as f64),
-                round_sig_figs_itg(*length as f64),
+                finalize(*beat as f64),
+                finalize(*length as f64),
             )
         })
         .collect();
@@ -625,7 +630,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         &simfile.normalized_time_signatures,
     ))
     .into_iter()
-    .map(|(beat, numerator, denominator)| (round_sig_figs_itg(beat), numerator, denominator))
+    .map(|(beat, numerator, denominator)| (finalize(beat), numerator, denominator))
     .collect();
     let labels: Vec<(f64, String)> = parse_labels(chart_or_global(
         allow_steps_timing,
@@ -634,7 +639,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         &simfile.normalized_labels,
     ))
     .into_iter()
-    .map(|(beat, label)| (round_sig_figs_itg(beat), label))
+    .map(|(beat, label)| (finalize(beat), label))
     .collect();
     let tickcounts: Vec<(f64, i32)> = parse_tickcounts(chart_or_global(
         allow_steps_timing,
@@ -643,7 +648,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         &simfile.normalized_tickcounts,
     ))
     .into_iter()
-    .map(|(beat, ticks)| (round_sig_figs_itg(beat), ticks))
+    .map(|(beat, ticks)| (finalize(beat), ticks))
     .collect();
     let combos: Vec<(f64, i32, i32)> = parse_combos(chart_or_global(
         allow_steps_timing,
@@ -652,11 +657,11 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         &simfile.normalized_combos,
     ))
     .into_iter()
-    .map(|(beat, combo, miss)| (round_sig_figs_itg(beat), combo, miss))
+    .map(|(beat, combo, miss)| (finalize(beat), combo, miss))
     .collect();
 
     TimingSnapshot {
-        beat0_offset_seconds: round_sig_figs_itg(
+        beat0_offset_seconds: finalize(
             chart.chart_offset_seconds + timing.beat0_offset_adjust as f64,
         ),
         beat0_group_offset_seconds: 0.0,
@@ -1552,8 +1557,8 @@ fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
         fakes,
     } = build_timing_snapshot(chart, simfile);
 
-    let bpm_min = round_sig_figs_itg(bpm_min_raw);
-    let bpm_max = round_sig_figs_itg(bpm_max_raw);
+    let bpm_min = round_sig_figs_6(round_sig_figs_itg(bpm_min_raw));
+    let bpm_max = round_sig_figs_6(round_sig_figs_itg(bpm_max_raw));
 
     let chart_display_bpm = chart
         .chart_display_bpm
@@ -1566,8 +1571,8 @@ fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
         bpm_max_raw,
         1.0,
     );
-    let display_bpm_min = round_sig_figs_itg(display_bpm_min_raw);
-    let display_bpm_max = round_sig_figs_itg(display_bpm_max_raw);
+    let display_bpm_min = round_sig_figs_6(round_sig_figs_itg(display_bpm_min_raw));
+    let display_bpm_max = round_sig_figs_6(round_sig_figs_itg(display_bpm_max_raw));
     let bpms: Vec<JsonValue> = bpms
         .into_iter()
         .map(|(beat, bpm)| serde_json::json!([beat, bpm]))
@@ -2017,15 +2022,6 @@ fn write_json_string<W: Write>(writer: &mut W, s: &str) -> io::Result<()> {
     writer.write_all(b"\"")
 }
 
-#[inline(always)]
-fn round_sig_figs_6(value: f64) -> f64 {
-    if !value.is_finite() || value == 0.0 {
-        return value;
-    }
-    let formatted = format!("{:.5e}", value);
-    formatted.parse::<f64>().unwrap_or(value)
-}
-
 fn write_json_number_for_key<W: Write>(
     writer: &mut W,
     key: Option<&str>,
@@ -2037,16 +2033,16 @@ fn write_json_number_for_key<W: Write>(
         write!(writer, "{}", u)
     } else if let Some(f) = number.as_f64() {
         match key {
-            None => write!(writer, "{}", round_sig_figs_6(f)),
+            None => write!(writer, "{}", f),
             Some("offset") => write!(writer, "{:.3}", f),
-            Some("beat0_offset_seconds") | Some("beat0_group_offset_seconds") => {
-                write!(writer, "{}", round_sig_figs_6(f))
-            }
-            Some("duration_seconds") => write!(writer, "{}", round_millis(f)),
-            Some("max_nps") => write!(writer, "{}", round_sig_figs_6(f)),
-            Some("bpm_min") | Some("bpm_max") | Some("display_bpm_min") | Some("display_bpm_max") => {
-                write!(writer, "{}", round_sig_figs_6(f))
-            }
+            Some("beat0_offset_seconds")
+            | Some("beat0_group_offset_seconds")
+            | Some("duration_seconds")
+            | Some("max_nps")
+            | Some("bpm_min")
+            | Some("bpm_max")
+            | Some("display_bpm_min")
+            | Some("display_bpm_max") => write!(writer, "{}", f),
             Some("bpm") => write!(writer, "{}", f),
             _ => write!(writer, "{:.2}", f),
         }

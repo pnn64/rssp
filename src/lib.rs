@@ -10,6 +10,7 @@ pub mod notes;
 pub mod parse;
 pub mod patterns;
 pub mod report;
+pub mod rounding;
 pub mod stats;
 pub mod step_parity;
 pub mod tech;
@@ -27,6 +28,7 @@ use crate::hashing::*;
 use crate::matrix::compute_matrix_rating;
 use crate::parse::*;
 use crate::patterns::*;
+use crate::rounding::{round_2, round_3, round_sig_figs_6};
 use crate::stats::*;
 use crate::tech::parse_tech_notation;
 use crate::timing::{
@@ -404,8 +406,8 @@ fn compute_derived_chart_metrics(
 
     let short_hash = compute_chart_hash(minimized_chart, bpms_to_use);
     let bpm_neutral_hash = compute_chart_hash(minimized_chart, "0.000=0.000");
-    let tier_bpm = compute_tier_bpm(measure_densities, bpm_map, 4.0);
-    let matrix_rating = compute_matrix_rating(measure_densities, bpm_map);
+    let tier_bpm = round_2(compute_tier_bpm(measure_densities, bpm_map, 4.0));
+    let matrix_rating = round_2(compute_matrix_rating(measure_densities, bpm_map));
 
     DerivedChartMetrics {
         stream_counts,
@@ -616,12 +618,14 @@ fn build_chart_summary(
             (HashMap::new(), (0, 0, 0, 0))
         };
 
-    let (facing_left, facing_right, mono_total, mono_percent, candle_total, candle_percent) =
+    let (facing_left, facing_right, mono_total, mono_percent_raw, candle_total, candle_percent_raw) =
         if let Some(bitmasks) = bitmasks.as_ref() {
             compute_mono_and_candle_stats(bitmasks, &stats, &detected_patterns, options)
         } else {
             (0, 0, 0, 0.0, 0, 0.0)
         };
+    let mono_percent = round_2(mono_percent_raw);
+    let candle_percent = round_2(candle_percent_raw);
 
     let custom_patterns = if compute_patterns && !compiled_custom_patterns.is_empty() {
         detect_custom_patterns_compiled(bitmasks.as_ref().unwrap(), compiled_custom_patterns)
@@ -644,8 +648,14 @@ fn build_chart_summary(
         (time_chart_f64 + (song_offset - chart_offset)).floor() as i32
     };
 
-    let measure_nps_vec = compute_measure_nps_vec_with_timing(&measure_densities, &timing);
-    let (max_nps, median_nps) = get_nps_stats(&measure_nps_vec);
+    let measure_nps_vec_raw = compute_measure_nps_vec_with_timing(&measure_densities, &timing);
+    let (max_nps_raw, median_nps_raw) = get_nps_stats(&measure_nps_vec_raw);
+    let max_nps = round_sig_figs_6(max_nps_raw);
+    let median_nps = round_2(median_nps_raw);
+    let measure_nps_vec = measure_nps_vec_raw
+        .into_iter()
+        .map(round_sig_figs_6)
+        .collect();
 
     let raw_total_steps = stats.total_steps;
     let raw_holding = stats.holding;
@@ -952,7 +962,9 @@ pub fn analyze(
         .collect();
     let (min_bpm_i32, max_bpm_i32) = compute_bpm_range(&global_bpm_map);
     let bpm_values: Vec<f64> = global_bpm_map.iter().map(|&(_, bpm)| bpm).collect();
-    let (median_bpm, average_bpm) = compute_bpm_stats(&bpm_values);
+    let (median_bpm_raw, average_bpm_raw) = compute_bpm_stats(&bpm_values);
+    let median_bpm = round_2(median_bpm_raw);
+    let average_bpm = round_2(average_bpm_raw);
 
     let cleaned_global_bpms_str = cleaned_global_bpms.as_str();
     let cleaned_global_stops_str = cleaned_global_stops.as_str();
@@ -1073,9 +1085,10 @@ pub fn analyze(
 
     let total_elapsed = total_start_time.elapsed();
 
+    let offset_rounded = round_3(offset);
     Ok(SimfileSummary {
         title_str, subtitle_str, artist_str, titletranslit_str, subtitletranslit_str,
-        artisttranslit_str, offset, normalized_bpms: normalized_global_bpms,
+        artisttranslit_str, offset: offset_rounded, normalized_bpms: normalized_global_bpms,
         normalized_stops: normalized_global_stops,
         normalized_delays: normalized_global_delays,
         normalized_warps: normalized_global_warps,
