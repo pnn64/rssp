@@ -1,10 +1,9 @@
-use crate::unescape_trim;
 use std::borrow::Cow;
 
 use crate::math::{fmt_dec3_half_up, round_sig_figs_itg, roundtrip_bpm_itg};
 use crate::parse::{
     ParsedChartEntry, ParsedSimfileData, decode_bytes, extract_sections, parse_version,
-    split_notes_fields,
+    split_notes_fields, unescape_trim,
 };
 use crate::timing::{
     ROWS_PER_BEAT, TimingFormat, compute_timing_segments, format_bpm_segments_like_itg,
