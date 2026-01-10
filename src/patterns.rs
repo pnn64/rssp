@@ -115,115 +115,240 @@ fn pack_u64_prefix(bytes: &[u8]) -> u64 {
 
 pub static DEFAULT_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::new(|| {
     vec![
-    // Candles
-    (PatternVariant::CandleLeft,  string_to_pattern_bits("ULD")),
-    (PatternVariant::CandleLeft,  string_to_pattern_bits("DLU")),
-    (PatternVariant::CandleRight, string_to_pattern_bits("URD")),
-    (PatternVariant::CandleRight, string_to_pattern_bits("DRU")),
-
-    // Boxes
-    (PatternVariant::BoxLR,       string_to_pattern_bits("LRLR")),
-    (PatternVariant::BoxLR,       string_to_pattern_bits("RLRL")),
-    (PatternVariant::BoxUD,       string_to_pattern_bits("UDUD")),
-    (PatternVariant::BoxUD,       string_to_pattern_bits("DUDU")),
-    (PatternVariant::BoxCornerLD, string_to_pattern_bits("LDLD")),
-    (PatternVariant::BoxCornerLD, string_to_pattern_bits("DLDL")),
-    (PatternVariant::BoxCornerLU, string_to_pattern_bits("LULU")),
-    (PatternVariant::BoxCornerLU, string_to_pattern_bits("ULUL")),
-    (PatternVariant::BoxCornerRD, string_to_pattern_bits("RDRD")),
-    (PatternVariant::BoxCornerRD, string_to_pattern_bits("DRDR")),
-    (PatternVariant::BoxCornerRU, string_to_pattern_bits("RURU")),
-    (PatternVariant::BoxCornerRU, string_to_pattern_bits("URUR")),
+        // Candles
+        (PatternVariant::CandleLeft, string_to_pattern_bits("ULD")),
+        (PatternVariant::CandleLeft, string_to_pattern_bits("DLU")),
+        (PatternVariant::CandleRight, string_to_pattern_bits("URD")),
+        (PatternVariant::CandleRight, string_to_pattern_bits("DRU")),
+        // Boxes
+        (PatternVariant::BoxLR, string_to_pattern_bits("LRLR")),
+        (PatternVariant::BoxLR, string_to_pattern_bits("RLRL")),
+        (PatternVariant::BoxUD, string_to_pattern_bits("UDUD")),
+        (PatternVariant::BoxUD, string_to_pattern_bits("DUDU")),
+        (PatternVariant::BoxCornerLD, string_to_pattern_bits("LDLD")),
+        (PatternVariant::BoxCornerLD, string_to_pattern_bits("DLDL")),
+        (PatternVariant::BoxCornerLU, string_to_pattern_bits("LULU")),
+        (PatternVariant::BoxCornerLU, string_to_pattern_bits("ULUL")),
+        (PatternVariant::BoxCornerRD, string_to_pattern_bits("RDRD")),
+        (PatternVariant::BoxCornerRD, string_to_pattern_bits("DRDR")),
+        (PatternVariant::BoxCornerRU, string_to_pattern_bits("RURU")),
+        (PatternVariant::BoxCornerRU, string_to_pattern_bits("URUR")),
     ]
 });
 
 pub static EXTRA_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::new(|| {
     vec![
-    //Staircases
-    (PatternVariant::StaircaseLeft,     string_to_pattern_bits("LDUR")),
-    (PatternVariant::StaircaseRight,    string_to_pattern_bits("RUDL")),
-    (PatternVariant::StaircaseInvLeft,  string_to_pattern_bits("LUDR")),
-    (PatternVariant::StaircaseInvRight, string_to_pattern_bits("RDUL")),
-
-    // Triangles
-    (PatternVariant::TriangleRUR, string_to_pattern_bits("RUR")),
-    (PatternVariant::TriangleLUL, string_to_pattern_bits("LUL")),
-    (PatternVariant::TriangleLDL, string_to_pattern_bits("LDL")),
-    (PatternVariant::TriangleRDR, string_to_pattern_bits("RDR")),
-
-    // Doritos
-    (PatternVariant::DoritoLeft,     string_to_pattern_bits("LDUDL")),
-    (PatternVariant::DoritoRight,    string_to_pattern_bits("RUDUR")),
-    (PatternVariant::DoritoInvLeft,  string_to_pattern_bits("LUDUL")),
-    (PatternVariant::DoritoInvRight, string_to_pattern_bits("RDUDR")),
-
-    // Sweeps
-    (PatternVariant::SweepLeft,     string_to_pattern_bits("LDURUDL")),
-    (PatternVariant::SweepRight,    string_to_pattern_bits("RUDLDUR")),
-    (PatternVariant::SweepInvLeft,  string_to_pattern_bits("LUDRDUL")),
-    (PatternVariant::SweepInvRight, string_to_pattern_bits("RDULUDR")),
-
-    // Towers
-    (PatternVariant::TowerLR,       string_to_pattern_bits("LRLRL")),
-    (PatternVariant::TowerLR,       string_to_pattern_bits("RLRLR")),
-    (PatternVariant::TowerUD,       string_to_pattern_bits("UDUDU")),
-    (PatternVariant::TowerUD,       string_to_pattern_bits("DUDUD")),
-    (PatternVariant::TowerCornerLD, string_to_pattern_bits("LDLDL")),
-    (PatternVariant::TowerCornerLD, string_to_pattern_bits("DLDLD")),
-    (PatternVariant::TowerCornerLU, string_to_pattern_bits("LULUL")),
-    (PatternVariant::TowerCornerLU, string_to_pattern_bits("ULULU")),
-    (PatternVariant::TowerCornerRD, string_to_pattern_bits("RDRDR")),
-    (PatternVariant::TowerCornerRD, string_to_pattern_bits("DRDRD")),
-    (PatternVariant::TowerCornerRU, string_to_pattern_bits("RURUR")),
-    (PatternVariant::TowerCornerRU, string_to_pattern_bits("URURU")),
-
-    // Double staircases
-    (PatternVariant::DStaircaseLeft,     string_to_pattern_bits("LUDRLUDR")),
-    (PatternVariant::DStaircaseRight,    string_to_pattern_bits("RDULRDUL")),
-    (PatternVariant::DStaircaseInvLeft,  string_to_pattern_bits("LDURLDUR")),
-    (PatternVariant::DStaircaseInvRight, string_to_pattern_bits("RDULRDUL")),
-
-    // Alternating staircases
-    (PatternVariant::AltStaircasesLeft,     string_to_pattern_bits("LUDRLDUR")),
-    (PatternVariant::AltStaircasesRight,    string_to_pattern_bits("RDULRUDL")),
-    (PatternVariant::AltStaircasesInvLeft,  string_to_pattern_bits("LDURLUDR")),
-    (PatternVariant::AltStaircasesInvRight, string_to_pattern_bits("RUDLRDUL")),
-
-    // Luchi
-    (PatternVariant::LuchiLeftDU,  string_to_pattern_bits("LDLUL")),
-    (PatternVariant::LuchiLeftUD,  string_to_pattern_bits("LULDL")),
-    (PatternVariant::LuchiRightUD, string_to_pattern_bits("RURDR")),
-    (PatternVariant::LuchiRightDU, string_to_pattern_bits("RDRUR")),
-
-    // Copters
-    (PatternVariant::CopterLeft,     string_to_pattern_bits("LDURDULDUR")),
-    (PatternVariant::CopterRight,    string_to_pattern_bits("RUDLUDRUDL")),
-    (PatternVariant::CopterInvLeft,  string_to_pattern_bits("LUDRUDLUDR")),
-    (PatternVariant::CopterInvRight, string_to_pattern_bits("RDULDURDUL")),
-
-    // Hip-Breakers
-    (PatternVariant::HipBreakerLeft,     string_to_pattern_bits("LDUDLUDUL")),
-    (PatternVariant::HipBreakerRight,    string_to_pattern_bits("RUDURDUDR")),
-    (PatternVariant::HipBreakerInvLeft,  string_to_pattern_bits("LUDULDUDL")),
-    (PatternVariant::HipBreakerInvRight, string_to_pattern_bits("RDUDRUDUR")),
-
-    // Spirals
-    (PatternVariant::SpiralLeft,     string_to_pattern_bits("LDURDR")),
-    (PatternVariant::SpiralRight,    string_to_pattern_bits("RUDLUL")),
-    (PatternVariant::SpiralInvLeft,  string_to_pattern_bits("LUDRUR")),
-    (PatternVariant::SpiralInvRight, string_to_pattern_bits("RDULDL")),
-
-    // Turbo Candle
-    (PatternVariant::TurboCandleLeft,     string_to_pattern_bits("LDLUDRUR")),
-    (PatternVariant::TurboCandleRight,    string_to_pattern_bits("RURDULDL")),
-    (PatternVariant::TurboCandleInvLeft,  string_to_pattern_bits("LULDURDR")),
-    (PatternVariant::TurboCandleInvRight, string_to_pattern_bits("RDRUDLUL")),
-
-    // Sweeping Candle
-    (PatternVariant::SweepCandleLeft,     string_to_pattern_bits("LDURDRUDL")),
-    (PatternVariant::SweepCandleRight,    string_to_pattern_bits("RUDLULDUR")),
-    (PatternVariant::SweepCandleInvLeft,  string_to_pattern_bits("LUDRURDUL")),
-    (PatternVariant::SweepCandleInvRight, string_to_pattern_bits("RDULDLUDR")),
+        //Staircases
+        (
+            PatternVariant::StaircaseLeft,
+            string_to_pattern_bits("LDUR"),
+        ),
+        (
+            PatternVariant::StaircaseRight,
+            string_to_pattern_bits("RUDL"),
+        ),
+        (
+            PatternVariant::StaircaseInvLeft,
+            string_to_pattern_bits("LUDR"),
+        ),
+        (
+            PatternVariant::StaircaseInvRight,
+            string_to_pattern_bits("RDUL"),
+        ),
+        // Triangles
+        (PatternVariant::TriangleRUR, string_to_pattern_bits("RUR")),
+        (PatternVariant::TriangleLUL, string_to_pattern_bits("LUL")),
+        (PatternVariant::TriangleLDL, string_to_pattern_bits("LDL")),
+        (PatternVariant::TriangleRDR, string_to_pattern_bits("RDR")),
+        // Doritos
+        (PatternVariant::DoritoLeft, string_to_pattern_bits("LDUDL")),
+        (PatternVariant::DoritoRight, string_to_pattern_bits("RUDUR")),
+        (
+            PatternVariant::DoritoInvLeft,
+            string_to_pattern_bits("LUDUL"),
+        ),
+        (
+            PatternVariant::DoritoInvRight,
+            string_to_pattern_bits("RDUDR"),
+        ),
+        // Sweeps
+        (PatternVariant::SweepLeft, string_to_pattern_bits("LDURUDL")),
+        (
+            PatternVariant::SweepRight,
+            string_to_pattern_bits("RUDLDUR"),
+        ),
+        (
+            PatternVariant::SweepInvLeft,
+            string_to_pattern_bits("LUDRDUL"),
+        ),
+        (
+            PatternVariant::SweepInvRight,
+            string_to_pattern_bits("RDULUDR"),
+        ),
+        // Towers
+        (PatternVariant::TowerLR, string_to_pattern_bits("LRLRL")),
+        (PatternVariant::TowerLR, string_to_pattern_bits("RLRLR")),
+        (PatternVariant::TowerUD, string_to_pattern_bits("UDUDU")),
+        (PatternVariant::TowerUD, string_to_pattern_bits("DUDUD")),
+        (
+            PatternVariant::TowerCornerLD,
+            string_to_pattern_bits("LDLDL"),
+        ),
+        (
+            PatternVariant::TowerCornerLD,
+            string_to_pattern_bits("DLDLD"),
+        ),
+        (
+            PatternVariant::TowerCornerLU,
+            string_to_pattern_bits("LULUL"),
+        ),
+        (
+            PatternVariant::TowerCornerLU,
+            string_to_pattern_bits("ULULU"),
+        ),
+        (
+            PatternVariant::TowerCornerRD,
+            string_to_pattern_bits("RDRDR"),
+        ),
+        (
+            PatternVariant::TowerCornerRD,
+            string_to_pattern_bits("DRDRD"),
+        ),
+        (
+            PatternVariant::TowerCornerRU,
+            string_to_pattern_bits("RURUR"),
+        ),
+        (
+            PatternVariant::TowerCornerRU,
+            string_to_pattern_bits("URURU"),
+        ),
+        // Double staircases
+        (
+            PatternVariant::DStaircaseLeft,
+            string_to_pattern_bits("LUDRLUDR"),
+        ),
+        (
+            PatternVariant::DStaircaseRight,
+            string_to_pattern_bits("RDULRDUL"),
+        ),
+        (
+            PatternVariant::DStaircaseInvLeft,
+            string_to_pattern_bits("LDURLDUR"),
+        ),
+        (
+            PatternVariant::DStaircaseInvRight,
+            string_to_pattern_bits("RDULRDUL"),
+        ),
+        // Alternating staircases
+        (
+            PatternVariant::AltStaircasesLeft,
+            string_to_pattern_bits("LUDRLDUR"),
+        ),
+        (
+            PatternVariant::AltStaircasesRight,
+            string_to_pattern_bits("RDULRUDL"),
+        ),
+        (
+            PatternVariant::AltStaircasesInvLeft,
+            string_to_pattern_bits("LDURLUDR"),
+        ),
+        (
+            PatternVariant::AltStaircasesInvRight,
+            string_to_pattern_bits("RUDLRDUL"),
+        ),
+        // Luchi
+        (PatternVariant::LuchiLeftDU, string_to_pattern_bits("LDLUL")),
+        (PatternVariant::LuchiLeftUD, string_to_pattern_bits("LULDL")),
+        (
+            PatternVariant::LuchiRightUD,
+            string_to_pattern_bits("RURDR"),
+        ),
+        (
+            PatternVariant::LuchiRightDU,
+            string_to_pattern_bits("RDRUR"),
+        ),
+        // Copters
+        (
+            PatternVariant::CopterLeft,
+            string_to_pattern_bits("LDURDULDUR"),
+        ),
+        (
+            PatternVariant::CopterRight,
+            string_to_pattern_bits("RUDLUDRUDL"),
+        ),
+        (
+            PatternVariant::CopterInvLeft,
+            string_to_pattern_bits("LUDRUDLUDR"),
+        ),
+        (
+            PatternVariant::CopterInvRight,
+            string_to_pattern_bits("RDULDURDUL"),
+        ),
+        // Hip-Breakers
+        (
+            PatternVariant::HipBreakerLeft,
+            string_to_pattern_bits("LDUDLUDUL"),
+        ),
+        (
+            PatternVariant::HipBreakerRight,
+            string_to_pattern_bits("RUDURDUDR"),
+        ),
+        (
+            PatternVariant::HipBreakerInvLeft,
+            string_to_pattern_bits("LUDULDUDL"),
+        ),
+        (
+            PatternVariant::HipBreakerInvRight,
+            string_to_pattern_bits("RDUDRUDUR"),
+        ),
+        // Spirals
+        (PatternVariant::SpiralLeft, string_to_pattern_bits("LDURDR")),
+        (
+            PatternVariant::SpiralRight,
+            string_to_pattern_bits("RUDLUL"),
+        ),
+        (
+            PatternVariant::SpiralInvLeft,
+            string_to_pattern_bits("LUDRUR"),
+        ),
+        (
+            PatternVariant::SpiralInvRight,
+            string_to_pattern_bits("RDULDL"),
+        ),
+        // Turbo Candle
+        (
+            PatternVariant::TurboCandleLeft,
+            string_to_pattern_bits("LDLUDRUR"),
+        ),
+        (
+            PatternVariant::TurboCandleRight,
+            string_to_pattern_bits("RURDULDL"),
+        ),
+        (
+            PatternVariant::TurboCandleInvLeft,
+            string_to_pattern_bits("LULDURDR"),
+        ),
+        (
+            PatternVariant::TurboCandleInvRight,
+            string_to_pattern_bits("RDRUDLUL"),
+        ),
+        // Sweeping Candle
+        (
+            PatternVariant::SweepCandleLeft,
+            string_to_pattern_bits("LDURDRUDL"),
+        ),
+        (
+            PatternVariant::SweepCandleRight,
+            string_to_pattern_bits("RUDLULDUR"),
+        ),
+        (
+            PatternVariant::SweepCandleInvLeft,
+            string_to_pattern_bits("LUDRURDUL"),
+        ),
+        (
+            PatternVariant::SweepCandleInvRight,
+            string_to_pattern_bits("RDULDLUDR"),
+        ),
     ]
 });
 
@@ -575,7 +700,12 @@ pub fn count_facing_steps(bitmasks: &[u8], mono_threshold: usize) -> (u32, u32) 
     for &mask in bitmasks {
         let Some(curr_arrow) = map_bitmask_to_arrow(mask) else {
             if prev_arrow.is_some() {
-                finalize_segment(&mut state, &mut final_left, &mut final_right, mono_threshold);
+                finalize_segment(
+                    &mut state,
+                    &mut final_left,
+                    &mut final_right,
+                    mono_threshold,
+                );
                 prev_arrow = None;
                 prev_foot = None;
             }
@@ -592,15 +722,31 @@ pub fn count_facing_steps(bitmasks: &[u8], mono_threshold: usize) -> (u32, u32) 
         let direction = determine_direction(prev_arrow_value, curr_arrow);
         let (next_foot, should_finalize) = next_foot(prev_foot, curr_arrow);
         if should_finalize {
-            finalize_segment(&mut state, &mut final_left, &mut final_right, mono_threshold);
+            finalize_segment(
+                &mut state,
+                &mut final_left,
+                &mut final_right,
+                mono_threshold,
+            );
         }
         prev_foot = next_foot;
-        state = update_facing_state(state, direction, &mut final_left, &mut final_right, mono_threshold);
+        state = update_facing_state(
+            state,
+            direction,
+            &mut final_left,
+            &mut final_right,
+            mono_threshold,
+        );
         prev_arrow = Some(curr_arrow);
     }
 
     if prev_arrow.is_some() {
-        finalize_segment(&mut state, &mut final_left, &mut final_right, mono_threshold);
+        finalize_segment(
+            &mut state,
+            &mut final_left,
+            &mut final_right,
+            mono_threshold,
+        );
     }
     (final_left, final_right)
 }

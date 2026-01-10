@@ -1,5 +1,7 @@
-use crate::timing::{beat_to_note_row, note_row_to_beat, TimingData};
+use crate::timing::{TimingData, beat_to_note_row, note_row_to_beat};
 use std::fmt::Write;
+
+pub use crate::nps::measure_equally_spaced;
 
 // ============================================================================
 // Data Structures
@@ -826,7 +828,7 @@ fn process_timing_row<const L: usize>(
 
     let (mut notes, mut new_h) = (0u32, 0u32);
     let mut has_note = false;
-    
+
     for c in 0..L {
         match line[c] {
             b'1' => {
@@ -922,49 +924,6 @@ fn densities_impl<const L: usize>(data: &[u8]) -> Vec<usize> {
     }
 
     densities
-}
-
-pub fn measure_equally_spaced(data: &[u8], lanes: usize) -> Vec<bool> {
-    dispatch_lanes!(lanes, equally_spaced_impl(data))
-}
-
-fn equally_spaced_impl<const L: usize>(data: &[u8]) -> Vec<bool> {
-    let mut results = Vec::new();
-    let (mut rows, mut notes) = (0, 0);
-    let mut saw_term = false;
-
-    for raw in data.split(|&b| b == b'\n') {
-        let line = trim_cr(raw);
-        if line.is_empty() {
-            continue;
-        }
-
-        match line[0] {
-            b',' => {
-                results.push(notes == rows);
-                rows = 0;
-                notes = 0;
-            }
-            b';' => {
-                results.push(notes == rows);
-                saw_term = true;
-                break;
-            }
-            _ if line.len() >= L => {
-                rows += 1;
-                if has_step::<L>(line) {
-                    notes += 1;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    if !saw_term {
-        results.push(notes == rows);
-    }
-
-    results
 }
 
 // ============================================================================

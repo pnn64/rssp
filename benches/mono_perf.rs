@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -7,11 +7,7 @@ const MONO_THRESHOLD: usize = 6;
 
 fn step_type_lanes(step_type: &str) -> usize {
     let normalized = step_type.trim().to_ascii_lowercase().replace('_', "-");
-    if normalized == "dance-double" {
-        8
-    } else {
-        4
-    }
+    if normalized == "dance-double" { 8 } else { 4 }
 }
 
 fn generate_bitmasks(minimized_chart: &[u8]) -> Vec<u8> {
@@ -34,8 +30,8 @@ fn generate_bitmasks(minimized_chart: &[u8]) -> Vec<u8> {
 }
 
 fn build_bitmasks() -> Vec<u8> {
-    let parsed = rssp::parse::extract_sections(FIXTURE.as_bytes(), "ssc")
-        .expect("fixture should parse");
+    let parsed =
+        rssp::parse::extract_sections(FIXTURE.as_bytes(), "ssc").expect("fixture should parse");
 
     let mut best_chart: Option<(usize, Vec<u8>)> = None;
     for entry in parsed.notes_list {
@@ -80,10 +76,8 @@ fn bench_mono_counts(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(2));
     group.bench_function("count_facing_steps", |b| {
         b.iter(|| {
-            let counts = rssp::patterns::count_facing_steps(
-                black_box(&bitmasks),
-                black_box(MONO_THRESHOLD),
-            );
+            let counts =
+                rssp::patterns::count_facing_steps(black_box(&bitmasks), black_box(MONO_THRESHOLD));
             black_box(counts);
         })
     });

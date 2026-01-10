@@ -8,7 +8,7 @@ use serde::Deserialize;
 use walkdir::WalkDir;
 
 use rssp::timing::round_millis;
-use rssp::{compute_chart_durations, ChartDuration, TimingOffsets};
+use rssp::{ChartDuration, TimingOffsets, compute_chart_durations};
 
 #[derive(Debug, Deserialize)]
 struct GoldenChart {
@@ -34,8 +34,7 @@ struct Failure {
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
-    let compressed_bytes = fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     let raw_bytes = zstd::decode_all(&compressed_bytes[..])
         .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
@@ -56,8 +55,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         ));
     }
 
-    let compressed_golden = fs::read(&golden_path)
-        .map_err(|e| format!("Failed to read baseline file: {}", e))?;
+    let compressed_golden =
+        fs::read(&golden_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
 
     let json_bytes = zstd::decode_all(&compressed_golden[..])
         .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
@@ -150,10 +149,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 .iter()
                 .map(|e| round_millis(e.duration_seconds))
                 .collect();
-            let actual_values: Vec<f64> = actual_entries
-                .iter()
-                .map(|a| a.duration_seconds)
-                .collect();
+            let actual_values: Vec<f64> =
+                actual_entries.iter().map(|a| a.duration_seconds).collect();
             return Err(format!(
                 "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP duration_seconds:   {:?}\nGolden duration_seconds: {:?}\n",
                 path.display(),

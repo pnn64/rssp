@@ -58,30 +58,26 @@ fn approx_eq(a: f64, b: f64) -> bool {
 }
 
 fn compute_chart_bpms(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartBpmInfo>, String> {
-    let snapshots = chart_bpm_snapshots(simfile_data, extension)
-        .map_err(|e| e.to_string())?;
+    let snapshots = chart_bpm_snapshots(simfile_data, extension).map_err(|e| e.to_string())?;
 
     Ok(snapshots
         .into_iter()
-        .map(|chart| {
-            ChartBpmInfo {
-                step_type: chart.step_type,
-                difficulty: chart.difficulty,
-                hash_bpms: chart.hash_bpms,
-                bpms: chart.bpms_formatted,
-                bpm_min: chart.bpm_min,
-                bpm_max: chart.bpm_max,
-                display_bpm: chart.display_bpm,
-                display_bpm_min: chart.display_bpm_min,
-                display_bpm_max: chart.display_bpm_max,
-            }
+        .map(|chart| ChartBpmInfo {
+            step_type: chart.step_type,
+            difficulty: chart.difficulty,
+            hash_bpms: chart.hash_bpms,
+            bpms: chart.bpms_formatted,
+            bpm_min: chart.bpm_min,
+            bpm_max: chart.bpm_max,
+            display_bpm: chart.display_bpm,
+            display_bpm_min: chart.display_bpm_min,
+            display_bpm_max: chart.display_bpm_max,
         })
         .collect())
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
-    let compressed_bytes = fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     let raw_bytes = zstd::decode_all(&compressed_bytes[..])
         .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
@@ -102,8 +98,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         ));
     }
 
-    let compressed_golden = fs::read(&golden_path)
-        .map_err(|e| format!("Failed to read baseline file: {}", e))?;
+    let compressed_golden =
+        fs::read(&golden_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
 
     let json_bytes = zstd::decode_all(&compressed_golden[..])
         .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
@@ -278,9 +274,11 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 .iter()
                 .map(|entry| entry.bpms.clone())
                 .collect();
-            let expected_min: Vec<f64> = expected_entries.iter().map(|entry| entry.bpm_min).collect();
+            let expected_min: Vec<f64> =
+                expected_entries.iter().map(|entry| entry.bpm_min).collect();
             let actual_min: Vec<f64> = actual_entries.iter().map(|entry| entry.bpm_min).collect();
-            let expected_max: Vec<f64> = expected_entries.iter().map(|entry| entry.bpm_max).collect();
+            let expected_max: Vec<f64> =
+                expected_entries.iter().map(|entry| entry.bpm_max).collect();
             let actual_max: Vec<f64> = actual_entries.iter().map(|entry| entry.bpm_max).collect();
             let expected_display: Vec<String> = expected_entries
                 .iter()

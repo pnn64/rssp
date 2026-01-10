@@ -1,10 +1,4 @@
-const SHA1_INIT: [u32; 5] = [
-    0x67452301,
-    0xefcdab89,
-    0x98badcfe,
-    0x10325476,
-    0xc3d2e1f0,
-];
+const SHA1_INIT: [u32; 5] = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0];
 
 const SHA1_K: [[u32; 4]; 4] = [
     [0x5a827999; 4],

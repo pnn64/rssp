@@ -1,10 +1,10 @@
-use std::fs;
+use libtest_mimic::Arguments;
+use serde::Deserialize;
 use std::collections::HashMap;
+use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use serde::Deserialize;
 use walkdir::WalkDir;
-use libtest_mimic::Arguments;
 
 #[derive(Debug, Deserialize)]
 struct GoldenChart {
@@ -48,7 +48,8 @@ fn main() {
         // Check the "inner" extension (e.g. "file.sm.zst" -> "sm")
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         let inner_path = Path::new(stem);
-        let inner_extension = inner_path.extension()
+        let inner_extension = inner_path
+            .extension()
             .and_then(|e| e.to_str())
             .map(|s| s.to_lowercase())
             .unwrap_or_default();
@@ -58,7 +59,8 @@ fn main() {
         }
 
         // Create a pretty name: "PackName/SongName/file.ssc.zst"
-        let test_name = path.strip_prefix(&packs_dir)
+        let test_name = path
+            .strip_prefix(&packs_dir)
             .unwrap_or(path)
             .to_string_lossy()
             .to_string();
@@ -184,16 +186,15 @@ struct Failure {
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
     // 1. Read Compressed Simfile
-    let compressed_bytes = fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
-    
+    let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+
     // 2. Decompress Simfile
     let raw_bytes = zstd::decode_all(&compressed_bytes[..])
         .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
-    
+
     // 3. Compute Hash (on raw bytes) to find Baseline JSON
     let file_hash = format!("{:x}", md5::compute(&raw_bytes));
-    
+
     // Determine sharded subfolder (first 2 chars of hash)
     let subfolder = &file_hash[0..2];
 
@@ -212,9 +213,9 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     }
 
     // 4. Read & Decompress Golden JSON
-    let compressed_golden = fs::read(&golden_path)
-        .map_err(|e| format!("Failed to read baseline file: {}", e))?;
-    
+    let compressed_golden =
+        fs::read(&golden_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
+
     let json_bytes = zstd::decode_all(&compressed_golden[..])
         .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
 
@@ -246,10 +247,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         if step_type_lower != "dance-single" && step_type_lower != "dance-double" {
             continue;
         }
-        let key = (
-            step_type_lower,
-            chart.difficulty.to_ascii_lowercase(),
-        );
+        let key = (step_type_lower, chart.difficulty.to_ascii_lowercase());
         rssp_map.entry(key).or_default().push(chart.hash);
     }
 

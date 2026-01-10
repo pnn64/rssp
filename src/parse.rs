@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::io;
 
-use crate::timing::{TimingFormat, STEPFILE_VERSION_NUMBER};
+use crate::timing::{STEPFILE_VERSION_NUMBER, TimingFormat};
 
 pub fn strip_title_tags(mut title: &str) -> String {
     loop {
@@ -20,7 +20,9 @@ pub fn strip_title_tags(mut title: &str) -> String {
             }
         }
 
-        if title == original { break; }
+        if title == original {
+            break;
+        }
     }
     title.to_string()
 }
@@ -33,7 +35,11 @@ pub fn unescape_tag(tag: &str) -> String {
     let mut out = String::with_capacity(tag.len());
     let mut chars = tag.chars();
     while let Some(c) = chars.next() {
-        out.push(if c == '\\' { chars.next().unwrap_or(c) } else { c });
+        out.push(if c == '\\' {
+            chars.next().unwrap_or(c)
+        } else {
+            c
+        });
     }
     out
 }
@@ -45,22 +51,28 @@ pub fn unescape_trim(tag: &str) -> String {
 }
 
 const CP1252_MAP: [u16; 32] = [
-    0x20AC, 0xFFFD, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
-    0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0xFFFD, 0x017D, 0xFFFD,
-    0xFFFD, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+    0x20AC, 0xFFFD, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160, 0x2039,
+    0x0152, 0xFFFD, 0x017D, 0xFFFD, 0xFFFD, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
     0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0xFFFD, 0x017E, 0x0178,
 ];
 
 fn decode_cp1252(bytes: &[u8]) -> String {
-    bytes.iter().map(|&b| match b {
-        0x00..=0x7F => b as char,
-        0x80..=0x9F => char::from_u32(CP1252_MAP[(b - 0x80) as usize] as u32).unwrap_or('\u{FFFD}'),
-        _ => char::from_u32(b as u32).unwrap_or('\u{FFFD}'),
-    }).collect()
+    bytes
+        .iter()
+        .map(|&b| match b {
+            0x00..=0x7F => b as char,
+            0x80..=0x9F => {
+                char::from_u32(CP1252_MAP[(b - 0x80) as usize] as u32).unwrap_or('\u{FFFD}')
+            }
+            _ => char::from_u32(b as u32).unwrap_or('\u{FFFD}'),
+        })
+        .collect()
 }
 
 pub fn decode_bytes(bytes: &[u8]) -> Cow<'_, str> {
-    std::str::from_utf8(bytes).map(Cow::Borrowed).unwrap_or_else(|_| Cow::Owned(decode_cp1252(bytes)))
+    std::str::from_utf8(bytes)
+        .map(Cow::Borrowed)
+        .unwrap_or_else(|_| Cow::Owned(decode_cp1252(bytes)))
 }
 
 pub fn parse_offset_seconds(offset: Option<&[u8]>) -> f64 {
@@ -75,13 +87,21 @@ pub fn parse_version(version: Option<&[u8]>, fmt: TimingFormat) -> f32 {
     version
         .and_then(|b| std::str::from_utf8(b).ok())
         .and_then(|s| s.parse().ok())
-        .unwrap_or(if fmt == TimingFormat::Ssc { f32::NAN } else { STEPFILE_VERSION_NUMBER })
+        .unwrap_or(if fmt == TimingFormat::Ssc {
+            f32::NAN
+        } else {
+            STEPFILE_VERSION_NUMBER
+        })
 }
 
 pub const SSC_VERSION_CHART_NAME_TAG: f32 = 0.74;
 
 pub fn normalize_chart_desc(desc: String, fmt: TimingFormat, ver: f32) -> String {
-    if fmt == TimingFormat::Ssc && ver < SSC_VERSION_CHART_NAME_TAG { String::new() } else { desc }
+    if fmt == TimingFormat::Ssc && ver < SSC_VERSION_CHART_NAME_TAG {
+        String::new()
+    } else {
+        desc
+    }
 }
 
 type TagBytes<'a> = Cow<'a, [u8]>;
@@ -164,7 +184,10 @@ struct NotedataFields<'a> {
 #[inline(always)]
 fn starts_with_ci(slice: &[u8], tag: &[u8]) -> bool {
     slice.len() >= tag.len()
-        && slice.iter().zip(tag).all(|(a, b)| a.eq_ignore_ascii_case(b))
+        && slice
+            .iter()
+            .zip(tag)
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
 }
 
 /// Returns (value_end, next_position) if terminator found.
@@ -180,11 +203,21 @@ fn scan_tag_end(slice: &[u8], allow_nl: bool) -> Option<(usize, usize)> {
             b':' if !allow_nl && !escaped => return Some((i, i + 1)),
             b'\n' | b'\r' => {
                 let mut j = i + 1;
-                if b == b'\r' && slice.get(j) == Some(&b'\n') { j += 1; }
-                while j < slice.len() && slice[j].is_ascii_whitespace() 
-                    && !matches!(slice[j], b'\n' | b'\r') { j += 1; }
-                if slice.get(j) == Some(&b'#') { return Some((i, j)); }
-                if !allow_nl && slice.get(j) != Some(&b';') { return None; }
+                if b == b'\r' && slice.get(j) == Some(&b'\n') {
+                    j += 1;
+                }
+                while j < slice.len()
+                    && slice[j].is_ascii_whitespace()
+                    && !matches!(slice[j], b'\n' | b'\r')
+                {
+                    j += 1;
+                }
+                if slice.get(j) == Some(&b'#') {
+                    return Some((i, j));
+                }
+                if !allow_nl && slice.get(j) != Some(&b';') {
+                    return None;
+                }
             }
             _ => {}
         }
@@ -207,14 +240,20 @@ fn try_tag<'a>(s: &'a [u8], tag: &[u8], out: &mut Option<&'a [u8]>, enabled: boo
     if enabled && starts_with_ci(s, tag) && out.is_none() {
         *out = parse_tag_val(s, tag.len(), true).map(|(v, _)| v);
         true
-    } else { false }
+    } else {
+        false
+    }
 }
 
 #[inline(always)]
 fn try_tag_adv<'a>(s: &'a [u8], tag: &[u8], nl: bool, out: &mut Option<&'a [u8]>) -> Option<usize> {
-    if !starts_with_ci(s, tag) { return None; }
+    if !starts_with_ci(s, tag) {
+        return None;
+    }
     let (val, adv) = parse_tag_val(s, tag.len(), nl)?;
-    if out.is_none() { *out = Some(val); }
+    if out.is_none() {
+        *out = Some(val);
+    }
     Some(adv)
 }
 
@@ -228,38 +267,48 @@ fn parse_notedata_fields(data: &[u8]) -> NotedataFields<'_> {
     let mut out = NotedataFields::default();
     let mut i = 0;
     while i < data.len() {
-        let Some(pos) = data[i..].iter().position(|&b| b == b'#') else { break };
+        let Some(pos) = data[i..].iter().position(|&b| b == b'#') else {
+            break;
+        };
         i += pos;
         let s = &data[i..];
 
         if starts_with_ci(s, b"#NOTEDATA:") {
-            if let Some((_, next)) = scan_tag_end(&s[10..], true) { i += 10 + next; continue; }
+            if let Some((_, next)) = scan_tag_end(&s[10..], true) {
+                i += 10 + next;
+                continue;
+            }
         }
 
-        try_tags!(s, i, out, [
-            (b"#STEPSTYPE:", step_type, false),
-            (b"#DESCRIPTION:", description, false),
-            (b"#CREDIT:", credit, false),
-            (b"#DIFFICULTY:", difficulty, false),
-            (b"#METER:", meter, false),
-            (b"#NOTES:", notes, true),
-            (b"#NOTES2:", notes2, true),
-            (b"#BPMS:", chart_bpms, true),
-            (b"#STOPS:", chart_stops, true),
-            (b"#FREEZES:", chart_freezes, true),
-            (b"#DELAYS:", chart_delays, true),
-            (b"#WARPS:", chart_warps, true),
-            (b"#SPEEDS:", chart_speeds, true),
-            (b"#SCROLLS:", chart_scrolls, true),
-            (b"#FAKES:", chart_fakes, true),
-            (b"#OFFSET:", chart_offset, true),
-            (b"#DISPLAYBPM:", chart_display_bpm, true),
-            (b"#TIMESIGNATURES:", chart_time_signatures, true),
-            (b"#LABELS:", chart_labels, true),
-            (b"#TICKCOUNTS:", chart_tickcounts, true),
-            (b"#COMBOS:", chart_combos, true),
-            (b"#RADARVALUES:", chart_radar_values, true),
-        ]);
+        try_tags!(
+            s,
+            i,
+            out,
+            [
+                (b"#STEPSTYPE:", step_type, false),
+                (b"#DESCRIPTION:", description, false),
+                (b"#CREDIT:", credit, false),
+                (b"#DIFFICULTY:", difficulty, false),
+                (b"#METER:", meter, false),
+                (b"#NOTES:", notes, true),
+                (b"#NOTES2:", notes2, true),
+                (b"#BPMS:", chart_bpms, true),
+                (b"#STOPS:", chart_stops, true),
+                (b"#FREEZES:", chart_freezes, true),
+                (b"#DELAYS:", chart_delays, true),
+                (b"#WARPS:", chart_warps, true),
+                (b"#SPEEDS:", chart_speeds, true),
+                (b"#SCROLLS:", chart_scrolls, true),
+                (b"#FAKES:", chart_fakes, true),
+                (b"#OFFSET:", chart_offset, true),
+                (b"#DISPLAYBPM:", chart_display_bpm, true),
+                (b"#TIMESIGNATURES:", chart_time_signatures, true),
+                (b"#LABELS:", chart_labels, true),
+                (b"#TICKCOUNTS:", chart_tickcounts, true),
+                (b"#COMBOS:", chart_combos, true),
+                (b"#RADARVALUES:", chart_radar_values, true),
+            ]
+        );
         i += 1;
     }
     out
@@ -270,7 +319,10 @@ fn join_notes(parts: [&[u8]; 6]) -> Vec<u8> {
     let cap: usize = parts.iter().map(|p| p.len()).sum::<usize>() + 5;
     let mut out = Vec::with_capacity(cap);
     out.extend_from_slice(parts[0]);
-    for p in &parts[1..] { out.push(b':'); out.extend_from_slice(p); }
+    for p in &parts[1..] {
+        out.push(b':');
+        out.extend_from_slice(p);
+    }
     out
 }
 
@@ -304,8 +356,10 @@ fn build_chart_entry(f: NotedataFields<'_>) -> ParsedChartEntry<'_> {
 pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfileData<'a>> {
     let ext_lower = ext.to_lowercase();
     if !matches!(ext_lower.as_str(), "sm" | "ssc") {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, 
-            "Unsupported file extension (must be .sm or .ssc)"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Unsupported file extension (must be .sm or .ssc)",
+        ));
     }
 
     let mut r = ParsedSimfileData::default();
@@ -313,15 +367,20 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
     let ssc = ext_lower == "ssc";
 
     while i < data.len() {
-        let Some(pos) = data[i..].iter().position(|&b| b == b'#') else { break };
+        let Some(pos) = data[i..].iter().position(|&b| b == b'#') else {
+            break;
+        };
         i += pos;
         let s = &data[i..];
 
         // SSC notedata block
         if ssc && starts_with_ci(s, b"#NOTEDATA:") {
             let mut end = i + 1;
-            while end < data.len() && !starts_with_ci(&data[end..], b"#NOTEDATA:") { end += 1; }
-            r.notes_list.push(build_chart_entry(parse_notedata_fields(&data[i..end])));
+            while end < data.len() && !starts_with_ci(&data[end..], b"#NOTEDATA:") {
+                end += 1;
+            }
+            r.notes_list
+                .push(build_chart_entry(parse_notedata_fields(&data[i..end])));
             i = end;
             continue;
         }
@@ -330,8 +389,14 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
         if !ssc && (starts_with_ci(s, b"#NOTES:") || starts_with_ci(s, b"#NOTES2:")) {
             let tag_len = if starts_with_ci(s, b"#NOTES2:") { 8 } else { 7 };
             let start = i + tag_len;
-            let end = data[start..].iter().position(|&b| b == b';').map_or(data.len(), |e| start + e);
-            r.notes_list.push(ParsedChartEntry { notes: data[start..end].to_vec(), ..Default::default() });
+            let end = data[start..]
+                .iter()
+                .position(|&b| b == b';')
+                .map_or(data.len(), |e| start + e);
+            r.notes_list.push(ParsedChartEntry {
+                notes: data[start..end].to_vec(),
+                ..Default::default()
+            });
             i = end + 1;
             continue;
         }
@@ -369,8 +434,14 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
 }
 
 pub fn split_notes_fields(block: &[u8]) -> (Vec<&[u8]>, &[u8]) {
-    let bs_count = |data: &[u8], pos: usize| data[..pos].iter().rev().take_while(|&&b| b == b'\\').count();
-    
+    let bs_count = |data: &[u8], pos: usize| {
+        data[..pos]
+            .iter()
+            .rev()
+            .take_while(|&&b| b == b'\\')
+            .count()
+    };
+
     let mut fields = Vec::new();
     let mut start = 0;
     for i in 0..block.len() {
@@ -379,11 +450,13 @@ pub fn split_notes_fields(block: &[u8]) -> (Vec<&[u8]>, &[u8]) {
             start = i + 1;
         }
     }
-    
+
     let rest = block.get(start..).unwrap_or(&[]);
-    let end = rest.iter().enumerate()
+    let end = rest
+        .iter()
+        .enumerate()
         .find(|&(k, &b)| b == b':' && bs_count(rest, k) % 2 == 0)
         .map_or(rest.len(), |(k, _)| k);
-    
+
     (fields, &rest[..end])
 }

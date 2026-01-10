@@ -7,7 +7,7 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::{analyze, normalize_difficulty_label, AnalysisOptions};
+use rssp::{AnalysisOptions, analyze, normalize_difficulty_label};
 
 #[derive(Debug, Deserialize)]
 struct GoldenTechCounts {
@@ -94,8 +94,7 @@ fn compute_chart_tech_counts(
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
-    let compressed_bytes = fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     let raw_bytes = zstd::decode_all(&compressed_bytes[..])
         .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
@@ -116,8 +115,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         ));
     }
 
-    let compressed_golden = fs::read(&golden_path)
-        .map_err(|e| format!("Failed to read baseline file: {}", e))?;
+    let compressed_golden =
+        fs::read(&golden_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
 
     let json_bytes = zstd::decode_all(&compressed_golden[..])
         .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
@@ -236,12 +235,14 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 .iter()
                 .filter_map(|e| e.tech_counts.as_ref().map(|c| c.footswitches))
                 .collect();
-            let actual_footswitches: Vec<u32> = actual_entries.iter().map(|a| a.footswitches).collect();
+            let actual_footswitches: Vec<u32> =
+                actual_entries.iter().map(|a| a.footswitches).collect();
             let expected_sideswitches: Vec<u32> = expected_entries
                 .iter()
                 .filter_map(|e| e.tech_counts.as_ref().map(|c| c.sideswitches))
                 .collect();
-            let actual_sideswitches: Vec<u32> = actual_entries.iter().map(|a| a.sideswitches).collect();
+            let actual_sideswitches: Vec<u32> =
+                actual_entries.iter().map(|a| a.sideswitches).collect();
             let expected_jacks: Vec<u32> = expected_entries
                 .iter()
                 .filter_map(|e| e.tech_counts.as_ref().map(|c| c.jacks))
@@ -256,7 +257,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 .iter()
                 .filter_map(|e| e.tech_counts.as_ref().map(|c| c.doublesteps))
                 .collect();
-            let actual_doublesteps: Vec<u32> = actual_entries.iter().map(|a| a.doublesteps).collect();
+            let actual_doublesteps: Vec<u32> =
+                actual_entries.iter().map(|a| a.doublesteps).collect();
 
             return Err(format!(
                 "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP crossovers:   {:?}\nGolden crossovers: {:?}\nRSSP footswitches:  {:?}\nGolden footswitches: {:?}\nRSSP sideswitches:  {:?}\nGolden sideswitches: {:?}\nRSSP jacks:         {:?}\nGolden jacks:       {:?}\nRSSP brackets:      {:?}\nGolden brackets:    {:?}\nRSSP doublesteps:   {:?}\nGolden doublesteps: {:?}\n",

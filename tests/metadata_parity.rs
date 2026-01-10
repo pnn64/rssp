@@ -7,7 +7,7 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::{analyze, display_metadata, AnalysisOptions};
+use rssp::{AnalysisOptions, analyze, display_metadata};
 
 #[derive(Debug, Deserialize)]
 struct GoldenMetadata {
@@ -76,21 +76,27 @@ struct ParsedMetadata {
     artist_translated: String,
 }
 
-fn expected_metadata(
-    entries: &[GoldenMetadata],
-    path: &Path,
-) -> Result<ExpectedMetadata, String> {
+fn expected_metadata(entries: &[GoldenMetadata], path: &Path) -> Result<ExpectedMetadata, String> {
     let mut expected: Option<ExpectedMetadata> = None;
 
     for entry in entries {
         let title = entry.title.as_deref().ok_or_else(|| {
-            format!("\n\nMISSING BASELINE FIELD\nFile: {}\nField: title\n", path.display())
+            format!(
+                "\n\nMISSING BASELINE FIELD\nFile: {}\nField: title\n",
+                path.display()
+            )
         })?;
         let subtitle = entry.subtitle.as_deref().ok_or_else(|| {
-            format!("\n\nMISSING BASELINE FIELD\nFile: {}\nField: subtitle\n", path.display())
+            format!(
+                "\n\nMISSING BASELINE FIELD\nFile: {}\nField: subtitle\n",
+                path.display()
+            )
         })?;
         let artist = entry.artist.as_deref().ok_or_else(|| {
-            format!("\n\nMISSING BASELINE FIELD\nFile: {}\nField: artist\n", path.display())
+            format!(
+                "\n\nMISSING BASELINE FIELD\nFile: {}\nField: artist\n",
+                path.display()
+            )
         })?;
         let title_translated = entry.title_translated.as_deref().ok_or_else(|| {
             format!(
@@ -133,9 +139,7 @@ fn expected_metadata(
         }
     }
 
-    expected.ok_or_else(|| {
-        format!("\n\nMISSING BASELINE METADATA\nFile: {}\n", path.display())
-    })
+    expected.ok_or_else(|| format!("\n\nMISSING BASELINE METADATA\nFile: {}\n", path.display()))
 }
 
 #[inline(always)]
@@ -180,7 +184,10 @@ fn parse_metadata(simfile_data: &[u8], extension: &str) -> Result<ParsedMetadata
     })
 }
 
-fn parse_step_artists(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartStepArtist>, String> {
+fn parse_step_artists(
+    simfile_data: &[u8],
+    extension: &str,
+) -> Result<Vec<ChartStepArtist>, String> {
     let options = AnalysisOptions {
         compute_tech_counts: false,
         translate_markers: true,
@@ -202,8 +209,7 @@ fn parse_step_artists(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartS
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
-    let compressed_bytes = fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     let raw_bytes = zstd::decode_all(&compressed_bytes[..])
         .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
@@ -224,8 +230,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         ));
     }
 
-    let compressed_golden = fs::read(&golden_path)
-        .map_err(|e| format!("Failed to read baseline file: {}", e))?;
+    let compressed_golden =
+        fs::read(&golden_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
 
     let json_bytes = zstd::decode_all(&compressed_golden[..])
         .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
@@ -238,8 +244,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
 
     let expected = expected_metadata(&golden_entries, path)?;
 
-    let actual = parse_metadata(&raw_bytes, extension)
-        .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
+    let actual =
+        parse_metadata(&raw_bytes, extension).map_err(|e| format!("RSSP Parsing Error: {}", e))?;
 
     let title_ok = actual.title == expected.title;
     let subtitle_ok = actual.subtitle == expected.subtitle
@@ -255,11 +261,27 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             && has_hash_prefix(&actual.artist_translated));
 
     let title_status = if title_ok { "....ok" } else { "....MISMATCH" };
-    let subtitle_status = if subtitle_ok { "....ok" } else { "....MISMATCH" };
+    let subtitle_status = if subtitle_ok {
+        "....ok"
+    } else {
+        "....MISMATCH"
+    };
     let artist_status = if artist_ok { "....ok" } else { "....MISMATCH" };
-    let title_translated_status = if title_translated_ok { "....ok" } else { "....MISMATCH" };
-    let subtitle_translated_status = if subtitle_translated_ok { "....ok" } else { "....MISMATCH" };
-    let artist_translated_status = if artist_translated_ok { "....ok" } else { "....MISMATCH" };
+    let title_translated_status = if title_translated_ok {
+        "....ok"
+    } else {
+        "....MISMATCH"
+    };
+    let subtitle_translated_status = if subtitle_translated_ok {
+        "....ok"
+    } else {
+        "....MISMATCH"
+    };
+    let artist_translated_status = if artist_translated_ok {
+        "....ok"
+    } else {
+        "....MISMATCH"
+    };
 
     println!("File: {}", path.display());
     println!(
@@ -296,8 +318,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         if step_type.is_empty() || step_type == "lights-cabinet" {
             continue;
         }
-        let difficulty = rssp::normalize_difficulty_label(&golden.difficulty)
-            .to_ascii_lowercase();
+        let difficulty = rssp::normalize_difficulty_label(&golden.difficulty).to_ascii_lowercase();
         let key = (step_type, difficulty);
         golden_map.entry(key).or_default().push(golden);
     }
@@ -358,14 +379,13 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 Some(0)
             };
 
-            let actual = matched_idx
-                .and_then(|pos| {
-                    if pos < actual_entries.len() {
-                        Some(actual_entries.remove(pos))
-                    } else {
-                        None
-                    }
-                });
+            let actual = matched_idx.and_then(|pos| {
+                if pos < actual_entries.len() {
+                    Some(actual_entries.remove(pos))
+                } else {
+                    None
+                }
+            });
 
             let meter_label = expected
                 .meter

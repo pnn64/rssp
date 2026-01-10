@@ -69,8 +69,7 @@ fn compute_chart_step_counts(
         compute_tech_counts: false,
         ..AnalysisOptions::default()
     };
-    let summary = analyze(simfile_data, extension, options)
-        .map_err(|e| e.to_string())?;
+    let summary = analyze(simfile_data, extension, options).map_err(|e| e.to_string())?;
     let mut results = Vec::new();
     for chart in summary.charts {
         results.push(ChartStepCounts {
@@ -91,8 +90,7 @@ fn compute_chart_step_counts(
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
-    let compressed_bytes = fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     let raw_bytes = zstd::decode_all(&compressed_bytes[..])
         .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
@@ -113,8 +111,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         ));
     }
 
-    let compressed_golden = fs::read(&golden_path)
-        .map_err(|e| format!("Failed to read baseline file: {}", e))?;
+    let compressed_golden =
+        fs::read(&golden_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
 
     let json_bytes = zstd::decode_all(&compressed_golden[..])
         .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
@@ -175,22 +173,21 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 .unwrap_or_else(|| (idx + 1).to_string());
 
             let mut all_match = true;
-            let mut field =
-                |label: &str, expected: Option<u32>, actual: Option<u32>| -> String {
-                    let status = if expected.is_some() && expected == actual {
-                        "ok"
-                    } else {
-                        all_match = false;
-                        "MISMATCH"
-                    };
-                    format!(
-                        "{} {} -> {} {}",
-                        label,
-                        format_count(expected),
-                        format_count(actual),
-                        status
-                    )
+            let mut field = |label: &str, expected: Option<u32>, actual: Option<u32>| -> String {
+                let status = if expected.is_some() && expected == actual {
+                    "ok"
+                } else {
+                    all_match = false;
+                    "MISMATCH"
                 };
+                format!(
+                    "{} {} -> {} {}",
+                    label,
+                    format_count(expected),
+                    format_count(actual),
+                    status
+                )
+            };
 
             let holds = field("holds", expected.map(|e| e.holds), actual.map(|a| a.holds));
             let mines = field("mines", expected.map(|e| e.mines), actual.map(|a| a.mines));

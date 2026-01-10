@@ -8,7 +8,7 @@ use serde::Deserialize;
 use walkdir::WalkDir;
 
 use rssp::stats::measure_equally_spaced;
-use rssp::{analyze, AnalysisOptions, step_type_lanes};
+use rssp::{AnalysisOptions, analyze, step_type_lanes};
 
 #[derive(Debug, Deserialize)]
 struct GoldenChart {
@@ -57,7 +57,10 @@ fn format_len<T>(opt: Option<&[T]>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
-fn compute_chart_nps(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartMeasureInfo>, String> {
+fn compute_chart_nps(
+    simfile_data: &[u8],
+    extension: &str,
+) -> Result<Vec<ChartMeasureInfo>, String> {
     let options = AnalysisOptions {
         compute_tech_counts: false,
         compute_pattern_counts: false,
@@ -74,11 +77,7 @@ fn compute_chart_nps(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartMe
                 step_type: chart.step_type_str,
                 difficulty: chart.difficulty_str,
                 peak_nps: chart.max_nps,
-                notes_per_measure: chart
-                    .measure_densities
-                    .iter()
-                    .map(|&v| v as u32)
-                    .collect(),
+                notes_per_measure: chart.measure_densities.iter().map(|&v| v as u32).collect(),
                 nps_per_measure: chart.measure_nps_vec,
                 equally_spaced_per_measure: measure_equally_spaced(
                     &chart.minimized_note_data,
@@ -90,8 +89,7 @@ fn compute_chart_nps(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartMe
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
-    let compressed_bytes = fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     let raw_bytes = zstd::decode_all(&compressed_bytes[..])
         .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
@@ -112,8 +110,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         ));
     }
 
-    let compressed_golden = fs::read(&golden_path)
-        .map_err(|e| format!("Failed to read baseline file: {}", e))?;
+    let compressed_golden =
+        fs::read(&golden_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
 
     let json_bytes = zstd::decode_all(&compressed_golden[..])
         .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
@@ -186,9 +184,11 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             let nps_matches = match (expected, actual) {
                 (Some(exp), Some(act)) => {
                     exp.nps_per_measure.len() == act.nps_per_measure.len()
-                        && exp.nps_per_measure.iter().zip(&act.nps_per_measure).all(|(e, a)| {
-                            approx_eq(*e, *a)
-                        })
+                        && exp
+                            .nps_per_measure
+                            .iter()
+                            .zip(&act.nps_per_measure)
+                            .all(|(e, a)| approx_eq(*e, *a))
                 }
                 _ => false,
             };

@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -85,29 +85,21 @@ fn bench_metadata_pipeline(c: &mut Criterion) {
                     continue;
                 }
 
-                let step_type = rssp::parse::unescape_trim(
-                    rssp::parse::decode_bytes(fields[0]).as_ref(),
-                );
+                let step_type =
+                    rssp::parse::unescape_trim(rssp::parse::decode_bytes(fields[0]).as_ref());
                 if step_type == "lights-cabinet" {
                     continue;
                 }
-                let desc_raw = rssp::parse::unescape_trim(
-                    rssp::parse::decode_bytes(fields[1]).as_ref(),
-                );
-                let description = rssp::parse::normalize_chart_desc(
-                    desc_raw,
-                    timing_format,
-                    ssc_version,
-                );
-                let difficulty = rssp::parse::unescape_trim(
-                    rssp::parse::decode_bytes(fields[2]).as_ref(),
-                );
-                let meter = rssp::parse::unescape_trim(
-                    rssp::parse::decode_bytes(fields[3]).as_ref(),
-                );
-                let credit = rssp::parse::unescape_tag(
-                    rssp::parse::decode_bytes(fields[4]).as_ref(),
-                );
+                let desc_raw =
+                    rssp::parse::unescape_trim(rssp::parse::decode_bytes(fields[1]).as_ref());
+                let description =
+                    rssp::parse::normalize_chart_desc(desc_raw, timing_format, ssc_version);
+                let difficulty =
+                    rssp::parse::unescape_trim(rssp::parse::decode_bytes(fields[2]).as_ref());
+                let meter =
+                    rssp::parse::unescape_trim(rssp::parse::decode_bytes(fields[3]).as_ref());
+                let credit =
+                    rssp::parse::unescape_tag(rssp::parse::decode_bytes(fields[4]).as_ref());
 
                 chart_meta_bytes += step_type.len()
                     + description.len()

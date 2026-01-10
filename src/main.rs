@@ -3,11 +3,11 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use rssp::analyze;
-use rssp::graph::{generate_density_graph_png, ColorScheme};
-use rssp::matrix::get_difficulty;
-use rssp::report::{print_reports, OutputMode, SimfileSummary};
 use rssp::AnalysisOptions;
+use rssp::analyze;
+use rssp::graph::{ColorScheme, generate_density_graph_png};
+use rssp::matrix::get_difficulty;
+use rssp::report::{OutputMode, SimfileSummary, print_reports};
 
 /// Recursively finds all simfiles in a directory structure.
 /// Directories containing a simfile are treated as leaves.
@@ -53,16 +53,16 @@ fn find_all_simfiles(root: &Path) -> Vec<PathBuf> {
 }
 
 /// Analyzes a single simfile and returns the summary
-fn analyze_simfile(path: &Path, options: &AnalysisOptions) -> io::Result<rssp::report::SimfileSummary> {
+fn analyze_simfile(
+    path: &Path,
+    options: &AnalysisOptions,
+) -> io::Result<rssp::report::SimfileSummary> {
     let mut file = File::open(path)?;
     let mut simfile_data = Vec::new();
     file.read_to_end(&mut simfile_data)?;
-    
-    let extension = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
-    
+
+    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+
     analyze(&simfile_data, extension, options.clone())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
@@ -94,16 +94,25 @@ fn main() -> io::Result<()> {
         if let Some(pos) = args.iter().position(|arg| arg == "-b" || arg == "--bpm") {
             bpm_opt = args.get(pos + 1).and_then(|s| s.parse().ok());
         }
-        if let Some(pos) = args.iter().position(|arg| arg == "-m" || arg == "--measures") {
+        if let Some(pos) = args
+            .iter()
+            .position(|arg| arg == "-m" || arg == "--measures")
+        {
             measures_opt = args.get(pos + 1).and_then(|s| s.parse().ok());
         }
 
         if let (Some(bpm), Some(measures)) = (bpm_opt, measures_opt) {
             let rating = get_difficulty(bpm, measures);
-            println!("Matrix rating of {} measures @ {} BPM is {:.4}", measures, bpm, rating);
+            println!(
+                "Matrix rating of {} measures @ {} BPM is {:.4}",
+                measures, bpm, rating
+            );
             return Ok(());
         } else {
-            eprintln!("Usage: {} --matrix --bpm <BPM> --measures <MEASURES>", args[0]);
+            eprintln!(
+                "Usage: {} --matrix --bpm <BPM> --measures <MEASURES>",
+                args[0]
+            );
             eprintln!("   (Short flags -b and -m are also accepted)");
             std::process::exit(1);
         }
@@ -165,7 +174,10 @@ fn main() -> io::Result<()> {
                     eprintln!("Error: Empty value for --custom-pattern.");
                     std::process::exit(1);
                 }
-                if !pattern_str.chars().all(|c| matches!(c, 'L' | 'l' | 'D' | 'd' | 'U' | 'u' | 'R' | 'r' | 'N' | 'n')) {
+                if !pattern_str
+                    .chars()
+                    .all(|c| matches!(c, 'L' | 'l' | 'D' | 'd' | 'U' | 'u' | 'R' | 'r' | 'N' | 'n'))
+                {
                     eprintln!(
                         "Error: Invalid character in custom pattern '{}'. Allowed characters: L, D, U, R, N.",
                         pattern_str
@@ -205,7 +217,7 @@ fn main() -> io::Result<()> {
 
     // --- Determine if path is file or folder ---
     let path = Path::new(simfile_path);
-    
+
     if !path.exists() {
         eprintln!("Error: Path does not exist: {}", path.display());
         std::process::exit(1);
@@ -229,7 +241,12 @@ fn main() -> io::Result<()> {
     // --- Process simfiles ---
     for (idx, simfile_path) in simfiles.iter().enumerate() {
         if simfiles.len() > 1 {
-            eprintln!("Analyzing [{}/{}]: {}", idx + 1, simfiles.len(), simfile_path.display());
+            eprintln!(
+                "Analyzing [{}/{}]: {}",
+                idx + 1,
+                simfiles.len(),
+                simfile_path.display()
+            );
         }
 
         let simfile = match analyze_simfile(simfile_path, &options) {

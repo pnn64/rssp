@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -56,8 +56,8 @@ fn chart_offset_seconds(tag: Option<&[u8]>) -> Option<f64> {
 }
 
 fn build_nps_inputs() -> (Vec<NpsChartInput>, NpsGlobals) {
-    let parsed = rssp::parse::extract_sections(FIXTURE.as_bytes(), EXTENSION)
-        .expect("fixture should parse");
+    let parsed =
+        rssp::parse::extract_sections(FIXTURE.as_bytes(), EXTENSION).expect("fixture should parse");
     let timing_format = rssp::timing::TimingFormat::from_extension(EXTENSION);
     let ssc_version = rssp::parse::parse_version(parsed.version, timing_format);
     let allow_steps_timing = rssp::timing::steps_timing_allowed(ssc_version, timing_format);
@@ -107,10 +107,7 @@ fn build_nps_inputs() -> (Vec<NpsChartInput>, NpsGlobals) {
     (charts, globals)
 }
 
-fn build_nps_timing_inputs(
-    charts: &[NpsChartInput],
-    globals: &NpsGlobals,
-) -> Vec<NpsTimingInput> {
+fn build_nps_timing_inputs(charts: &[NpsChartInput], globals: &NpsGlobals) -> Vec<NpsTimingInput> {
     let mut inputs = Vec::with_capacity(charts.len());
     for chart in charts {
         let (_minimized, _stats, measure_densities) =
@@ -197,6 +194,7 @@ fn build_nps_timing_inputs(
             },
             timing_fakes_global,
             globals.timing_format,
+            true,
         );
 
         inputs.push(NpsTimingInput {
@@ -318,12 +316,11 @@ fn bench_nps_inner(c: &mut Criterion) {
                     },
                     timing_fakes_global,
                     globals.timing_format,
+                    true,
                 );
 
-                let measure_nps_vec = rssp::bpm::compute_measure_nps_vec_with_timing(
-                    &measure_densities,
-                    &timing,
-                );
+                let measure_nps_vec =
+                    rssp::bpm::compute_measure_nps_vec_with_timing(&measure_densities, &timing);
                 let stats = rssp::bpm::get_nps_stats(&measure_nps_vec);
                 outputs.push(stats);
             }
@@ -356,5 +353,10 @@ fn bench_nps_stats(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_nps_pipeline, bench_nps_inner, bench_nps_stats);
+criterion_group!(
+    benches,
+    bench_nps_pipeline,
+    bench_nps_inner,
+    bench_nps_stats
+);
 criterion_main!(benches);

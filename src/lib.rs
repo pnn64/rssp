@@ -7,6 +7,7 @@ pub mod graph;
 pub mod hashing;
 pub mod matrix;
 pub mod notes;
+pub mod nps;
 pub mod parse;
 pub mod patterns;
 pub mod report;
@@ -20,6 +21,7 @@ pub mod translate;
 pub const RSSP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // Re-export the primary data structures for library users
+pub use nps::compute_chart_peak_nps;
 pub use report::{ChartSummary, SimfileSummary};
 pub use step_parity::TechCounts;
 
@@ -32,11 +34,7 @@ use crate::rounding::{round_2, round_3, round_sig_figs_6};
 use crate::stats::*;
 use crate::tech::parse_tech_notation;
 use crate::timing::{
-    compute_timing_segments_cleaned,
-    round_millis,
-    steps_timing_allowed,
-    TimingData,
-    TimingFormat,
+    TimingData, TimingFormat, compute_timing_segments_cleaned, round_millis, steps_timing_allowed,
 };
 
 /// Options for controlling simfile analysis.
@@ -212,9 +210,21 @@ pub fn display_metadata(
     if show_native {
         return (title.to_string(), subtitle.to_string(), artist.to_string());
     }
-    let title_out = if title_translit.is_empty() { title } else { title_translit };
-    let subtitle_out = if subtitle_translit.is_empty() { subtitle } else { subtitle_translit };
-    let artist_out = if artist_translit.is_empty() { artist } else { artist_translit };
+    let title_out = if title_translit.is_empty() {
+        title
+    } else {
+        title_translit
+    };
+    let subtitle_out = if subtitle_translit.is_empty() {
+        subtitle
+    } else {
+        subtitle_translit
+    };
+    let artist_out = if artist_translit.is_empty() {
+        artist
+    } else {
+        artist_translit
+    };
     (
         title_out.to_string(),
         subtitle_out.to_string(),
@@ -236,11 +246,15 @@ fn chart_timing_tag_pair(tag: Option<&[u8]>) -> (Option<String>, Option<String>)
     (raw, norm)
 }
 
-fn chart_timing_tag_raw(tag: Option<&[u8]>) -> Option<String> {
+pub(crate) fn chart_timing_tag_raw(tag: Option<&[u8]>) -> Option<String> {
     let bytes = tag?;
     let text = std::str::from_utf8(bytes).ok()?;
     let cleaned = clean_timing_map(text);
-    if cleaned.is_empty() { None } else { Some(cleaned) }
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
 }
 
 fn chart_display_bpm_tag(tag: Option<&[u8]>) -> Option<String> {
@@ -280,10 +294,7 @@ fn parse_radar_values_bytes(
     parse_radar_values_str(text, split_players)
 }
 
-fn parse_radar_values_str(
-    raw: &str,
-    split_players: bool,
-) -> Option<[f32; RADAR_CATEGORY_COUNT]> {
+fn parse_radar_values_str(raw: &str, split_players: bool) -> Option<[f32; RADAR_CATEGORY_COUNT]> {
     let cleaned = clean_timing_map_cow(raw);
     let cleaned = cleaned.as_ref();
     if cleaned.is_empty() {
@@ -349,10 +360,18 @@ fn compute_mono_and_candle_stats(
 
     let (facing_left, facing_right) = count_facing_steps(bitmasks, options.mono_threshold);
     let mono_total = facing_left + facing_right;
-    let mono_percent = if stats.total_steps > 0 { (mono_total as f64 / stats.total_steps as f64) * 100.0 } else { 0.0 };
+    let mono_percent = if stats.total_steps > 0 {
+        (mono_total as f64 / stats.total_steps as f64) * 100.0
+    } else {
+        0.0
+    };
 
-    let candle_left = *detected_patterns.get(&PatternVariant::CandleLeft).unwrap_or(&0);
-    let candle_right = *detected_patterns.get(&PatternVariant::CandleRight).unwrap_or(&0);
+    let candle_left = *detected_patterns
+        .get(&PatternVariant::CandleLeft)
+        .unwrap_or(&0);
+    let candle_right = *detected_patterns
+        .get(&PatternVariant::CandleRight)
+        .unwrap_or(&0);
     let candle_total = candle_left + candle_right;
 
     let max_candles = (stats.total_steps.saturating_sub(1)) / 2;
@@ -362,7 +381,14 @@ fn compute_mono_and_candle_stats(
         0.0
     };
 
-    (facing_left, facing_right, mono_total, mono_percent, candle_total, candle_percent)
+    (
+        facing_left,
+        facing_right,
+        mono_total,
+        mono_percent,
+        candle_total,
+        candle_percent,
+    )
 }
 
 // A private helper struct to bundle metrics derived from density and BPMs.
@@ -472,7 +498,8 @@ fn build_chart_summary(
     let description = normalize_chart_desc(description_raw, timing_format, ssc_version);
     let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
     let rating_raw = unescape_trim(decode_bytes(fields[3]).as_ref());
-    let difficulty_str = resolve_difficulty_label(&difficulty_raw, &description, &rating_raw, extension);
+    let difficulty_str =
+        resolve_difficulty_label(&difficulty_raw, &description, &rating_raw, extension);
     let rating_str = rating_raw;
     let is_ssc = extension.eq_ignore_ascii_case("ssc");
     let credit = if is_ssc {
@@ -480,7 +507,11 @@ fn build_chart_summary(
     } else {
         String::new()
     };
-    let step_artist_str = if is_ssc { credit.clone() } else { description.clone() };
+    let step_artist_str = if is_ssc {
+        credit.clone()
+    } else {
+        description.clone()
+    };
     let tech_notation_str = parse_tech_notation(&credit, &description);
 
     let lanes = step_type_lanes(&step_type_str);
@@ -489,7 +520,14 @@ fn build_chart_summary(
         if compute_patterns {
             let (chart, stats, densities, row_to_beat, last_beat, bitmasks) =
                 minimize_chart_rows_bits(chart_data);
-            (chart, stats, densities, row_to_beat, last_beat, Some(bitmasks))
+            (
+                chart,
+                stats,
+                densities,
+                row_to_beat,
+                last_beat,
+                Some(bitmasks),
+            )
         } else {
             let (chart, stats, densities, row_to_beat, last_beat) =
                 minimize_chart_count_rows(chart_data, lanes);
@@ -510,13 +548,41 @@ fn build_chart_summary(
     let chart_warps = chart_timing_tag_raw(chart_warps_opt);
     let chart_fakes = chart_timing_tag_raw(chart_fakes_opt);
 
-    let chart_bpms_timing = if allow_steps_timing { chart_bpms.as_deref() } else { None };
-    let chart_stops_timing = if allow_steps_timing { chart_stops.as_deref() } else { None };
-    let chart_delays_timing = if allow_steps_timing { chart_delays.as_deref() } else { None };
-    let chart_warps_timing = if allow_steps_timing { chart_warps.as_deref() } else { None };
-    let chart_speeds_timing = if allow_steps_timing { chart_speeds.as_deref() } else { None };
-    let chart_scrolls_timing = if allow_steps_timing { chart_scrolls.as_deref() } else { None };
-    let chart_fakes_timing = if allow_steps_timing { chart_fakes.as_deref() } else { None };
+    let chart_bpms_timing = if allow_steps_timing {
+        chart_bpms.as_deref()
+    } else {
+        None
+    };
+    let chart_stops_timing = if allow_steps_timing {
+        chart_stops.as_deref()
+    } else {
+        None
+    };
+    let chart_delays_timing = if allow_steps_timing {
+        chart_delays.as_deref()
+    } else {
+        None
+    };
+    let chart_warps_timing = if allow_steps_timing {
+        chart_warps.as_deref()
+    } else {
+        None
+    };
+    let chart_speeds_timing = if allow_steps_timing {
+        chart_speeds.as_deref()
+    } else {
+        None
+    };
+    let chart_scrolls_timing = if allow_steps_timing {
+        chart_scrolls.as_deref()
+    } else {
+        None
+    };
+    let chart_fakes_timing = if allow_steps_timing {
+        chart_fakes.as_deref()
+    } else {
+        None
+    };
     let chart_time_signatures = chart_time_signatures_opt.and_then(|bytes| {
         let decoded = decode_bytes(bytes);
         let trimmed = decoded.trim();
@@ -575,12 +641,26 @@ fn build_chart_summary(
             || chart_tickcounts_opt.is_some()
             || chart_combos_opt.is_some()
             || chart_offset_opt.is_some());
-    let (timing_bpms_global, timing_stops_global, timing_delays_global, timing_warps_global,
-        timing_speeds_global, timing_scrolls_global, timing_fakes_global) = if chart_has_own_timing {
+    let (
+        timing_bpms_global,
+        timing_stops_global,
+        timing_delays_global,
+        timing_warps_global,
+        timing_speeds_global,
+        timing_scrolls_global,
+        timing_fakes_global,
+    ) = if chart_has_own_timing {
         ("", "", "", "", "", "", "")
     } else {
-        (global_bpms_raw, global_stops_raw, global_delays_raw, global_warps_raw,
-            global_speeds_raw, global_scrolls_raw, global_fakes_raw)
+        (
+            global_bpms_raw,
+            global_stops_raw,
+            global_delays_raw,
+            global_warps_raw,
+            global_speeds_raw,
+            global_scrolls_raw,
+            global_fakes_raw,
+        )
     };
     let timing_segments = compute_timing_segments_cleaned(
         chart_bpms_timing,
@@ -631,14 +711,9 @@ fn build_chart_summary(
         Vec::new()
     };
 
-    let timing = TimingData::from_segments(
-        chart_offset,
-        0.0,
-        &timing_segments,
-    );
+    let timing = TimingData::from_segments(chart_offset, 0.0, &timing_segments);
 
-    let duration_seconds =
-        chart_duration_seconds(last_beat, &timing, TimingOffsets::default());
+    let duration_seconds = chart_duration_seconds(last_beat, &timing, TimingOffsets::default());
     let chart_length = if last_beat <= 0.0 {
         0
     } else {
@@ -718,66 +793,69 @@ fn build_chart_summary(
 
     let elapsed_chart = chart_start_time.elapsed();
 
-    Some((ChartSummary {
-        step_type_str,
-        step_artist_str,
-        description_str: description,
-        difficulty_str,
-        rating_str,
-        tech_notation_str,
-        tier_bpm: metrics.tier_bpm,
-        matrix_rating: metrics.matrix_rating,
-        stats,
-        stream_counts: metrics.stream_counts,
-        total_streams: metrics.total_streams,
-        mines_nonfake,
-        total_measures: measure_densities.len(),
-        sn_detailed_breakdown: metrics.sn_detailed_breakdown,
-        sn_partial_breakdown: metrics.sn_partial_breakdown,
-        sn_simple_breakdown: metrics.sn_simple_breakdown,
-        detailed_breakdown: metrics.detailed_breakdown,
-        partial_breakdown: metrics.partial_breakdown,
-        simple_breakdown: metrics.simple_breakdown,
-        max_nps,
-        median_nps,
-        duration_seconds,
-        detected_patterns,
-        anchor_left,
-        anchor_down,
-        anchor_up,
-        anchor_right,
-        facing_left,
-        facing_right,
-        mono_total,
-        mono_percent,
-        candle_total,
-        candle_percent,
-        tech_counts,
-        custom_patterns,
-        short_hash: metrics.short_hash,
-        bpm_neutral_hash: metrics.bpm_neutral_hash,
-        elapsed: elapsed_chart,
-        measure_densities,
-        measure_nps_vec,
-        row_to_beat,
-        timing_segments,
-        chart_offset_seconds: chart_offset,
-        chart_has_own_timing,
-        minimized_note_data: minimized_chart,
-        chart_stops,
-        chart_speeds,
-        chart_scrolls,
-        chart_bpms,
-        chart_delays,
-        chart_warps,
-        chart_fakes,
-        chart_display_bpm,
-        chart_time_signatures,
-        chart_labels,
-        chart_tickcounts,
-        chart_combos,
-        cached_radar_values,
-    }, chart_length))
+    Some((
+        ChartSummary {
+            step_type_str,
+            step_artist_str,
+            description_str: description,
+            difficulty_str,
+            rating_str,
+            tech_notation_str,
+            tier_bpm: metrics.tier_bpm,
+            matrix_rating: metrics.matrix_rating,
+            stats,
+            stream_counts: metrics.stream_counts,
+            total_streams: metrics.total_streams,
+            mines_nonfake,
+            total_measures: measure_densities.len(),
+            sn_detailed_breakdown: metrics.sn_detailed_breakdown,
+            sn_partial_breakdown: metrics.sn_partial_breakdown,
+            sn_simple_breakdown: metrics.sn_simple_breakdown,
+            detailed_breakdown: metrics.detailed_breakdown,
+            partial_breakdown: metrics.partial_breakdown,
+            simple_breakdown: metrics.simple_breakdown,
+            max_nps,
+            median_nps,
+            duration_seconds,
+            detected_patterns,
+            anchor_left,
+            anchor_down,
+            anchor_up,
+            anchor_right,
+            facing_left,
+            facing_right,
+            mono_total,
+            mono_percent,
+            candle_total,
+            candle_percent,
+            tech_counts,
+            custom_patterns,
+            short_hash: metrics.short_hash,
+            bpm_neutral_hash: metrics.bpm_neutral_hash,
+            elapsed: elapsed_chart,
+            measure_densities,
+            measure_nps_vec,
+            row_to_beat,
+            timing_segments,
+            chart_offset_seconds: chart_offset,
+            chart_has_own_timing,
+            minimized_note_data: minimized_chart,
+            chart_stops,
+            chart_speeds,
+            chart_scrolls,
+            chart_bpms,
+            chart_delays,
+            chart_warps,
+            chart_fakes,
+            chart_display_bpm,
+            chart_time_signatures,
+            chart_labels,
+            chart_tickcounts,
+            chart_combos,
+            cached_radar_values,
+        },
+        chart_length,
+    ))
 }
 
 pub fn analyze(
@@ -862,9 +940,18 @@ pub fn analyze(
     }
     let offset = parse_offset_seconds(parsed_data.offset);
     let ssc_version = parse_version(parsed_data.version, timing_format);
-    let sample_start = parsed_data.sample_start.and_then(|b| std::str::from_utf8(b).ok()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-    let sample_length = parsed_data.sample_length.and_then(|b| std::str::from_utf8(b).ok()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-    let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"<invalid-bpms>")).unwrap_or("<invalid-bpms>");
+    let sample_start = parsed_data
+        .sample_start
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let sample_length = parsed_data
+        .sample_length
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"<invalid-bpms>"))
+        .unwrap_or("<invalid-bpms>");
     let normalized_global_bpms = normalize_float_digits(global_bpms_raw);
     let cleaned_global_bpms = clean_timing_map(global_bpms_raw);
     let global_stops_raw = parsed_data
@@ -931,11 +1018,12 @@ pub fn analyze(
         .to_string();
 
     let allow_steps_timing = steps_timing_allowed(ssc_version, timing_format);
-    let compiled_custom_patterns = if options.compute_pattern_counts && !options.custom_patterns.is_empty() {
-        compile_custom_patterns(&options.custom_patterns)
-    } else {
-        Vec::new()
-    };
+    let compiled_custom_patterns =
+        if options.compute_pattern_counts && !options.custom_patterns.is_empty() {
+            compile_custom_patterns(&options.custom_patterns)
+        } else {
+            Vec::new()
+        };
     let global_timing_segments = compute_timing_segments_cleaned(
         None,
         &cleaned_global_bpms,
@@ -1023,8 +1111,14 @@ pub fn analyze(
 
     let offset_rounded = round_3(offset);
     Ok(SimfileSummary {
-        title_str, subtitle_str, artist_str, titletranslit_str, subtitletranslit_str,
-        artisttranslit_str, offset: offset_rounded, normalized_bpms: normalized_global_bpms,
+        title_str,
+        subtitle_str,
+        artist_str,
+        titletranslit_str,
+        subtitletranslit_str,
+        artisttranslit_str,
+        offset: offset_rounded,
+        normalized_bpms: normalized_global_bpms,
         normalized_stops: normalized_global_stops,
         normalized_delays: normalized_global_delays,
         normalized_warps: normalized_global_warps,
@@ -1041,9 +1135,13 @@ pub fn analyze(
         background_path: background_path_str,
         music_path: music_path_str,
         display_bpm_str,
-        sample_start, sample_length,
-        min_bpm: min_bpm_i32 as f64, max_bpm: max_bpm_i32 as f64,
-        median_bpm, average_bpm, total_length,
+        sample_start,
+        sample_length,
+        min_bpm: min_bpm_i32 as f64,
+        max_bpm: max_bpm_i32 as f64,
+        median_bpm,
+        average_bpm,
+        total_length,
         pattern_counts_enabled: options.compute_pattern_counts,
         tech_counts_enabled: options.compute_tech_counts,
         charts: chart_summaries,
@@ -1078,7 +1176,8 @@ pub fn compute_all_hashes(
         let description = normalize_chart_desc(description_raw, timing_format, ssc_version);
         let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
         let meter_raw = unescape_trim(decode_bytes(fields[3]).as_ref());
-        let difficulty = resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
+        let difficulty =
+            resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
 
         // Skip lights, etc.
         if step_type == "lights-cabinet" {
@@ -1175,7 +1274,8 @@ pub fn compute_chart_durations(
         let description = normalize_chart_desc(description_raw, timing_format, ssc_version);
         let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
         let meter_raw = unescape_trim(decode_bytes(fields[3]).as_ref());
-        let difficulty = resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
+        let difficulty =
+            resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
 
         let lanes = step_type_lanes(&step_type);
         let (_, _, _, _, last_beat) = minimize_chart_count_rows(chart_data, lanes);
@@ -1234,21 +1334,27 @@ pub fn compute_chart_durations(
                 || entry.chart_tickcounts.is_some()
                 || entry.chart_combos.is_some()
                 || entry.chart_offset.is_some());
-        let (timing_bpms_global, timing_stops_global, timing_delays_global, timing_warps_global,
-            timing_speeds_global, timing_scrolls_global, timing_fakes_global) =
-            if chart_has_own_timing {
-                ("", "", "", "", "", "", "")
-            } else {
-                (
-                    cleaned_global_bpms.as_str(),
-                    cleaned_global_stops.as_str(),
-                    cleaned_global_delays.as_str(),
-                    cleaned_global_warps.as_str(),
-                    cleaned_global_speeds.as_str(),
-                    cleaned_global_scrolls.as_str(),
-                    cleaned_global_fakes.as_str(),
-                )
-            };
+        let (
+            timing_bpms_global,
+            timing_stops_global,
+            timing_delays_global,
+            timing_warps_global,
+            timing_speeds_global,
+            timing_scrolls_global,
+            timing_fakes_global,
+        ) = if chart_has_own_timing {
+            ("", "", "", "", "", "", "")
+        } else {
+            (
+                cleaned_global_bpms.as_str(),
+                cleaned_global_stops.as_str(),
+                cleaned_global_delays.as_str(),
+                cleaned_global_warps.as_str(),
+                cleaned_global_speeds.as_str(),
+                cleaned_global_scrolls.as_str(),
+                cleaned_global_fakes.as_str(),
+            )
+        };
 
         let timing = TimingData::from_chart_data_cleaned(
             chart_offset,
@@ -1275,174 +1381,6 @@ pub fn compute_chart_durations(
             step_type,
             difficulty,
             duration_seconds,
-        });
-    }
-
-    Ok(results)
-}
-
-pub fn compute_chart_peak_nps(
-    simfile_data: &[u8],
-    extension: &str,
-) -> Result<Vec<ChartNpsInfo>, String> {
-    let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
-
-    let timing_format = TimingFormat::from_extension(extension);
-    let ssc_version = parse_version(parsed_data.version, timing_format);
-    let allow_steps_timing = steps_timing_allowed(ssc_version, timing_format);
-    let song_offset = parse_offset_seconds(parsed_data.offset);
-
-    let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"")).unwrap_or("");
-    let cleaned_global_bpms = clean_timing_map(global_bpms_raw);
-    let global_stops_raw = parsed_data
-        .stops
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .unwrap_or("");
-    let cleaned_global_stops = clean_timing_map(global_stops_raw);
-    let global_delays_raw = parsed_data
-        .delays
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .unwrap_or("");
-    let cleaned_global_delays = clean_timing_map(global_delays_raw);
-    let global_warps_raw = parsed_data
-        .warps
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .unwrap_or("");
-    let cleaned_global_warps = clean_timing_map(global_warps_raw);
-    let global_speeds_raw = parsed_data
-        .speeds
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .unwrap_or("");
-    let cleaned_global_speeds = clean_timing_map(global_speeds_raw);
-    let global_scrolls_raw = parsed_data
-        .scrolls
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .unwrap_or("");
-    let cleaned_global_scrolls = clean_timing_map(global_scrolls_raw);
-    let global_fakes_raw = parsed_data
-        .fakes
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .unwrap_or("");
-    let cleaned_global_fakes = clean_timing_map(global_fakes_raw);
-
-    let mut results = Vec::new();
-
-    for entry in parsed_data.notes_list {
-        let (fields, chart_data) = split_notes_fields(&entry.notes);
-        if fields.len() < 5 {
-            continue;
-        }
-
-        let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());
-        if step_type == "lights-cabinet" {
-            continue;
-        }
-        let description_raw = unescape_trim(decode_bytes(fields[1]).as_ref());
-        let description = normalize_chart_desc(description_raw, timing_format, ssc_version);
-        let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
-        let meter_raw = unescape_trim(decode_bytes(fields[3]).as_ref());
-        let difficulty = resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
-
-        let lanes = step_type_lanes(&step_type);
-        let measure_densities = stats::measure_densities(chart_data, lanes);
-
-        let chart_bpms = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_bpms.as_deref())
-        } else {
-            None
-        };
-        let chart_stops = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_stops.as_deref())
-        } else {
-            None
-        };
-        let chart_delays = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_delays.as_deref())
-        } else {
-            None
-        };
-        let chart_warps = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_warps.as_deref())
-        } else {
-            None
-        };
-        let chart_speeds = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_speeds.as_deref())
-        } else {
-            None
-        };
-        let chart_scrolls = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_scrolls.as_deref())
-        } else {
-            None
-        };
-        let chart_fakes = if allow_steps_timing {
-            chart_timing_tag_raw(entry.chart_fakes.as_deref())
-        } else {
-            None
-        };
-        let chart_offset = if allow_steps_timing && entry.chart_offset.is_some() {
-            parse_offset_seconds(entry.chart_offset.as_deref())
-        } else {
-            song_offset
-        };
-
-        let chart_has_own_timing = allow_steps_timing
-            && (entry.chart_bpms.is_some()
-                || entry.chart_stops.is_some()
-                || entry.chart_delays.is_some()
-                || entry.chart_warps.is_some()
-                || entry.chart_speeds.is_some()
-                || entry.chart_scrolls.is_some()
-                || entry.chart_fakes.is_some()
-                || entry.chart_time_signatures.is_some()
-                || entry.chart_labels.is_some()
-                || entry.chart_tickcounts.is_some()
-                || entry.chart_combos.is_some()
-                || entry.chart_offset.is_some());
-        let (timing_bpms_global, timing_stops_global, timing_delays_global, timing_warps_global,
-            timing_speeds_global, timing_scrolls_global, timing_fakes_global) =
-            if chart_has_own_timing {
-                ("", "", "", "", "", "", "")
-            } else {
-                (
-                    cleaned_global_bpms.as_str(),
-                    cleaned_global_stops.as_str(),
-                    cleaned_global_delays.as_str(),
-                    cleaned_global_warps.as_str(),
-                    cleaned_global_speeds.as_str(),
-                    cleaned_global_scrolls.as_str(),
-                    cleaned_global_fakes.as_str(),
-                )
-            };
-
-        let timing = TimingData::from_chart_data_cleaned(
-            chart_offset,
-            0.0,
-            chart_bpms.as_deref(),
-            timing_bpms_global,
-            chart_stops.as_deref(),
-            timing_stops_global,
-            chart_delays.as_deref(),
-            timing_delays_global,
-            chart_warps.as_deref(),
-            timing_warps_global,
-            chart_speeds.as_deref(),
-            timing_speeds_global,
-            chart_scrolls.as_deref(),
-            timing_scrolls_global,
-            chart_fakes.as_deref(),
-            timing_fakes_global,
-            timing_format,
-        );
-
-        let measure_nps_vec = compute_measure_nps_vec_with_timing(&measure_densities, &timing);
-        let (max_nps, _median_nps) = get_nps_stats(&measure_nps_vec);
-
-        results.push(ChartNpsInfo {
-            step_type,
-            difficulty,
-            peak_nps: max_nps,
         });
     }
 

@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -14,8 +14,8 @@ struct ChartBreakdownInput {
 }
 
 fn build_breakdown_inputs() -> Vec<ChartBreakdownInput> {
-    let parsed = rssp::parse::extract_sections(FIXTURE.as_bytes(), EXTENSION)
-        .expect("fixture should parse");
+    let parsed =
+        rssp::parse::extract_sections(FIXTURE.as_bytes(), EXTENSION).expect("fixture should parse");
 
     parsed
         .notes_list
@@ -51,12 +51,8 @@ fn bench_breakdown_pipeline(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(2));
     group.bench_function("analyze_breakdowns", |b| {
         b.iter(|| {
-            let summary = rssp::analyze(
-                black_box(fixture),
-                black_box(EXTENSION),
-                options.clone(),
-            )
-            .expect("analysis should succeed");
+            let summary = rssp::analyze(black_box(fixture), black_box(EXTENSION), options.clone())
+                .expect("analysis should succeed");
             let mut total_len = 0usize;
             for chart in &summary.charts {
                 total_len += chart.detailed_breakdown.len();
@@ -96,23 +92,15 @@ fn bench_breakdown_inner(c: &mut Criterion) {
                     &measure_densities,
                     StreamBreakdownLevel::Partial,
                 );
-                let simple = rssp::stats::stream_breakdown(
-                    &measure_densities,
-                    StreamBreakdownLevel::Simple,
-                );
+                let simple =
+                    rssp::stats::stream_breakdown(&measure_densities, StreamBreakdownLevel::Simple);
 
-                let sn_detailed = rssp::stats::generate_breakdown(
-                    &measure_densities,
-                    BreakdownMode::Detailed,
-                );
-                let sn_partial = rssp::stats::generate_breakdown(
-                    &measure_densities,
-                    BreakdownMode::Partial,
-                );
-                let sn_simple = rssp::stats::generate_breakdown(
-                    &measure_densities,
-                    BreakdownMode::Simplified,
-                );
+                let sn_detailed =
+                    rssp::stats::generate_breakdown(&measure_densities, BreakdownMode::Detailed);
+                let sn_partial =
+                    rssp::stats::generate_breakdown(&measure_densities, BreakdownMode::Partial);
+                let sn_simple =
+                    rssp::stats::generate_breakdown(&measure_densities, BreakdownMode::Simplified);
 
                 totals.push(
                     detailed.len()

@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -188,13 +188,11 @@ fn timing_for_chart(chart: &TechChartInput, globals: &TechGlobals) -> rssp::timi
         },
         timing_fakes_global,
         globals.timing_format,
+        true,
     )
 }
 
-fn build_parity_inputs(
-    charts: &[TechChartInput],
-    globals: &TechGlobals,
-) -> Vec<TechParityInput> {
+fn build_parity_inputs(charts: &[TechChartInput], globals: &TechGlobals) -> Vec<TechParityInput> {
     let mut out = Vec::with_capacity(charts.len());
     for chart in charts {
         let minimized_chart = minimize_chart(&chart.chart_data, chart.lanes);
@@ -218,13 +216,13 @@ fn bench_tech_counts_pipeline(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(2));
     group.bench_function("analyze_tech_counts", |b| {
         b.iter(|| {
-            let summary = rssp::analyze(
-                black_box(fixture),
-                black_box(EXTENSION),
-                options.clone(),
-            )
-            .expect("analysis should succeed");
-            let counts: Vec<_> = summary.charts.iter().map(|chart| chart.tech_counts).collect();
+            let summary = rssp::analyze(black_box(fixture), black_box(EXTENSION), options.clone())
+                .expect("analysis should succeed");
+            let counts: Vec<_> = summary
+                .charts
+                .iter()
+                .map(|chart| chart.tech_counts)
+                .collect();
             black_box(counts);
         })
     });
@@ -240,16 +238,11 @@ fn bench_tech_counts_inner(c: &mut Criterion) {
         b.iter(|| {
             let mut outputs = Vec::with_capacity(charts.len());
             for chart in &charts {
-                let minimized_chart = minimize_chart(
-                    black_box(&chart.chart_data),
-                    black_box(chart.lanes),
-                );
+                let minimized_chart =
+                    minimize_chart(black_box(&chart.chart_data), black_box(chart.lanes));
                 let timing = timing_for_chart(chart, &globals);
-                let counts = rssp::step_parity::analyze_timing_lanes(
-                    &minimized_chart,
-                    &timing,
-                    chart.lanes,
-                );
+                let counts =
+                    rssp::step_parity::analyze_timing_lanes(&minimized_chart, &timing, chart.lanes);
                 outputs.push(counts);
             }
             black_box(outputs);

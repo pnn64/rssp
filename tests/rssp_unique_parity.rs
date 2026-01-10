@@ -7,9 +7,9 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::{analyze, AnalysisOptions, ChartSummary};
-use rssp::patterns::{count_pattern, compute_box_counts, BoxCounts, PatternVariant};
+use rssp::patterns::{BoxCounts, PatternVariant, compute_box_counts, count_pattern};
 use rssp::report::format_json_float;
+use rssp::{AnalysisOptions, ChartSummary, analyze};
 
 const DEFAULT_MONO_THRESHOLD: usize = 6;
 
@@ -150,7 +150,13 @@ fn format_boxes(patterns: Option<&PatternCounts>) -> String {
             let b = &p.boxes;
             format!(
                 "{} (LR {} UD {} LD {} LU {} RD {} RU {})",
-                b.total_boxes, b.lr_boxes, b.ud_boxes, b.ld_boxes, b.lu_boxes, b.rd_boxes, b.ru_boxes
+                b.total_boxes,
+                b.lr_boxes,
+                b.ud_boxes,
+                b.ld_boxes,
+                b.lu_boxes,
+                b.rd_boxes,
+                b.ru_boxes
             )
         })
         .unwrap_or_else(|| "-".to_string())
@@ -203,7 +209,10 @@ fn chart_values_from_summary(chart: &ChartSummary) -> ChartUniqueValues {
                 ru_boxes: box_counts.ru_boxes,
             },
             anchors: AnchorsCounts {
-                total_anchors: chart.anchor_left + chart.anchor_down + chart.anchor_up + chart.anchor_right,
+                total_anchors: chart.anchor_left
+                    + chart.anchor_down
+                    + chart.anchor_up
+                    + chart.anchor_right,
                 left_anchors: chart.anchor_left,
                 down_anchors: chart.anchor_down,
                 up_anchors: chart.anchor_up,
@@ -267,8 +276,7 @@ fn compute_chart_values(
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
-    let compressed_bytes = fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     let raw_bytes = zstd::decode_all(&compressed_bytes[..])
         .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
@@ -289,8 +297,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         ));
     }
 
-    let compressed_golden = fs::read(&golden_path)
-        .map_err(|e| format!("Failed to read baseline file: {}", e))?;
+    let compressed_golden =
+        fs::read(&golden_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
 
     let json_bytes = zstd::decode_all(&compressed_golden[..])
         .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
@@ -368,8 +376,12 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 && expected_values == actual_values;
             let status = if matches { "....ok" } else { "....MISMATCH" };
 
-            let expected_matrix = expected_values.map(|v| v.matrix_rating.as_str()).unwrap_or("-");
-            let actual_matrix = actual_values.map(|v| v.matrix_rating.as_str()).unwrap_or("-");
+            let expected_matrix = expected_values
+                .map(|v| v.matrix_rating.as_str())
+                .unwrap_or("-");
+            let actual_matrix = actual_values
+                .map(|v| v.matrix_rating.as_str())
+                .unwrap_or("-");
             let expected_detail = expected_values
                 .map(|v| v.breakdown.sn_detailed_breakdown.as_str())
                 .unwrap_or("-");

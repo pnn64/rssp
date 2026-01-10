@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -126,9 +126,8 @@ fn bench_bpm_pipeline(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(2));
     group.bench_function("chart_bpm_snapshots", |b| {
         b.iter(|| {
-            let snapshots =
-                rssp::bpm::chart_bpm_snapshots(black_box(fixture), black_box("ssc"))
-                    .expect("bpm snapshots should succeed");
+            let snapshots = rssp::bpm::chart_bpm_snapshots(black_box(fixture), black_box("ssc"))
+                .expect("bpm snapshots should succeed");
             black_box(snapshots);
         })
     });
@@ -206,6 +205,7 @@ fn bench_bpm_inner(c: &mut Criterion) {
                     },
                     &globals.fakes_raw,
                     globals.timing_format,
+                    true,
                 );
 
                 let bpms_formatted =

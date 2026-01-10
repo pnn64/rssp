@@ -1,6 +1,6 @@
-use criterion::{criterion_group, criterion_main, Criterion};
-use std::hint::black_box;
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::borrow::Cow;
+use std::hint::black_box;
 use std::time::Duration;
 
 const FIXTURE: &str = include_str!("fixtures/camellia_mix.ssc");
@@ -13,16 +13,12 @@ struct ChartInput {
 
 fn step_type_lanes(step_type: &str) -> usize {
     let normalized = step_type.trim().to_ascii_lowercase().replace('_', "-");
-    if normalized == "dance-double" {
-        8
-    } else {
-        4
-    }
+    if normalized == "dance-double" { 8 } else { 4 }
 }
 
 fn build_chart_inputs() -> (Vec<ChartInput>, String) {
-    let parsed = rssp::parse::extract_sections(FIXTURE.as_bytes(), "ssc")
-        .expect("fixture should parse");
+    let parsed =
+        rssp::parse::extract_sections(FIXTURE.as_bytes(), "ssc").expect("fixture should parse");
     let normalized_global_bpms = {
         let raw = std::str::from_utf8(parsed.bpms.unwrap_or(b"")).unwrap_or("");
         rssp::bpm::normalize_float_digits(raw)
@@ -87,7 +83,8 @@ fn bench_hash_inner(c: &mut Criterion) {
                     Cow::Borrowed(normalized_global_bpms.as_str())
                 };
 
-                let hash = rssp::hashing::compute_chart_hash(&minimized_chart, bpms_to_use.as_ref());
+                let hash =
+                    rssp::hashing::compute_chart_hash(&minimized_chart, bpms_to_use.as_ref());
                 hashes.push(hash);
             }
             black_box(hashes);

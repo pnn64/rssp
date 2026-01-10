@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -105,12 +105,8 @@ fn bench_step_counts_pipeline(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(2));
     group.bench_function("analyze_step_counts", |b| {
         b.iter(|| {
-            let summary = rssp::analyze(
-                black_box(fixture),
-                black_box("ssc"),
-                options.clone(),
-            )
-            .expect("analysis should succeed");
+            let summary = rssp::analyze(black_box(fixture), black_box("ssc"), options.clone())
+                .expect("analysis should succeed");
             let counts: Vec<_> = summary
                 .charts
                 .iter()
@@ -229,6 +225,7 @@ fn bench_step_counts_inner(c: &mut Criterion) {
                     },
                     timing_fakes_global,
                     globals.timing_format,
+                    true,
                 );
 
                 let mut timing_stats = rssp::stats::compute_timing_aware_stats(

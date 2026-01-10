@@ -26,15 +26,20 @@ fn generate_graph_pixels(
     let color_gradient: Vec<[u8; 3]> = (0..height)
         .map(|y| {
             let frac = (height - 1 - y) as f64 / (height as f64 - 1.0);
-            let r = (bottom_color[0] as f64 + (top_color[0] as f64 - bottom_color[0] as f64) * frac).round() as u8;
-            let g = (bottom_color[1] as f64 + (top_color[1] as f64 - bottom_color[1] as f64) * frac).round() as u8;
-            let b = (bottom_color[2] as f64 + (top_color[2] as f64 - bottom_color[2] as f64) * frac).round() as u8;
+            let r = (bottom_color[0] as f64 + (top_color[0] as f64 - bottom_color[0] as f64) * frac)
+                .round() as u8;
+            let g = (bottom_color[1] as f64 + (top_color[1] as f64 - bottom_color[1] as f64) * frac)
+                .round() as u8;
+            let b = (bottom_color[2] as f64 + (top_color[2] as f64 - bottom_color[2] as f64) * frac)
+                .round() as u8;
             [r, g, b]
         })
         .collect();
 
     let mut img_buffer = vec![0; (width * height * 3) as usize];
-    img_buffer.chunks_exact_mut(3).for_each(|pixel| pixel.copy_from_slice(&bg_color));
+    img_buffer
+        .chunks_exact_mut(3)
+        .for_each(|pixel| pixel.copy_from_slice(&bg_color));
 
     if !measure_nps_vec.is_empty() && max_nps > 0.0 {
         let num_measures = measure_nps_vec.len();
@@ -88,10 +93,18 @@ pub fn generate_density_graph_png(
     const GRAPH_HEIGHT: u32 = 400;
 
     let (bottom_color, top_color, bg_color) = match color_scheme {
-        ColorScheme::Default => ([0, 184, 204], [130, 0, 161], [30, 40, 47]),       // Cyan to Purple
+        ColorScheme::Default => ([0, 184, 204], [130, 0, 161], [30, 40, 47]), // Cyan to Purple
         ColorScheme::Alternative => ([247, 243, 51], [236, 122, 25], [30, 40, 47]), // Yellow to Orange
     };
-    let img_buffer_rgb = generate_graph_pixels(measure_nps_vec, max_nps, IMAGE_WIDTH, GRAPH_HEIGHT, bottom_color, top_color, bg_color);
+    let img_buffer_rgb = generate_graph_pixels(
+        measure_nps_vec,
+        max_nps,
+        IMAGE_WIDTH,
+        GRAPH_HEIGHT,
+        bottom_color,
+        top_color,
+        bg_color,
+    );
 
     let filename = match color_scheme {
         ColorScheme::Default => format!("{}.png", short_hash),
@@ -116,7 +129,15 @@ pub fn generate_density_graph_rgba_data(
     top_color: [u8; 3],
     bg_color: [u8; 3],
 ) -> Result<GraphImageData, String> {
-    let rgb_data = generate_graph_pixels(measure_nps_vec, max_nps, width, height, bottom_color, top_color, bg_color);
+    let rgb_data = generate_graph_pixels(
+        measure_nps_vec,
+        max_nps,
+        width,
+        height,
+        bottom_color,
+        top_color,
+        bg_color,
+    );
 
     let rgba_data = rgb_data
         .chunks_exact(3)

@@ -7,8 +7,8 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::{analyze, AnalysisOptions};
-use rssp::report::{build_timing_snapshot, TimingSnapshot};
+use rssp::report::{TimingSnapshot, build_timing_snapshot};
+use rssp::{AnalysisOptions, analyze};
 
 #[derive(Debug, Deserialize)]
 struct GoldenTiming {
@@ -120,16 +120,18 @@ fn compare_pairs(expected: &[(f64, f64)], actual: &[(f64, f64)]) -> bool {
 
 fn compare_time_signatures(expected: &[(f64, i32, i32)], actual: &[(f64, i32, i32)]) -> bool {
     expected.len() == actual.len()
-        && expected.iter().zip(actual).all(|(e, a)| {
-            approx_eq(e.0, a.0) && e.1 == a.1 && e.2 == a.2
-        })
+        && expected
+            .iter()
+            .zip(actual)
+            .all(|(e, a)| approx_eq(e.0, a.0) && e.1 == a.1 && e.2 == a.2)
 }
 
 fn compare_labels(expected: &[(f64, String)], actual: &[(f64, String)]) -> bool {
     expected.len() == actual.len()
-        && expected.iter().zip(actual).all(|(e, a)| {
-            approx_eq(e.0, a.0) && e.1 == a.1
-        })
+        && expected
+            .iter()
+            .zip(actual)
+            .all(|(e, a)| approx_eq(e.0, a.0) && e.1 == a.1)
 }
 
 fn compare_tickcounts(expected: &[(f64, i32)], actual: &[(f64, i32)]) -> bool {
@@ -142,9 +144,10 @@ fn compare_tickcounts(expected: &[(f64, i32)], actual: &[(f64, i32)]) -> bool {
 
 fn compare_combos(expected: &[(f64, i32, i32)], actual: &[(f64, i32, i32)]) -> bool {
     expected.len() == actual.len()
-        && expected.iter().zip(actual).all(|(e, a)| {
-            approx_eq(e.0, a.0) && e.1 == a.1 && e.2 == a.2
-        })
+        && expected
+            .iter()
+            .zip(actual)
+            .all(|(e, a)| approx_eq(e.0, a.0) && e.1 == a.1 && e.2 == a.2)
 }
 
 fn compare_speeds(expected: &[(f64, f64, f64, i32)], actual: &[(f64, f64, f64, i32)]) -> bool {
@@ -236,8 +239,7 @@ fn compute_chart_timings(
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
-    let compressed_bytes = fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     let raw_bytes = zstd::decode_all(&compressed_bytes[..])
         .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
@@ -258,8 +260,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         ));
     }
 
-    let compressed_golden = fs::read(&golden_path)
-        .map_err(|e| format!("Failed to read baseline file: {}", e))?;
+    let compressed_golden =
+        fs::read(&golden_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
 
     let json_bytes = zstd::decode_all(&compressed_golden[..])
         .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
@@ -332,10 +334,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 step_type,
                 difficulty,
                 meter_label,
-                expected_timing
-                    .map_or_else(|| "-".to_string(), timing_counts_expected),
-                actual_timing
-                    .map_or_else(|| "-".to_string(), timing_counts_snapshot),
+                expected_timing.map_or_else(|| "-".to_string(), timing_counts_expected),
+                actual_timing.map_or_else(|| "-".to_string(), timing_counts_snapshot),
                 status
             );
         }
