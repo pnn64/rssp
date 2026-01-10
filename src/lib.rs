@@ -14,6 +14,7 @@ pub mod report;
 pub mod rounding;
 pub mod stats;
 pub mod step_parity;
+pub mod streams;
 pub mod tech;
 pub mod timing;
 pub mod translate;
