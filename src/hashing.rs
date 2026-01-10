@@ -6,7 +6,12 @@ const SHA1_INIT: [u32; 5] = [
     0xc3d2e1f0,
 ];
 
-const SHA1_K: [u32; 4] = [0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xca62c1d6];
+const SHA1_K: [[u32; 4]; 4] = [
+    [0x5a827999; 4],
+    [0x6ed9eba1; 4],
+    [0x8f1bbcdc; 4],
+    [0xca62c1d6; 4],
+];
 
 #[inline(always)]
 fn add4(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
@@ -52,17 +57,6 @@ fn sha1msg2(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
 #[inline(always)]
 fn sha1_first_half(abcd: [u32; 4], msg: [u32; 4]) -> [u32; 4] {
     sha1_first_add(abcd[0].rotate_left(30), msg)
-}
-
-#[inline(always)]
-fn sha1_digest_round_x4(abcd: [u32; 4], work: [u32; 4], i: u8) -> [u32; 4] {
-    match i {
-        0 => sha1rnds4c(abcd, add4(work, [SHA1_K[0]; 4])),
-        1 => sha1rnds4p(abcd, add4(work, [SHA1_K[1]; 4])),
-        2 => sha1rnds4m(abcd, add4(work, [SHA1_K[2]; 4])),
-        3 => sha1rnds4p(abcd, add4(work, [SHA1_K[3]; 4])),
-        _ => unreachable!("unknown sha1 round"),
-    }
 }
 
 #[inline(always)]
@@ -151,7 +145,7 @@ fn sha1rnds4m(abcd: [u32; 4], msg: [u32; 4]) -> [u32; 4] {
 
     macro_rules! maj {
         ($a:expr, $b:expr, $c:expr) => {
-            ($a & $b) ^ ($a & $c) ^ ($b & $c)
+            ($a & $b) | (($a | $b) & $c)
         };
     }
 
@@ -182,9 +176,20 @@ fn sha1rnds4m(abcd: [u32; 4], msg: [u32; 4]) -> [u32; 4] {
     [b, c, d, e]
 }
 
+#[inline(always)]
+fn sha1_digest_round_x4<const I: usize>(abcd: [u32; 4], work: [u32; 4]) -> [u32; 4] {
+    let work = add4(work, SHA1_K[I]);
+    match I {
+        0 => sha1rnds4c(abcd, work),
+        1 | 3 => sha1rnds4p(abcd, work),
+        2 => sha1rnds4m(abcd, work),
+        _ => unreachable!(),
+    }
+}
+
 macro_rules! rounds4 {
-    ($h0:ident, $h1:ident, $wk:expr, $i:expr) => {
-        sha1_digest_round_x4($h0, sha1_first_half($h1, $wk), $i)
+    ($h0:ident, $h1:ident, $wk:expr, $i:literal) => {
+        sha1_digest_round_x4::<$i>($h0, sha1_first_half($h1, $wk))
     };
 }
 
@@ -198,7 +203,7 @@ macro_rules! schedule_rounds4 {
     (
         $h0:ident, $h1:ident,
         $w0:expr, $w1:expr, $w2:expr, $w3:expr, $w4:expr,
-        $i:expr
+        $i:literal
     ) => {
         $w4 = schedule!($w0, $w1, $w2, $w3);
         $h1 = rounds4!($h0, $h1, $w4, $i);
@@ -217,7 +222,7 @@ fn sha1_digest_block_u32(state: &mut [u32; 5], block: &[u32; 16]) {
     let mut h0 = [state[0], state[1], state[2], state[3]];
     let mut h1 = sha1_first_add(state[4], w0);
 
-    h1 = sha1_digest_round_x4(h0, h1, 0);
+    h1 = sha1_digest_round_x4::<0>(h0, h1);
     h0 = rounds4!(h1, h0, w1, 0);
     h1 = rounds4!(h0, h1, w2, 0);
     h0 = rounds4!(h1, h0, w3, 0);
@@ -252,16 +257,24 @@ fn sha1_digest_block_u32(state: &mut [u32; 5], block: &[u32; 16]) {
 }
 
 #[inline(always)]
-fn sha1_compress(state: &mut [u32; 5], blocks: &[[u8; 64]]) {
+fn bytes_to_u32_be(chunk: &[u8]) -> u32 {
+    u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+}
+
+#[inline(always)]
+fn sha1_compress_block(state: &mut [u32; 5], block: &[u8]) {
     let mut block_u32 = [0u32; 16];
-    let mut state_cpy = *state;
-    for block in blocks.iter() {
-        for (o, chunk) in block_u32.iter_mut().zip(block.chunks_exact(4)) {
-            *o = u32::from_be_bytes(chunk.try_into().unwrap());
-        }
-        sha1_digest_block_u32(&mut state_cpy, &block_u32);
+    for (i, chunk) in block.chunks_exact(4).enumerate() {
+        block_u32[i] = bytes_to_u32_be(chunk);
     }
-    *state = state_cpy;
+    sha1_digest_block_u32(state, &block_u32);
+}
+
+#[inline(always)]
+fn sha1_compress(state: &mut [u32; 5], blocks: &[[u8; 64]]) {
+    for block in blocks {
+        sha1_compress_block(state, block);
+    }
 }
 
 #[inline(always)]
@@ -281,18 +294,12 @@ fn sha1_update(state: &mut [u32; 5], buf: &mut [u8; 64], buf_len: &mut usize, da
     }
 
     let data = &data[offset..];
-    let blocks_len = data.len() >> 6;
-    if blocks_len != 0 {
-        let blocks = unsafe {
-            // SAFETY: blocks_len is data.len() / 64, so the slice is in-bounds.
-            std::slice::from_raw_parts(data.as_ptr() as *const [u8; 64], blocks_len)
-        };
-        sha1_compress(state, blocks);
+    for chunk in data.chunks_exact(64) {
+        sha1_compress_block(state, chunk);
     }
     let rem = data.len() & 63;
     if rem != 0 {
-        let start = data.len() - rem;
-        buf[..rem].copy_from_slice(&data[start..]);
+        buf[..rem].copy_from_slice(&data[data.len() - rem..]);
         *buf_len = rem;
     }
 }
@@ -315,14 +322,12 @@ fn sha1_finish(
     }
 
     buf[len..56].fill(0);
-    let bit_len = (total_len as u64) << 3;
-    buf[56..64].copy_from_slice(&bit_len.to_be_bytes());
+    buf[56..64].copy_from_slice(&((total_len as u64) << 3).to_be_bytes());
     sha1_compress(state, std::slice::from_ref(buf));
 
     let mut out = [0u8; 20];
     for (i, word) in state.iter().enumerate() {
-        let base = i * 4;
-        out[base..base + 4].copy_from_slice(&word.to_be_bytes());
+        out[i * 4..][..4].copy_from_slice(&word.to_be_bytes());
     }
     out
 }
@@ -337,13 +342,25 @@ fn sha1_digest(first: &[u8], second: &[u8]) -> [u8; 20] {
     sha1_finish(&mut state, &mut buf, buf_len, first.len() + second.len())
 }
 
+const HEX_TABLE: [[u8; 2]; 256] = {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut table = [[0u8; 2]; 256];
+    let mut i = 0usize;
+    while i < 256 {
+        table[i][0] = HEX[i >> 4];
+        table[i][1] = HEX[i & 0x0f];
+        i += 1;
+    }
+    table
+};
+
 pub fn compute_chart_hash(chart_data: &[u8], normalized_bpms: &str) -> String {
     let digest = sha1_digest(chart_data, normalized_bpms.as_bytes());
-    let mut out = String::with_capacity(16);
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    for &byte in digest[..8].iter() {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
+    let mut out = [0u8; 16];
+    for (i, &byte) in digest[..8].iter().enumerate() {
+        let hex = HEX_TABLE[byte as usize];
+        out[i * 2] = hex[0];
+        out[i * 2 + 1] = hex[1];
     }
-    out
+    String::from_utf8(out.to_vec()).expect("hex is always valid utf8")
 }
