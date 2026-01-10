@@ -1,5 +1,4 @@
 use crate::bpm::{clean_timing_map_cow, parse_beat_or_row, parse_bpm_map};
-pub use crate::math::round_millis;
 use crate::math::{fmt_dec3_itg, lrint_f32, lrint_f64, roundtrip_bpm_itg};
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -73,13 +72,8 @@ pub(crate) fn beat_to_note_row(beat: f64) -> i32 {
 }
 
 #[inline(always)]
-pub(crate) fn beat_to_note_row_f32_exact(beat: f32) -> i32 {
+pub(crate) fn beat_to_note_row_f32(beat: f32) -> i32 {
     lrint_f32(beat * ROWS_PER_BEAT as f32)
-}
-
-#[inline(always)]
-fn beat_to_note_row_f32(beat: f32) -> i32 {
-    beat_to_note_row_f32_exact(beat)
 }
 
 #[inline(always)]
@@ -436,45 +430,6 @@ pub fn compute_timing_segments(
         scrolls: scrolls.iter().map(to_f32_pair).collect(),
         fakes: fakes.iter().map(to_f32_pair).collect(),
     }
-}
-
-/// Compatibility wrapper for pre-cleaned inputs
-#[allow(clippy::too_many_arguments)]
-pub fn compute_timing_segments_cleaned(
-    chart_bpms: Option<&str>,
-    global_bpms: &str,
-    chart_stops: Option<&str>,
-    global_stops: &str,
-    chart_delays: Option<&str>,
-    global_delays: &str,
-    chart_warps: Option<&str>,
-    global_warps: &str,
-    chart_speeds: Option<&str>,
-    global_speeds: &str,
-    chart_scrolls: Option<&str>,
-    global_scrolls: &str,
-    chart_fakes: Option<&str>,
-    global_fakes: &str,
-    format: TimingFormat,
-) -> TimingSegments {
-    compute_timing_segments(
-        chart_bpms,
-        global_bpms,
-        chart_stops,
-        global_stops,
-        chart_delays,
-        global_delays,
-        chart_warps,
-        global_warps,
-        chart_speeds,
-        global_speeds,
-        chart_scrolls,
-        global_scrolls,
-        chart_fakes,
-        global_fakes,
-        format,
-        true,
-    )
 }
 
 pub fn normalize_speeds_like_itg(
@@ -998,49 +953,6 @@ impl TimingData {
         )
     }
 
-    /// Compatibility wrapper for pre-cleaned inputs
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_chart_data_cleaned(
-        song_offset: f64,
-        global_offset: f64,
-        chart_bpms: Option<&str>,
-        global_bpms: &str,
-        chart_stops: Option<&str>,
-        global_stops: &str,
-        chart_delays: Option<&str>,
-        global_delays: &str,
-        chart_warps: Option<&str>,
-        global_warps: &str,
-        chart_speeds: Option<&str>,
-        global_speeds: &str,
-        chart_scrolls: Option<&str>,
-        global_scrolls: &str,
-        chart_fakes: Option<&str>,
-        global_fakes: &str,
-        format: TimingFormat,
-    ) -> Self {
-        Self::from_chart_data(
-            song_offset,
-            global_offset,
-            chart_bpms,
-            global_bpms,
-            chart_stops,
-            global_stops,
-            chart_delays,
-            global_delays,
-            chart_warps,
-            global_warps,
-            chart_speeds,
-            global_speeds,
-            chart_scrolls,
-            global_scrolls,
-            chart_fakes,
-            global_fakes,
-            format,
-            true,
-        )
-    }
-
     fn build(
         song_offset: f64,
         global_offset: f64,
@@ -1513,42 +1425,42 @@ impl TimingData {
         let mut event = TimingEvent::NotFound;
 
         if state.is_warping {
-            let r = beat_to_note_row_f32_exact(state.warp_destination);
+            let r = beat_to_note_row_f32(state.warp_destination);
             if r < row {
                 row = r;
                 event = TimingEvent::WarpDest;
             }
         }
         if state.bpm_idx < self.beat_to_time.len() {
-            let r = beat_to_note_row_f32_exact(self.beat_to_time[state.bpm_idx].beat as f32);
+            let r = beat_to_note_row_f32(self.beat_to_time[state.bpm_idx].beat as f32);
             if r < row {
                 row = r;
                 event = TimingEvent::Bpm;
             }
         }
         if state.delay_idx < self.delays.len() {
-            let r = beat_to_note_row_f32_exact(self.delays[state.delay_idx].beat as f32);
+            let r = beat_to_note_row_f32(self.delays[state.delay_idx].beat as f32);
             if r < row {
                 row = r;
                 event = TimingEvent::Delay;
             }
         }
         if find_marker {
-            let r = beat_to_note_row_f32_exact(beat);
+            let r = beat_to_note_row_f32(beat);
             if r < row {
                 row = r;
                 event = TimingEvent::Marker;
             }
         }
         if state.stop_idx < self.stops.len() {
-            let r = beat_to_note_row_f32_exact(self.stops[state.stop_idx].beat as f32);
+            let r = beat_to_note_row_f32(self.stops[state.stop_idx].beat as f32);
             if r < row {
                 row = r;
                 event = TimingEvent::Stop;
             }
         }
         if state.warp_idx < self.warps.len() {
-            let r = beat_to_note_row_f32_exact(self.warps[state.warp_idx].beat as f32);
+            let r = beat_to_note_row_f32(self.warps[state.warp_idx].beat as f32);
             if r < row {
                 row = r;
                 event = TimingEvent::Warp;
@@ -1564,7 +1476,7 @@ impl TimingData {
         }
         let pos = self
             .beat_to_time
-            .partition_point(|p| beat_to_note_row_f32_exact(p.beat as f32) <= row);
+            .partition_point(|p| beat_to_note_row_f32(p.beat as f32) <= row);
         if pos == 0 {
             self.beat_to_time[0].bpm as f32
         } else {

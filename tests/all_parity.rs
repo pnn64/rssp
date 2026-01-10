@@ -8,8 +8,8 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
+use rssp::math::round_sig_figs_itg;
 use rssp::report::format_json_float;
-use rssp::timing::round_millis;
 use rssp::{display_metadata, normalize_difficulty_label};
 
 // Full JSON output (tech/pattern counts enabled).
@@ -1151,10 +1151,10 @@ fn compare_durations(
                 .map(|meter| meter.to_string())
                 .unwrap_or_else(|| (idx + 1).to_string());
 
-            let expected_val = expected.map(|e| round_millis(e.duration_seconds));
+            let expected_val = expected.map(|e| round_sig_figs_itg(e.duration_seconds));
             let actual_val = actual
                 .and_then(|a| a.timing.duration_seconds)
-                .map(round_millis);
+                .map(round_sig_figs_itg);
             let status = if expected_val.is_some() && expected_val == actual_val {
                 "....ok"
             } else {
@@ -1181,18 +1181,19 @@ fn compare_durations(
                 .iter()
                 .zip(actual_indices)
                 .all(|(expected_idx, actual_idx)| {
-                    let expected = round_millis(harness_charts[*expected_idx].duration_seconds);
+                    let expected =
+                        round_sig_figs_itg(harness_charts[*expected_idx].duration_seconds);
                     let actual = actual_charts[*actual_idx]
                         .timing
                         .duration_seconds
-                        .map(round_millis)
+                        .map(round_sig_figs_itg)
                         .unwrap_or_default();
                     expected == actual
                 });
         if !matches {
             let expected_vals: Vec<f64> = expected_indices
                 .iter()
-                .map(|&i| round_millis(harness_charts[i].duration_seconds))
+                .map(|&i| round_sig_figs_itg(harness_charts[i].duration_seconds))
                 .collect();
             let actual_vals: Vec<f64> = actual_indices
                 .iter()
@@ -1200,7 +1201,7 @@ fn compare_durations(
                     actual_charts[i]
                         .timing
                         .duration_seconds
-                        .map(round_millis)
+                        .map(round_sig_figs_itg)
                         .unwrap_or_default()
                 })
                 .collect();

@@ -5,7 +5,7 @@ use std::time::Duration;
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use crate::bpm::{actual_bpm_range_raw, normalize_float_digits, resolve_display_bpm};
-use crate::math::{round_2, round_sig_figs_6, round_sig_figs_itg, roundtrip_bpm_itg};
+use crate::math::{round_dp, round_sig_figs_6, round_sig_figs_itg, roundtrip_bpm_itg};
 use crate::patterns::{CustomPatternSummary, PatternVariant};
 use crate::stats::{
     ArrowStats, RADAR_CATEGORY_COUNT, StreamCounts, measure_equally_spaced, stream_sequences,
@@ -37,9 +37,9 @@ fn compute_stream_percentages(
     let break_percent = 100.0 - adj_stream_percent;
 
     (
-        round_2(stream_percent),
-        round_2(adj_stream_percent),
-        round_2(break_percent),
+        round_dp(stream_percent, 2),
+        round_dp(adj_stream_percent, 2),
+        round_dp(break_percent, 2),
     )
 }
 

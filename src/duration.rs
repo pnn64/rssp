@@ -1,5 +1,5 @@
 use crate::bpm::clean_timing_map;
-use crate::math::round_millis;
+use crate::math::round_sig_figs_itg;
 use crate::parse::{
     decode_bytes, extract_sections, normalize_chart_desc, parse_offset_seconds, parse_version,
     split_notes_fields, unescape_trim,
@@ -37,7 +37,7 @@ pub(crate) fn chart_duration_seconds(
     if last_beat <= 0.0 {
         return 0.0;
     }
-    round_millis(
+    round_sig_figs_itg(
         timing.get_time_for_beat_f32(last_beat)
             - offsets.global_offset_seconds
             - offsets.group_offset_seconds,
@@ -187,7 +187,7 @@ pub fn compute_chart_durations(
             )
         };
 
-        let timing = TimingData::from_chart_data_cleaned(
+        let timing = TimingData::from_chart_data(
             chart_offset,
             0.0,
             chart_bpms.as_deref(),
@@ -205,6 +205,7 @@ pub fn compute_chart_durations(
             chart_fakes.as_deref(),
             timing_fakes_global,
             timing_format,
+            true,
         );
         let duration_seconds = chart_duration_seconds(last_beat, &timing, offsets);
 

@@ -7,7 +7,7 @@ use crate::parse::{
     split_notes_fields,
 };
 use crate::timing::{
-    ROWS_PER_BEAT, TimingFormat, compute_timing_segments_cleaned, format_bpm_segments_like_itg,
+    ROWS_PER_BEAT, TimingFormat, compute_timing_segments, format_bpm_segments_like_itg,
     steps_timing_allowed,
 };
 
@@ -364,9 +364,9 @@ fn chart_bpm_snapshot(
         .unwrap_or_else(|| bpms_norm.to_string());
 
     let r = chart.resolve(global, use_chart);
-    let segments = compute_timing_segments_cleaned(
+    let segments = compute_timing_segments(
         r[0].1, r[0].0, r[1].1, r[1].0, r[2].1, r[2].0, r[3].1, r[3].0, r[4].1, r[4].0, r[5].1,
-        r[5].0, r[6].1, r[6].0, fmt,
+        r[5].0, r[6].1, r[6].0, fmt, true,
     );
 
     let bpms: Vec<_> = segments

@@ -139,7 +139,7 @@ pub fn compute_chart_peak_nps(
             )
         };
 
-        let timing = TimingData::from_chart_data_cleaned(
+        let timing = TimingData::from_chart_data(
             chart_offset,
             0.0,
             chart_bpms.as_deref(),
@@ -157,6 +157,7 @@ pub fn compute_chart_peak_nps(
             chart_fakes.as_deref(),
             timing_fakes_global,
             timing_format,
+            true,
         );
 
         let measure_nps_vec = compute_measure_nps_vec_with_timing(&measure_densities, &timing);

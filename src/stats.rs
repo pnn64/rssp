@@ -419,10 +419,6 @@ where
     (output, stats, densities)
 }
 
-pub fn minimize_chart_and_count(data: &[u8]) -> (Vec<u8>, ArrowStats, Vec<usize>) {
-    minimize_chart_and_count_with_lanes(data, 4)
-}
-
 pub fn minimize_chart_and_count_with_lanes(
     data: &[u8],
     lanes: usize,

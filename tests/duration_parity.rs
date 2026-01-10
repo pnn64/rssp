@@ -7,7 +7,7 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::timing::round_millis;
+use rssp::math::round_sig_figs_itg;
 use rssp::{ChartDuration, TimingOffsets, compute_chart_durations};
 
 #[derive(Debug, Deserialize)]
@@ -116,7 +116,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 .map(|meter| meter.to_string())
                 .unwrap_or_else(|| (idx + 1).to_string());
 
-            let expected_val = expected.map(|e| round_millis(e.duration_seconds));
+            let expected_val = expected.map(|e| round_sig_figs_itg(e.duration_seconds));
             let actual_val = actual.map(|a| a.duration_seconds);
             let matches = match (expected_val, actual_val) {
                 (Some(exp), Some(act)) => (exp - act).abs() <= 0.001,
@@ -141,13 +141,13 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
 
         let matches = expected_entries.len() == actual_entries.len()
             && expected_entries.iter().zip(&actual_entries).all(|(e, a)| {
-                let expected_val = round_millis(e.duration_seconds);
+                let expected_val = round_sig_figs_itg(e.duration_seconds);
                 (expected_val - a.duration_seconds).abs() <= 0.001
             });
         if !matches {
             let expected_values: Vec<f64> = expected_entries
                 .iter()
-                .map(|e| round_millis(e.duration_seconds))
+                .map(|e| round_sig_figs_itg(e.duration_seconds))
                 .collect();
             let actual_values: Vec<f64> =
                 actual_entries.iter().map(|a| a.duration_seconds).collect();

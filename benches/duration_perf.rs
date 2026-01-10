@@ -299,7 +299,7 @@ fn bench_duration_inner(c: &mut Criterion) {
                     true,
                 );
                 let duration = timing.get_time_for_beat(target_beat);
-                let duration = rssp::timing::round_millis(duration);
+                let duration = rssp::math::round_sig_figs_itg(duration);
                 durations.push(duration);
             }
             black_box(durations);
@@ -410,7 +410,7 @@ fn bench_duration_timing(c: &mut Criterion) {
                     true,
                 );
                 let duration = timing.get_time_for_beat(entry.target_beat);
-                durations.push(rssp::timing::round_millis(duration));
+                durations.push(rssp::math::round_sig_figs_itg(duration));
             }
             black_box(durations);
         })

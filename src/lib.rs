@@ -20,7 +20,7 @@ pub mod timing;
 pub mod translate;
 
 pub mod rounding {
-    pub use crate::math::{round_2, round_3, round_sig_figs_6};
+    pub use crate::math::{round_dp, round_sig_figs_6, round_sig_figs_itg};
 }
 
 pub const RSSP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -33,15 +33,13 @@ pub use step_parity::TechCounts;
 
 use crate::bpm::*;
 use crate::hashing::*;
-use crate::math::{round_2, round_3, round_sig_figs_6};
+use crate::math::{round_dp, round_sig_figs_6};
 use crate::matrix::compute_matrix_rating;
 use crate::parse::*;
 use crate::patterns::*;
 use crate::stats::*;
 use crate::tech::parse_tech_notation;
-use crate::timing::{
-    TimingData, TimingFormat, compute_timing_segments_cleaned, steps_timing_allowed,
-};
+use crate::timing::{TimingData, TimingFormat, compute_timing_segments, steps_timing_allowed};
 
 /// Options for controlling simfile analysis.
 #[derive(Debug, Clone)]
@@ -402,8 +400,8 @@ fn compute_derived_chart_metrics(
 
     let short_hash = compute_chart_hash(minimized_chart, bpms_to_use);
     let bpm_neutral_hash = compute_chart_hash(minimized_chart, "0.000=0.000");
-    let tier_bpm = round_2(compute_tier_bpm(measure_densities, bpm_map, 4.0));
-    let matrix_rating = round_2(compute_matrix_rating(measure_densities, bpm_map));
+    let tier_bpm = round_dp(compute_tier_bpm(measure_densities, bpm_map, 4.0), 2);
+    let matrix_rating = round_dp(compute_matrix_rating(measure_densities, bpm_map), 2);
 
     DerivedChartMetrics {
         stream_counts,
@@ -634,7 +632,7 @@ fn build_chart_summary(
             global_fakes_raw,
         )
     };
-    let timing_segments = compute_timing_segments_cleaned(
+    let timing_segments = compute_timing_segments(
         chart_bpms_timing,
         timing_bpms_global,
         chart_stops_timing,
@@ -650,6 +648,7 @@ fn build_chart_summary(
         chart_fakes_timing,
         timing_fakes_global,
         timing_format,
+        true,
     );
 
     let bpm_map: Vec<(f64, f64)> = timing_segments
@@ -674,8 +673,8 @@ fn build_chart_summary(
         } else {
             (0, 0, 0, 0.0, 0, 0.0)
         };
-    let mono_percent = round_2(mono_percent_raw);
-    let candle_percent = round_2(candle_percent_raw);
+    let mono_percent = round_dp(mono_percent_raw, 2);
+    let candle_percent = round_dp(candle_percent_raw, 2);
 
     let custom_patterns = if compute_patterns && !compiled_custom_patterns.is_empty() {
         detect_custom_patterns_compiled(bitmasks.as_ref().unwrap(), compiled_custom_patterns)
@@ -697,7 +696,7 @@ fn build_chart_summary(
     let measure_nps_vec_raw = compute_measure_nps_vec_with_timing(&measure_densities, &timing);
     let (max_nps_raw, median_nps_raw) = get_nps_stats(&measure_nps_vec_raw);
     let max_nps = round_sig_figs_6(max_nps_raw);
-    let median_nps = round_2(median_nps_raw);
+    let median_nps = round_dp(median_nps_raw, 2);
     let measure_nps_vec = measure_nps_vec_raw
         .into_iter()
         .map(round_sig_figs_6)
@@ -997,7 +996,7 @@ pub fn analyze(
         } else {
             Vec::new()
         };
-    let global_timing_segments = compute_timing_segments_cleaned(
+    let global_timing_segments = compute_timing_segments(
         None,
         &cleaned_global_bpms,
         None,
@@ -1013,6 +1012,7 @@ pub fn analyze(
         None,
         &cleaned_global_fakes,
         timing_format,
+        true,
     );
     let global_bpm_map: Vec<(f64, f64)> = global_timing_segments
         .bpms
@@ -1022,8 +1022,8 @@ pub fn analyze(
     let (min_bpm_i32, max_bpm_i32) = compute_bpm_range(&global_bpm_map);
     let bpm_values: Vec<f64> = global_bpm_map.iter().map(|&(_, bpm)| bpm).collect();
     let (median_bpm_raw, average_bpm_raw) = compute_bpm_stats(&bpm_values);
-    let median_bpm = round_2(median_bpm_raw);
-    let average_bpm = round_2(average_bpm_raw);
+    let median_bpm = round_dp(median_bpm_raw, 2);
+    let average_bpm = round_dp(average_bpm_raw, 2);
 
     let cleaned_global_bpms_str = cleaned_global_bpms.as_str();
     let cleaned_global_stops_str = cleaned_global_stops.as_str();
@@ -1082,7 +1082,7 @@ pub fn analyze(
 
     let total_elapsed = total_start_time.elapsed();
 
-    let offset_rounded = round_3(offset);
+    let offset_rounded = round_dp(offset, 3);
     Ok(SimfileSummary {
         title_str,
         subtitle_str,

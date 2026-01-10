@@ -7,7 +7,7 @@ fn round_sig_figs_6_fmt(value: f64, fallback: f64) -> f64 {
 }
 
 #[inline(always)]
-fn round_dp(value: f64, dp: usize) -> f64 {
+pub fn round_dp(value: f64, dp: usize) -> f64 {
     if !value.is_finite() {
         return value;
     }
@@ -24,26 +24,11 @@ pub fn round_sig_figs_6(value: f64) -> f64 {
 }
 
 #[inline(always)]
-pub(crate) fn round_sig_figs_itg(value: f64) -> f64 {
+pub fn round_sig_figs_itg(value: f64) -> f64 {
     if !value.is_finite() || value == 0.0 {
         return value;
     }
     round_sig_figs_6_fmt(value as f32 as f64, value)
-}
-
-#[inline(always)]
-pub fn round_millis(value: f64) -> f64 {
-    round_sig_figs_itg(value)
-}
-
-#[inline(always)]
-pub fn round_2(value: f64) -> f64 {
-    round_dp(value, 2)
-}
-
-#[inline(always)]
-pub fn round_3(value: f64) -> f64 {
-    round_dp(value, 3)
 }
 
 #[inline(always)]

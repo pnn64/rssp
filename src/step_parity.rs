@@ -3,7 +3,7 @@ use std::hash::{BuildHasherDefault, Hasher};
 use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
-use crate::timing::{ROWS_PER_BEAT, TimingData, beat_to_note_row_f32_exact};
+use crate::timing::{ROWS_PER_BEAT, TimingData, beat_to_note_row_f32};
 
 const INVALID_COLUMN: isize = -1;
 const CLM_SECOND_INVALID: f32 = -1.0;
@@ -1970,7 +1970,7 @@ where
             }
 
             let beat = start + j as f32 * step;
-            let note_row = beat_to_note_row_f32_exact(beat);
+            let note_row = beat_to_note_row_f32(beat);
             let beat = note_row as f32 / ROWS_PER_BEAT as f32;
             let second = get_second(beat);
 
@@ -2007,7 +2007,7 @@ fn parse_rows_from_arrays<const LANES: usize>(
         }
 
         let beat_raw = row_to_beat[idx];
-        let note_row = beat_to_note_row_f32_exact(beat_raw);
+        let note_row = beat_to_note_row_f32(beat_raw);
         let beat = note_row as f32 / ROWS_PER_BEAT as f32;
         let second = timing.get_time_for_beat_f32(beat as f64) as f32;
 
@@ -2094,10 +2094,6 @@ fn build_notes(rows: &[ParsedRow], timing: Option<&TimingData>) -> Vec<Intermedi
 
 // --- Public API ---
 
-pub fn analyze(data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> TechCounts {
-    analyze_lanes(data, bpm_map, offset, 4)
-}
-
 pub fn analyze_lanes(data: &[u8], bpm_map: &[(f64, f64)], offset: f64, lanes: usize) -> TechCounts {
     let Some(layout) = layout_for_lanes(lanes) else {
         return TechCounts::default();
@@ -2113,10 +2109,6 @@ pub fn analyze_lanes(data: &[u8], bpm_map: &[(f64, f64)], offset: f64, lanes: us
         return TechCounts::default();
     }
     calculate_tech_counts(&generator.rows, &generator.layout)
-}
-
-pub fn analyze_with_timing(data: &[u8], timing: &TimingData) -> TechCounts {
-    analyze_timing_lanes(data, timing, 4)
 }
 
 pub fn analyze_timing_lanes(data: &[u8], timing: &TimingData, lanes: usize) -> TechCounts {
