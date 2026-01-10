@@ -8,7 +8,6 @@ pub mod graph;
 pub mod hashing;
 pub mod math;
 pub mod matrix;
-pub mod notes;
 pub mod nps;
 pub mod parse;
 pub mod patterns;
