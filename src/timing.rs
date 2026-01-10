@@ -1,4 +1,6 @@
 use crate::bpm::{clean_timing_map_cow, parse_beat_or_row, parse_bpm_map};
+pub use crate::math::round_millis;
+use crate::math::{fmt_dec3_itg, lrint_f32, lrint_f64, roundtrip_bpm_itg};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -81,53 +83,6 @@ fn beat_to_note_row_f32(beat: f32) -> i32 {
 }
 
 #[inline(always)]
-fn lrint_f64(v: f64) -> f64 {
-    if !v.is_finite() {
-        return 0.0;
-    }
-    if v.fract() == 0.0 {
-        return v;
-    }
-    let floor = v.floor();
-    let frac = v - floor;
-    match frac.partial_cmp(&0.5) {
-        Some(Ordering::Less) => floor,
-        Some(Ordering::Greater) => floor + 1.0,
-        _ => {
-            if ((floor as i64) & 1) == 0 {
-                floor
-            } else {
-                floor + 1.0
-            }
-        }
-    }
-}
-
-#[inline(always)]
-fn lrint_f32(v: f32) -> i32 {
-    if !v.is_finite() {
-        return 0;
-    }
-    if v.fract() == 0.0 {
-        return v as i32;
-    }
-    let floor = v.floor();
-    let frac = v - floor;
-    let fi = floor as i32;
-    match frac.partial_cmp(&0.5) {
-        Some(Ordering::Less) => fi,
-        Some(Ordering::Greater) => fi + 1,
-        _ => {
-            if (fi & 1) == 0 {
-                fi
-            } else {
-                fi + 1
-            }
-        }
-    }
-}
-
-#[inline(always)]
 fn quantize_beat(beat: f64) -> f64 {
     note_row_to_beat_f32(beat_to_note_row_f32(beat as f32)) as f64
 }
@@ -140,36 +95,6 @@ fn quantize_beat_f32(beat: f32) -> f32 {
 #[inline(always)]
 pub fn steps_timing_allowed(version: f32, format: TimingFormat) -> bool {
     matches!(format, TimingFormat::Sm) || version >= VERSION_SPLIT_TIMING
-}
-
-#[inline(always)]
-pub(crate) fn roundtrip_bpm_itg(bpm: f64) -> f64 {
-    let bpm_f = bpm as f32;
-    if !bpm_f.is_finite() {
-        0.0
-    } else {
-        (bpm_f / 60.0 * 60.0) as f64
-    }
-}
-
-#[inline(always)]
-pub(crate) fn round_sig_figs_itg(value: f64) -> f64 {
-    if !value.is_finite() || value == 0.0 {
-        return value;
-    }
-    format!("{:.5e}", value as f32 as f64)
-        .parse()
-        .unwrap_or(value)
-}
-
-#[inline(always)]
-pub fn round_millis(value: f64) -> f64 {
-    round_sig_figs_itg(value)
-}
-
-#[inline(always)]
-fn normalize_decimal_itg(value: f64) -> String {
-    format!("{:.3}", (value as f32 * 1000.0).round() / 1000.0)
 }
 
 #[inline(always)]
@@ -576,9 +501,9 @@ pub fn format_bpm_segments_like_itg(bpms: &[(f64, f64)]) -> String {
                 out.push(',');
             }
             let beat = note_row_to_beat_f32(beat_to_note_row_f32(*beat as f32)) as f64;
-            out.push_str(&normalize_decimal_itg(beat));
+            out.push_str(&fmt_dec3_itg(beat));
             out.push('=');
-            out.push_str(&normalize_decimal_itg(roundtrip_bpm_itg(*bpm)));
+            out.push_str(&fmt_dec3_itg(roundtrip_bpm_itg(*bpm)));
             out
         })
 }

@@ -1,13 +1,14 @@
 use crate::unescape_trim;
 use std::borrow::Cow;
 
+use crate::math::{fmt_dec3_half_up, round_sig_figs_itg, roundtrip_bpm_itg};
 use crate::parse::{
     ParsedChartEntry, ParsedSimfileData, decode_bytes, extract_sections, parse_version,
     split_notes_fields,
 };
 use crate::timing::{
     ROWS_PER_BEAT, TimingFormat, compute_timing_segments_cleaned, format_bpm_segments_like_itg,
-    round_sig_figs_itg, roundtrip_bpm_itg, steps_timing_allowed,
+    steps_timing_allowed,
 };
 
 const GIMMICK_BPM_THRESHOLD: f64 = 10000.0;
@@ -35,7 +36,7 @@ fn strip_control(s: &str) -> Cow<'_, str> {
 
 fn normalize_decimal(s: &str) -> Option<String> {
     let value: f64 = strip_control(s).trim().parse().ok()?;
-    Some(format!("{:.3}", ((value * 1000.0 + 0.5).floor()) / 1000.0))
+    Some(fmt_dec3_half_up(value))
 }
 
 pub(crate) fn parse_beat_or_row(raw: &str) -> Option<f64> {

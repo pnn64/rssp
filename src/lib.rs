@@ -6,19 +6,23 @@ pub mod bpm;
 pub mod duration;
 pub mod graph;
 pub mod hashing;
+pub mod math;
 pub mod matrix;
 pub mod notes;
 pub mod nps;
 pub mod parse;
 pub mod patterns;
 pub mod report;
-pub mod rounding;
 pub mod stats;
 pub mod step_parity;
 pub mod streams;
 pub mod tech;
 pub mod timing;
 pub mod translate;
+
+pub mod rounding {
+    pub use crate::math::{round_2, round_3, round_sig_figs_6};
+}
 
 pub const RSSP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -30,10 +34,10 @@ pub use step_parity::TechCounts;
 
 use crate::bpm::*;
 use crate::hashing::*;
+use crate::math::{round_2, round_3, round_sig_figs_6};
 use crate::matrix::compute_matrix_rating;
 use crate::parse::*;
 use crate::patterns::*;
-use crate::rounding::{round_2, round_3, round_sig_figs_6};
 use crate::stats::*;
 use crate::tech::parse_tech_notation;
 use crate::timing::{

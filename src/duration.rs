@@ -1,9 +1,10 @@
 use crate::bpm::clean_timing_map;
+use crate::math::round_millis;
 use crate::parse::{
     decode_bytes, extract_sections, normalize_chart_desc, parse_offset_seconds, parse_version,
     split_notes_fields, unescape_trim,
 };
-use crate::timing::{TimingData, TimingFormat, round_millis, steps_timing_allowed};
+use crate::timing::{TimingData, TimingFormat, steps_timing_allowed};
 
 #[derive(Debug, Clone)]
 pub struct ChartDuration {

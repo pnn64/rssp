@@ -5,16 +5,15 @@ use std::time::Duration;
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use crate::bpm::{actual_bpm_range_raw, normalize_float_digits, resolve_display_bpm};
+use crate::math::{round_2, round_sig_figs_6, round_sig_figs_itg, roundtrip_bpm_itg};
 use crate::patterns::{CustomPatternSummary, PatternVariant};
-use crate::rounding::{round_2, round_sig_figs_6};
 use crate::stats::{
     ArrowStats, RADAR_CATEGORY_COUNT, StreamCounts, measure_equally_spaced, stream_sequences,
 };
 use crate::step_parity::TechCounts;
 use crate::timing::{
     SpeedUnit, TimingFormat, TimingSegments, beat_to_note_row, format_bpm_segments_like_itg,
-    normalize_scrolls_like_itg, normalize_speeds_like_itg, note_row_to_beat, round_sig_figs_itg,
-    roundtrip_bpm_itg, steps_timing_allowed,
+    normalize_scrolls_like_itg, normalize_speeds_like_itg, note_row_to_beat, steps_timing_allowed,
 };
 
 #[inline(always)]
