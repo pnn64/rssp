@@ -2,7 +2,7 @@ use crate::bpm::clean_timing_map;
 use crate::math::round_sig_figs_itg;
 use crate::parse::{
     decode_bytes, extract_sections, normalize_chart_desc, parse_offset_seconds, parse_version,
-    split_notes_fields, unescape_trim,
+    unescape_trim,
 };
 use crate::timing::{TimingData, TimingFormat, steps_timing_allowed};
 
@@ -92,10 +92,11 @@ pub fn compute_chart_durations(
     let mut results = Vec::new();
 
     for entry in parsed_data.notes_list {
-        let (fields, chart_data) = split_notes_fields(&entry.notes);
-        if fields.len() < 5 {
+        if entry.field_count < 5 {
             continue;
         }
+        let fields = entry.fields;
+        let chart_data = entry.note_data;
 
         let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());
         if step_type == "lights-cabinet" {

@@ -397,21 +397,7 @@ fn compute_derived_chart_metrics(
 
 /// Processes a single chart's data to produce a `ChartSummary`.
 fn build_chart_summary(
-    notes_data: &[u8],
-    chart_bpms_opt: Option<&[u8]>,
-    chart_delays_opt: Option<&[u8]>,
-    chart_warps_opt: Option<&[u8]>,
-    chart_stops_opt: Option<&[u8]>,
-    chart_speeds_opt: Option<&[u8]>,
-    chart_scrolls_opt: Option<&[u8]>,
-    chart_fakes_opt: Option<&[u8]>,
-    chart_time_signatures_opt: Option<&[u8]>,
-    chart_labels_opt: Option<&[u8]>,
-    chart_tickcounts_opt: Option<&[u8]>,
-    chart_combos_opt: Option<&[u8]>,
-    chart_display_bpm_opt: Option<&[u8]>,
-    chart_offset_opt: Option<&[u8]>,
-    chart_radar_values_opt: Option<&[u8]>,
+    entry: &ParsedChartEntry<'_>,
     global_bpms_raw: &str,
     global_stops_raw: &str,
     global_delays_raw: &str,
@@ -430,10 +416,26 @@ fn build_chart_summary(
 ) -> Option<(ChartSummary, i32)> {
     let chart_start_time = Instant::now();
 
-    let (fields, chart_data) = split_notes_fields(notes_data);
-    if fields.len() < 5 {
+    if entry.field_count < 5 {
         return None;
     }
+    let fields = entry.fields;
+    let chart_data = entry.note_data;
+
+    let chart_bpms_opt = entry.chart_bpms.as_deref();
+    let chart_delays_opt = entry.chart_delays.as_deref();
+    let chart_warps_opt = entry.chart_warps.as_deref();
+    let chart_stops_opt = entry.chart_stops.as_deref();
+    let chart_speeds_opt = entry.chart_speeds.as_deref();
+    let chart_scrolls_opt = entry.chart_scrolls.as_deref();
+    let chart_fakes_opt = entry.chart_fakes.as_deref();
+    let chart_time_signatures_opt = entry.chart_time_signatures.as_deref();
+    let chart_labels_opt = entry.chart_labels.as_deref();
+    let chart_tickcounts_opt = entry.chart_tickcounts.as_deref();
+    let chart_combos_opt = entry.chart_combos.as_deref();
+    let chart_display_bpm_opt = entry.chart_display_bpm.as_deref();
+    let chart_offset_opt = entry.chart_offset.as_deref();
+    let chart_radar_values_opt = entry.chart_radar_values.as_deref();
 
     let step_type_str = unescape_trim(decode_bytes(fields[0]).as_ref());
     if step_type_str == "lights-cabinet" {
@@ -589,7 +591,7 @@ fn build_chart_summary(
     );
     let chart_offset = timing_src.chart_offset_seconds;
     let cached_radar_values = if extension.eq_ignore_ascii_case("sm") {
-        parse_radar_values_bytes(fields.get(4).copied(), false)
+        parse_radar_values_bytes(Some(fields[4]), false)
     } else {
         parse_radar_values_bytes(chart_radar_values_opt, true)
     };
@@ -1004,21 +1006,7 @@ pub fn analyze(
     let compiled_custom_patterns_ref = &compiled_custom_patterns;
     for entry in entries {
         if let Some((summary, chart_length)) = build_chart_summary(
-            &entry.notes,
-            entry.chart_bpms.as_deref(),
-            entry.chart_delays.as_deref(),
-            entry.chart_warps.as_deref(),
-            entry.chart_stops.as_deref(),
-            entry.chart_speeds.as_deref(),
-            entry.chart_scrolls.as_deref(),
-            entry.chart_fakes.as_deref(),
-            entry.chart_time_signatures.as_deref(),
-            entry.chart_labels.as_deref(),
-            entry.chart_tickcounts.as_deref(),
-            entry.chart_combos.as_deref(),
-            entry.chart_display_bpm.as_deref(),
-            entry.chart_offset.as_deref(),
-            entry.chart_radar_values.as_deref(),
+            &entry,
             cleaned_global_bpms_str,
             cleaned_global_stops_str,
             cleaned_global_delays_str,
@@ -1101,10 +1089,11 @@ pub fn compute_all_hashes(
 
     for entry in parsed_data.notes_list {
         // 3. Split fields to get Metadata (StepType, Difficulty)
-        let (fields, chart_data) = split_notes_fields(&entry.notes);
-        if fields.len() < 5 {
+        if entry.field_count < 5 {
             continue;
         }
+        let fields = entry.fields;
+        let chart_data = entry.note_data;
 
         let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());
         let description_raw = unescape_trim(decode_bytes(fields[1]).as_ref());

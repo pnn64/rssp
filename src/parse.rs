@@ -108,7 +108,9 @@ type TagBytes<'a> = Cow<'a, [u8]>;
 
 #[derive(Default)]
 pub struct ParsedChartEntry<'a> {
-    pub notes: Vec<u8>,
+    pub field_count: u8,
+    pub fields: [&'a [u8]; 5],
+    pub note_data: &'a [u8],
     pub chart_bpms: Option<TagBytes<'a>>,
     pub chart_stops: Option<TagBytes<'a>>,
     pub chart_delays: Option<TagBytes<'a>>,
@@ -263,21 +265,27 @@ macro_rules! try_tags {
     };
 }
 
-fn parse_notedata_fields(data: &[u8]) -> NotedataFields<'_> {
+fn parse_notedata_entry<'a>(data: &'a [u8], start: usize) -> (ParsedChartEntry<'a>, usize) {
     let mut out = NotedataFields::default();
-    let mut i = 0;
+    let mut i = start;
+
     while i < data.len() {
         let Some(pos) = data[i..].iter().position(|&b| b == b'#') else {
-            break;
+            return (build_chart_entry(out), data.len());
         };
         i += pos;
         let s = &data[i..];
 
         if starts_with_ci(s, b"#NOTEDATA:") {
+            if i != start {
+                break;
+            }
             if let Some((_, next)) = scan_tag_end(&s[10..], true) {
                 i += 10 + next;
                 continue;
             }
+            i += 10;
+            continue;
         }
 
         try_tags!(
@@ -311,31 +319,21 @@ fn parse_notedata_fields(data: &[u8]) -> NotedataFields<'_> {
         );
         i += 1;
     }
-    out
-}
 
-#[inline(always)]
-fn join_notes(parts: [&[u8]; 6]) -> Vec<u8> {
-    let cap: usize = parts.iter().map(|p| p.len()).sum::<usize>() + 5;
-    let mut out = Vec::with_capacity(cap);
-    out.extend_from_slice(parts[0]);
-    for p in &parts[1..] {
-        out.push(b':');
-        out.extend_from_slice(p);
-    }
-    out
+    (build_chart_entry(out), i)
 }
 
 fn build_chart_entry(f: NotedataFields<'_>) -> ParsedChartEntry<'_> {
     ParsedChartEntry {
-        notes: join_notes([
+        field_count: 5,
+        fields: [
             f.step_type.unwrap_or_default(),
             f.description.unwrap_or_default(),
             f.difficulty.unwrap_or_default(),
             f.meter.unwrap_or_default(),
             f.credit.unwrap_or_default(),
-            f.notes.or(f.notes2).unwrap_or_default(),
-        ]),
+        ],
+        note_data: f.notes.or(f.notes2).unwrap_or_default(),
         chart_bpms: f.chart_bpms.map(Cow::Borrowed),
         chart_stops: f.chart_stops.or(f.chart_freezes).map(Cow::Borrowed),
         chart_delays: f.chart_delays.map(Cow::Borrowed),
@@ -375,13 +373,9 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
 
         // SSC notedata block
         if ssc && starts_with_ci(s, b"#NOTEDATA:") {
-            let mut end = i + 1;
-            while end < data.len() && !starts_with_ci(&data[end..], b"#NOTEDATA:") {
-                end += 1;
-            }
-            r.notes_list
-                .push(build_chart_entry(parse_notedata_fields(&data[i..end])));
-            i = end;
+            let (entry, next) = parse_notedata_entry(data, i);
+            r.notes_list.push(entry);
+            i = next;
             continue;
         }
 
@@ -393,8 +387,11 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
                 .iter()
                 .position(|&b| b == b';')
                 .map_or(data.len(), |e| start + e);
+            let (field_count, fields, note_data) = split_notes6(&data[start..end]);
             r.notes_list.push(ParsedChartEntry {
-                notes: data[start..end].to_vec(),
+                field_count,
+                fields,
+                note_data,
                 ..Default::default()
             });
             i = end + 1;
@@ -434,29 +431,51 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
 }
 
 pub fn split_notes_fields(block: &[u8]) -> (Vec<&[u8]>, &[u8]) {
-    let bs_count = |data: &[u8], pos: usize| {
-        data[..pos]
-            .iter()
-            .rev()
-            .take_while(|&&b| b == b'\\')
-            .count()
-    };
+    let (n, parts, note_data) = split_notes6(block);
+    let mut fields = Vec::with_capacity(n as usize);
+    for i in 0..n as usize {
+        fields.push(parts[i]);
+    }
+    (fields, note_data)
+}
 
-    let mut fields = Vec::new();
-    let mut start = 0;
-    for i in 0..block.len() {
-        if block[i] == b':' && bs_count(block, i) % 2 == 0 && fields.len() < 5 {
-            fields.push(&block[start..i]);
-            start = i + 1;
+#[inline(always)]
+fn split_notes6(block: &[u8]) -> (u8, [&[u8]; 5], &[u8]) {
+    let mut fields: [&[u8]; 5] = [&[]; 5];
+    let mut count = 0u8;
+    let mut start = 0usize;
+    let mut bs_run = 0usize;
+
+    for (i, &b) in block.iter().enumerate() {
+        if b == b'\\' {
+            bs_run += 1;
+            continue;
         }
+        if b == b':' && bs_run & 1 == 0 && count < 5 {
+            fields[count as usize] = block.get(start..i).unwrap_or(&[]);
+            count += 1;
+            start = i + 1;
+            if count == 5 {
+                break;
+            }
+        }
+        bs_run = 0;
     }
 
     let rest = block.get(start..).unwrap_or(&[]);
-    let end = rest
-        .iter()
-        .enumerate()
-        .find(|&(k, &b)| b == b':' && bs_count(rest, k) % 2 == 0)
-        .map_or(rest.len(), |(k, _)| k);
+    let mut end = rest.len();
+    bs_run = 0;
+    for (i, &b) in rest.iter().enumerate() {
+        if b == b'\\' {
+            bs_run += 1;
+            continue;
+        }
+        if b == b':' && bs_run & 1 == 0 {
+            end = i;
+            break;
+        }
+        bs_run = 0;
+    }
 
-    (fields, &rest[..end])
+    (count, fields, &rest[..end])
 }

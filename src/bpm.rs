@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use crate::math::{fmt_dec3_half_up, round_sig_figs_itg, roundtrip_bpm_itg};
 use crate::parse::{
     ParsedChartEntry, ParsedSimfileData, decode_bytes, extract_sections, parse_version,
-    split_notes_fields, unescape_trim,
+    unescape_trim,
 };
 use crate::timing::{
     ROWS_PER_BEAT, TimingFormat, compute_timing_segments, format_bpm_segments_like_itg,
@@ -352,8 +352,10 @@ fn chart_bpm_snapshot(
     fmt: TimingFormat,
     use_chart: bool,
 ) -> Option<ChartBpmSnapshot> {
-    let (fields, _) = split_notes_fields(&entry.notes);
-    let (step_type, difficulty) = chart_metadata(&fields, fmt)?;
+    if entry.field_count < 4 {
+        return None;
+    }
+    let (step_type, difficulty) = chart_metadata(&entry.fields, fmt)?;
     let chart = ChartTags::from_entry(entry);
     let hash_bpms = chart
         .bpms

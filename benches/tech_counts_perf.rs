@@ -75,18 +75,17 @@ fn build_tech_inputs() -> (Vec<TechChartInput>, TechGlobals) {
         .notes_list
         .into_iter()
         .filter_map(|entry| {
-            let (fields, chart_data) = rssp::parse::split_notes_fields(&entry.notes);
-            if fields.len() < 5 {
+            if entry.field_count < 5 {
                 return None;
             }
 
-            let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim();
+            let step_type = std::str::from_utf8(entry.fields[0]).unwrap_or("").trim();
             if step_type == "lights-cabinet" {
                 return None;
             }
 
             Some(TechChartInput {
-                chart_data: chart_data.to_vec(),
+                chart_data: entry.note_data.to_vec(),
                 lanes: rssp::step_type_lanes(step_type),
                 chart_bpms: clean_chart_tag(entry.chart_bpms.as_deref()),
                 chart_stops: clean_chart_tag(entry.chart_stops.as_deref()),

@@ -35,12 +35,11 @@ fn build_bitmasks() -> Vec<u8> {
 
     let mut best_chart: Option<(usize, Vec<u8>)> = None;
     for entry in parsed.notes_list {
-        let (fields, chart_data) = rssp::parse::split_notes_fields(&entry.notes);
-        if fields.len() < 5 {
+        if entry.field_count < 5 {
             continue;
         }
 
-        let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim();
+        let step_type = std::str::from_utf8(entry.fields[0]).unwrap_or("").trim();
         if step_type == "lights-cabinet" {
             continue;
         }
@@ -51,7 +50,7 @@ fn build_bitmasks() -> Vec<u8> {
         }
 
         let (mut minimized_chart, stats, _measure_densities) =
-            rssp::stats::minimize_chart_and_count_with_lanes(chart_data, lanes);
+            rssp::stats::minimize_chart_and_count_with_lanes(entry.note_data, lanes);
         if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
             minimized_chart.truncate(pos + 1);
         }

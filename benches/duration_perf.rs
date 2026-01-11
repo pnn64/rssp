@@ -93,18 +93,17 @@ fn build_duration_inputs() -> (Vec<DurationChartInput>, DurationGlobals) {
         .notes_list
         .into_iter()
         .filter_map(|entry| {
-            let (fields, chart_data) = rssp::parse::split_notes_fields(&entry.notes);
-            if fields.len() < 5 {
+            if entry.field_count < 5 {
                 return None;
             }
 
-            let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim();
+            let step_type = std::str::from_utf8(entry.fields[0]).unwrap_or("").trim();
             if step_type == "lights-cabinet" {
                 return None;
             }
 
             Some(DurationChartInput {
-                chart_data: chart_data.to_vec(),
+                chart_data: entry.note_data.to_vec(),
                 lanes: rssp::step_type_lanes(step_type),
                 chart_offset: chart_offset_seconds(entry.chart_offset.as_deref()),
                 chart_bpms: clean_chart_tag(entry.chart_bpms.as_deref()),

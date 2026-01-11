@@ -7,7 +7,9 @@ const FIXTURE: &str = include_str!("fixtures/camellia_mix.ssc");
 
 #[derive(Clone)]
 struct ChartInput {
-    notes: Vec<u8>,
+    field_count: u8,
+    fields: [&'static [u8]; 5],
+    note_data: &'static [u8],
     chart_bpms: Option<Vec<u8>>,
 }
 
@@ -27,7 +29,9 @@ fn build_chart_inputs() -> (Vec<ChartInput>, String) {
         .notes_list
         .into_iter()
         .map(|entry| ChartInput {
-            notes: entry.notes,
+            field_count: entry.field_count,
+            fields: entry.fields,
+            note_data: entry.note_data,
             chart_bpms: entry.chart_bpms.map(|v| v.into_owned()),
         })
         .collect();
@@ -58,18 +62,18 @@ fn bench_hash_inner(c: &mut Criterion) {
         b.iter(|| {
             let mut hashes = Vec::with_capacity(charts.len());
             for entry in &charts {
-                let (fields, chart_data) = rssp::parse::split_notes_fields(&entry.notes);
-                if fields.len() < 5 {
+                if entry.field_count < 5 {
                     continue;
                 }
 
-                let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim();
+                let step_type = std::str::from_utf8(entry.fields[0]).unwrap_or("").trim();
                 if step_type == "lights-cabinet" {
                     continue;
                 }
 
                 let lanes = step_type_lanes(step_type);
-                let mut minimized_chart = rssp::stats::minimize_chart_for_hash(chart_data, lanes);
+                let mut minimized_chart =
+                    rssp::stats::minimize_chart_for_hash(entry.note_data, lanes);
                 if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
                     minimized_chart.truncate(pos + 1);
                 }
