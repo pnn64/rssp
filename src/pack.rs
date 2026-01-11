@@ -62,6 +62,7 @@ pub struct PackScan {
     pub has_pack_ini: bool,
     pub sync_pref: SyncPref,
     pub banner_path: Option<PathBuf>,
+    pub background_path: Option<PathBuf>,
     pub songs: Vec<SongScan>,
 }
 
@@ -89,6 +90,7 @@ struct PackIniRaw {
     translit_title: String,
     series: String,
     banner: String,
+    background: String,
     sync_offset: String,
     year: String,
 }
@@ -122,6 +124,7 @@ fn parse_pack_ini(text: &str) -> PackIniRaw {
             "translittitle" => out.translit_title = val,
             "series" => out.series = val,
             "banner" => out.banner = val,
+            "background" => out.background = val,
             "syncoffset" => out.sync_offset = val,
             "year" => out.year = val,
             _ => {}
@@ -153,19 +156,6 @@ fn read_pack_ini(pack_dir: &Path, group_name: &str) -> (PackIniRaw, bool) {
     (raw, true)
 }
 
-fn pick_pack_img(pack_dir: &Path) -> Option<PathBuf> {
-    let mut files = assets::list_img_files(pack_dir);
-    files.sort_by_cached_key(|p| {
-        let ext = p
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default();
-        let rank = assets::img_rank(ext).unwrap_or(u8::MAX);
-        (rank, assets::lc_name(p))
-    });
-    files.into_iter().next()
-}
-
 fn pick_pack_parent_img(pack_dir: &Path, group_name: &str) -> Option<PathBuf> {
     let parent = pack_dir.parent()?;
     for ext in ["png", "jpg", "jpeg", "gif", "bmp"] {
@@ -177,8 +167,8 @@ fn pick_pack_parent_img(pack_dir: &Path, group_name: &str) -> Option<PathBuf> {
     None
 }
 
-fn pick_ini_banner(pack_dir: &Path, banner_hint: &str) -> Option<PathBuf> {
-    let hint = banner_hint.trim();
+fn pick_ini_img(pack_dir: &Path, hint: &str) -> Option<PathBuf> {
+    let hint = hint.trim();
     if hint.is_empty() {
         return None;
     }
@@ -294,9 +284,19 @@ pub fn scan_pack_dir(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, ScanE
     } else {
         SyncPref::Default
     };
-    let banner_path = pick_ini_banner(dir, &ini.banner)
-        .or_else(|| pick_pack_img(dir))
+
+    let ini_banner = pick_ini_img(dir, &ini.banner);
+    let ini_background = pick_ini_img(dir, &ini.background);
+    let (auto_banner, auto_background) = if ini_banner.is_none() || ini_background.is_none() {
+        assets::resolve_song_assets(dir, "", "")
+    } else {
+        (None, None)
+    };
+
+    let banner_path = ini_banner
+        .or(auto_banner)
         .or_else(|| pick_pack_parent_img(dir, group_name));
+    let background_path = ini_background.or(auto_background);
 
     let mut songs = Vec::new();
     for entry in fs::read_dir(dir)? {
@@ -328,6 +328,7 @@ pub fn scan_pack_dir(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, ScanE
         has_pack_ini,
         sync_pref,
         banner_path,
+        background_path,
         songs,
     }))
 }
