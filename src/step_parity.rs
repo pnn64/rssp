@@ -191,13 +191,6 @@ impl NeighborMap {
         self.insert_index(idx);
     }
 
-    fn get(&self, neighbor_id: usize) -> Option<f32> {
-        self.entries
-            .iter()
-            .find(|e| e.neighbor_id == neighbor_id)
-            .map(|e| e.cost)
-    }
-
     fn rehash(&mut self, new_count: usize) {
         self.bucket_count = new_count;
         self.bucket_before = vec![BUCKET_EMPTY; new_count];
@@ -472,25 +465,14 @@ enum TapNoteType {
     Empty,
     Tap,
     HoldHead,
-    HoldTail,
     Mine,
     Fake,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum TapNoteSubType {
-    #[default]
-    Invalid,
-    Hold,
-    Roll,
 }
 
 #[derive(Debug, Clone, Default)]
 struct IntermediateNoteData {
     note_type: TapNoteType,
-    subtype: TapNoteSubType,
     col: usize,
-    row: usize,
     beat: f32,
     hold_length: f32,
     fake: bool,
@@ -2067,15 +2049,9 @@ fn build_notes(rows: &[ParsedRow], timing: Option<&TimingData>) -> Vec<Intermedi
             let mut note = IntermediateNoteData {
                 note_type,
                 col: c,
-                row: row.row as usize,
                 beat: row.beat,
                 second: row.second,
                 fake: note_type == TapNoteType::Fake || row_fake,
-                subtype: match ch {
-                    b'4' => TapNoteSubType::Roll,
-                    b'2' => TapNoteSubType::Hold,
-                    _ => TapNoteSubType::Invalid,
-                },
                 ..Default::default()
             };
 

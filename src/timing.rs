@@ -828,7 +828,6 @@ fn process_bpms_and_stops_sm(
 #[derive(Debug, Clone, Copy)]
 struct BeatTimePoint {
     beat: f64,
-    time_sec: f64,
     bpm: f64,
 }
 
@@ -875,7 +874,6 @@ enum TimingEvent {
     Bpm,
     Stop,
     Delay,
-    StopDelay,
     Warp,
     WarpDest,
     Marker,
@@ -1058,25 +1056,16 @@ impl TimingData {
         fakes: Vec<Segment>,
     ) -> Self {
         let mut beat_to_time = Vec::with_capacity(bpms.len());
-        let mut current_time = 0.0;
-        let mut last_beat = 0.0;
-        let mut last_bpm = bpms[0].1;
         let mut max_bpm = 0.0_f64;
 
         for &(beat, bpm) in &bpms {
-            if beat > last_beat && last_bpm > 0.0 {
-                current_time += (beat - last_beat) * 60.0 / last_bpm;
-            }
             beat_to_time.push(BeatTimePoint {
                 beat,
-                time_sec: song_offset + current_time,
                 bpm,
             });
             if bpm.is_finite() && bpm > max_bpm {
                 max_bpm = bpm;
             }
-            last_beat = beat;
-            last_bpm = bpm;
         }
 
         let stop_rows = build_segment_rows(&stops, true);
@@ -1102,15 +1091,6 @@ impl TimingData {
             global_offset_sec: global_offset,
             max_bpm,
         };
-
-        timing.beat_to_time = timing
-            .beat_to_time
-            .iter()
-            .map(|p| BeatTimePoint {
-                time_sec: timing.get_time_internal(p.beat),
-                ..*p
-            })
-            .collect();
 
         if !timing.speeds.is_empty() {
             let mut prev_ratio = 1.0;
@@ -1311,7 +1291,7 @@ impl TimingData {
                     bps = self.beat_to_time[state.bpm_idx].bpm / 60.0;
                     state.bpm_idx += 1;
                 }
-                TimingEvent::Delay | TimingEvent::StopDelay => {
+                TimingEvent::Delay => {
                     let d = self.delays[state.delay_idx].value;
                     if elapsed < state.last_time + d {
                         return BeatInfo {
@@ -1322,10 +1302,6 @@ impl TimingData {
                     }
                     state.last_time += d;
                     state.delay_idx += 1;
-                    if event_type == TimingEvent::Delay {
-                        state.last_row = event_row;
-                        continue;
-                    }
                 }
                 TimingEvent::Stop => {
                     let d = self.stops[state.stop_idx].value;
@@ -1380,7 +1356,7 @@ impl TimingData {
                     bps = self.beat_to_time[state.bpm_idx].bpm / 60.0;
                     state.bpm_idx += 1;
                 }
-                TimingEvent::Stop | TimingEvent::StopDelay => {
+                TimingEvent::Stop => {
                     state.last_time += self.stops[state.stop_idx].value;
                     state.stop_idx += 1;
                 }
@@ -1426,7 +1402,7 @@ impl TimingData {
                     state.bpm_idx += 1;
                     curr_segment += 1;
                 }
-                TimingEvent::Stop | TimingEvent::StopDelay => {
+                TimingEvent::Stop => {
                     state.last_time += self.stops[state.stop_idx].value as f32;
                     state.stop_idx += 1;
                     curr_segment += 1;
