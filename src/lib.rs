@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod assets;
 pub mod bpm;
 pub mod duration;
 pub mod graph;
@@ -8,6 +9,7 @@ pub mod matrix;
 pub mod nps;
 pub mod parse;
 pub mod patterns;
+pub mod pack;
 pub mod report;
 pub mod simfile;
 pub mod stats;
