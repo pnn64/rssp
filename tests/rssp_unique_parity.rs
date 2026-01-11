@@ -7,9 +7,9 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::{analyze, AnalysisOptions, ChartSummary};
-use rssp::patterns::{count_pattern, compute_box_counts, BoxCounts, PatternVariant};
+use rssp::patterns::{BoxCounts, PatternVariant, compute_box_counts, count_pattern};
 use rssp::report::format_json_float;
+use rssp::{AnalysisOptions, ChartSummary, analyze};
 
 const DEFAULT_MONO_THRESHOLD: usize = 6;
 
@@ -150,7 +150,13 @@ fn format_boxes(patterns: Option<&PatternCounts>) -> String {
             let b = &p.boxes;
             format!(
                 "{} (LR {} UD {} LD {} LU {} RD {} RU {})",
-                b.total_boxes, b.lr_boxes, b.ud_boxes, b.ld_boxes, b.lu_boxes, b.rd_boxes, b.ru_boxes
+                b.total_boxes,
+                b.lr_boxes,
+                b.ud_boxes,
+                b.ld_boxes,
+                b.lu_boxes,
+                b.rd_boxes,
+                b.ru_boxes
             )
         })
         .unwrap_or_else(|| "-".to_string())
@@ -203,7 +209,10 @@ fn chart_values_from_summary(chart: &ChartSummary) -> ChartUniqueValues {
                 ru_boxes: box_counts.ru_boxes,
             },
             anchors: AnchorsCounts {
-                total_anchors: chart.anchor_left + chart.anchor_down + chart.anchor_up + chart.anchor_right,
+                total_anchors: chart.anchor_left
+                    + chart.anchor_down
+                    + chart.anchor_up
+                    + chart.anchor_right,
                 left_anchors: chart.anchor_left,
                 down_anchors: chart.anchor_down,
                 up_anchors: chart.anchor_up,
@@ -242,7 +251,6 @@ fn compute_chart_values(
         compute_tech_counts: true,
         compute_pattern_counts: true,
         translate_markers: false,
-        parallel: true,
     };
 
     let summary = analyze(simfile_data, extension, options).map_err(|e| e.to_string())?;
@@ -268,11 +276,19 @@ fn compute_chart_values(
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
-    let compressed_bytes = fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
-
-    let raw_bytes = zstd::decode_all(&compressed_bytes[..])
-        .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
+    let (raw_bytes, ext) = if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("zst"))
+    {
+        let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        let raw_bytes = zstd::decode_all(&compressed_bytes[..])
+            .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
+        (raw_bytes, extension)
+    } else {
+        let sim = rssp::simfile::open(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        (sim.data, sim.extension)
+    };
 
     let file_hash = format!("{:x}", md5::compute(&raw_bytes));
     let subfolder = &file_hash[0..2];
@@ -290,8 +306,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         ));
     }
 
-    let compressed_golden = fs::read(&golden_path)
-        .map_err(|e| format!("Failed to read baseline file: {}", e))?;
+    let compressed_golden =
+        fs::read(&golden_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
 
     let json_bytes = zstd::decode_all(&compressed_golden[..])
         .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
@@ -299,7 +315,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     let golden_file: GoldenFile = serde_json::from_slice(&json_bytes)
         .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
 
-    let rssp_charts = compute_chart_values(&raw_bytes, extension)
+    let rssp_charts = compute_chart_values(&raw_bytes, ext)
         .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
 
     let mut golden_map: HashMap<(String, String), Vec<ChartSnapshot>> = HashMap::new();
@@ -369,8 +385,12 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 && expected_values == actual_values;
             let status = if matches { "....ok" } else { "....MISMATCH" };
 
-            let expected_matrix = expected_values.map(|v| v.matrix_rating.as_str()).unwrap_or("-");
-            let actual_matrix = actual_values.map(|v| v.matrix_rating.as_str()).unwrap_or("-");
+            let expected_matrix = expected_values
+                .map(|v| v.matrix_rating.as_str())
+                .unwrap_or("-");
+            let actual_matrix = actual_values
+                .map(|v| v.matrix_rating.as_str())
+                .unwrap_or("-");
             let expected_detail = expected_values
                 .map(|v| v.breakdown.sn_detailed_breakdown.as_str())
                 .unwrap_or("-");
@@ -472,21 +492,26 @@ fn main() {
         }
 
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if ext != "zst" {
-            continue;
-        }
+        let extension = if ext.eq_ignore_ascii_case("zst") {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let inner_path = Path::new(stem);
+            let inner_extension = inner_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_default();
 
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        let inner_path = Path::new(stem);
-        let inner_extension = inner_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|s| s.to_lowercase())
-            .unwrap_or_default();
-
-        if inner_extension != "sm" && inner_extension != "ssc" {
+            if inner_extension != "sm" && inner_extension != "ssc" {
+                continue;
+            }
+            inner_extension
+        } else if ext.eq_ignore_ascii_case("sm") {
+            "sm".to_string()
+        } else if ext.eq_ignore_ascii_case("ssc") {
+            "ssc".to_string()
+        } else {
             continue;
-        }
+        };
 
         let test_name = path
             .strip_prefix(&packs_dir)
@@ -497,7 +522,7 @@ fn main() {
         tests.push(TestCase {
             name: test_name,
             path: path.to_path_buf(),
-            extension: inner_extension,
+            extension,
         });
     }
 

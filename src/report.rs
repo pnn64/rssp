@@ -5,28 +5,15 @@ use std::time::Duration;
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use crate::bpm::{actual_bpm_range_raw, normalize_float_digits, resolve_display_bpm};
+use crate::math::{round_dp, round_sig_figs_6, round_sig_figs_itg, roundtrip_bpm_itg};
 use crate::patterns::{CustomPatternSummary, PatternVariant};
 use crate::stats::{
-    measure_equally_spaced,
-    stream_sequences,
-    ArrowStats,
-    StreamCounts,
-    RADAR_CATEGORY_COUNT,
+    ArrowStats, RADAR_CATEGORY_COUNT, StreamCounts, measure_equally_spaced, stream_sequences,
 };
 use crate::step_parity::TechCounts;
 use crate::timing::{
-    beat_to_note_row,
-    format_bpm_segments_like_itg,
-    note_row_to_beat,
-    normalize_scrolls_like_itg,
-    normalize_speeds_like_itg,
-    round_millis,
-    round_sig_figs_itg,
-    roundtrip_bpm_itg,
-    steps_timing_allowed,
-    SpeedUnit,
-    TimingFormat,
-    TimingSegments,
+    SpeedUnit, TimingFormat, TimingSegments, beat_to_note_row, format_bpm_segments_like_itg,
+    normalize_scrolls_like_itg, normalize_speeds_like_itg, note_row_to_beat, steps_timing_allowed,
 };
 
 #[inline(always)]
@@ -49,7 +36,11 @@ fn compute_stream_percentages(
 
     let break_percent = 100.0 - adj_stream_percent;
 
-    (stream_percent, adj_stream_percent, break_percent)
+    (
+        round_dp(stream_percent, 2),
+        round_dp(adj_stream_percent, 2),
+        round_dp(break_percent, 2),
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -189,105 +180,105 @@ fn compute_simple_quad_parts(
 // Make the struct and its fields public
 #[derive(Debug)]
 pub struct ChartSummary {
-    pub step_type_str:     String,
-    pub step_artist_str:   String,
-    pub description_str:   String,
-    pub difficulty_str:    String,
-    pub rating_str:        String,
-    pub matrix_rating:     f64,
+    pub step_type_str: String,
+    pub step_artist_str: String,
+    pub description_str: String,
+    pub difficulty_str: String,
+    pub rating_str: String,
+    pub matrix_rating: f64,
     pub tech_notation_str: String,
-    pub tier_bpm:          f64,
-    pub stats:             ArrowStats,
-    pub stream_counts:     StreamCounts,
-    pub total_measures:    usize,
-    pub total_streams:     u32,
+    pub tier_bpm: f64,
+    pub stats: ArrowStats,
+    pub stream_counts: StreamCounts,
+    pub total_measures: usize,
+    pub total_streams: u32,
     /// Mines that are actually judgable (not inside warps or #FAKES).
-    pub mines_nonfake:     u32,
+    pub mines_nonfake: u32,
     pub sn_detailed_breakdown: String,
-    pub sn_partial_breakdown:  String,
-    pub sn_simple_breakdown:   String,
+    pub sn_partial_breakdown: String,
+    pub sn_simple_breakdown: String,
     pub detailed_breakdown: String,
-    pub partial_breakdown:  String,
-    pub simple_breakdown:   String,
-    pub max_nps:           f64,
-    pub median_nps:        f64,
+    pub partial_breakdown: String,
+    pub simple_breakdown: String,
+    pub max_nps: f64,
+    pub median_nps: f64,
     pub duration_seconds: f64,
     pub detected_patterns: HashMap<PatternVariant, u32>,
-    pub anchor_left:       u32,
-    pub anchor_down:       u32,
-    pub anchor_up:         u32,
-    pub anchor_right:      u32,
-    pub facing_left:       u32,
-    pub facing_right:      u32,
-    pub mono_total:        u32,
-    pub mono_percent:      f64,
-    pub candle_total:      u32,
-    pub candle_percent:    f64,
-    pub tech_counts:       TechCounts,
-    pub custom_patterns:   Vec<CustomPatternSummary>,
-    pub short_hash:        String,
-    pub bpm_neutral_hash:  String,
-    pub elapsed:           Duration,
+    pub anchor_left: u32,
+    pub anchor_down: u32,
+    pub anchor_up: u32,
+    pub anchor_right: u32,
+    pub facing_left: u32,
+    pub facing_right: u32,
+    pub mono_total: u32,
+    pub mono_percent: f64,
+    pub candle_total: u32,
+    pub candle_percent: f64,
+    pub tech_counts: TechCounts,
+    pub custom_patterns: Vec<CustomPatternSummary>,
+    pub short_hash: String,
+    pub bpm_neutral_hash: String,
+    pub elapsed: Duration,
     pub measure_densities: Vec<usize>,
-    pub measure_nps_vec:   Vec<f64>,
-    pub row_to_beat:       Vec<f32>,
-    pub timing_segments:   TimingSegments,
+    pub measure_nps_vec: Vec<f64>,
+    pub row_to_beat: Vec<f32>,
+    pub timing_segments: TimingSegments,
     pub chart_offset_seconds: f64,
     pub chart_has_own_timing: bool,
     pub minimized_note_data: Vec<u8>,
-    pub chart_stops:       Option<String>,
-    pub chart_speeds:      Option<String>,
-    pub chart_scrolls:     Option<String>,
-    pub chart_bpms:        Option<String>,
-    pub chart_delays:      Option<String>,
-    pub chart_warps:       Option<String>,
-    pub chart_fakes:       Option<String>,
+    pub chart_stops: Option<String>,
+    pub chart_speeds: Option<String>,
+    pub chart_scrolls: Option<String>,
+    pub chart_bpms: Option<String>,
+    pub chart_delays: Option<String>,
+    pub chart_warps: Option<String>,
+    pub chart_fakes: Option<String>,
     pub chart_display_bpm: Option<String>,
     pub chart_time_signatures: Option<String>,
-    pub chart_labels:      Option<String>,
-    pub chart_tickcounts:  Option<String>,
-    pub chart_combos:      Option<String>,
+    pub chart_labels: Option<String>,
+    pub chart_tickcounts: Option<String>,
+    pub chart_combos: Option<String>,
     pub cached_radar_values: Option<[f32; RADAR_CATEGORY_COUNT]>,
 }
 
 // Make the struct and its fields public
 #[derive(Debug)] // Add Debug for easier use in the engine
 pub struct SimfileSummary {
-    pub title_str:            String,
-    pub subtitle_str:         String,
-    pub artist_str:           String,
-    pub titletranslit_str:    String,
+    pub title_str: String,
+    pub subtitle_str: String,
+    pub artist_str: String,
+    pub titletranslit_str: String,
     pub subtitletranslit_str: String,
-    pub artisttranslit_str:   String,
-    pub offset:               f64,
-    pub normalized_bpms:      String,
-    pub normalized_stops:     String,
-    pub normalized_delays:    String,
-    pub normalized_speeds:    String,
-    pub normalized_scrolls:   String,
-    pub normalized_fakes:     String,
+    pub artisttranslit_str: String,
+    pub offset: f64,
+    pub normalized_bpms: String,
+    pub normalized_stops: String,
+    pub normalized_delays: String,
+    pub normalized_speeds: String,
+    pub normalized_scrolls: String,
+    pub normalized_fakes: String,
     pub normalized_time_signatures: String,
-    pub normalized_labels:    String,
+    pub normalized_labels: String,
     pub normalized_tickcounts: String,
-    pub normalized_combos:    String,
-    pub ssc_version:          f32,
-    pub timing_format:        TimingFormat,
-    pub banner_path:          String,
-    pub background_path:      String,
-    pub music_path:           String,
-    pub display_bpm_str:      String,
-    pub sample_start:         f64,
-    pub sample_length:        f64,
-    pub min_bpm:              f64,
-    pub max_bpm:              f64,
-    pub normalized_warps:     String,
-    pub median_bpm:           f64,
-    pub average_bpm:          f64,
-    pub total_length:         i32,
+    pub normalized_combos: String,
+    pub ssc_version: f32,
+    pub timing_format: TimingFormat,
+    pub banner_path: String,
+    pub background_path: String,
+    pub music_path: String,
+    pub display_bpm_str: String,
+    pub sample_start: f64,
+    pub sample_length: f64,
+    pub min_bpm: f64,
+    pub max_bpm: f64,
+    pub normalized_warps: String,
+    pub median_bpm: f64,
+    pub average_bpm: f64,
+    pub total_length: i32,
     pub pattern_counts_enabled: bool,
-    pub tech_counts_enabled:  bool,
-    pub charts:               Vec<ChartSummary>,
-    pub total_elapsed:        Duration,
+    pub tech_counts_enabled: bool,
+    pub charts: Vec<ChartSummary>,
+    pub total_elapsed: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -296,6 +287,8 @@ pub struct TimingSnapshot {
     pub beat0_group_offset_seconds: f64,
     pub bpms: Vec<(f64, f64)>,
     pub bpms_formatted: String,
+    pub bpm_min_raw: f64,
+    pub bpm_max_raw: f64,
     pub stops: Vec<(f64, f64)>,
     pub delays: Vec<(f64, f64)>,
     pub time_signatures: Vec<(f64, i32, i32)>,
@@ -316,12 +309,16 @@ pub enum OutputMode {
     CSV,
 }
 
-pub fn print_reports(simfile: &SimfileSummary, mode: OutputMode) {
+pub fn write_reports<W: Write>(
+    simfile: &SimfileSummary,
+    mode: OutputMode,
+    writer: &mut W,
+) -> io::Result<()> {
     match mode {
-        OutputMode::Full   => print_full_all(simfile),
-        OutputMode::Pretty => print_pretty_all(simfile),
-        OutputMode::JSON   => print_json_all(simfile),
-        OutputMode::CSV    => print_csv_all(simfile),
+        OutputMode::Full => write_full_all(writer, simfile),
+        OutputMode::Pretty => write_pretty_all(writer, simfile),
+        OutputMode::JSON => write_json_all(simfile, writer),
+        OutputMode::CSV => write_csv_all(writer, simfile),
     }
 }
 
@@ -347,9 +344,7 @@ fn chart_or_global<'a>(
     global_value: &'a str,
 ) -> Option<&'a str> {
     if allow_chart && chart_has_own_timing {
-        return chart_value
-            .as_deref()
-            .filter(|s| !s.is_empty());
+        return chart_value.as_deref().filter(|s| !s.is_empty());
     }
 
     if allow_chart {
@@ -360,7 +355,11 @@ fn chart_or_global<'a>(
         }
     }
 
-    if !global_value.is_empty() { Some(global_value) } else { None }
+    if !global_value.is_empty() {
+        Some(global_value)
+    } else {
+        None
+    }
 }
 
 #[inline(always)]
@@ -369,11 +368,7 @@ fn segment_index_at_row<T>(segments: &[(f64, T)], row: i32) -> usize {
     if pos == 0 { 0 } else { pos - 1 }
 }
 
-fn add_indefinite_segment<T: PartialEq>(
-    segments: &mut Vec<(f64, T)>,
-    beat: f64,
-    value: T,
-) {
+fn add_indefinite_segment<T: PartialEq>(segments: &mut Vec<(f64, T)>, beat: f64, value: T) {
     let row = beat_to_note_row(beat);
     let beat = note_row_to_beat(row);
     if segments.is_empty() {
@@ -383,7 +378,11 @@ fn add_indefinite_segment<T: PartialEq>(
 
     let idx = segment_index_at_row(segments, row);
     let b_on_same_row = beat_to_note_row(segments[idx].0) == row;
-    let prev_idx = if b_on_same_row && idx > 0 { idx - 1 } else { idx };
+    let prev_idx = if b_on_same_row && idx > 0 {
+        idx - 1
+    } else {
+        idx
+    };
 
     if idx + 1 < segments.len() {
         let next_idx = idx + 1;
@@ -446,12 +445,24 @@ fn parse_time_signatures(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
             continue;
         }
         let mut parts = segment.split('=');
-        let Some(beat_str) = parts.next() else { continue };
-        let Some(num_str) = parts.next() else { continue };
-        let Some(den_str) = parts.next() else { continue };
-        let Ok(beat) = beat_str.trim().parse::<f64>() else { continue };
-        let Ok(num) = num_str.trim().parse::<i32>() else { continue };
-        let Ok(den) = den_str.trim().parse::<i32>() else { continue };
+        let Some(beat_str) = parts.next() else {
+            continue;
+        };
+        let Some(num_str) = parts.next() else {
+            continue;
+        };
+        let Some(den_str) = parts.next() else {
+            continue;
+        };
+        let Ok(beat) = beat_str.trim().parse::<f64>() else {
+            continue;
+        };
+        let Ok(num) = num_str.trim().parse::<i32>() else {
+            continue;
+        };
+        let Ok(den) = den_str.trim().parse::<i32>() else {
+            continue;
+        };
         raw.push((beat, (num, den)));
     }
 
@@ -485,10 +496,18 @@ fn parse_tickcounts(opt: Option<&str>) -> Vec<(f64, i32)> {
             continue;
         }
         let mut parts = segment.split('=');
-        let Some(beat_str) = parts.next() else { continue };
-        let Some(count_str) = parts.next() else { continue };
-        let Ok(beat) = beat_str.trim().parse::<f64>() else { continue };
-        let Ok(count) = count_str.trim().parse::<i32>() else { continue };
+        let Some(beat_str) = parts.next() else {
+            continue;
+        };
+        let Some(count_str) = parts.next() else {
+            continue;
+        };
+        let Ok(beat) = beat_str.trim().parse::<f64>() else {
+            continue;
+        };
+        let Ok(count) = count_str.trim().parse::<i32>() else {
+            continue;
+        };
         raw.push((beat, count));
     }
 
@@ -511,12 +530,24 @@ fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
             continue;
         }
         let mut parts = segment.split('=');
-        let Some(beat_str) = parts.next() else { continue };
-        let Some(combo_str) = parts.next() else { continue };
-        let Some(miss_str) = parts.next() else { continue };
-        let Ok(beat) = beat_str.trim().parse::<f64>() else { continue };
-        let Ok(combo) = combo_str.trim().parse::<i32>() else { continue };
-        let Ok(miss) = miss_str.trim().parse::<i32>() else { continue };
+        let Some(beat_str) = parts.next() else {
+            continue;
+        };
+        let Some(combo_str) = parts.next() else {
+            continue;
+        };
+        let Some(miss_str) = parts.next() else {
+            continue;
+        };
+        let Ok(beat) = beat_str.trim().parse::<f64>() else {
+            continue;
+        };
+        let Ok(combo) = combo_str.trim().parse::<i32>() else {
+            continue;
+        };
+        let Ok(miss) = miss_str.trim().parse::<i32>() else {
+            continue;
+        };
         raw.push((beat, (combo, miss)));
     }
 
@@ -533,46 +564,33 @@ fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
 pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> TimingSnapshot {
     let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
     let timing = &chart.timing_segments;
+    let finalize = |value: f64| round_sig_figs_6(round_sig_figs_itg(value));
     let bpms_raw: Vec<(f64, f64)> = timing
         .bpms
         .iter()
         .map(|(beat, bpm)| (*beat as f64, roundtrip_bpm_itg(*bpm as f64)))
         .collect();
     let bpms_formatted = format_bpm_segments_like_itg(&bpms_raw);
+    let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw(&bpms_raw);
     // Match itgmania-reference-harness default float precision (6 significant digits).
     let bpms: Vec<(f64, f64)> = bpms_raw
         .iter()
-        .map(|(beat, bpm)| (round_sig_figs_itg(*beat), round_sig_figs_itg(*bpm)))
+        .map(|(beat, bpm)| (finalize(*beat), finalize(*bpm)))
         .collect();
     let stops = timing
         .stops
         .iter()
-        .map(|(beat, duration)| {
-            (
-                round_sig_figs_itg(*beat as f64),
-                round_sig_figs_itg(*duration as f64),
-            )
-        })
+        .map(|(beat, duration)| (finalize(*beat as f64), finalize(*duration as f64)))
         .collect();
     let delays = timing
         .delays
         .iter()
-        .map(|(beat, duration)| {
-            (
-                round_sig_figs_itg(*beat as f64),
-                round_sig_figs_itg(*duration as f64),
-            )
-        })
+        .map(|(beat, duration)| (finalize(*beat as f64), finalize(*duration as f64)))
         .collect();
     let warps = timing
         .warps
         .iter()
-        .map(|(beat, length)| {
-            (
-                round_sig_figs_itg(*beat as f64),
-                round_sig_figs_itg(*length as f64),
-            )
-        })
+        .map(|(beat, length)| (finalize(*beat as f64), finalize(*length as f64)))
         .collect();
     let speeds = timing
         .speeds
@@ -585,14 +603,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
     let speeds = normalize_speeds_like_itg(speeds);
     let speeds: Vec<(f64, f64, f64, i32)> = speeds
         .into_iter()
-        .map(|(beat, ratio, delay, unit)| {
-            (
-                round_sig_figs_itg(beat),
-                round_sig_figs_itg(ratio),
-                round_sig_figs_itg(delay),
-                unit,
-            )
-        })
+        .map(|(beat, ratio, delay, unit)| (finalize(beat), finalize(ratio), finalize(delay), unit))
         .collect();
     let scrolls = timing
         .scrolls
@@ -602,17 +613,12 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
     let scrolls = normalize_scrolls_like_itg(scrolls);
     let scrolls: Vec<(f64, f64)> = scrolls
         .into_iter()
-        .map(|(beat, ratio)| (round_sig_figs_itg(beat), round_sig_figs_itg(ratio)))
+        .map(|(beat, ratio)| (finalize(beat), finalize(ratio)))
         .collect();
     let fakes = timing
         .fakes
         .iter()
-        .map(|(beat, length)| {
-            (
-                round_sig_figs_itg(*beat as f64),
-                round_sig_figs_itg(*length as f64),
-            )
-        })
+        .map(|(beat, length)| (finalize(*beat as f64), finalize(*length as f64)))
         .collect();
 
     let time_signatures: Vec<(f64, i32, i32)> = parse_time_signatures(chart_or_global(
@@ -622,7 +628,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         &simfile.normalized_time_signatures,
     ))
     .into_iter()
-    .map(|(beat, numerator, denominator)| (round_sig_figs_itg(beat), numerator, denominator))
+    .map(|(beat, numerator, denominator)| (finalize(beat), numerator, denominator))
     .collect();
     let labels: Vec<(f64, String)> = parse_labels(chart_or_global(
         allow_steps_timing,
@@ -631,7 +637,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         &simfile.normalized_labels,
     ))
     .into_iter()
-    .map(|(beat, label)| (round_sig_figs_itg(beat), label))
+    .map(|(beat, label)| (finalize(beat), label))
     .collect();
     let tickcounts: Vec<(f64, i32)> = parse_tickcounts(chart_or_global(
         allow_steps_timing,
@@ -640,7 +646,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         &simfile.normalized_tickcounts,
     ))
     .into_iter()
-    .map(|(beat, ticks)| (round_sig_figs_itg(beat), ticks))
+    .map(|(beat, ticks)| (finalize(beat), ticks))
     .collect();
     let combos: Vec<(f64, i32, i32)> = parse_combos(chart_or_global(
         allow_steps_timing,
@@ -649,16 +655,18 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         &simfile.normalized_combos,
     ))
     .into_iter()
-    .map(|(beat, combo, miss)| (round_sig_figs_itg(beat), combo, miss))
+    .map(|(beat, combo, miss)| (finalize(beat), combo, miss))
     .collect();
 
     TimingSnapshot {
-        beat0_offset_seconds: round_sig_figs_itg(
+        beat0_offset_seconds: finalize(
             chart.chart_offset_seconds + timing.beat0_offset_adjust as f64,
         ),
         beat0_group_offset_seconds: 0.0,
         bpms,
         bpms_formatted,
+        bpm_min_raw,
+        bpm_max_raw,
         stops,
         delays,
         time_signatures,
@@ -704,9 +712,7 @@ fn parse_labels(opt: Option<&str>) -> Vec<(f64, String)> {
 }
 
 fn count_timing_segments_from_str(s: &str) -> u32 {
-    s.split(',')
-        .filter(|part| !part.trim().is_empty())
-        .count() as u32
+    s.split(',').filter(|part| !part.trim().is_empty()).count() as u32
 }
 
 fn count_timing_segments(opt: Option<&str>) -> u32 {
@@ -770,7 +776,11 @@ fn chart_mine_fake_counts(chart: &ChartSummary) -> (u32, u32) {
     (chart.stats.mines, chart.stats.fakes)
 }
 
-fn print_gimmicks(chart: &ChartSummary, simfile: &SimfileSummary) {
+fn write_gimmicks<W: Write>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    simfile: &SimfileSummary,
+) -> io::Result<()> {
     let has_lifts = chart.stats.lifts > 0;
     let (_, fakes) = chart_mine_fake_counts(chart);
     let has_fakes = fakes > 0;
@@ -820,36 +830,40 @@ fn print_gimmicks(chart: &ChartSummary, simfile: &SimfileSummary) {
         && speed_count == 0
         && scroll_count == 0
     {
-        return;
+        return Ok(());
     }
 
-    println!("\n--- Gimmicks ---");
+    writeln!(writer, "\n--- Gimmicks ---")?;
     if has_lifts {
-        println!("Lifts: {}", chart.stats.lifts);
+        writeln!(writer, "Lifts: {}", chart.stats.lifts)?;
     }
     if has_fakes {
-        println!("Fakes: {}", fakes);
+        writeln!(writer, "Fakes: {}", fakes)?;
     }
     if stop_count > 0 {
-        println!("Stops/Freezes: {}", stop_count);
+        writeln!(writer, "Stops/Freezes: {}", stop_count)?;
     }
     if speed_count > 0 {
-        println!("Speeds: {}", speed_count);
+        writeln!(writer, "Speeds: {}", speed_count)?;
     }
     if scroll_count > 0 {
-        println!("Scrolls: {}", scroll_count);
+        writeln!(writer, "Scrolls: {}", scroll_count)?;
     }
     if delay_count > 0 {
-        println!("Delays: {}", delay_count);
+        writeln!(writer, "Delays: {}", delay_count)?;
     }
     if warp_count > 0 {
-        println!("Warps: {}", warp_count);
+        writeln!(writer, "Warps: {}", warp_count)?;
     }
+
+    Ok(())
 }
 
-fn print_pretty_all(simfile: &SimfileSummary) {
-    println!("--- Song Details ---");
-    println!("Title: {}{} by {}",
+fn write_pretty_all<W: Write>(writer: &mut W, simfile: &SimfileSummary) -> io::Result<()> {
+    writeln!(writer, "--- Song Details ---")?;
+    writeln!(
+        writer,
+        "Title: {}{} by {}",
         simfile.title_str,
         if simfile.subtitle_str.is_empty() {
             String::new()
@@ -857,30 +871,43 @@ fn print_pretty_all(simfile: &SimfileSummary) {
             format!(" {}", simfile.subtitle_str)
         },
         simfile.artist_str
-    );
-    println!("Length: {}", format_duration(simfile.total_length));
+    )?;
+    writeln!(writer, "Length: {}", format_duration(simfile.total_length))?;
     if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
-        println!("BPM: {:.0}", simfile.min_bpm);
+        writeln!(writer, "BPM: {:.0}", simfile.min_bpm)?;
     } else {
-        println!("BPM: {:.0}-{:.0}", simfile.min_bpm, simfile.max_bpm);
-        println!("Median BPM: {:.0}", simfile.median_bpm);
-        println!("Average BPM: {:.0}", simfile.average_bpm);
+        writeln!(writer, "BPM: {:.0}-{:.0}", simfile.min_bpm, simfile.max_bpm)?;
+        writeln!(writer, "Median BPM: {:.0}", simfile.median_bpm)?;
+        writeln!(writer, "Average BPM: {:.0}", simfile.average_bpm)?;
     }
 
     for chart in &simfile.charts {
-        print_pretty_chart(chart, simfile);
+        write_pretty_chart(writer, chart, simfile)?;
     }
+
+    Ok(())
 }
 
-fn print_pretty_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
-    let header = format!("{} {} : {}", chart.difficulty_str, chart.rating_str, chart.step_artist_str);
-    println!("\n{}", header);
-    println!("{}", "-".repeat(header.len()));
+fn write_pretty_chart<W: Write>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    simfile: &SimfileSummary,
+) -> io::Result<()> {
+    let header = format!(
+        "{} {} : {}",
+        chart.difficulty_str, chart.rating_str, chart.step_artist_str
+    );
+    writeln!(writer, "\n{}", header)?;
+    writeln!(writer, "{}", "-".repeat(header.len()))?;
 
     if (chart.median_nps - chart.max_nps).abs() < f64::EPSILON {
-        println!("NPS: {:.2} Median/Peak", chart.median_nps);
+        writeln!(writer, "NPS: {:.2} Median/Peak", chart.median_nps)?;
     } else {
-        println!("NPS: {:.2} Median, {:.2} Peak", chart.median_nps, chart.max_nps);
+        writeln!(
+            writer,
+            "NPS: {:.2} Median, {:.2} Peak",
+            chart.median_nps, chart.max_nps
+        )?;
     }
 
     let total_stream = chart.total_streams;
@@ -889,148 +916,189 @@ fn print_pretty_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
     let (stream_percent, adjusted_stream_percent, break_percent) =
         compute_stream_percentages(total_stream, total_break, total_measures);
 
-    println!(
+    writeln!(
+        writer,
         "Total Stream: {} ({:.2}%/{:.2}% Adj.)",
         total_stream, stream_percent, adjusted_stream_percent
-    );
-    println!("Total Break: {} ({:.2}%)", total_break, break_percent);
+    )?;
+    writeln!(
+        writer,
+        "Total Break: {} ({:.2}%)",
+        total_break, break_percent
+    )?;
 
-    println!("\n--- Chart Info ---");
-    println!("Steps: {} ({} arrows)", chart.stats.total_steps, chart.stats.total_arrows);
-    println!("Jumps: {}", chart.stats.jumps);
-    println!("Hands: {}", chart.stats.hands);
-    println!("Holds: {}", chart.stats.holds);
-    println!("Rolls: {}", chart.stats.rolls);
+    writeln!(writer, "\n--- Chart Info ---")?;
+    writeln!(
+        writer,
+        "Steps: {} ({} arrows)",
+        chart.stats.total_steps, chart.stats.total_arrows
+    )?;
+    writeln!(writer, "Jumps: {}", chart.stats.jumps)?;
+    writeln!(writer, "Hands: {}", chart.stats.hands)?;
+    writeln!(writer, "Holds: {}", chart.stats.holds)?;
+    writeln!(writer, "Rolls: {}", chart.stats.rolls)?;
     let (mines_judgable, _) = chart_mine_fake_counts(chart);
-    println!("Mines: {}", mines_judgable);
+    writeln!(writer, "Mines: {}", mines_judgable)?;
 
-    print_gimmicks(chart, simfile);
+    write_gimmicks(writer, chart, simfile)?;
     if simfile.pattern_counts_enabled {
-        println!("\n--- Pattern Analysis ---");
-        let candle_left = chart.detected_patterns.get(&PatternVariant::CandleLeft).unwrap_or(&0);
-        let candle_right = chart.detected_patterns.get(&PatternVariant::CandleRight).unwrap_or(&0);
-        println!("Candles: {} ({} left, {} right)",
-            candle_left + candle_right, candle_left, candle_right);
-        println!("Candle%: {:.2}%", chart.candle_percent);
-        println!(
+        writeln!(writer, "\n--- Pattern Analysis ---")?;
+        let candle_left = chart
+            .detected_patterns
+            .get(&PatternVariant::CandleLeft)
+            .unwrap_or(&0);
+        let candle_right = chart
+            .detected_patterns
+            .get(&PatternVariant::CandleRight)
+            .unwrap_or(&0);
+        writeln!(
+            writer,
+            "Candles: {} ({} left, {} right)",
+            candle_left + candle_right,
+            candle_left,
+            candle_right
+        )?;
+        writeln!(writer, "Candle%: {:.2}%", chart.candle_percent)?;
+        writeln!(
+            writer,
             "Mono: {} ({} left-facing, {} right-facing)",
-            chart.mono_total,
-            chart.facing_left,
-            chart.facing_right
-        );
-        println!("Mono%: {:.2}%", chart.mono_percent);
+            chart.mono_total, chart.facing_left, chart.facing_right
+        )?;
+        writeln!(writer, "Mono%: {:.2}%", chart.mono_percent)?;
 
         let box_parts = compute_box_parts(&chart.detected_patterns);
         let box_corners = box_parts.ld + box_parts.lu + box_parts.rd + box_parts.ru;
-        println!(
+        writeln!(
+            writer,
             "Boxes: {} ({} LRLR, {} UDUD, {} corner)",
             box_parts.lr + box_parts.ud + box_corners,
             box_parts.lr,
             box_parts.ud,
             box_corners
-        );
+        )?;
 
         let anchor_total =
             chart.anchor_left + chart.anchor_down + chart.anchor_up + chart.anchor_right;
-        println!(
+        writeln!(
+            writer,
             "Anchors: {} ({} left, {} down, {} up, {} right)",
             anchor_total, chart.anchor_left, chart.anchor_down, chart.anchor_up, chart.anchor_right
-        );
+        )?;
     }
 
     if simfile.tech_counts_enabled {
-        println!("\n--- Step Parity Analysis ---");
-        println!("Crossovers: {}", chart.tech_counts.crossovers);
-        println!(
+        writeln!(writer, "\n--- Step Parity Analysis ---")?;
+        writeln!(writer, "Crossovers: {}", chart.tech_counts.crossovers)?;
+        writeln!(
+            writer,
             "Footswitches: {} ({} up, {} down)",
             chart.tech_counts.footswitches,
             chart.tech_counts.up_footswitches,
             chart.tech_counts.down_footswitches
-        );
-        println!("Sideswitches: {}", chart.tech_counts.sideswitches);
-        println!("Jacks: {}", chart.tech_counts.jacks);
-        println!("Brackets: {}", chart.tech_counts.brackets);
-        println!("Doublesteps: {}", chart.tech_counts.doublesteps);
+        )?;
+        writeln!(writer, "Sideswitches: {}", chart.tech_counts.sideswitches)?;
+        writeln!(writer, "Jacks: {}", chart.tech_counts.jacks)?;
+        writeln!(writer, "Brackets: {}", chart.tech_counts.brackets)?;
+        writeln!(writer, "Doublesteps: {}", chart.tech_counts.doublesteps)?;
     }
 
     if simfile.pattern_counts_enabled && !chart.custom_patterns.is_empty() {
-        println!("\n--- Custom Patterns ---");
+        writeln!(writer, "\n--- Custom Patterns ---")?;
         for cp in &chart.custom_patterns {
-            println!("{}: {}", cp.pattern, cp.count);
+            writeln!(writer, "{}: {}", cp.pattern, cp.count)?;
         }
     }
 
     if !chart.detailed_breakdown.is_empty() {
-        println!("\n--- Detailed Breakdown ---");
-        println!("{}", chart.detailed_breakdown);
-        println!("--- Partial Breakdown ---");
-        println!("{}", chart.partial_breakdown);
-        println!("--- Simple Breakdown ---");
-        println!("{}", chart.simple_breakdown);
+        writeln!(writer, "\n--- Detailed Breakdown ---")?;
+        writeln!(writer, "{}", chart.detailed_breakdown)?;
+        writeln!(writer, "--- Partial Breakdown ---")?;
+        writeln!(writer, "{}", chart.partial_breakdown)?;
+        writeln!(writer, "--- Simple Breakdown ---")?;
+        writeln!(writer, "{}", chart.simple_breakdown)?;
     }
 
     if !chart.sn_detailed_breakdown.is_empty() {
-        println!("\n--- SN Detailed Breakdown ---");
-        println!("{}", chart.sn_detailed_breakdown);
-        println!("--- SN Partially Simplified ---");
-        println!("{}", chart.sn_partial_breakdown);
-        println!("--- SN Simplified Breakdown ---");
-        println!("{}", chart.sn_simple_breakdown);
+        writeln!(writer, "\n--- SN Detailed Breakdown ---")?;
+        writeln!(writer, "{}", chart.sn_detailed_breakdown)?;
+        writeln!(writer, "--- SN Partially Simplified ---")?;
+        writeln!(writer, "{}", chart.sn_partial_breakdown)?;
+        writeln!(writer, "--- SN Simplified Breakdown ---")?;
+        writeln!(writer, "{}", chart.sn_simple_breakdown)?;
     }
+
+    Ok(())
 }
 
-fn print_full_all(simfile: &SimfileSummary) {
-    println!("--- Song Details ---");
-    println!("Title: {}", simfile.title_str);
+fn write_full_all<W: Write>(writer: &mut W, simfile: &SimfileSummary) -> io::Result<()> {
+    writeln!(writer, "--- Song Details ---")?;
+    writeln!(writer, "Title: {}", simfile.title_str)?;
     if !simfile.subtitle_str.is_empty() {
-        println!("Subtitle: {}", simfile.subtitle_str);
+        writeln!(writer, "Subtitle: {}", simfile.subtitle_str)?;
     }
-    println!("Artist: {}", simfile.artist_str);
+    writeln!(writer, "Artist: {}", simfile.artist_str)?;
     if !simfile.titletranslit_str.is_empty() {
-        println!("Title trans: {}", simfile.titletranslit_str);
+        writeln!(writer, "Title trans: {}", simfile.titletranslit_str)?;
     }
     if !simfile.subtitletranslit_str.is_empty() {
-        println!("Subtitle trans: {}", simfile.subtitletranslit_str);
+        writeln!(writer, "Subtitle trans: {}", simfile.subtitletranslit_str)?;
     }
     if !simfile.artisttranslit_str.is_empty() {
-        println!("Artist trans: {}", simfile.artisttranslit_str);
+        writeln!(writer, "Artist trans: {}", simfile.artisttranslit_str)?;
     }
-    
-    println!("Length: {}", format_duration(simfile.total_length));
+
+    writeln!(writer, "Length: {}", format_duration(simfile.total_length))?;
     if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
-        println!("BPM: {:.0}", simfile.min_bpm);
+        writeln!(writer, "BPM: {:.0}", simfile.min_bpm)?;
     } else {
-        println!("BPM: {:.0}-{:.0}", simfile.min_bpm, simfile.max_bpm);
+        writeln!(writer, "BPM: {:.0}-{:.0}", simfile.min_bpm, simfile.max_bpm)?;
     }
-    println!("Average BPM: {:.2}", simfile.average_bpm);
-    println!("Median BPM: {:.2}", simfile.median_bpm);
-    println!("BPM Data: {}", simfile.normalized_bpms);
-    println!("Offset: {:.3}", simfile.offset);
+    writeln!(writer, "Average BPM: {:.2}", simfile.average_bpm)?;
+    writeln!(writer, "Median BPM: {:.2}", simfile.median_bpm)?;
+    writeln!(writer, "BPM Data: {}", simfile.normalized_bpms)?;
+    writeln!(writer, "Offset: {:.3}", simfile.offset)?;
 
     for chart in &simfile.charts {
-        print_full_chart(chart, simfile);
+        write_full_chart(writer, chart, simfile)?;
     }
-    println!("\nElapsed Time: {:?}", simfile.total_elapsed);
+    writeln!(writer, "\nElapsed Time: {:?}", simfile.total_elapsed)?;
+
+    Ok(())
 }
 
-fn print_full_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
-    let header = format!("{} {} : {}", chart.difficulty_str, chart.rating_str, chart.step_artist_str);
-    println!("\n{}", header);
-    println!("{}", "-".repeat(header.len()));
+fn write_full_chart<W: Write>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    simfile: &SimfileSummary,
+) -> io::Result<()> {
+    let header = format!(
+        "{} {} : {}",
+        chart.difficulty_str, chart.rating_str, chart.step_artist_str
+    );
+    writeln!(writer, "\n{}", header)?;
+    writeln!(writer, "{}", "-".repeat(header.len()))?;
 
-    println!("Step Type: {}", chart.step_type_str);
-    println!("Matrix Rating: {:.4}", chart.matrix_rating);
-    println!("Tier BPM: {}", chart.tier_bpm);
+    writeln!(writer, "Step Type: {}", chart.step_type_str)?;
+    writeln!(writer, "Matrix Rating: {:.4}", chart.matrix_rating)?;
+    writeln!(writer, "Tier BPM: {}", chart.tier_bpm)?;
     if !chart.tech_notation_str.is_empty() {
-        println!("Tech Notations: {}", chart.tech_notation_str);
+        writeln!(writer, "Tech Notations: {}", chart.tech_notation_str)?;
     }
-    println!("SHA1 Hash: {}", chart.short_hash);
-    println!("BPM Neutral SHA1 Hash: {}\n", chart.bpm_neutral_hash);
+    writeln!(writer, "SHA1 Hash: {}", chart.short_hash)?;
+    writeln!(
+        writer,
+        "BPM Neutral SHA1 Hash: {}\n",
+        chart.bpm_neutral_hash
+    )?;
 
     if (chart.median_nps - chart.max_nps).abs() < f64::EPSILON {
-        println!("NPS: {:.2} Median/Peak", chart.median_nps);
+        writeln!(writer, "NPS: {:.2} Median/Peak", chart.median_nps)?;
     } else {
-        println!("NPS: {:.2} Median, {:.2} Peak", chart.median_nps, chart.max_nps);
+        writeln!(
+            writer,
+            "NPS: {:.2} Median, {:.2} Peak",
+            chart.median_nps, chart.max_nps
+        )?;
     }
     let total_stream = chart.total_streams;
     let total_break = chart.stream_counts.total_breaks;
@@ -1038,54 +1106,87 @@ fn print_full_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
     let (stream_percent, adjusted_stream_percent, break_percent) =
         compute_stream_percentages(total_stream, total_break, total_measures);
 
-    println!(
+    writeln!(
+        writer,
         "Total Stream: {} ({:.2}%/{:.2}% Adj.)",
         total_stream, stream_percent, adjusted_stream_percent
-    );
-    println!("    16th_streams: {}", chart.stream_counts.run16_streams);
-    println!("    20th_streams: {}", chart.stream_counts.run20_streams);
-    println!("    24th_streams: {}", chart.stream_counts.run24_streams);
-    println!("    32nd_streams: {}", chart.stream_counts.run32_streams);
-    println!("Total Break: {} ({:.2}%)", total_break, break_percent);
+    )?;
+    writeln!(
+        writer,
+        "    16th_streams: {}",
+        chart.stream_counts.run16_streams
+    )?;
+    writeln!(
+        writer,
+        "    20th_streams: {}",
+        chart.stream_counts.run20_streams
+    )?;
+    writeln!(
+        writer,
+        "    24th_streams: {}",
+        chart.stream_counts.run24_streams
+    )?;
+    writeln!(
+        writer,
+        "    32nd_streams: {}",
+        chart.stream_counts.run32_streams
+    )?;
+    writeln!(
+        writer,
+        "Total Break: {} ({:.2}%)",
+        total_break, break_percent
+    )?;
 
-    println!("\n--- Chart Info ---");
-    println!("Steps: {} ({} arrows) [{} left, {} down, {} up, {} right]", chart.stats.total_steps, chart.stats.total_arrows,chart.stats.left, chart.stats.down, chart.stats.up, chart.stats.right);
-    println!("Jumps: {}", chart.stats.jumps);
-    println!("Hands: {}", chart.stats.hands);
-    println!("Holds: {}", chart.stats.holds);
-    println!("Rolls: {}", chart.stats.rolls);
+    writeln!(writer, "\n--- Chart Info ---")?;
+    writeln!(
+        writer,
+        "Steps: {} ({} arrows) [{} left, {} down, {} up, {} right]",
+        chart.stats.total_steps,
+        chart.stats.total_arrows,
+        chart.stats.left,
+        chart.stats.down,
+        chart.stats.up,
+        chart.stats.right
+    )?;
+    writeln!(writer, "Jumps: {}", chart.stats.jumps)?;
+    writeln!(writer, "Hands: {}", chart.stats.hands)?;
+    writeln!(writer, "Holds: {}", chart.stats.holds)?;
+    writeln!(writer, "Rolls: {}", chart.stats.rolls)?;
     let (mines_judgable, _) = chart_mine_fake_counts(chart);
-    println!("Mines: {}", mines_judgable);
+    writeln!(writer, "Mines: {}", mines_judgable)?;
 
-    print_gimmicks(chart, simfile);
+    write_gimmicks(writer, chart, simfile)?;
 
     if simfile.pattern_counts_enabled {
-        println!("\n--- Pattern Analysis ---");
-        let candle_left = chart.detected_patterns.get(&PatternVariant::CandleLeft).unwrap_or(&0);
-        let candle_right = chart.detected_patterns.get(&PatternVariant::CandleRight).unwrap_or(&0);
-        println!(
+        writeln!(writer, "\n--- Pattern Analysis ---")?;
+        let candle_left = chart
+            .detected_patterns
+            .get(&PatternVariant::CandleLeft)
+            .unwrap_or(&0);
+        let candle_right = chart
+            .detected_patterns
+            .get(&PatternVariant::CandleRight)
+            .unwrap_or(&0);
+        writeln!(
+            writer,
             "Candles: {} ({} left, {} right)",
             candle_left + candle_right,
             candle_left,
             candle_right
-        );
-        println!("Candle%: {:.2}%", chart.candle_percent);
-        println!(
+        )?;
+        writeln!(writer, "Candle%: {:.2}%", chart.candle_percent)?;
+        writeln!(
+            writer,
             "Mono: {} ({} left-facing, {} right-facing)",
-            chart.mono_total,
-            chart.facing_left,
-            chart.facing_right
-        );
-        println!("Mono%: {:.2}%", chart.mono_percent);
+            chart.mono_total, chart.facing_left, chart.facing_right
+        )?;
+        writeln!(writer, "Mono%: {:.2}%", chart.mono_percent)?;
 
         let box_parts = compute_box_parts(&chart.detected_patterns);
-        let box_corners = box_parts.lr
-            + box_parts.ud
-            + box_parts.ld
-            + box_parts.lu
-            + box_parts.rd
-            + box_parts.ru;
-        println!(
+        let box_corners =
+            box_parts.lr + box_parts.ud + box_parts.ld + box_parts.lu + box_parts.rd + box_parts.ru;
+        writeln!(
+            writer,
             "Boxes: {} ({} LRLR, {} UDUD, {} LDLD, {} LULU, {} RDRD, {} RURU)",
             box_parts.lr + box_parts.ud + box_corners,
             box_parts.lr,
@@ -1094,60 +1195,65 @@ fn print_full_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
             box_parts.lu,
             box_parts.rd,
             box_parts.ru
-        );
+        )?;
 
         let anchor_total =
             chart.anchor_left + chart.anchor_down + chart.anchor_up + chart.anchor_right;
-        println!(
+        writeln!(
+            writer,
             "Anchors: {} ({} left, {} down, {} up, {} right)",
             anchor_total, chart.anchor_left, chart.anchor_down, chart.anchor_up, chart.anchor_right
-        );
+        )?;
     }
 
     if simfile.tech_counts_enabled {
-        println!("\n--- Step Parity Analysis ---");
-        println!("Crossovers: {}", chart.tech_counts.crossovers);
-        println!(
+        writeln!(writer, "\n--- Step Parity Analysis ---")?;
+        writeln!(writer, "Crossovers: {}", chart.tech_counts.crossovers)?;
+        writeln!(
+            writer,
             "Footswitches: {} ({} up, {} down)",
             chart.tech_counts.footswitches,
             chart.tech_counts.up_footswitches,
             chart.tech_counts.down_footswitches
-        );
-        println!("Sideswitches: {}", chart.tech_counts.sideswitches);
-        println!("Jacks: {}", chart.tech_counts.jacks);
-        println!("Brackets: {}", chart.tech_counts.brackets);
-        println!("Doublesteps: {}", chart.tech_counts.doublesteps);
+        )?;
+        writeln!(writer, "Sideswitches: {}", chart.tech_counts.sideswitches)?;
+        writeln!(writer, "Jacks: {}", chart.tech_counts.jacks)?;
+        writeln!(writer, "Brackets: {}", chart.tech_counts.brackets)?;
+        writeln!(writer, "Doublesteps: {}", chart.tech_counts.doublesteps)?;
     }
 
     if !chart.detailed_breakdown.is_empty() {
-        println!("\n--- Detailed Breakdown ---");
-        println!("{}", chart.detailed_breakdown);
-        println!("--- Partial Breakdown ---");
-        println!("{}", chart.partial_breakdown);
-        println!("--- Simple Breakdown ---");
-        println!("{}", chart.simple_breakdown);
+        writeln!(writer, "\n--- Detailed Breakdown ---")?;
+        writeln!(writer, "{}", chart.detailed_breakdown)?;
+        writeln!(writer, "--- Partial Breakdown ---")?;
+        writeln!(writer, "{}", chart.partial_breakdown)?;
+        writeln!(writer, "--- Simple Breakdown ---")?;
+        writeln!(writer, "{}", chart.simple_breakdown)?;
     }
 
     if !chart.sn_detailed_breakdown.is_empty() {
-        println!("\n--- SN Detailed Breakdown ---");
-        println!("{}", chart.sn_detailed_breakdown);
-        println!("--- SN Partially Simplified ---");
-        println!("{}", chart.sn_partial_breakdown);
-        println!("--- SN Simplified Breakdown ---");
-        println!("{}", chart.sn_simple_breakdown);
+        writeln!(writer, "\n--- SN Detailed Breakdown ---")?;
+        writeln!(writer, "{}", chart.sn_detailed_breakdown)?;
+        writeln!(writer, "--- SN Partially Simplified ---")?;
+        writeln!(writer, "{}", chart.sn_partial_breakdown)?;
+        writeln!(writer, "--- SN Simplified Breakdown ---")?;
+        writeln!(writer, "{}", chart.sn_simple_breakdown)?;
     }
 
     if simfile.pattern_counts_enabled {
-        print_other_patterns(chart);
+        write_other_patterns(writer, chart)?;
     }
+
+    Ok(())
 }
 
-fn print_other_patterns(chart: &ChartSummary) {
-    println!("\n--- Other Patterns ---");
+fn write_other_patterns<W: Write>(writer: &mut W, chart: &ChartSummary) -> io::Result<()> {
+    writeln!(writer, "\n--- Other Patterns ---")?;
     let tower_parts = compute_tower_parts(&chart.detected_patterns);
     let corner_towers = tower_parts.ld + tower_parts.lu + tower_parts.rd + tower_parts.ru;
     let total_towers = tower_parts.lr + tower_parts.ud + corner_towers;
-    println!(
+    writeln!(
+        writer,
         "Total Towers: {} ({} LR, {} UD, {} LD, {} LU, {} RD, {} RU)",
         total_towers,
         tower_parts.lr,
@@ -1156,16 +1262,21 @@ fn print_other_patterns(chart: &ChartSummary) {
         tower_parts.lu,
         tower_parts.rd,
         tower_parts.ru
-    );
+    )?;
 
     // Triangles
     let triangle_parts = compute_triangle_parts(&chart.detected_patterns);
-    let total_triangles = triangle_parts.ldl + triangle_parts.lul + triangle_parts.rdr + triangle_parts.rur;
-    println!(
+    let total_triangles =
+        triangle_parts.ldl + triangle_parts.lul + triangle_parts.rdr + triangle_parts.rur;
+    writeln!(
+        writer,
         "Total Triangles: {} ({} LDL, {} LUL, {} RDR, {} RUR)",
-        total_triangles, triangle_parts.ldl, triangle_parts.lul, triangle_parts.rdr,
+        total_triangles,
+        triangle_parts.ldl,
+        triangle_parts.lul,
+        triangle_parts.rdr,
         triangle_parts.rur
-    );
+    )?;
 
     // Staircases
     let stairs = compute_stair_parts(
@@ -1176,10 +1287,11 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::StaircaseInvRight,
     );
     let total_staircases = stairs.left + stairs.right + stairs.left_inv + stairs.right_inv;
-    println!(
+    writeln!(
+        writer,
         "Staircases: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
         total_staircases, stairs.left, stairs.right, stairs.left_inv, stairs.right_inv
-    );
+    )?;
 
     // Alternate Staircases
     let alt_stairs = compute_stair_parts(
@@ -1190,10 +1302,11 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::AltStaircasesInvRight,
     );
     let total_alt = alt_stairs.left + alt_stairs.right + alt_stairs.left_inv + alt_stairs.right_inv;
-    println!(
+    writeln!(
+        writer,
         "Alt Staircases: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
         total_alt, alt_stairs.left, alt_stairs.right, alt_stairs.left_inv, alt_stairs.right_inv
-    );
+    )?;
 
     // Double Staircases
     let double_stairs = compute_stair_parts(
@@ -1203,18 +1316,17 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::DStaircaseInvLeft,
         PatternVariant::DStaircaseInvRight,
     );
-    let total_double = double_stairs.left
-        + double_stairs.right
-        + double_stairs.left_inv
-        + double_stairs.right_inv;
-    println!(
+    let total_double =
+        double_stairs.left + double_stairs.right + double_stairs.left_inv + double_stairs.right_inv;
+    writeln!(
+        writer,
         "Double Staircases: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
         total_double,
         double_stairs.left,
         double_stairs.right,
         double_stairs.left_inv,
         double_stairs.right_inv
-    );
+    )?;
 
     // Sweeps
     let sweeps = compute_sweep_parts(
@@ -1225,10 +1337,11 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::SweepInvRight,
     );
     let total_sweeps = sweeps.left + sweeps.right + sweeps.left_inv + sweeps.right_inv;
-    println!(
+    writeln!(
+        writer,
         "Sweeps: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
         total_sweeps, sweeps.left, sweeps.right, sweeps.left_inv, sweeps.right_inv
-    );
+    )?;
 
     // Candle Sweeps
     let candle_sweeps = compute_sweep_parts(
@@ -1238,18 +1351,17 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::SweepCandleInvLeft,
         PatternVariant::SweepCandleInvRight,
     );
-    let total_candle_sweeps = candle_sweeps.left
-        + candle_sweeps.right
-        + candle_sweeps.left_inv
-        + candle_sweeps.right_inv;
-    println!(
+    let total_candle_sweeps =
+        candle_sweeps.left + candle_sweeps.right + candle_sweeps.left_inv + candle_sweeps.right_inv;
+    writeln!(
+        writer,
         "Candle Sweeps: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
         total_candle_sweeps,
         candle_sweeps.left,
         candle_sweeps.right,
         candle_sweeps.left_inv,
         candle_sweeps.right_inv
-    );
+    )?;
 
     // Copters
     let copters = compute_simple_quad_parts(
@@ -1260,10 +1372,11 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::CopterInvRight,
     );
     let total_copters = copters.a + copters.b + copters.c + copters.d;
-    println!(
+    writeln!(
+        writer,
         "Copters: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
         total_copters, copters.a, copters.b, copters.c, copters.d
-    );
+    )?;
 
     // Spirals
     let spirals = compute_simple_quad_parts(
@@ -1274,10 +1387,11 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::SpiralInvRight,
     );
     let total_spirals = spirals.a + spirals.b + spirals.c + spirals.d;
-    println!(
+    writeln!(
+        writer,
         "Spirals: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
         total_spirals, spirals.a, spirals.b, spirals.c, spirals.d
-    );
+    )?;
 
     // Turbo Candles
     let turbo_candles = compute_simple_quad_parts(
@@ -1287,16 +1401,12 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::TurboCandleInvLeft,
         PatternVariant::TurboCandleInvRight,
     );
-    let total_turbo_candles =
-        turbo_candles.a + turbo_candles.b + turbo_candles.c + turbo_candles.d;
-    println!(
+    let total_turbo_candles = turbo_candles.a + turbo_candles.b + turbo_candles.c + turbo_candles.d;
+    writeln!(
+        writer,
         "Turbo Candles: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
-        total_turbo_candles,
-        turbo_candles.a,
-        turbo_candles.b,
-        turbo_candles.c,
-        turbo_candles.d
-    );
+        total_turbo_candles, turbo_candles.a, turbo_candles.b, turbo_candles.c, turbo_candles.d
+    )?;
 
     // Hip Breakers
     let hip_breakers = compute_simple_quad_parts(
@@ -1306,12 +1416,12 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::HipBreakerInvLeft,
         PatternVariant::HipBreakerInvRight,
     );
-    let total_hip_breakers =
-        hip_breakers.a + hip_breakers.b + hip_breakers.c + hip_breakers.d;
-    println!(
+    let total_hip_breakers = hip_breakers.a + hip_breakers.b + hip_breakers.c + hip_breakers.d;
+    writeln!(
+        writer,
         "Hip Breakers: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
         total_hip_breakers, hip_breakers.a, hip_breakers.b, hip_breakers.c, hip_breakers.d
-    );
+    )?;
 
     // Doritos
     let doritos = compute_simple_quad_parts(
@@ -1322,10 +1432,11 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::DoritoInvRight,
     );
     let total_doritos = doritos.a + doritos.b + doritos.c + doritos.d;
-    println!(
+    writeln!(
+        writer,
         "Doritos: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
         total_doritos, doritos.a, doritos.b, doritos.c, doritos.d
-    );
+    )?;
 
     // Luchis
     let luchis = compute_simple_quad_parts(
@@ -1336,17 +1447,20 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::LuchiRightUD,
     );
     let total_luchis = luchis.a + luchis.b + luchis.c + luchis.d;
-    println!(
+    writeln!(
+        writer,
         "Luchis: {} ({} Left DU, {} Left UD, {} Right DU, {} Right UD)",
         total_luchis, luchis.a, luchis.b, luchis.c, luchis.d
-    );
+    )?;
 
     if !chart.custom_patterns.is_empty() {
-        println!("\n--- Custom Patterns ---");
+        writeln!(writer, "\n--- Custom Patterns ---")?;
         for cp in &chart.custom_patterns {
-            println!("{}: {}", cp.pattern, cp.count);
+            writeln!(writer, "{}: {}", cp.pattern, cp.count)?;
         }
     }
+
+    Ok(())
 }
 
 fn json_chart_info(chart: &ChartSummary) -> JsonValue {
@@ -1533,6 +1647,8 @@ fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
         beat0_group_offset_seconds,
         bpms,
         bpms_formatted,
+        bpm_min_raw,
+        bpm_max_raw,
         stops,
         delays,
         time_signatures,
@@ -1545,31 +1661,18 @@ fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
         fakes,
     } = build_timing_snapshot(chart, simfile);
 
-    let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw(&bpms);
-    let bpm_min = round_sig_figs_itg(bpm_min_raw);
-    let bpm_max = round_sig_figs_itg(bpm_max_raw);
+    let bpm_min = round_sig_figs_6(round_sig_figs_itg(bpm_min_raw));
+    let bpm_max = round_sig_figs_6(round_sig_figs_itg(bpm_max_raw));
 
     let chart_display_bpm = chart
         .chart_display_bpm
         .as_deref()
         .filter(|s| !s.trim().is_empty());
-    let song_display_bpm = {
-        let trimmed = simfile.display_bpm_str.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed)
-        }
-    };
-    let display_tag = chart_display_bpm.or(song_display_bpm);
-    let (display_bpm_min_raw, display_bpm_max_raw, display_bpm) = resolve_display_bpm(
-        display_tag,
-        bpm_min_raw,
-        bpm_max_raw,
-        1.0,
-    );
-    let display_bpm_min = round_sig_figs_itg(display_bpm_min_raw);
-    let display_bpm_max = round_sig_figs_itg(display_bpm_max_raw);
+    let display_tag = chart_display_bpm;
+    let (display_bpm_min_raw, display_bpm_max_raw, display_bpm) =
+        resolve_display_bpm(display_tag, bpm_min_raw, bpm_max_raw, 1.0);
+    let display_bpm_min = round_sig_figs_6(round_sig_figs_itg(display_bpm_min_raw));
+    let display_bpm_max = round_sig_figs_6(round_sig_figs_itg(display_bpm_max_raw));
     let bpms: Vec<JsonValue> = bpms
         .into_iter()
         .map(|(beat, bpm)| serde_json::json!([beat, bpm]))
@@ -1719,8 +1822,7 @@ fn json_pattern_counts(chart: &ChartSummary) -> JsonValue {
         PatternVariant::StaircaseInvLeft,
         PatternVariant::StaircaseInvRight,
     );
-    let total_staircases =
-        stairs.left + stairs.right + stairs.left_inv + stairs.right_inv;
+    let total_staircases = stairs.left + stairs.right + stairs.left_inv + stairs.right_inv;
     let alt_stairs = compute_stair_parts(
         &chart.detected_patterns,
         PatternVariant::AltStaircasesLeft,
@@ -1736,10 +1838,8 @@ fn json_pattern_counts(chart: &ChartSummary) -> JsonValue {
         PatternVariant::DStaircaseInvLeft,
         PatternVariant::DStaircaseInvRight,
     );
-    let total_double = double_stairs.left
-        + double_stairs.right
-        + double_stairs.left_inv
-        + double_stairs.right_inv;
+    let total_double =
+        double_stairs.left + double_stairs.right + double_stairs.left_inv + double_stairs.right_inv;
     obj.insert(
         "staircases".to_string(),
         serde_json::json!({
@@ -1789,10 +1889,8 @@ fn json_pattern_counts(chart: &ChartSummary) -> JsonValue {
         PatternVariant::SweepCandleInvLeft,
         PatternVariant::SweepCandleInvRight,
     );
-    let total_candle_sweeps = candle_sweeps.left
-        + candle_sweeps.right
-        + candle_sweeps.left_inv
-        + candle_sweeps.right_inv;
+    let total_candle_sweeps =
+        candle_sweeps.left + candle_sweeps.right + candle_sweeps.left_inv + candle_sweeps.right_inv;
     obj.insert(
         "candle_sweeps".to_string(),
         serde_json::json!({
@@ -1852,8 +1950,7 @@ fn json_pattern_counts(chart: &ChartSummary) -> JsonValue {
         PatternVariant::TurboCandleInvLeft,
         PatternVariant::TurboCandleInvRight,
     );
-    let total_turbo_candles =
-        turbo_candles.a + turbo_candles.b + turbo_candles.c + turbo_candles.d;
+    let total_turbo_candles = turbo_candles.a + turbo_candles.b + turbo_candles.c + turbo_candles.d;
     obj.insert(
         "turbo_candles".to_string(),
         serde_json::json!({
@@ -1873,8 +1970,7 @@ fn json_pattern_counts(chart: &ChartSummary) -> JsonValue {
         PatternVariant::HipBreakerInvLeft,
         PatternVariant::HipBreakerInvRight,
     );
-    let total_hip_breakers =
-        hip_breakers.a + hip_breakers.b + hip_breakers.c + hip_breakers.d;
+    let total_hip_breakers = hip_breakers.a + hip_breakers.b + hip_breakers.c + hip_breakers.d;
     obj.insert(
         "hip_breakers".to_string(),
         serde_json::json!({
@@ -1959,17 +2055,64 @@ fn write_indent<W: Write>(writer: &mut W, indent: usize) -> io::Result<()> {
 }
 
 fn write_json_string<W: Write>(writer: &mut W, s: &str) -> io::Result<()> {
-    let encoded = serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string());
-    writer.write_all(encoded.as_bytes())
-}
-
-#[inline(always)]
-fn round_sig_figs_6(value: f64) -> f64 {
-    if !value.is_finite() || value == 0.0 {
-        return value;
+    let bytes = s.as_bytes();
+    let mut needs_escape = false;
+    for &b in bytes {
+        if b < 0x20 || b == b'"' || b == b'\\' {
+            needs_escape = true;
+            break;
+        }
     }
-    let formatted = format!("{:.5e}", value);
-    formatted.parse::<f64>().unwrap_or(value)
+
+    writer.write_all(b"\"")?;
+    if !needs_escape {
+        writer.write_all(bytes)?;
+        writer.write_all(b"\"")?;
+        return Ok(());
+    }
+
+    let hex = |value: u8| -> u8 {
+        if value < 10 {
+            b'0' + value
+        } else {
+            b'a' + (value - 10)
+        }
+    };
+
+    let mut start = 0usize;
+    for (i, &b) in bytes.iter().enumerate() {
+        let escape = match b {
+            b'"' => Some(b"\\\"".as_slice()),
+            b'\\' => Some(b"\\\\".as_slice()),
+            b'\n' => Some(b"\\n".as_slice()),
+            b'\r' => Some(b"\\r".as_slice()),
+            b'\t' => Some(b"\\t".as_slice()),
+            b'\x08' => Some(b"\\b".as_slice()),
+            b'\x0c' => Some(b"\\f".as_slice()),
+            0x00..=0x1F => None,
+            _ => continue,
+        };
+
+        if start < i {
+            writer.write_all(&bytes[start..i])?;
+        }
+
+        if let Some(escape) = escape {
+            writer.write_all(escape)?;
+        } else {
+            let mut buf = [b'\\', b'u', b'0', b'0', b'0', b'0'];
+            buf[4] = hex((b >> 4) & 0x0f);
+            buf[5] = hex(b & 0x0f);
+            writer.write_all(&buf)?;
+        }
+
+        start = i + 1;
+    }
+
+    if start < bytes.len() {
+        writer.write_all(&bytes[start..])?;
+    }
+    writer.write_all(b"\"")
 }
 
 fn write_json_number_for_key<W: Write>(
@@ -1983,16 +2126,16 @@ fn write_json_number_for_key<W: Write>(
         write!(writer, "{}", u)
     } else if let Some(f) = number.as_f64() {
         match key {
-            None => write!(writer, "{}", round_sig_figs_6(f)),
+            None => write!(writer, "{}", f),
             Some("offset") => write!(writer, "{:.3}", f),
-            Some("beat0_offset_seconds") | Some("beat0_group_offset_seconds") => {
-                write!(writer, "{}", round_sig_figs_6(f))
-            }
-            Some("duration_seconds") => write!(writer, "{}", round_millis(f)),
-            Some("max_nps") => write!(writer, "{}", round_sig_figs_6(f)),
-            Some("bpm_min") | Some("bpm_max") | Some("display_bpm_min") | Some("display_bpm_max") => {
-                write!(writer, "{}", round_sig_figs_6(f))
-            }
+            Some("beat0_offset_seconds")
+            | Some("beat0_group_offset_seconds")
+            | Some("duration_seconds")
+            | Some("max_nps")
+            | Some("bpm_min")
+            | Some("bpm_max")
+            | Some("display_bpm_min")
+            | Some("display_bpm_max") => write!(writer, "{}", f),
             Some("bpm") => write!(writer, "{}", f),
             _ => write!(writer, "{:.2}", f),
         }
@@ -2023,11 +2166,7 @@ fn write_json_value_with_key<W: Write>(
     }
 }
 
-fn write_json_array<W: Write>(
-    writer: &mut W,
-    arr: &[JsonValue],
-    indent: usize,
-) -> io::Result<()> {
+fn write_json_array<W: Write>(writer: &mut W, arr: &[JsonValue], indent: usize) -> io::Result<()> {
     writer.write_all(b"[\n")?;
     let mut first = true;
     for value in arr {
@@ -2067,7 +2206,7 @@ fn write_json_object<W: Write>(
     writer.write_all(b"}")
 }
 
-pub fn print_json_all(simfile: &SimfileSummary) {
+pub fn write_json_all<W: Write>(simfile: &SimfileSummary, writer: &mut W) -> io::Result<()> {
     let bpm_value = if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
         JsonValue::from(simfile.min_bpm)
     } else {
@@ -2104,29 +2243,57 @@ pub fn print_json_all(simfile: &SimfileSummary) {
         .collect();
 
     let mut root_obj = JsonMap::new();
-    root_obj.insert("title".to_string(), JsonValue::from(simfile.title_str.clone()));
-    root_obj.insert("subtitle".to_string(), JsonValue::from(simfile.subtitle_str.clone()));
-    root_obj.insert("artist".to_string(), JsonValue::from(simfile.artist_str.clone()));
-    root_obj.insert("title_trans".to_string(), JsonValue::from(simfile.titletranslit_str.clone()));
-    root_obj.insert("subtitle_trans".to_string(), JsonValue::from(simfile.subtitletranslit_str.clone()));
-    root_obj.insert("artist_trans".to_string(), JsonValue::from(simfile.artisttranslit_str.clone()));
-    root_obj.insert("length".to_string(), JsonValue::from(simfile.total_length.to_string()));
+    root_obj.insert(
+        "title".to_string(),
+        JsonValue::from(simfile.title_str.clone()),
+    );
+    root_obj.insert(
+        "subtitle".to_string(),
+        JsonValue::from(simfile.subtitle_str.clone()),
+    );
+    root_obj.insert(
+        "artist".to_string(),
+        JsonValue::from(simfile.artist_str.clone()),
+    );
+    root_obj.insert(
+        "title_trans".to_string(),
+        JsonValue::from(simfile.titletranslit_str.clone()),
+    );
+    root_obj.insert(
+        "subtitle_trans".to_string(),
+        JsonValue::from(simfile.subtitletranslit_str.clone()),
+    );
+    root_obj.insert(
+        "artist_trans".to_string(),
+        JsonValue::from(simfile.artisttranslit_str.clone()),
+    );
+    root_obj.insert(
+        "length".to_string(),
+        JsonValue::from(simfile.total_length.to_string()),
+    );
     root_obj.insert("bpm".to_string(), bpm_value);
     root_obj.insert("min_bpm".to_string(), JsonValue::from(simfile.min_bpm));
     root_obj.insert("max_bpm".to_string(), JsonValue::from(simfile.max_bpm));
-    root_obj.insert("average_bpm".to_string(), JsonValue::from(simfile.average_bpm));
-    root_obj.insert("median_bpm".to_string(), JsonValue::from(simfile.median_bpm));
-    root_obj.insert("bpm_data".to_string(), JsonValue::from(simfile.normalized_bpms.clone()));
+    root_obj.insert(
+        "average_bpm".to_string(),
+        JsonValue::from(simfile.average_bpm),
+    );
+    root_obj.insert(
+        "median_bpm".to_string(),
+        JsonValue::from(simfile.median_bpm),
+    );
+    root_obj.insert(
+        "bpm_data".to_string(),
+        JsonValue::from(simfile.normalized_bpms.clone()),
+    );
     root_obj.insert("offset".to_string(), JsonValue::from(simfile.offset));
     root_obj.insert("charts".to_string(), JsonValue::from(charts));
 
     let root = JsonValue::Object(root_obj);
 
-    let stdout = std::io::stdout();
-    let mut handle = stdout.lock();
-    if write_json_value_with_key(&mut handle, None, &root, 0).is_ok() {
-        let _ = writeln!(handle);
-    }
+    write_json_value_with_key(writer, None, &root, 0)?;
+    writeln!(writer)?;
+    Ok(())
 }
 
 const CSV_HEADER_BASE: &str = "Title,Subtitle,Artist,Title trans,Subtitle trans,Artist trans,Length,BPM,BPM Tier,min_bpm,max_bpm,average_bpm,median bpm,BPM-data,offset,file_md5_hash,step_type,difficulty,rating,step_artist,tech_notation,sha1_hash,bpm_neutral_hash,total_arrows,left_arrows,down_arrows,up_arrows,right_arrows,total_steps,jumps,hands,holds,rolls,mines,lifts,fakes,stops_freezes,delays,warps,speeds,scrolls,total_streams,16th_streams,20th_streams,24th_streams,32nd_streams,total_breaks,sn_breaks,stream_percent,adj_stream_percent,max_nps,median_nps,matrix_rating";
@@ -2136,7 +2303,7 @@ const CSV_HEADER_PATTERN_2: &str = "total_towers,lr_towers,ud_towers,corner_towe
 const CSV_HEADER_TECH: &str = "crossovers,half_crossovers,full_crossovers,footswitches,up_footswitches,down_footswitches,sideswitches,jacks,brackets,doublesteps";
 const CSV_HEADER_PATTERN_3: &str = "total staircases,left_staircases,right_staircases,left_inv_staircases,right_inv_staircases,total_alt_staircases,left_alt_staircases,right_alt_staircases,left_inv_alt_staircases,right_inv_alt_staircases,total_double_staircases,left_double_staircases,right_double_staircases,left_inv_double_staircases,right_inv_double_staircases,total_sweeps,left_sweeps,right_sweeps,left_inv_sweeps,right_inv_sweeps,total_candle_sweeps,left_candle_sweeps,right_candle_sweeps,left_inv_candle_sweeps,right_inv_candle_sweeps,total copters,left_copters,right_copters,left_inv_copters,right_inv_copters,total_spirals,left_spirals,right_spirals,left_inv_spirals,right_inv_spirals,total_turbo_candles,left_turbo_candles,right_turbo_candles,left_inv_turbo_candles,right_inv_turbo_candles,total_hip_breakers,left_hip_breakers,right_hip_breakers,left_inv_hip_breakers,right_inv_hip_breakers,total_doritos,left_doritos,right_doritos,left_inv_doritos,right_inv_doritos,total_luchis,left_du_luchis,left_ud_luchis,right_du_luchis,right_ud_luchis";
 
-fn print_csv_all(simfile: &SimfileSummary) {
+fn write_csv_all<W: Write>(writer: &mut W, simfile: &SimfileSummary) -> io::Result<()> {
     let mut header: Vec<String> = CSV_HEADER_BASE.split(',').map(str::to_string).collect();
     if simfile.pattern_counts_enabled {
         header.extend(CSV_HEADER_PATTERN_1.split(',').map(str::to_string));
@@ -2157,14 +2324,20 @@ fn print_csv_all(simfile: &SimfileSummary) {
         }
     }
 
-    println!("{}", header.join(","));
+    writeln!(writer, "{}", header.join(","))?;
 
     for chart in &simfile.charts {
-        print_csv_row(simfile, chart);
+        write_csv_row(writer, simfile, chart)?;
     }
+
+    Ok(())
 }
 
-fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
+fn write_csv_row<W: Write>(
+    writer: &mut W,
+    simfile: &SimfileSummary,
+    chart: &ChartSummary,
+) -> io::Result<()> {
     fn esc_csv(s: &str) -> String {
         if s.contains('"') || s.contains(',') {
             format!("\"{}\"", s.replace('"', "\"\""))
@@ -2194,7 +2367,10 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
     if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
         push_num(&mut row, simfile.min_bpm);
     } else {
-        push_str(&mut row, &format!("{}-{}", simfile.min_bpm, simfile.max_bpm));
+        push_str(
+            &mut row,
+            &format!("{}-{}", simfile.min_bpm, simfile.max_bpm),
+        );
     }
 
     push_num(&mut row, simfile.min_bpm);
@@ -2500,8 +2676,7 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
             PatternVariant::HipBreakerInvLeft,
             PatternVariant::HipBreakerInvRight,
         );
-        let total_hip_breakers =
-            hip_breakers.a + hip_breakers.b + hip_breakers.c + hip_breakers.d;
+        let total_hip_breakers = hip_breakers.a + hip_breakers.b + hip_breakers.c + hip_breakers.d;
         push_num(&mut row, total_hip_breakers);
         push_num(&mut row, hip_breakers.a);
         push_num(&mut row, hip_breakers.b);
@@ -2541,5 +2716,6 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
         }
     }
 
-    println!("{}", row.join(","));
+    writeln!(writer, "{}", row.join(","))?;
+    Ok(())
 }

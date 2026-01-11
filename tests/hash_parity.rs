@@ -1,10 +1,10 @@
-use std::fs;
+use libtest_mimic::Arguments;
+use serde::Deserialize;
 use std::collections::HashMap;
+use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use serde::Deserialize;
 use walkdir::WalkDir;
-use libtest_mimic::Arguments;
 
 #[derive(Debug, Deserialize)]
 struct GoldenChart {
@@ -39,26 +39,30 @@ fn main() {
             continue;
         }
 
-        // Check for .zst extension
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if ext != "zst" {
+        let extension = if ext.eq_ignore_ascii_case("zst") {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let inner_path = Path::new(stem);
+            let inner_extension = inner_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_default();
+            if inner_extension != "sm" && inner_extension != "ssc" {
+                continue;
+            }
+            inner_extension
+        } else if ext.eq_ignore_ascii_case("sm") {
+            "sm".to_string()
+        } else if ext.eq_ignore_ascii_case("ssc") {
+            "ssc".to_string()
+        } else {
             continue;
-        }
-
-        // Check the "inner" extension (e.g. "file.sm.zst" -> "sm")
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        let inner_path = Path::new(stem);
-        let inner_extension = inner_path.extension()
-            .and_then(|e| e.to_str())
-            .map(|s| s.to_lowercase())
-            .unwrap_or_default();
-
-        if inner_extension != "sm" && inner_extension != "ssc" {
-            continue;
-        }
+        };
 
         // Create a pretty name: "PackName/SongName/file.ssc.zst"
-        let test_name = path.strip_prefix(&packs_dir)
+        let test_name = path
+            .strip_prefix(&packs_dir)
             .unwrap_or(path)
             .to_string_lossy()
             .to_string();
@@ -66,7 +70,7 @@ fn main() {
         tests.push(TestCase {
             name: test_name,
             path: path.to_path_buf(),
-            extension: inner_extension,
+            extension,
         });
     }
 
@@ -183,17 +187,23 @@ struct Failure {
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
-    // 1. Read Compressed Simfile
-    let compressed_bytes = fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
-    
-    // 2. Decompress Simfile
-    let raw_bytes = zstd::decode_all(&compressed_bytes[..])
-        .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
-    
+    let (raw_bytes, ext) = if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("zst"))
+    {
+        let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        let raw_bytes = zstd::decode_all(&compressed_bytes[..])
+            .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
+        (raw_bytes, extension)
+    } else {
+        let sim = rssp::simfile::open(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        (sim.data, sim.extension)
+    };
+
     // 3. Compute Hash (on raw bytes) to find Baseline JSON
     let file_hash = format!("{:x}", md5::compute(&raw_bytes));
-    
+
     // Determine sharded subfolder (first 2 chars of hash)
     let subfolder = &file_hash[0..2];
 
@@ -212,17 +222,17 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     }
 
     // 4. Read & Decompress Golden JSON
-    let compressed_golden = fs::read(&golden_path)
-        .map_err(|e| format!("Failed to read baseline file: {}", e))?;
-    
+    let compressed_golden =
+        fs::read(&golden_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
+
     let json_bytes = zstd::decode_all(&compressed_golden[..])
         .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
 
     let golden_charts: Vec<GoldenChart> = serde_json::from_slice(&json_bytes)
         .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
 
-    // 5. Run RSSP FAST Hashing (using decompressed raw_bytes)
-    let rssp_charts = rssp::compute_all_hashes(&raw_bytes, extension)
+    // 5. Run RSSP FAST Hashing
+    let rssp_charts = rssp::compute_all_hashes(&raw_bytes, ext)
         .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
 
     // 6. Compare Charts (support multiple edits per difficulty)
@@ -246,10 +256,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         if step_type_lower != "dance-single" && step_type_lower != "dance-double" {
             continue;
         }
-        let key = (
-            step_type_lower,
-            chart.difficulty.to_ascii_lowercase(),
-        );
+        let key = (step_type_lower, chart.difficulty.to_ascii_lowercase());
         rssp_map.entry(key).or_default().push(chart.hash);
     }
 

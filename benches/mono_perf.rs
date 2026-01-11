@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -7,11 +7,7 @@ const MONO_THRESHOLD: usize = 6;
 
 fn step_type_lanes(step_type: &str) -> usize {
     let normalized = step_type.trim().to_ascii_lowercase().replace('_', "-");
-    if normalized == "dance-double" {
-        8
-    } else {
-        4
-    }
+    if normalized == "dance-double" { 8 } else { 4 }
 }
 
 fn generate_bitmasks(minimized_chart: &[u8]) -> Vec<u8> {
@@ -34,17 +30,16 @@ fn generate_bitmasks(minimized_chart: &[u8]) -> Vec<u8> {
 }
 
 fn build_bitmasks() -> Vec<u8> {
-    let parsed = rssp::parse::extract_sections(FIXTURE.as_bytes(), "ssc")
-        .expect("fixture should parse");
+    let parsed =
+        rssp::parse::extract_sections(FIXTURE.as_bytes(), "ssc").expect("fixture should parse");
 
     let mut best_chart: Option<(usize, Vec<u8>)> = None;
     for entry in parsed.notes_list {
-        let (fields, chart_data) = rssp::parse::split_notes_fields(&entry.notes);
-        if fields.len() < 5 {
+        if entry.field_count < 5 {
             continue;
         }
 
-        let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim();
+        let step_type = std::str::from_utf8(entry.fields[0]).unwrap_or("").trim();
         if step_type == "lights-cabinet" {
             continue;
         }
@@ -55,7 +50,7 @@ fn build_bitmasks() -> Vec<u8> {
         }
 
         let (mut minimized_chart, stats, _measure_densities) =
-            rssp::stats::minimize_chart_and_count_with_lanes(chart_data, lanes);
+            rssp::stats::minimize_chart_and_count_with_lanes(entry.note_data, lanes);
         if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
             minimized_chart.truncate(pos + 1);
         }
@@ -80,10 +75,8 @@ fn bench_mono_counts(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(2));
     group.bench_function("count_facing_steps", |b| {
         b.iter(|| {
-            let counts = rssp::patterns::count_facing_steps(
-                black_box(&bitmasks),
-                black_box(MONO_THRESHOLD),
-            );
+            let counts =
+                rssp::patterns::count_facing_steps(black_box(&bitmasks), black_box(MONO_THRESHOLD));
             black_box(counts);
         })
     });

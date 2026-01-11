@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -6,7 +6,8 @@ const FIXTURE: &str = include_str!("fixtures/bpm_fixture.ssc");
 
 #[derive(Clone)]
 struct ChartTimingInput {
-    notes: Vec<u8>,
+    field_count: u8,
+    fields: [&'static [u8]; 5],
     chart_bpms: Option<Vec<u8>>,
     chart_stops: Option<Vec<u8>>,
     chart_delays: Option<Vec<u8>>,
@@ -105,7 +106,8 @@ fn build_timing_inputs() -> (Vec<ChartTimingInput>, TimingGlobals) {
         .notes_list
         .into_iter()
         .map(|entry| ChartTimingInput {
-            notes: entry.notes,
+            field_count: entry.field_count,
+            fields: entry.fields,
             chart_bpms: entry.chart_bpms.map(|v| v.into_owned()),
             chart_stops: entry.chart_stops.map(|v| v.into_owned()),
             chart_delays: entry.chart_delays.map(|v| v.into_owned()),
@@ -126,9 +128,8 @@ fn bench_bpm_pipeline(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(2));
     group.bench_function("chart_bpm_snapshots", |b| {
         b.iter(|| {
-            let snapshots =
-                rssp::bpm::chart_bpm_snapshots(black_box(fixture), black_box("ssc"))
-                    .expect("bpm snapshots should succeed");
+            let snapshots = rssp::bpm::chart_bpm_snapshots(black_box(fixture), black_box("ssc"))
+                .expect("bpm snapshots should succeed");
             black_box(snapshots);
         })
     });
@@ -144,12 +145,11 @@ fn bench_bpm_inner(c: &mut Criterion) {
         b.iter(|| {
             let mut outputs = Vec::with_capacity(charts.len());
             for entry in &charts {
-                let (fields, _chart_data) = rssp::parse::split_notes_fields(&entry.notes);
-                if fields.len() < 4 {
+                if entry.field_count < 4 {
                     continue;
                 }
 
-                let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim();
+                let step_type = std::str::from_utf8(entry.fields[0]).unwrap_or("").trim();
                 if step_type == "lights-cabinet" {
                     continue;
                 }
@@ -206,6 +206,7 @@ fn bench_bpm_inner(c: &mut Criterion) {
                     },
                     &globals.fakes_raw,
                     globals.timing_format,
+                    true,
                 );
 
                 let bpms_formatted =

@@ -8,7 +8,7 @@ use serde::Deserialize;
 use walkdir::WalkDir;
 
 use rssp::stats::measure_equally_spaced;
-use rssp::{analyze, AnalysisOptions, step_type_lanes};
+use rssp::{AnalysisOptions, analyze, step_type_lanes};
 
 #[derive(Debug, Deserialize)]
 struct GoldenChart {
@@ -57,7 +57,10 @@ fn format_len<T>(opt: Option<&[T]>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
-fn compute_chart_nps(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartMeasureInfo>, String> {
+fn compute_chart_nps(
+    simfile_data: &[u8],
+    extension: &str,
+) -> Result<Vec<ChartMeasureInfo>, String> {
     let options = AnalysisOptions {
         compute_tech_counts: false,
         compute_pattern_counts: false,
@@ -74,11 +77,7 @@ fn compute_chart_nps(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartMe
                 step_type: chart.step_type_str,
                 difficulty: chart.difficulty_str,
                 peak_nps: chart.max_nps,
-                notes_per_measure: chart
-                    .measure_densities
-                    .iter()
-                    .map(|&v| v as u32)
-                    .collect(),
+                notes_per_measure: chart.measure_densities.iter().map(|&v| v as u32).collect(),
                 nps_per_measure: chart.measure_nps_vec,
                 equally_spaced_per_measure: measure_equally_spaced(
                     &chart.minimized_note_data,
@@ -90,11 +89,19 @@ fn compute_chart_nps(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartMe
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
-    let compressed_bytes = fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
-
-    let raw_bytes = zstd::decode_all(&compressed_bytes[..])
-        .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
+    let (raw_bytes, ext) = if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("zst"))
+    {
+        let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        let raw_bytes = zstd::decode_all(&compressed_bytes[..])
+            .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
+        (raw_bytes, extension)
+    } else {
+        let sim = rssp::simfile::open(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        (sim.data, sim.extension)
+    };
 
     let file_hash = format!("{:x}", md5::compute(&raw_bytes));
     let subfolder = &file_hash[0..2];
@@ -112,8 +119,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         ));
     }
 
-    let compressed_golden = fs::read(&golden_path)
-        .map_err(|e| format!("Failed to read baseline file: {}", e))?;
+    let compressed_golden =
+        fs::read(&golden_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
 
     let json_bytes = zstd::decode_all(&compressed_golden[..])
         .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
@@ -121,7 +128,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     let golden_charts: Vec<GoldenChart> = serde_json::from_slice(&json_bytes)
         .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
 
-    let rssp_charts = compute_chart_nps(&raw_bytes, extension)
+    let rssp_charts = compute_chart_nps(&raw_bytes, ext)
         .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
 
     let mut golden_map: HashMap<(String, String), Vec<GoldenChart>> = HashMap::new();
@@ -186,9 +193,11 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             let nps_matches = match (expected, actual) {
                 (Some(exp), Some(act)) => {
                     exp.nps_per_measure.len() == act.nps_per_measure.len()
-                        && exp.nps_per_measure.iter().zip(&act.nps_per_measure).all(|(e, a)| {
-                            approx_eq(*e, *a)
-                        })
+                        && exp
+                            .nps_per_measure
+                            .iter()
+                            .zip(&act.nps_per_measure)
+                            .all(|(e, a)| approx_eq(*e, *a))
                 }
                 _ => false,
             };
@@ -304,21 +313,26 @@ fn main() {
         }
 
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if ext != "zst" {
-            continue;
-        }
+        let extension = if ext.eq_ignore_ascii_case("zst") {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let inner_path = Path::new(stem);
+            let inner_extension = inner_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_default();
 
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        let inner_path = Path::new(stem);
-        let inner_extension = inner_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|s| s.to_lowercase())
-            .unwrap_or_default();
-
-        if inner_extension != "sm" && inner_extension != "ssc" {
+            if inner_extension != "sm" && inner_extension != "ssc" {
+                continue;
+            }
+            inner_extension
+        } else if ext.eq_ignore_ascii_case("sm") {
+            "sm".to_string()
+        } else if ext.eq_ignore_ascii_case("ssc") {
+            "ssc".to_string()
+        } else {
             continue;
-        }
+        };
 
         let test_name = path
             .strip_prefix(&packs_dir)
@@ -329,7 +343,7 @@ fn main() {
         tests.push(TestCase {
             name: test_name,
             path: path.to_path_buf(),
-            extension: inner_extension,
+            extension,
         });
     }
 

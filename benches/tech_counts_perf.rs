@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -75,18 +75,17 @@ fn build_tech_inputs() -> (Vec<TechChartInput>, TechGlobals) {
         .notes_list
         .into_iter()
         .filter_map(|entry| {
-            let (fields, chart_data) = rssp::parse::split_notes_fields(&entry.notes);
-            if fields.len() < 5 {
+            if entry.field_count < 5 {
                 return None;
             }
 
-            let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim();
+            let step_type = std::str::from_utf8(entry.fields[0]).unwrap_or("").trim();
             if step_type == "lights-cabinet" {
                 return None;
             }
 
             Some(TechChartInput {
-                chart_data: chart_data.to_vec(),
+                chart_data: entry.note_data.to_vec(),
                 lanes: rssp::step_type_lanes(step_type),
                 chart_bpms: clean_chart_tag(entry.chart_bpms.as_deref()),
                 chart_stops: clean_chart_tag(entry.chart_stops.as_deref()),
@@ -188,13 +187,11 @@ fn timing_for_chart(chart: &TechChartInput, globals: &TechGlobals) -> rssp::timi
         },
         timing_fakes_global,
         globals.timing_format,
+        true,
     )
 }
 
-fn build_parity_inputs(
-    charts: &[TechChartInput],
-    globals: &TechGlobals,
-) -> Vec<TechParityInput> {
+fn build_parity_inputs(charts: &[TechChartInput], globals: &TechGlobals) -> Vec<TechParityInput> {
     let mut out = Vec::with_capacity(charts.len());
     for chart in charts {
         let minimized_chart = minimize_chart(&chart.chart_data, chart.lanes);
@@ -211,7 +208,6 @@ fn build_parity_inputs(
 fn bench_tech_counts_pipeline(c: &mut Criterion) {
     let fixture = FIXTURE.as_bytes();
     let options = rssp::AnalysisOptions {
-        parallel: false,
         ..rssp::AnalysisOptions::default()
     };
     let mut group = c.benchmark_group("tech_counts_pipeline");
@@ -219,13 +215,13 @@ fn bench_tech_counts_pipeline(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(2));
     group.bench_function("analyze_tech_counts", |b| {
         b.iter(|| {
-            let summary = rssp::analyze(
-                black_box(fixture),
-                black_box(EXTENSION),
-                options.clone(),
-            )
-            .expect("analysis should succeed");
-            let counts: Vec<_> = summary.charts.iter().map(|chart| chart.tech_counts).collect();
+            let summary = rssp::analyze(black_box(fixture), black_box(EXTENSION), options.clone())
+                .expect("analysis should succeed");
+            let counts: Vec<_> = summary
+                .charts
+                .iter()
+                .map(|chart| chart.tech_counts)
+                .collect();
             black_box(counts);
         })
     });
@@ -241,16 +237,11 @@ fn bench_tech_counts_inner(c: &mut Criterion) {
         b.iter(|| {
             let mut outputs = Vec::with_capacity(charts.len());
             for chart in &charts {
-                let minimized_chart = minimize_chart(
-                    black_box(&chart.chart_data),
-                    black_box(chart.lanes),
-                );
+                let minimized_chart =
+                    minimize_chart(black_box(&chart.chart_data), black_box(chart.lanes));
                 let timing = timing_for_chart(chart, &globals);
-                let counts = rssp::step_parity::analyze_timing_lanes(
-                    &minimized_chart,
-                    &timing,
-                    chart.lanes,
-                );
+                let counts =
+                    rssp::step_parity::analyze_timing_lanes(&minimized_chart, &timing, chart.lanes);
                 outputs.push(counts);
             }
             black_box(outputs);

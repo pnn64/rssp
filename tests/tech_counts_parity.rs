@@ -7,7 +7,7 @@ use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::{analyze, normalize_difficulty_label, AnalysisOptions};
+use rssp::{AnalysisOptions, analyze, normalize_difficulty_label};
 
 #[derive(Debug, Deserialize)]
 struct GoldenTechCounts {
@@ -94,11 +94,19 @@ fn compute_chart_tech_counts(
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
-    let compressed_bytes = fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
-
-    let raw_bytes = zstd::decode_all(&compressed_bytes[..])
-        .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
+    let (raw_bytes, ext) = if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("zst"))
+    {
+        let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        let raw_bytes = zstd::decode_all(&compressed_bytes[..])
+            .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
+        (raw_bytes, extension)
+    } else {
+        let sim = rssp::simfile::open(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        (sim.data, sim.extension)
+    };
 
     let file_hash = format!("{:x}", md5::compute(&raw_bytes));
     let subfolder = &file_hash[0..2];
@@ -116,8 +124,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         ));
     }
 
-    let compressed_golden = fs::read(&golden_path)
-        .map_err(|e| format!("Failed to read baseline file: {}", e))?;
+    let compressed_golden =
+        fs::read(&golden_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
 
     let json_bytes = zstd::decode_all(&compressed_golden[..])
         .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
@@ -125,7 +133,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     let golden_charts: Vec<GoldenChart> = serde_json::from_slice(&json_bytes)
         .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
 
-    let rssp_charts = compute_chart_tech_counts(&raw_bytes, extension)
+    let rssp_charts = compute_chart_tech_counts(&raw_bytes, ext)
         .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
 
     let mut golden_map: HashMap<(String, String), Vec<GoldenChart>> = HashMap::new();
@@ -236,12 +244,14 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 .iter()
                 .filter_map(|e| e.tech_counts.as_ref().map(|c| c.footswitches))
                 .collect();
-            let actual_footswitches: Vec<u32> = actual_entries.iter().map(|a| a.footswitches).collect();
+            let actual_footswitches: Vec<u32> =
+                actual_entries.iter().map(|a| a.footswitches).collect();
             let expected_sideswitches: Vec<u32> = expected_entries
                 .iter()
                 .filter_map(|e| e.tech_counts.as_ref().map(|c| c.sideswitches))
                 .collect();
-            let actual_sideswitches: Vec<u32> = actual_entries.iter().map(|a| a.sideswitches).collect();
+            let actual_sideswitches: Vec<u32> =
+                actual_entries.iter().map(|a| a.sideswitches).collect();
             let expected_jacks: Vec<u32> = expected_entries
                 .iter()
                 .filter_map(|e| e.tech_counts.as_ref().map(|c| c.jacks))
@@ -256,7 +266,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 .iter()
                 .filter_map(|e| e.tech_counts.as_ref().map(|c| c.doublesteps))
                 .collect();
-            let actual_doublesteps: Vec<u32> = actual_entries.iter().map(|a| a.doublesteps).collect();
+            let actual_doublesteps: Vec<u32> =
+                actual_entries.iter().map(|a| a.doublesteps).collect();
 
             return Err(format!(
                 "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP crossovers:   {:?}\nGolden crossovers: {:?}\nRSSP footswitches:  {:?}\nGolden footswitches: {:?}\nRSSP sideswitches:  {:?}\nGolden sideswitches: {:?}\nRSSP jacks:         {:?}\nGolden jacks:       {:?}\nRSSP brackets:      {:?}\nGolden brackets:    {:?}\nRSSP doublesteps:   {:?}\nGolden doublesteps: {:?}\n",
@@ -303,21 +314,26 @@ fn main() {
         }
 
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if ext != "zst" {
-            continue;
-        }
+        let extension = if ext.eq_ignore_ascii_case("zst") {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let inner_path = Path::new(stem);
+            let inner_extension = inner_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_default();
 
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        let inner_path = Path::new(stem);
-        let inner_extension = inner_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|s| s.to_lowercase())
-            .unwrap_or_default();
-
-        if inner_extension != "sm" && inner_extension != "ssc" {
+            if inner_extension != "sm" && inner_extension != "ssc" {
+                continue;
+            }
+            inner_extension
+        } else if ext.eq_ignore_ascii_case("sm") {
+            "sm".to_string()
+        } else if ext.eq_ignore_ascii_case("ssc") {
+            "ssc".to_string()
+        } else {
             continue;
-        }
+        };
 
         let test_name = path
             .strip_prefix(&packs_dir)
@@ -328,7 +344,7 @@ fn main() {
         tests.push(TestCase {
             name: test_name,
             path: path.to_path_buf(),
-            extension: inner_extension,
+            extension,
         });
     }
 

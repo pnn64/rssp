@@ -2,18 +2,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use rssp::report::format_json_float;
-use rssp::timing::round_millis;
-use rssp::{display_metadata, normalize_difficulty_label};
-
-// Full JSON output (tech/pattern counts enabled).
-const RSSP_ARGS: [&str; 1] = ["--json"];
+use rssp::math::round_sig_figs_itg;
+use rssp::report::{OutputMode, format_json_float, write_reports};
+use rssp::{AnalysisOptions, analyze, display_metadata, normalize_difficulty_label};
 
 #[derive(Debug, Clone, PartialEq)]
 struct ExpectedMetadata {
@@ -497,9 +493,10 @@ fn compare_pairs(expected: &[(f64, f64)], actual: &[(f64, f64)]) -> bool {
 
 fn compare_time_signatures(expected: &[(f64, i32, i32)], actual: &[(f64, i32, i32)]) -> bool {
     expected.len() == actual.len()
-        && expected.iter().zip(actual).all(|(e, a)| {
-            timing_approx_eq(e.0, a.0) && e.1 == a.1 && e.2 == a.2
-        })
+        && expected
+            .iter()
+            .zip(actual)
+            .all(|(e, a)| timing_approx_eq(e.0, a.0) && e.1 == a.1 && e.2 == a.2)
 }
 
 fn compare_labels(expected: &[(f64, String)], actual: &[(f64, String)]) -> bool {
@@ -627,9 +624,7 @@ fn expected_metadata(entries: &[HarnessChart], path: &Path) -> Result<ExpectedMe
         }
     }
 
-    expected.ok_or_else(|| {
-        format!("\n\nMISSING BASELINE METADATA\nFile: {}\n", path.display())
-    })
+    expected.ok_or_else(|| format!("\n\nMISSING BASELINE METADATA\nFile: {}\n", path.display()))
 }
 
 fn parse_metadata(actual: &RsspJsonFile) -> ParsedMetadata {
@@ -659,10 +654,10 @@ fn compare_metadata(
     actual: &ParsedMetadata,
 ) -> Result<(), String> {
     let title_ok = actual.title == expected.title;
-    let subtitle_ok =
-        actual.subtitle == expected.subtitle || (expected.subtitle.is_empty() && has_hash_prefix(&actual.subtitle));
-    let artist_ok =
-        actual.artist == expected.artist || (expected.artist == "Unknown artist" && has_hash_prefix(&actual.artist));
+    let subtitle_ok = actual.subtitle == expected.subtitle
+        || (expected.subtitle.is_empty() && has_hash_prefix(&actual.subtitle));
+    let artist_ok = actual.artist == expected.artist
+        || (expected.artist == "Unknown artist" && has_hash_prefix(&actual.artist));
     let title_translated_ok = actual.title_translated == expected.title_translated;
     let subtitle_translated_ok = actual.subtitle_translated == expected.subtitle_translated
         || (expected.subtitle_translated.is_empty()
@@ -672,11 +667,27 @@ fn compare_metadata(
             && has_hash_prefix(&actual.artist_translated));
 
     let title_status = if title_ok { "....ok" } else { "....MISMATCH" };
-    let subtitle_status = if subtitle_ok { "....ok" } else { "....MISMATCH" };
+    let subtitle_status = if subtitle_ok {
+        "....ok"
+    } else {
+        "....MISMATCH"
+    };
     let artist_status = if artist_ok { "....ok" } else { "....MISMATCH" };
-    let title_translated_status = if title_translated_ok { "....ok" } else { "....MISMATCH" };
-    let subtitle_translated_status = if subtitle_translated_ok { "....ok" } else { "....MISMATCH" };
-    let artist_translated_status = if artist_translated_ok { "....ok" } else { "....MISMATCH" };
+    let title_translated_status = if title_translated_ok {
+        "....ok"
+    } else {
+        "....MISMATCH"
+    };
+    let subtitle_translated_status = if subtitle_translated_ok {
+        "....ok"
+    } else {
+        "....MISMATCH"
+    };
+    let artist_translated_status = if artist_translated_ok {
+        "....ok"
+    } else {
+        "....MISMATCH"
+    };
 
     println!(
         "  title: baseline: {} -> rssp: {} {}",
@@ -946,7 +957,13 @@ fn compare_bpm(
                 .collect();
             let actual_hashes: Vec<String> = actual_indices
                 .iter()
-                .map(|&i| actual_charts[i].timing.hash_bpms.clone().unwrap_or_default())
+                .map(|&i| {
+                    actual_charts[i]
+                        .timing
+                        .hash_bpms
+                        .clone()
+                        .unwrap_or_default()
+                })
                 .collect();
             let expected_bpms: Vec<String> = expected_indices
                 .iter()
@@ -1130,10 +1147,10 @@ fn compare_durations(
                 .map(|meter| meter.to_string())
                 .unwrap_or_else(|| (idx + 1).to_string());
 
-            let expected_val = expected.map(|e| round_millis(e.duration_seconds));
+            let expected_val = expected.map(|e| round_sig_figs_itg(e.duration_seconds));
             let actual_val = actual
                 .and_then(|a| a.timing.duration_seconds)
-                .map(round_millis);
+                .map(round_sig_figs_itg);
             let status = if expected_val.is_some() && expected_val == actual_val {
                 "....ok"
             } else {
@@ -1160,18 +1177,19 @@ fn compare_durations(
                 .iter()
                 .zip(actual_indices)
                 .all(|(expected_idx, actual_idx)| {
-                    let expected = round_millis(harness_charts[*expected_idx].duration_seconds);
+                    let expected =
+                        round_sig_figs_itg(harness_charts[*expected_idx].duration_seconds);
                     let actual = actual_charts[*actual_idx]
                         .timing
                         .duration_seconds
-                        .map(round_millis)
+                        .map(round_sig_figs_itg)
                         .unwrap_or_default();
                     expected == actual
                 });
         if !matches {
             let expected_vals: Vec<f64> = expected_indices
                 .iter()
-                .map(|&i| round_millis(harness_charts[i].duration_seconds))
+                .map(|&i| round_sig_figs_itg(harness_charts[i].duration_seconds))
                 .collect();
             let actual_vals: Vec<f64> = actual_indices
                 .iter()
@@ -1179,7 +1197,7 @@ fn compare_durations(
                     actual_charts[i]
                         .timing
                         .duration_seconds
-                        .map(round_millis)
+                        .map(round_sig_figs_itg)
                         .unwrap_or_default()
                 })
                 .collect();
@@ -1240,10 +1258,8 @@ fn compare_timing(
                 step_type,
                 difficulty,
                 meter_label,
-                expected_timing
-                    .map_or_else(|| "-".to_string(), timing_counts_expected),
-                actual_timing
-                    .map_or_else(|| "-".to_string(), timing_counts_actual),
+                expected_timing.map_or_else(|| "-".to_string(), timing_counts_expected),
+                actual_timing.map_or_else(|| "-".to_string(), timing_counts_actual),
                 status
             );
         }
@@ -1253,7 +1269,8 @@ fn compare_timing(
                 .iter()
                 .zip(actual_indices)
                 .all(|(expected_idx, actual_idx)| {
-                    let Some(expected_timing) = harness_charts[*expected_idx].timing.as_ref() else {
+                    let Some(expected_timing) = harness_charts[*expected_idx].timing.as_ref()
+                    else {
                         return false;
                     };
                     timing_matches(expected_timing, &actual_charts[*actual_idx].timing)
@@ -1460,31 +1477,62 @@ fn compare_step_counts(
                 .unwrap_or_else(|| (idx + 1).to_string());
 
             let mut all_match = true;
-            let mut field =
-                |label: &str, expected: Option<u32>, actual: Option<u32>| -> String {
-                    let status = if expected.is_some() && expected == actual {
-                        "ok"
-                    } else {
-                        all_match = false;
-                        "MISMATCH"
-                    };
-                    format!(
-                        "{} {} -> {} {}",
-                        label,
-                        format_count(expected),
-                        format_count(actual),
-                        status
-                    )
+            let mut field = |label: &str, expected: Option<u32>, actual: Option<u32>| -> String {
+                let status = if expected.is_some() && expected == actual {
+                    "ok"
+                } else {
+                    all_match = false;
+                    "MISMATCH"
                 };
+                format!(
+                    "{} {} -> {} {}",
+                    label,
+                    format_count(expected),
+                    format_count(actual),
+                    status
+                )
+            };
 
-            let holds = field("holds", expected.map(|e| e.holds), actual.map(|a| a.arrow_stats.holds));
-            let mines = field("mines", expected.map(|e| e.mines), actual.map(|a| a.arrow_stats.mines));
-            let rolls = field("rolls", expected.map(|e| e.rolls), actual.map(|a| a.arrow_stats.rolls));
-            let notes = field("notes", expected.map(|e| e.notes), actual.map(|a| a.arrow_stats.total_arrows));
-            let lifts = field("lifts", expected.map(|e| e.lifts), actual.map(|a| a.gimmicks.lifts));
-            let fakes = field("fakes", expected.map(|e| e.fakes), actual.map(|a| a.gimmicks.fakes));
-            let jumps = field("jumps", expected.map(|e| e.jumps), actual.map(|a| a.arrow_stats.jumps));
-            let hands = field("hands", expected.map(|e| e.hands), actual.map(|a| a.arrow_stats.hands));
+            let holds = field(
+                "holds",
+                expected.map(|e| e.holds),
+                actual.map(|a| a.arrow_stats.holds),
+            );
+            let mines = field(
+                "mines",
+                expected.map(|e| e.mines),
+                actual.map(|a| a.arrow_stats.mines),
+            );
+            let rolls = field(
+                "rolls",
+                expected.map(|e| e.rolls),
+                actual.map(|a| a.arrow_stats.rolls),
+            );
+            let notes = field(
+                "notes",
+                expected.map(|e| e.notes),
+                actual.map(|a| a.arrow_stats.total_arrows),
+            );
+            let lifts = field(
+                "lifts",
+                expected.map(|e| e.lifts),
+                actual.map(|a| a.gimmicks.lifts),
+            );
+            let fakes = field(
+                "fakes",
+                expected.map(|e| e.fakes),
+                actual.map(|a| a.gimmicks.fakes),
+            );
+            let jumps = field(
+                "jumps",
+                expected.map(|e| e.jumps),
+                actual.map(|a| a.arrow_stats.jumps),
+            );
+            let hands = field(
+                "hands",
+                expected.map(|e| e.hands),
+                actual.map(|a| a.arrow_stats.hands),
+            );
             let total_steps = field(
                 "total_steps",
                 expected.map(|e| e.total_steps),
@@ -1745,7 +1793,12 @@ fn compare_tech_counts(
                 .collect();
             let expected_footswitches: Vec<u32> = expected_indices
                 .iter()
-                .filter_map(|&i| harness_charts[i].tech_counts.as_ref().map(|c| c.footswitches))
+                .filter_map(|&i| {
+                    harness_charts[i]
+                        .tech_counts
+                        .as_ref()
+                        .map(|c| c.footswitches)
+                })
                 .collect();
             let actual_footswitches: Vec<u32> = actual_indices
                 .iter()
@@ -1759,7 +1812,12 @@ fn compare_tech_counts(
                 .collect();
             let expected_sideswitches: Vec<u32> = expected_indices
                 .iter()
-                .filter_map(|&i| harness_charts[i].tech_counts.as_ref().map(|c| c.sideswitches))
+                .filter_map(|&i| {
+                    harness_charts[i]
+                        .tech_counts
+                        .as_ref()
+                        .map(|c| c.sideswitches)
+                })
                 .collect();
             let actual_sideswitches: Vec<u32> = actual_indices
                 .iter()
@@ -1801,7 +1859,12 @@ fn compare_tech_counts(
                 .collect();
             let expected_doublesteps: Vec<u32> = expected_indices
                 .iter()
-                .filter_map(|&i| harness_charts[i].tech_counts.as_ref().map(|c| c.doublesteps))
+                .filter_map(|&i| {
+                    harness_charts[i]
+                        .tech_counts
+                        .as_ref()
+                        .map(|c| c.doublesteps)
+                })
                 .collect();
             let actual_doublesteps: Vec<u32> = actual_indices
                 .iter()
@@ -1949,8 +2012,10 @@ fn compare_stream_breakdown(
                     let expected = &harness_charts[*expected_idx];
                     let actual = &actual_charts[*actual_idx];
                     expected.streams_breakdown == actual.stream_breakdown.detailed_breakdown
-                        && expected.streams_breakdown_level1 == actual.stream_breakdown.partial_breakdown
-                        && expected.streams_breakdown_level2 == actual.stream_breakdown.simple_breakdown
+                        && expected.streams_breakdown_level1
+                            == actual.stream_breakdown.partial_breakdown
+                        && expected.streams_breakdown_level2
+                            == actual.stream_breakdown.simple_breakdown
                         && expected.total_stream_measures == actual.stream_info.total_streams
                         && expected.total_break_measures == actual.stream_info.total_breaks
                         && expected.stream_sequences == actual.stream_info.stream_sequences
@@ -2057,7 +2122,11 @@ fn compare_sn_breakdown(
             let meter_label = expected
                 .map(|entry| entry.chart_info.rating.as_str())
                 .filter(|label| !label.is_empty())
-                .or_else(|| actual.map(|entry| entry.chart_info.rating.as_str()).filter(|label| !label.is_empty()))
+                .or_else(|| {
+                    actual
+                        .map(|entry| entry.chart_info.rating.as_str())
+                        .filter(|label| !label.is_empty())
+                })
                 .map(|label| label.to_string())
                 .unwrap_or_else(|| (idx + 1).to_string());
 
@@ -2206,7 +2275,13 @@ fn format_boxes(patterns: Option<&RsspPatternCounts>) -> String {
             let b = &p.boxes;
             format!(
                 "{} (LR {} UD {} LD {} LU {} RD {} RU {})",
-                b.total_boxes, b.lr_boxes, b.ud_boxes, b.ld_boxes, b.lu_boxes, b.rd_boxes, b.ru_boxes
+                b.total_boxes,
+                b.lr_boxes,
+                b.ud_boxes,
+                b.ld_boxes,
+                b.lu_boxes,
+                b.rd_boxes,
+                b.ru_boxes
             )
         })
         .unwrap_or_else(|| "-".to_string())
@@ -2284,9 +2359,9 @@ fn compare_rssp_unique(
     actual_map: &HashMap<(String, String), Vec<usize>>,
     actual_charts: &[RsspJsonChart],
 ) -> Result<(), String> {
-    let compare_patterns = actual_charts.iter().any(|chart| {
-        chart.mono_candle_stats.is_some() || chart.pattern_counts.is_some()
-    });
+    let compare_patterns = actual_charts
+        .iter()
+        .any(|chart| chart.mono_candle_stats.is_some() || chart.pattern_counts.is_some());
 
     for ((step_type, difficulty), expected_indices) in rssp_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
@@ -2451,82 +2526,37 @@ fn compare_rssp_unique(
     Ok(())
 }
 
-fn run_rssp_json(
-    bin_path: &Path,
-    raw_bytes: &[u8],
-    extension: &str,
-    file_hash: &str,
-) -> Result<RsspJsonFile, String> {
-    let pid = std::process::id();
-    let mut tmp_path = std::env::temp_dir();
-    tmp_path.push(format!("rssp_all_{}_{}.{}", pid, file_hash, extension));
-
-    fs::write(&tmp_path, raw_bytes)
-        .map_err(|e| format!("Failed to write temp simfile: {}", e))?;
-
-    let output = Command::new(bin_path)
-        .arg(&tmp_path)
-        .args(RSSP_ARGS)
-        .output();
-
-    let _ = fs::remove_file(&tmp_path);
-
-    let output = output.map_err(|e| format!("Failed to run rssp: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "rssp failed: exit={} stderr={}",
-            output.status, stderr
-        ));
-    }
-
-    serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("Failed to parse rssp JSON: {}", e))
+fn run_rssp_json(raw_bytes: &[u8], extension: &str) -> Result<RsspJsonFile, String> {
+    let options = AnalysisOptions {
+        strip_tags: false,
+        mono_threshold: 6,
+        custom_patterns: Vec::new(),
+        compute_tech_counts: true,
+        compute_pattern_counts: true,
+        translate_markers: false,
+    };
+    let summary = analyze(raw_bytes, extension, options).map_err(|e| e.to_string())?;
+    let mut stdout = Vec::new();
+    write_reports(&summary, OutputMode::JSON, &mut stdout).map_err(|e| e.to_string())?;
+    serde_json::from_slice(&stdout).map_err(|e| format!("Failed to parse rssp JSON: {}", e))
 }
 
 fn read_zst(path: &Path) -> Result<Vec<u8>, String> {
-    let compressed = fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
-    zstd::decode_all(&compressed[..])
-        .map_err(|e| format!("Failed to decompress file: {}", e))
+    let compressed = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+    zstd::decode_all(&compressed[..]).map_err(|e| format!("Failed to decompress file: {}", e))
 }
 
-fn resolve_rssp_bin() -> Result<PathBuf, String> {
-    if let Ok(bin) = std::env::var("CARGO_BIN_EXE_rssp") {
-        return Ok(PathBuf::from(bin));
-    }
-    if let Some(bin) = option_env!("CARGO_BIN_EXE_rssp") {
-        return Ok(PathBuf::from(bin));
-    }
-
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let target_dir = std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
-    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
-    let exe_name = if cfg!(windows) { "rssp.exe" } else { "rssp" };
-    let candidate = manifest_dir.join(target_dir).join(profile).join(exe_name);
-
-    if candidate.is_file() {
-        return Ok(candidate);
-    }
-
-    Err(format!(
-        "CARGO_BIN_EXE_rssp is not set and {} does not exist; run `cargo build --release --bin rssp` or set CARGO_BIN_EXE_rssp",
-        candidate.display()
-    ))
-}
-
-fn check_file(
-    path: &Path,
-    extension: &str,
-    baseline_dir: &Path,
-    rssp_bin: &Path,
-) -> Result<(), String> {
-    let compressed_bytes = fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
-
-    let raw_bytes = zstd::decode_all(&compressed_bytes[..])
-        .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
+fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
+    let (raw_bytes, ext) = if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("zst"))
+    {
+        (read_zst(path)?, extension)
+    } else {
+        let sim = rssp::simfile::open(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        (sim.data, sim.extension)
+    };
 
     let file_hash = format!("{:x}", md5::compute(&raw_bytes));
     let subfolder = &file_hash[0..2];
@@ -2563,11 +2593,19 @@ fn check_file(
     let rssp_file: RsspBaselineFile = serde_json::from_slice(&rssp_json)
         .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
 
-    let actual = run_rssp_json(rssp_bin, &raw_bytes, extension, &file_hash)?;
+    let actual = run_rssp_json(&raw_bytes, ext)?;
 
     let harness_map = build_index(&harness_charts, |c| &c.step_type, |c| &c.difficulty);
-    let actual_map = build_index(&actual.charts, |c| &c.chart_info.step_type, |c| &c.chart_info.difficulty);
-    let rssp_map = build_index(&rssp_file.charts, |c| &c.chart_info.step_type, |c| &c.chart_info.difficulty);
+    let actual_map = build_index(
+        &actual.charts,
+        |c| &c.chart_info.step_type,
+        |c| &c.chart_info.difficulty,
+    );
+    let rssp_map = build_index(
+        &rssp_file.charts,
+        |c| &c.chart_info.step_type,
+        |c| &c.chart_info.difficulty,
+    );
 
     let harness_entries = sorted_entries(harness_map);
     let rssp_entries = sorted_entries(rssp_map);
@@ -2577,17 +2615,83 @@ fn check_file(
     let expected = expected_metadata(&harness_charts, path)?;
     let actual_metadata = parse_metadata(&actual);
     compare_metadata(path, &expected, &actual_metadata)?;
-    compare_step_artists(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
-    compare_bpm(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
-    compare_hashes(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
-    compare_durations(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
-    compare_timing(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
-    compare_nps(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
-    compare_step_counts(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
-    compare_tech_counts(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
-    compare_stream_breakdown(path, &harness_entries, &harness_charts, &actual_map, &actual.charts)?;
-    compare_sn_breakdown(path, &rssp_entries, &rssp_file.charts, &actual_map, &actual.charts)?;
-    compare_rssp_unique(path, &rssp_entries, &rssp_file.charts, &actual_map, &actual.charts)?;
+    compare_step_artists(
+        path,
+        &harness_entries,
+        &harness_charts,
+        &actual_map,
+        &actual.charts,
+    )?;
+    compare_bpm(
+        path,
+        &harness_entries,
+        &harness_charts,
+        &actual_map,
+        &actual.charts,
+    )?;
+    compare_hashes(
+        path,
+        &harness_entries,
+        &harness_charts,
+        &actual_map,
+        &actual.charts,
+    )?;
+    compare_durations(
+        path,
+        &harness_entries,
+        &harness_charts,
+        &actual_map,
+        &actual.charts,
+    )?;
+    compare_timing(
+        path,
+        &harness_entries,
+        &harness_charts,
+        &actual_map,
+        &actual.charts,
+    )?;
+    compare_nps(
+        path,
+        &harness_entries,
+        &harness_charts,
+        &actual_map,
+        &actual.charts,
+    )?;
+    compare_step_counts(
+        path,
+        &harness_entries,
+        &harness_charts,
+        &actual_map,
+        &actual.charts,
+    )?;
+    compare_tech_counts(
+        path,
+        &harness_entries,
+        &harness_charts,
+        &actual_map,
+        &actual.charts,
+    )?;
+    compare_stream_breakdown(
+        path,
+        &harness_entries,
+        &harness_charts,
+        &actual_map,
+        &actual.charts,
+    )?;
+    compare_sn_breakdown(
+        path,
+        &rssp_entries,
+        &rssp_file.charts,
+        &actual_map,
+        &actual.charts,
+    )?;
+    compare_rssp_unique(
+        path,
+        &rssp_entries,
+        &rssp_file.charts,
+        &actual_map,
+        &actual.charts,
+    )?;
 
     Ok(())
 }
@@ -2598,14 +2702,6 @@ fn main() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let packs_dir = manifest_dir.join("tests/data/packs");
     let baseline_dir = manifest_dir.join("tests/data/baseline");
-
-    let rssp_bin = match resolve_rssp_bin() {
-        Ok(path) => path,
-        Err(msg) => {
-            println!("{}", msg);
-            return;
-        }
-    };
 
     if !packs_dir.exists() {
         println!("No tests/packs directory found.");
@@ -2621,21 +2717,26 @@ fn main() {
         }
 
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if ext != "zst" {
-            continue;
-        }
+        let extension = if ext.eq_ignore_ascii_case("zst") {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let inner_path = Path::new(stem);
+            let inner_extension = inner_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_default();
 
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        let inner_path = Path::new(stem);
-        let inner_extension = inner_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|s| s.to_lowercase())
-            .unwrap_or_default();
-
-        if inner_extension != "sm" && inner_extension != "ssc" {
+            if inner_extension != "sm" && inner_extension != "ssc" {
+                continue;
+            }
+            inner_extension
+        } else if ext.eq_ignore_ascii_case("sm") {
+            "sm".to_string()
+        } else if ext.eq_ignore_ascii_case("ssc") {
+            "ssc".to_string()
+        } else {
             continue;
-        }
+        };
 
         let test_name = path
             .strip_prefix(&packs_dir)
@@ -2646,7 +2747,7 @@ fn main() {
         tests.push(TestCase {
             name: test_name,
             path: path.to_path_buf(),
-            extension: inner_extension,
+            extension,
         });
     }
 
@@ -2691,7 +2792,7 @@ fn main() {
             extension,
         } = test;
 
-        let res = check_file(&path, &extension, &baseline_dir, &rssp_bin);
+        let res = check_file(&path, &extension, &baseline_dir);
         match res {
             Ok(()) => {
                 println!("test {} ... ok", name);

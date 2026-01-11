@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -67,18 +67,17 @@ fn build_count_inputs() -> (Vec<ChartCountInput>, CountGlobals) {
         .notes_list
         .into_iter()
         .filter_map(|entry| {
-            let (fields, chart_data) = rssp::parse::split_notes_fields(&entry.notes);
-            if fields.len() < 5 {
+            if entry.field_count < 5 {
                 return None;
             }
 
-            let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim();
+            let step_type = std::str::from_utf8(entry.fields[0]).unwrap_or("").trim();
             if step_type == "lights-cabinet" {
                 return None;
             }
 
             Some(ChartCountInput {
-                chart_data: chart_data.to_vec(),
+                chart_data: entry.note_data.to_vec(),
                 lanes: rssp::step_type_lanes(step_type),
                 chart_bpms: clean_chart_tag(entry.chart_bpms.as_deref()),
                 chart_stops: clean_chart_tag(entry.chart_stops.as_deref()),
@@ -97,7 +96,6 @@ fn build_count_inputs() -> (Vec<ChartCountInput>, CountGlobals) {
 fn bench_step_counts_pipeline(c: &mut Criterion) {
     let fixture = FIXTURE.as_bytes();
     let options = rssp::AnalysisOptions {
-        parallel: false,
         compute_tech_counts: false,
         ..rssp::AnalysisOptions::default()
     };
@@ -106,12 +104,8 @@ fn bench_step_counts_pipeline(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(2));
     group.bench_function("analyze_step_counts", |b| {
         b.iter(|| {
-            let summary = rssp::analyze(
-                black_box(fixture),
-                black_box("ssc"),
-                options.clone(),
-            )
-            .expect("analysis should succeed");
+            let summary = rssp::analyze(black_box(fixture), black_box("ssc"), options.clone())
+                .expect("analysis should succeed");
             let counts: Vec<_> = summary
                 .charts
                 .iter()
@@ -230,6 +224,7 @@ fn bench_step_counts_inner(c: &mut Criterion) {
                     },
                     timing_fakes_global,
                     globals.timing_format,
+                    true,
                 );
 
                 let mut timing_stats = rssp::stats::compute_timing_aware_stats(

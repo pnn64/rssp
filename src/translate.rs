@@ -308,7 +308,10 @@ fn alias_table() -> &'static [Vec<AliasEntry>] {
                     }
                 }
                 if !found {
-                    bucket.push(AliasEntry { key: *alias, value: ch });
+                    bucket.push(AliasEntry {
+                        key: *alias,
+                        value: ch,
+                    });
                 }
             }
             table
@@ -435,7 +438,13 @@ pub fn replace_markers_in_place(text: &mut String) {
         let next_amp = rest.find('&');
         let next_semi = rest.find(';');
         let end = match (next_amp, next_semi) {
-            (Some(a), Some(s)) => if a < s { None } else { Some(after_amp + s) },
+            (Some(a), Some(s)) => {
+                if a < s {
+                    None
+                } else {
+                    Some(after_amp + s)
+                }
+            }
             (Some(_), None) => None,
             (None, Some(s)) => Some(after_amp + s),
             (None, None) => None,
@@ -446,8 +455,7 @@ pub fn replace_markers_in_place(text: &mut String) {
             continue;
         };
         let element = &input[after_amp..end_idx];
-        let repl = alias_lookup(element)
-            .or_else(|| parse_numeric_marker(element, invalid));
+        let repl = alias_lookup(element).or_else(|| parse_numeric_marker(element, invalid));
         if let Some(repl) = repl {
             out.push(repl);
             offset = end_idx + 1;

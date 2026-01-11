@@ -58,33 +58,38 @@ fn approx_eq(a: f64, b: f64) -> bool {
 }
 
 fn compute_chart_bpms(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartBpmInfo>, String> {
-    let snapshots = chart_bpm_snapshots(simfile_data, extension)
-        .map_err(|e| e.to_string())?;
+    let snapshots = chart_bpm_snapshots(simfile_data, extension).map_err(|e| e.to_string())?;
 
     Ok(snapshots
         .into_iter()
-        .map(|chart| {
-            ChartBpmInfo {
-                step_type: chart.step_type,
-                difficulty: chart.difficulty,
-                hash_bpms: chart.hash_bpms,
-                bpms: chart.bpms_formatted,
-                bpm_min: chart.bpm_min,
-                bpm_max: chart.bpm_max,
-                display_bpm: chart.display_bpm,
-                display_bpm_min: chart.display_bpm_min,
-                display_bpm_max: chart.display_bpm_max,
-            }
+        .map(|chart| ChartBpmInfo {
+            step_type: chart.step_type,
+            difficulty: chart.difficulty,
+            hash_bpms: chart.hash_bpms,
+            bpms: chart.bpms_formatted,
+            bpm_min: chart.bpm_min,
+            bpm_max: chart.bpm_max,
+            display_bpm: chart.display_bpm,
+            display_bpm_min: chart.display_bpm_min,
+            display_bpm_max: chart.display_bpm_max,
         })
         .collect())
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
-    let compressed_bytes = fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
-
-    let raw_bytes = zstd::decode_all(&compressed_bytes[..])
-        .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
+    let (raw_bytes, ext) = if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("zst"))
+    {
+        let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        let raw_bytes = zstd::decode_all(&compressed_bytes[..])
+            .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
+        (raw_bytes, extension)
+    } else {
+        let sim = rssp::simfile::open(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        (sim.data, sim.extension)
+    };
 
     let file_hash = format!("{:x}", md5::compute(&raw_bytes));
     let subfolder = &file_hash[0..2];
@@ -102,8 +107,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         ));
     }
 
-    let compressed_golden = fs::read(&golden_path)
-        .map_err(|e| format!("Failed to read baseline file: {}", e))?;
+    let compressed_golden =
+        fs::read(&golden_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
 
     let json_bytes = zstd::decode_all(&compressed_golden[..])
         .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
@@ -111,7 +116,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     let golden_charts: Vec<GoldenChart> = serde_json::from_slice(&json_bytes)
         .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
 
-    let rssp_charts = compute_chart_bpms(&raw_bytes, extension)
+    let rssp_charts = compute_chart_bpms(&raw_bytes, ext)
         .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
 
     let mut golden_map: HashMap<(String, String), Vec<GoldenChart>> = HashMap::new();
@@ -278,9 +283,11 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 .iter()
                 .map(|entry| entry.bpms.clone())
                 .collect();
-            let expected_min: Vec<f64> = expected_entries.iter().map(|entry| entry.bpm_min).collect();
+            let expected_min: Vec<f64> =
+                expected_entries.iter().map(|entry| entry.bpm_min).collect();
             let actual_min: Vec<f64> = actual_entries.iter().map(|entry| entry.bpm_min).collect();
-            let expected_max: Vec<f64> = expected_entries.iter().map(|entry| entry.bpm_max).collect();
+            let expected_max: Vec<f64> =
+                expected_entries.iter().map(|entry| entry.bpm_max).collect();
             let actual_max: Vec<f64> = actual_entries.iter().map(|entry| entry.bpm_max).collect();
             let expected_display: Vec<String> = expected_entries
                 .iter()
@@ -353,21 +360,26 @@ fn main() {
         }
 
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if ext != "zst" {
-            continue;
-        }
+        let extension = if ext.eq_ignore_ascii_case("zst") {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let inner_path = Path::new(stem);
+            let inner_extension = inner_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_default();
 
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        let inner_path = Path::new(stem);
-        let inner_extension = inner_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|s| s.to_lowercase())
-            .unwrap_or_default();
-
-        if inner_extension != "sm" && inner_extension != "ssc" {
+            if inner_extension != "sm" && inner_extension != "ssc" {
+                continue;
+            }
+            inner_extension
+        } else if ext.eq_ignore_ascii_case("sm") {
+            "sm".to_string()
+        } else if ext.eq_ignore_ascii_case("ssc") {
+            "ssc".to_string()
+        } else {
             continue;
-        }
+        };
 
         let test_name = path
             .strip_prefix(&packs_dir)
@@ -378,7 +390,7 @@ fn main() {
         tests.push(TestCase {
             name: test_name,
             path: path.to_path_buf(),
-            extension: inner_extension,
+            extension,
         });
     }
 

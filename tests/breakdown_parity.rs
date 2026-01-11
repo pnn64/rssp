@@ -119,8 +119,7 @@ fn compute_chart_breakdowns(
         compute_tech_counts: false,
         ..AnalysisOptions::default()
     };
-    let summary = analyze(simfile_data, extension, options)
-        .map_err(|e| e.to_string())?;
+    let summary = analyze(simfile_data, extension, options).map_err(|e| e.to_string())?;
 
     let mut results = Vec::new();
     for chart in summary.charts {
@@ -157,11 +156,19 @@ fn compute_chart_breakdowns(
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
-    let compressed_bytes = fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
-
-    let raw_bytes = zstd::decode_all(&compressed_bytes[..])
-        .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
+    let (raw_bytes, ext) = if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("zst"))
+    {
+        let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        let raw_bytes = zstd::decode_all(&compressed_bytes[..])
+            .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
+        (raw_bytes, extension)
+    } else {
+        let sim = rssp::simfile::open(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        (sim.data, sim.extension)
+    };
 
     let file_hash = format!("{:x}", md5::compute(&raw_bytes));
     let subfolder = &file_hash[0..2];
@@ -192,8 +199,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         ));
     }
 
-    let compressed_harness = fs::read(&harness_path)
-        .map_err(|e| format!("Failed to read baseline file: {}", e))?;
+    let compressed_harness =
+        fs::read(&harness_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
 
     let harness_json = zstd::decode_all(&compressed_harness[..])
         .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
@@ -201,8 +208,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     let harness_charts: Vec<HarnessChart> = serde_json::from_slice(&harness_json)
         .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
 
-    let compressed_rssp = fs::read(&rssp_path)
-        .map_err(|e| format!("Failed to read baseline file: {}", e))?;
+    let compressed_rssp =
+        fs::read(&rssp_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
 
     let rssp_json = zstd::decode_all(&compressed_rssp[..])
         .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
@@ -210,7 +217,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     let rssp_file: RsspGoldenFile = serde_json::from_slice(&rssp_json)
         .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
 
-    let rssp_charts = compute_chart_breakdowns(&raw_bytes, extension)
+    let rssp_charts = compute_chart_breakdowns(&raw_bytes, ext)
         .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
 
     let mut harness_map: HashMap<(String, String), Vec<HarnessChart>> = HashMap::new();
@@ -285,21 +292,15 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             let expected_detail = expected
                 .map(|v| v.streams_breakdown.as_str())
                 .unwrap_or("-");
-            let actual_detail = actual
-                .map(|v| v.streams.detailed.as_str())
-                .unwrap_or("-");
+            let actual_detail = actual.map(|v| v.streams.detailed.as_str()).unwrap_or("-");
             let expected_partial = expected
                 .map(|v| v.streams_breakdown_level1.as_str())
                 .unwrap_or("-");
-            let actual_partial = actual
-                .map(|v| v.streams.partial.as_str())
-                .unwrap_or("-");
+            let actual_partial = actual.map(|v| v.streams.partial.as_str()).unwrap_or("-");
             let expected_simple = expected
                 .map(|v| v.streams_breakdown_level2.as_str())
                 .unwrap_or("-");
-            let actual_simple = actual
-                .map(|v| v.streams.simple.as_str())
-                .unwrap_or("-");
+            let actual_simple = actual.map(|v| v.streams.simple.as_str()).unwrap_or("-");
             let expected_total_streams = expected.map(|v| v.total_stream_measures);
             let actual_total_streams = actual.map(|v| v.total_streams);
             let expected_total_breaks = expected.map(|v| v.total_break_measures);
@@ -365,28 +366,40 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                     && e.stream_sequences == a.stream_sequences
             });
         if !matches {
-            let expected_detail: Vec<String> =
-                expected_entries.iter().map(|e| e.streams_breakdown.clone()).collect();
-            let actual_detail: Vec<String> =
-                actual_entries.iter().map(|a| a.streams.detailed.clone()).collect();
+            let expected_detail: Vec<String> = expected_entries
+                .iter()
+                .map(|e| e.streams_breakdown.clone())
+                .collect();
+            let actual_detail: Vec<String> = actual_entries
+                .iter()
+                .map(|a| a.streams.detailed.clone())
+                .collect();
             let expected_partial: Vec<String> = expected_entries
                 .iter()
                 .map(|e| e.streams_breakdown_level1.clone())
                 .collect();
-            let actual_partial: Vec<String> =
-                actual_entries.iter().map(|a| a.streams.partial.clone()).collect();
+            let actual_partial: Vec<String> = actual_entries
+                .iter()
+                .map(|a| a.streams.partial.clone())
+                .collect();
             let expected_simple: Vec<String> = expected_entries
                 .iter()
                 .map(|e| e.streams_breakdown_level2.clone())
                 .collect();
-            let actual_simple: Vec<String> =
-                actual_entries.iter().map(|a| a.streams.simple.clone()).collect();
-            let expected_total_streams: Vec<u32> =
-                expected_entries.iter().map(|e| e.total_stream_measures).collect();
+            let actual_simple: Vec<String> = actual_entries
+                .iter()
+                .map(|a| a.streams.simple.clone())
+                .collect();
+            let expected_total_streams: Vec<u32> = expected_entries
+                .iter()
+                .map(|e| e.total_stream_measures)
+                .collect();
             let actual_total_streams: Vec<u32> =
                 actual_entries.iter().map(|a| a.total_streams).collect();
-            let expected_total_breaks: Vec<u32> =
-                expected_entries.iter().map(|e| e.total_break_measures).collect();
+            let expected_total_breaks: Vec<u32> = expected_entries
+                .iter()
+                .map(|e| e.total_break_measures)
+                .collect();
             let actual_total_breaks: Vec<u32> =
                 actual_entries.iter().map(|a| a.total_breaks).collect();
             let expected_sequences: Vec<Vec<StreamSequence>> = expected_entries
@@ -454,21 +467,13 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             let expected_detail = expected
                 .map(|v| v.breakdown.detailed.as_str())
                 .unwrap_or("-");
-            let actual_detail = actual
-                .map(|v| v.sn.detailed.as_str())
-                .unwrap_or("-");
+            let actual_detail = actual.map(|v| v.sn.detailed.as_str()).unwrap_or("-");
             let expected_partial = expected
                 .map(|v| v.breakdown.partial.as_str())
                 .unwrap_or("-");
-            let actual_partial = actual
-                .map(|v| v.sn.partial.as_str())
-                .unwrap_or("-");
-            let expected_simple = expected
-                .map(|v| v.breakdown.simple.as_str())
-                .unwrap_or("-");
-            let actual_simple = actual
-                .map(|v| v.sn.simple.as_str())
-                .unwrap_or("-");
+            let actual_partial = actual.map(|v| v.sn.partial.as_str()).unwrap_or("-");
+            let expected_simple = expected.map(|v| v.breakdown.simple.as_str()).unwrap_or("-");
+            let actual_simple = actual.map(|v| v.sn.simple.as_str()).unwrap_or("-");
             let expected_sn_breaks = expected.map(|v| v.sn_breaks);
             let actual_sn_breaks = actual.map(|v| v.sn_breaks);
 
@@ -505,26 +510,36 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         }
 
         let matches = expected_entries.len() == actual_entries.len()
-            && expected_entries.iter().zip(actual_entries).all(|(e, a)| {
-                e.breakdown == a.sn && e.sn_breaks == a.sn_breaks
-            });
+            && expected_entries
+                .iter()
+                .zip(actual_entries)
+                .all(|(e, a)| e.breakdown == a.sn && e.sn_breaks == a.sn_breaks);
         if !matches {
-            let expected_detail: Vec<String> =
-                expected_entries.iter().map(|e| e.breakdown.detailed.clone()).collect();
-            let actual_detail: Vec<String> =
-                actual_entries.iter().map(|a| a.sn.detailed.clone()).collect();
-            let expected_partial: Vec<String> =
-                expected_entries.iter().map(|e| e.breakdown.partial.clone()).collect();
-            let actual_partial: Vec<String> =
-                actual_entries.iter().map(|a| a.sn.partial.clone()).collect();
-            let expected_simple: Vec<String> =
-                expected_entries.iter().map(|e| e.breakdown.simple.clone()).collect();
+            let expected_detail: Vec<String> = expected_entries
+                .iter()
+                .map(|e| e.breakdown.detailed.clone())
+                .collect();
+            let actual_detail: Vec<String> = actual_entries
+                .iter()
+                .map(|a| a.sn.detailed.clone())
+                .collect();
+            let expected_partial: Vec<String> = expected_entries
+                .iter()
+                .map(|e| e.breakdown.partial.clone())
+                .collect();
+            let actual_partial: Vec<String> = actual_entries
+                .iter()
+                .map(|a| a.sn.partial.clone())
+                .collect();
+            let expected_simple: Vec<String> = expected_entries
+                .iter()
+                .map(|e| e.breakdown.simple.clone())
+                .collect();
             let actual_simple: Vec<String> =
                 actual_entries.iter().map(|a| a.sn.simple.clone()).collect();
             let expected_sn_breaks: Vec<u32> =
                 expected_entries.iter().map(|e| e.sn_breaks).collect();
-            let actual_sn_breaks: Vec<u32> =
-                actual_entries.iter().map(|a| a.sn_breaks).collect();
+            let actual_sn_breaks: Vec<u32> = actual_entries.iter().map(|a| a.sn_breaks).collect();
 
             return Err(format!(
                 "\n\nMISMATCH DETECTED\nFile: {}\nChart: {} {}\nRSSP sn_detailed: {:?}\nGolden sn_detailed: {:?}\nRSSP sn_partial: {:?}\nGolden sn_partial: {:?}\nRSSP sn_simple: {:?}\nGolden sn_simple: {:?}\nRSSP sn_breaks: {:?}\nGolden sn_breaks: {:?}\n",
@@ -567,21 +582,26 @@ fn main() {
         }
 
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if ext != "zst" {
-            continue;
-        }
+        let extension = if ext.eq_ignore_ascii_case("zst") {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let inner_path = Path::new(stem);
+            let inner_extension = inner_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_default();
 
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        let inner_path = Path::new(stem);
-        let inner_extension = inner_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|s| s.to_lowercase())
-            .unwrap_or_default();
-
-        if inner_extension != "sm" && inner_extension != "ssc" {
+            if inner_extension != "sm" && inner_extension != "ssc" {
+                continue;
+            }
+            inner_extension
+        } else if ext.eq_ignore_ascii_case("sm") {
+            "sm".to_string()
+        } else if ext.eq_ignore_ascii_case("ssc") {
+            "ssc".to_string()
+        } else {
             continue;
-        }
+        };
 
         let test_name = path
             .strip_prefix(&packs_dir)
@@ -592,7 +612,7 @@ fn main() {
         tests.push(TestCase {
             name: test_name,
             path: path.to_path_buf(),
-            extension: inner_extension,
+            extension,
         });
     }
 

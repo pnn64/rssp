@@ -1,16 +1,16 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
+use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
-use crate::timing::{beat_to_note_row_f32_exact, TimingData, ROWS_PER_BEAT};
+use crate::timing::{ROWS_PER_BEAT, TimingData, beat_to_note_row_f32};
 
 const INVALID_COLUMN: isize = -1;
 const CLM_SECOND_INVALID: f32 = -1.0;
 const MAX_NOTE_ROW: i32 = 1 << 30;
-// Sentinel for unmatched hold heads (NoteData uses MAX_NOTE_ROW).
 const MISSING_HOLD_LENGTH_BEATS: f32 = MAX_NOTE_ROW as f32 / ROWS_PER_BEAT as f32;
 
-// Weights and thresholds from ITGmania source
+// Weights and thresholds
 const DOUBLESTEP_WEIGHT: f32 = 850.0;
 const BRACKETJACK_WEIGHT: f32 = 20.0;
 const JACK_WEIGHT: f32 = 30.0;
@@ -26,18 +26,18 @@ const DISTANCE_WEIGHT: f32 = 6.0;
 const SPIN_WEIGHT: f32 = 1000.0;
 const SIDESWITCH_WEIGHT: f32 = 130.0;
 
-// 0.1 = 1/16th at 150bpm. Jacks quicker than this are harder.
 const JACK_THRESHOLD: f32 = 0.1;
-// 0.15 = 1/8th at 200bpm.
 const SLOW_BRACKET_THRESHOLD: f32 = 0.15;
-// 0.2 = 1/8th at 150bpm.
 const SLOW_FOOTSWITCH_THRESHOLD: f32 = 0.2;
-// 0.4 = 1/4th at 150bpm. Ignore footswitch penalty after this.
 const SLOW_FOOTSWITCH_IGNORE: f32 = 0.4;
+const JACK_CUTOFF: f32 = 0.176;
+const FOOTSWITCH_CUTOFF: f32 = 0.3;
+const DOUBLESTEP_CUTOFF: f32 = 0.235;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, Default)]
 #[repr(usize)]
 pub enum Foot {
+    #[default]
     None = 0,
     LeftHeel = 1,
     LeftToe = 2,
@@ -46,12 +46,24 @@ pub enum Foot {
 }
 
 impl Foot {
+    #[inline(always)]
     fn as_index(self) -> usize {
         self as usize
+    }
+
+    #[inline(always)]
+    fn is_left(self) -> bool {
+        matches!(self, Foot::LeftHeel | Foot::LeftToe)
+    }
+
+    #[inline(always)]
+    fn is_right(self) -> bool {
+        matches!(self, Foot::RightHeel | Foot::RightToe)
     }
 }
 
 const NUM_FEET: usize = 5;
+const MAX_COLUMNS: usize = 8;
 const FEET: [Foot; 4] = [
     Foot::LeftHeel,
     Foot::LeftToe,
@@ -59,6 +71,8 @@ const FEET: [Foot; 4] = [
     Foot::RightToe,
 ];
 const FOOT_MASKS: [u8; NUM_FEET] = [0, 1, 2, 4, 8];
+const LEFT_FOOT_MASK: u8 = FOOT_MASKS[1] | FOOT_MASKS[2];
+const RIGHT_FOOT_MASK: u8 = FOOT_MASKS[3] | FOOT_MASKS[4];
 const OTHER_PART_OF_FOOT: [Foot; NUM_FEET] = [
     Foot::None,
     Foot::LeftToe,
@@ -66,51 +80,22 @@ const OTHER_PART_OF_FOOT: [Foot; NUM_FEET] = [
     Foot::RightToe,
     Foot::RightHeel,
 ];
+const STATE_HASH_PRIME: u64 = 31;
 
-fn foot_label(foot: Foot) -> &'static str {
-    match foot {
-        Foot::None => "N",
-        Foot::LeftHeel => "LH",
-        Foot::LeftToe => "LT",
-        Foot::RightHeel => "RH",
-        Foot::RightToe => "RT",
-    }
+// Foot pair for symmetric operations
+struct FootPair {
+    heel: Foot,
+    toe: Foot,
 }
 
-fn format_foot_vec(feet: &[Foot]) -> String {
-    let mut out = String::from("[");
-    for (i, foot) in feet.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        out.push_str(foot_label(*foot));
-    }
-    out.push(']');
-    out
-}
-
-fn format_foot_positions(positions: &[isize]) -> String {
-    let get = |foot: Foot| positions.get(foot.as_index()).copied().unwrap_or(INVALID_COLUMN);
-    format!(
-        "lh={} lt={} rh={} rt={}",
-        get(Foot::LeftHeel),
-        get(Foot::LeftToe),
-        get(Foot::RightHeel),
-        get(Foot::RightToe)
-    )
-}
-
-fn format_foot_flags(flags: &[bool]) -> String {
-    let get = |foot: Foot| flags.get(foot.as_index()).copied().unwrap_or(false);
-    let as_u8 = |flag| if flag { 1 } else { 0 };
-    format!(
-        "lh={} lt={} rh={} rt={}",
-        as_u8(get(Foot::LeftHeel)),
-        as_u8(get(Foot::LeftToe)),
-        as_u8(get(Foot::RightHeel)),
-        as_u8(get(Foot::RightToe))
-    )
-}
+const LEFT_PAIR: FootPair = FootPair {
+    heel: Foot::LeftHeel,
+    toe: Foot::LeftToe,
+};
+const RIGHT_PAIR: FootPair = FootPair {
+    heel: Foot::RightHeel,
+    toe: Foot::RightToe,
+};
 
 #[derive(Default)]
 struct IdentityHasher(u64);
@@ -123,19 +108,15 @@ impl Hasher for IdentityHasher {
         }
         self.0 = hash;
     }
-
-    fn write_usize(&mut self, value: usize) {
-        self.0 = value as u64;
+    fn write_usize(&mut self, v: usize) {
+        self.0 = v as u64;
     }
-
-    fn write_u32(&mut self, value: u32) {
-        self.0 = value as u64;
+    fn write_u32(&mut self, v: u32) {
+        self.0 = v as u64;
     }
-
-    fn write_u64(&mut self, value: u64) {
-        self.0 = value;
+    fn write_u64(&mut self, v: u64) {
+        self.0 = v;
     }
-
     fn finish(&self) -> u64 {
         self.0
     }
@@ -147,18 +128,17 @@ type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<IdentityHasher>>;
 struct NeighborEntry {
     neighbor_id: usize,
     cost: f32,
-    next: Option<usize>,
+    next: usize,
     hash_key: usize,
 }
 
 const BUCKET_EMPTY: usize = usize::MAX;
 const BUCKET_SENTINEL: usize = usize::MAX - 1;
 
-// Match libstdc++ unordered_map iteration order to keep tie-breaking aligned.
 #[derive(Debug, Clone)]
 struct NeighborMap {
     entries: Vec<NeighborEntry>,
-    head: Option<usize>,
+    head: usize,
     bucket_before: Vec<usize>,
     bucket_count: usize,
 }
@@ -167,7 +147,7 @@ impl Default for NeighborMap {
     fn default() -> Self {
         Self {
             entries: Vec::new(),
-            head: None,
+            head: BUCKET_EMPTY,
             bucket_before: vec![BUCKET_EMPTY; 13],
             bucket_count: 13,
         }
@@ -175,99 +155,77 @@ impl Default for NeighborMap {
 }
 
 impl NeighborMap {
-    fn insert(&mut self, neighbor_id: usize, hash_key: usize, cost: f32) {
+    fn reserve(&mut self, additional: usize) {
+        if additional == 0 {
+            return;
+        }
+        let target = self.entries.len().saturating_add(additional);
+        if target > self.bucket_count {
+            self.rehash(next_prime(target.max(1)));
+        }
+        self.entries.reserve(additional);
+    }
+
+    fn insert_reserved(&mut self, neighbor_id: usize, hash_key: usize, cost: f32) {
+        #[cfg(debug_assertions)]
         if let Some(entry) = self
             .entries
             .iter_mut()
-            .find(|entry| entry.neighbor_id == neighbor_id)
+            .find(|e| e.neighbor_id == neighbor_id)
         {
             entry.cost = cost;
             return;
         }
+        self.insert_new_reserved(neighbor_id, hash_key, cost);
+    }
 
-        let new_size = self.entries.len() + 1;
-        if new_size > self.bucket_count {
-            self.rehash(next_prime(self.bucket_count.saturating_mul(2).max(1)));
-        }
-
+    fn insert_new_reserved(&mut self, neighbor_id: usize, hash_key: usize, cost: f32) {
+        debug_assert!(self.entries.len() + 1 <= self.bucket_count);
         let idx = self.entries.len();
         self.entries.push(NeighborEntry {
             neighbor_id,
             cost,
-            next: None,
+            next: BUCKET_EMPTY,
             hash_key,
         });
         self.insert_index(idx);
     }
 
-    fn get(&self, neighbor_id: usize) -> Option<f32> {
-        self.entries
-            .iter()
-            .find(|entry| entry.neighbor_id == neighbor_id)
-            .map(|entry| entry.cost)
-    }
-
-    fn for_each_in_order<F>(&self, mut visit: F)
-    where
-        F: FnMut(usize, f32),
-    {
-        let mut current = self.head;
-        while let Some(idx) = current {
-            let entry = &self.entries[idx];
-            visit(entry.neighbor_id, entry.cost);
-            current = entry.next;
-        }
-    }
-
-    fn rehash(&mut self, new_bucket_count: usize) {
-        self.bucket_count = new_bucket_count;
-        self.bucket_before = vec![BUCKET_EMPTY; new_bucket_count];
+    fn rehash(&mut self, new_count: usize) {
+        self.bucket_count = new_count;
+        self.bucket_before = vec![BUCKET_EMPTY; new_count];
         let mut prev = None;
         let mut current = self.head;
-        while let Some(idx) = current {
-            let bucket = self.bucket_index(self.entries[idx].hash_key);
+        while current != BUCKET_EMPTY {
+            let bucket = self.entries[current].hash_key % new_count;
             if self.bucket_before[bucket] == BUCKET_EMPTY {
-                self.bucket_before[bucket] = match prev {
-                    None => BUCKET_SENTINEL,
-                    Some(prev_idx) => prev_idx,
-                };
+                self.bucket_before[bucket] = prev.unwrap_or(BUCKET_SENTINEL);
             }
-            prev = Some(idx);
-            current = self.entries[idx].next;
+            prev = Some(current);
+            current = self.entries[current].next;
         }
     }
 
     fn insert_index(&mut self, idx: usize) {
-        let bucket = self.bucket_index(self.entries[idx].hash_key);
+        let bucket = self.entries[idx].hash_key % self.bucket_count;
         let before = self.bucket_before[bucket];
 
         if before == BUCKET_EMPTY {
             let old_head = self.head;
             self.entries[idx].next = old_head;
-            self.head = Some(idx);
+            self.head = idx;
             self.bucket_before[bucket] = BUCKET_SENTINEL;
-            if let Some(old_idx) = old_head {
-                let old_bucket = self.bucket_index(self.entries[old_idx].hash_key);
+            if old_head != BUCKET_EMPTY {
+                let old_bucket = self.entries[old_head].hash_key % self.bucket_count;
                 self.bucket_before[old_bucket] = idx;
             }
-            return;
+        } else if before == BUCKET_SENTINEL {
+            self.entries[idx].next = self.head;
+            self.head = idx;
+        } else {
+            self.entries[idx].next = self.entries[before].next;
+            self.entries[before].next = idx;
         }
-
-        if before == BUCKET_SENTINEL {
-            let old_head = self.head;
-            self.entries[idx].next = old_head;
-            self.head = Some(idx);
-            return;
-        }
-
-        let before_idx = before;
-        let after = self.entries[before_idx].next;
-        self.entries[idx].next = after;
-        self.entries[before_idx].next = Some(idx);
-    }
-
-    fn bucket_index(&self, key: usize) -> usize {
-        key % self.bucket_count
     }
 }
 
@@ -275,25 +233,23 @@ fn next_prime(start: usize) -> usize {
     if start <= 2 {
         return 2;
     }
-    let mut candidate = if start % 2 == 0 { start + 1 } else { start };
-    loop {
-        if is_prime(candidate) {
-            return candidate;
-        }
-        candidate = candidate.saturating_add(2);
+    let mut c = if start % 2 == 0 { start + 1 } else { start };
+    while !is_prime(c) {
+        c = c.saturating_add(2);
     }
+    c
 }
 
-fn is_prime(value: usize) -> bool {
-    if value <= 3 {
-        return value > 1;
+fn is_prime(v: usize) -> bool {
+    if v <= 3 {
+        return v > 1;
     }
-    if value % 2 == 0 || value % 3 == 0 {
+    if v % 2 == 0 || v % 3 == 0 {
         return false;
     }
     let mut i = 5usize;
-    while i.saturating_mul(i) <= value {
-        if value % i == 0 || value % (i + 2) == 0 {
+    while i.saturating_mul(i) <= v {
+        if v % i == 0 || v % (i + 2) == 0 {
             return false;
         }
         i += 6;
@@ -313,26 +269,33 @@ struct StageLayout {
     up_arrows: Vec<usize>,
     down_arrows: Vec<usize>,
     side_arrows: Vec<usize>,
+    pair_stride: usize,
+    avg_points: Vec<StagePoint>,
+    x_diffs: Vec<f32>,
+    y_diffs: Vec<f32>,
+    dist_stride: usize,
+    dist_sq: Vec<f32>,
+    dist_weighted: Vec<f64>,
 }
 
 impl StageLayout {
     fn new_dance_single() -> Self {
-        Self {
-            columns: vec![
+        Self::new(
+            vec![
                 StagePoint { x: 0.0, y: 1.0 },
                 StagePoint { x: 1.0, y: 0.0 },
                 StagePoint { x: 1.0, y: 2.0 },
                 StagePoint { x: 2.0, y: 1.0 },
             ],
-            up_arrows: vec![2],
-            down_arrows: vec![1],
-            side_arrows: vec![0, 3],
-        }
+            vec![2],
+            vec![1],
+            vec![0, 3],
+        )
     }
 
     fn new_dance_double() -> Self {
-        Self {
-            columns: vec![
+        Self::new(
+            vec![
                 StagePoint { x: 0.0, y: 1.0 },
                 StagePoint { x: 1.0, y: 0.0 },
                 StagePoint { x: 1.0, y: 2.0 },
@@ -342,151 +305,179 @@ impl StageLayout {
                 StagePoint { x: 4.0, y: 2.0 },
                 StagePoint { x: 5.0, y: 1.0 },
             ],
-            up_arrows: vec![2, 6],
-            down_arrows: vec![1, 5],
-            side_arrows: vec![0, 3, 4, 7],
+            vec![2, 6],
+            vec![1, 5],
+            vec![0, 3, 4, 7],
+        )
+    }
+
+    fn new(
+        columns: Vec<StagePoint>,
+        up_arrows: Vec<usize>,
+        down_arrows: Vec<usize>,
+        side_arrows: Vec<usize>,
+    ) -> Self {
+        let pair_stride = columns.len() + 1;
+        let pair_len = pair_stride * pair_stride;
+        let invalid = columns.len();
+
+        let mut avg_points = vec![StagePoint::default(); pair_len];
+        let mut x_diffs = vec![0.0f32; pair_len];
+        let mut y_diffs = vec![0.0f32; pair_len];
+
+        for left in 0..pair_stride {
+            for right in 0..pair_stride {
+                let idx = left * pair_stride + right;
+                let lp = if left == invalid {
+                    None
+                } else {
+                    Some(columns[left])
+                };
+                let rp = if right == invalid {
+                    None
+                } else {
+                    Some(columns[right])
+                };
+
+                avg_points[idx] = match (lp, rp) {
+                    (None, None) => StagePoint::default(),
+                    (None, Some(r)) => r,
+                    (Some(l), None) => l,
+                    (Some(l), Some(r)) => StagePoint {
+                        x: (l.x + r.x) / 2.0,
+                        y: (l.y + r.y) / 2.0,
+                    },
+                };
+
+                if left == right || left == invalid || right == invalid {
+                    continue;
+                }
+
+                let (dx, dy) = (
+                    (columns[right].x - columns[left].x) as f64,
+                    (columns[right].y - columns[left].y) as f64,
+                );
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist == 0.0 {
+                    continue;
+                }
+
+                let (ndx, ndy) = (dx / dist, dy / dist);
+                let (mut xm, mut ym) = (ndx.abs().powf(4.0) as f32, ndy.abs().powf(4.0) as f32);
+                if ndx <= 0.0 {
+                    xm = -xm;
+                }
+                if ndy <= 0.0 {
+                    ym = -ym;
+                }
+                x_diffs[idx] = xm;
+                y_diffs[idx] = ym;
+            }
+        }
+
+        let dist_stride = columns.len();
+        let dist_len = dist_stride * dist_stride;
+        let mut dist_sq = vec![0.0f32; dist_len];
+        let mut dist_weighted = vec![0.0f64; dist_len];
+
+        for l in 0..dist_stride {
+            for r in 0..dist_stride {
+                let (dx, dy) = (columns[l].x - columns[r].x, columns[l].y - columns[r].y);
+                let sq = dx * dx + dy * dy;
+                let idx = l * dist_stride + r;
+                dist_sq[idx] = sq;
+                dist_weighted[idx] = (sq as f64).sqrt() * DISTANCE_WEIGHT as f64;
+            }
+        }
+
+        Self {
+            columns,
+            up_arrows,
+            down_arrows,
+            side_arrows,
+            pair_stride,
+            avg_points,
+            x_diffs,
+            y_diffs,
+            dist_stride,
+            dist_sq,
+            dist_weighted,
         }
     }
 
+    #[inline(always)]
     fn column_count(&self) -> usize {
         self.columns.len()
     }
 
-    fn bracket_check(&self, column1: usize, column2: usize) -> bool {
-        let p1 = self.columns[column1];
-        let p2 = self.columns[column2];
-        self.get_distance_sq_points(p1, p2) <= 2.0
+    #[inline(always)]
+    fn bracket_check(&self, c1: usize, c2: usize) -> bool {
+        let (p1, p2) = (self.columns[c1], self.columns[c2]);
+        let (dx, dy) = (p1.x - p2.x, p1.y - p2.y);
+        dx * dx + dy * dy <= 2.0
     }
 
+    #[inline(always)]
     fn get_distance_sq(&self, c1: usize, c2: usize) -> f32 {
-        self.get_distance_sq_points(self.columns[c1], self.columns[c2])
+        self.dist_sq[c1 * self.dist_stride + c2]
     }
 
-    fn get_distance_sq_points(&self, p1: StagePoint, p2: StagePoint) -> f32 {
-        let dx = p1.x - p2.x;
-        let dy = p1.y - p2.y;
-        dx * dx + dy * dy
+    #[inline(always)]
+    fn get_distance_weighted(&self, c1: usize, c2: usize) -> f64 {
+        self.dist_weighted[c1 * self.dist_stride + c2]
     }
 
-    fn get_x_difference(&self, left_index: isize, right_index: isize) -> f32 {
-        if left_index == right_index {
-            return 0.0;
-        }
-        if left_index == INVALID_COLUMN || right_index == INVALID_COLUMN {
-            return 0.0;
-        }
-
-        let left = self.columns[left_index as usize];
-        let right = self.columns[right_index as usize];
-
-        let dx = (right.x - left.x) as f64;
-        let dy = (right.y - left.y) as f64;
-        let distance = (dx * dx + dy * dy).sqrt();
-        if distance == 0.0 {
-            return 0.0;
-        }
-
-        let dx = dx / distance;
-        let negative = dx <= 0.0;
-        let mut magnitude = dx.abs().powf(4.0) as f32;
-        if negative {
-            magnitude = -magnitude;
-        }
-
-        magnitude
+    #[inline(always)]
+    fn pair_index(&self, left: isize, right: isize) -> usize {
+        let max = self.pair_stride - 1;
+        let l = if left == INVALID_COLUMN {
+            max
+        } else {
+            left as usize
+        };
+        let r = if right == INVALID_COLUMN {
+            max
+        } else {
+            right as usize
+        };
+        l * self.pair_stride + r
     }
 
-    fn get_y_difference(&self, left_index: isize, right_index: isize) -> f32 {
-        if left_index == right_index {
-            return 0.0;
-        }
-        if left_index == INVALID_COLUMN || right_index == INVALID_COLUMN {
-            return 0.0;
-        }
-
-        let left = self.columns[left_index as usize];
-        let right = self.columns[right_index as usize];
-
-        let dy = (right.y - left.y) as f64;
-        let dx = (right.x - left.x) as f64;
-        let distance = (dx * dx + dy * dy).sqrt();
-        if distance == 0.0 {
-            return 0.0;
-        }
-
-        let dy = dy / distance;
-        let negative = dy <= 0.0;
-        let mut magnitude = dy.abs().powf(4.0) as f32;
-        if negative {
-            magnitude = -magnitude;
-        }
-
-        magnitude
+    #[inline(always)]
+    fn get_x_diff(&self, l: isize, r: isize) -> f32 {
+        self.x_diffs[self.pair_index(l, r)]
     }
 
-    fn average_point(&self, left_index: isize, right_index: isize) -> StagePoint {
-        match (left_index, right_index) {
-            (INVALID_COLUMN, INVALID_COLUMN) => StagePoint { x: 0.0, y: 0.0 },
-            (INVALID_COLUMN, r) => self.columns[r as usize],
-            (l, INVALID_COLUMN) => self.columns[l as usize],
-            (l, r) => StagePoint {
-                x: (self.columns[l as usize].x + self.columns[r as usize].x) / 2.0,
-                y: (self.columns[l as usize].y + self.columns[r as usize].y) / 2.0,
-            },
-        }
+    #[inline(always)]
+    fn get_y_diff(&self, l: isize, r: isize) -> f32 {
+        self.y_diffs[self.pair_index(l, r)]
+    }
+
+    #[inline(always)]
+    fn avg_point(&self, l: isize, r: isize) -> StagePoint {
+        self.avg_points[self.pair_index(l, r)]
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum TapNoteType {
+    #[default]
     Empty,
     Tap,
     HoldHead,
-    HoldTail,
     Mine,
     Fake,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TapNoteSubType {
-    Invalid,
-    Hold,
-    Roll,
-}
-
-impl Default for TapNoteSubType {
-    fn default() -> Self {
-        TapNoteSubType::Invalid
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct IntermediateNoteData {
     note_type: TapNoteType,
-    subtype: TapNoteSubType,
     col: usize,
-    row: usize,
     beat: f32,
     hold_length: f32,
     fake: bool,
     second: f32,
     parity: Foot,
-}
-
-impl Default for IntermediateNoteData {
-    fn default() -> Self {
-        Self {
-            note_type: TapNoteType::Empty,
-            subtype: TapNoteSubType::Invalid,
-            col: 0,
-            row: 0,
-            beat: 0.0,
-            hold_length: -1.0,
-            fake: false,
-            second: 0.0,
-            parity: Foot::None,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -502,66 +493,48 @@ struct Row {
     row_index: usize,
     column_count: usize,
     note_count: usize,
+    note_mask: u8,
+    hold_mask: u8,
+    mine_mask: u8,
+    mine_i32_mask: u8,
+    fake_mine_mask: u8,
 }
 
 impl Row {
-    fn new(column_count: usize) -> Self {
+    fn new(cols: usize) -> Self {
         Self {
-            notes: vec![IntermediateNoteData::default(); column_count],
-            holds: vec![IntermediateNoteData::default(); column_count],
-            mines: vec![0.0; column_count],
-            fake_mines: vec![0.0; column_count],
-            columns: vec![Foot::None; column_count],
+            notes: vec![IntermediateNoteData::default(); cols],
+            holds: vec![IntermediateNoteData::default(); cols],
+            mines: vec![0.0; cols],
+            fake_mines: vec![0.0; cols],
+            columns: vec![Foot::None; cols],
             where_the_feet_are: vec![INVALID_COLUMN; NUM_FEET],
             second: 0.0,
             beat: 0.0,
             row_index: 0,
-            column_count,
+            column_count: cols,
             note_count: 0,
+            note_mask: 0,
+            hold_mask: 0,
+            mine_mask: 0,
+            mine_i32_mask: 0,
+            fake_mine_mask: 0,
         }
     }
 
-    fn set_foot_placement(&mut self, foot_placement: &[Foot]) {
-        self.note_count = 0;
-        for c in 0..self.column_count {
-            if self.notes[c].note_type != TapNoteType::Empty {
-                let foot = foot_placement[c];
+    fn set_foot_placement(&mut self, placement: &[Foot]) {
+        self.note_count = self.note_mask.count_ones() as usize;
+        for c in 0..self.column_count.min(MAX_COLUMNS) {
+            if (self.note_mask & (1u8 << c)) != 0 {
+                let foot = placement[c];
                 self.notes[c].parity = foot;
                 self.columns[c] = foot;
                 if foot != Foot::None {
                     self.where_the_feet_are[foot.as_index()] = c as isize;
                 }
-                self.note_count += 1;
             } else {
                 self.columns[c] = Foot::None;
             }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct RowCounter {
-    notes: Vec<IntermediateNoteData>,
-    active_holds: Vec<IntermediateNoteData>,
-    mines: Vec<f32>,
-    fake_mines: Vec<f32>,
-    next_mines: Vec<f32>,
-    next_fake_mines: Vec<f32>,
-    last_column_second: f32,
-    last_column_beat: f32,
-}
-
-impl RowCounter {
-    fn new(column_count: usize) -> Self {
-        Self {
-            notes: vec![IntermediateNoteData::default(); column_count],
-            active_holds: vec![IntermediateNoteData::default(); column_count],
-            mines: vec![0.0; column_count],
-            fake_mines: vec![0.0; column_count],
-            next_mines: vec![0.0; column_count],
-            next_fake_mines: vec![0.0; column_count],
-            last_column_second: CLM_SECOND_INVALID,
-            last_column_beat: CLM_SECOND_INVALID,
         }
     }
 }
@@ -579,17 +552,30 @@ struct State {
 }
 
 impl State {
-    fn new(column_count: usize) -> Self {
+    fn new(cols: usize) -> Self {
         Self {
-            columns: vec![Foot::None; column_count],
-            combined_columns: vec![Foot::None; column_count],
-            moved_feet: vec![Foot::None; column_count],
-            hold_feet: vec![Foot::None; column_count],
+            columns: vec![Foot::None; cols],
+            combined_columns: vec![Foot::None; cols],
+            moved_feet: vec![Foot::None; cols],
+            hold_feet: vec![Foot::None; cols],
             where_the_feet_are: [INVALID_COLUMN; NUM_FEET],
             what_note_the_foot_is_hitting: [INVALID_COLUMN; NUM_FEET],
             did_the_foot_move: [false; NUM_FEET],
             is_the_foot_holding: [false; NUM_FEET],
         }
+    }
+
+    #[inline(always)]
+    fn foot_moved(&self, pair: &FootPair) -> bool {
+        self.did_the_foot_move[pair.heel.as_index()] || self.did_the_foot_move[pair.toe.as_index()]
+    }
+
+    #[inline(always)]
+    fn foot_moved_not_holding(&self, pair: &FootPair) -> bool {
+        (self.did_the_foot_move[pair.heel.as_index()]
+            && !self.is_the_foot_holding[pair.heel.as_index()])
+            || (self.did_the_foot_move[pair.toe.as_index()]
+                && !self.is_the_foot_holding[pair.toe.as_index()])
     }
 }
 
@@ -601,10 +587,9 @@ impl PartialEq for State {
             && self.hold_feet == other.hold_feet
     }
 }
-
 impl Eq for State {}
 
-type FootPlacement = Vec<Foot>;
+type FootPlacement = [Foot; MAX_COLUMNS];
 
 #[derive(Debug, Clone)]
 struct StepParityNode {
@@ -613,22 +598,565 @@ struct StepParityNode {
     neighbors: NeighborMap,
 }
 
-impl StepParityNode {
-    fn new(state: Rc<State>, second: f32) -> Self {
+const NODE_CHUNK_SIZE: usize = 1024;
+
+struct NodeArena {
+    chunks: Vec<Vec<StepParityNode>>,
+    len: usize,
+}
+
+impl NodeArena {
+    fn new() -> Self {
         Self {
-            state,
-            second,
-            neighbors: NeighborMap::default(),
+            chunks: Vec::new(),
+            len: 0,
         }
     }
+    fn len(&self) -> usize {
+        self.len
+    }
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn clear(&mut self) {
+        for chunk in &mut self.chunks {
+            chunk.clear();
+        }
+        self.len = 0;
+    }
+
+    fn push(&mut self, node: StepParityNode) -> usize {
+        let idx = self.len;
+        if self
+            .chunks
+            .last()
+            .map_or(true, |c| c.len() == NODE_CHUNK_SIZE)
+        {
+            self.chunks.push(Vec::with_capacity(NODE_CHUNK_SIZE));
+        }
+        self.chunks.last_mut().unwrap().push(node);
+        self.len = idx + 1;
+        idx
+    }
+
+    fn get(&self, idx: usize) -> Option<&StepParityNode> {
+        if idx < self.len {
+            self.chunks
+                .get(idx / NODE_CHUNK_SIZE)?
+                .get(idx % NODE_CHUNK_SIZE)
+        } else {
+            None
+        }
+    }
+
+    fn get_mut(&mut self, idx: usize) -> Option<&mut StepParityNode> {
+        if idx < self.len {
+            self.chunks
+                .get_mut(idx / NODE_CHUNK_SIZE)?
+                .get_mut(idx % NODE_CHUNK_SIZE)
+        } else {
+            None
+        }
+    }
+
+    fn ptr(&self, idx: usize) -> *const StepParityNode {
+        self.get(idx)
+            .map(|n| n as *const _)
+            .unwrap_or(std::ptr::null())
+    }
 }
+
+impl Index<usize> for NodeArena {
+    type Output = StepParityNode;
+    fn index(&self, idx: usize) -> &Self::Output {
+        self.get(idx).expect("node index out of bounds")
+    }
+}
+
+impl IndexMut<usize> for NodeArena {
+    fn index_mut(&mut self, idx: usize) -> &mut Self::Output {
+        self.get_mut(idx).expect("node index out of bounds")
+    }
+}
+
+// --- Cost Calculations (free functions to avoid borrow issues) ---
+
+fn did_jack(
+    initial: &State,
+    result: &State,
+    pair: &FootPair,
+    heel_col: isize,
+    toe_col: isize,
+    moved: bool,
+    did_jump: bool,
+) -> bool {
+    if did_jump || !moved {
+        return false;
+    }
+
+    let check = |col: isize, foot: Foot| -> bool {
+        col > INVALID_COLUMN
+            && initial.combined_columns[col as usize] == foot
+            && !result.is_the_foot_holding[foot.as_index()]
+            && initial.foot_moved_not_holding(pair)
+    };
+
+    check(heel_col, pair.heel) || check(toe_col, pair.toe)
+}
+
+fn calc_action_cost(
+    layout: &StageLayout,
+    initial: &State,
+    result: &State,
+    rows: &[Row],
+    row_idx: usize,
+    elapsed: f32,
+) -> f32 {
+    let row = &rows[row_idx];
+    let cols = row.column_count;
+
+    let lh = result.what_note_the_foot_is_hitting[Foot::LeftHeel.as_index()];
+    let lt = result.what_note_the_foot_is_hitting[Foot::LeftToe.as_index()];
+    let rh = result.what_note_the_foot_is_hitting[Foot::RightHeel.as_index()];
+    let rt = result.what_note_the_foot_is_hitting[Foot::RightToe.as_index()];
+
+    let moved_left = result.foot_moved(&LEFT_PAIR);
+    let moved_right = result.foot_moved(&RIGHT_PAIR);
+
+    let did_jump =
+        initial.foot_moved_not_holding(&LEFT_PAIR) && initial.foot_moved_not_holding(&RIGHT_PAIR);
+
+    let jacked_left = did_jack(initial, result, &LEFT_PAIR, lh, lt, moved_left, did_jump);
+    let jacked_right = did_jack(initial, result, &RIGHT_PAIR, rh, rt, moved_right, did_jump);
+
+    let mut cost = 0.0;
+    cost += calc_mine_cost(result, row, cols);
+    cost += calc_hold_switch_cost(layout, initial, result, row);
+    cost += calc_bracket_tap_cost(initial, row, lh, lt, rh, rt, elapsed);
+    cost += calc_bracket_jack_cost(
+        result,
+        moved_left,
+        moved_right,
+        jacked_left,
+        jacked_right,
+        did_jump,
+    );
+    cost += calc_doublestep_cost(
+        initial,
+        result,
+        rows,
+        row_idx,
+        moved_left,
+        moved_right,
+        jacked_left,
+        jacked_right,
+        did_jump,
+    );
+    cost += calc_slow_bracket_cost(row, moved_left, moved_right, elapsed);
+    cost += calc_twisted_foot_cost(layout, result);
+    cost += calc_facing_cost(layout, result);
+    cost += calc_spin_cost(layout, initial, result);
+    cost += calc_footswitch_cost(initial, result, row, elapsed, cols);
+    cost += calc_sideswitch_cost(layout, initial, result);
+    cost += calc_missed_footswitch_cost(row, jacked_left, jacked_right);
+    cost += calc_jack_cost(moved_left, moved_right, jacked_left, jacked_right, elapsed);
+    cost += calc_big_movements_cost(layout, initial, result, elapsed);
+    cost
+}
+
+fn calc_mine_cost(result: &State, row: &Row, cols: usize) -> f32 {
+    if row.mine_mask == 0 {
+        return 0.0;
+    }
+    let mut mask = row.mine_mask;
+    while mask != 0 {
+        let idx = mask.trailing_zeros() as usize;
+        if idx < cols && result.combined_columns[idx] != Foot::None {
+            return MINE_WEIGHT;
+        }
+        mask &= mask - 1;
+    }
+    0.0
+}
+
+fn calc_hold_switch_cost(layout: &StageLayout, initial: &State, result: &State, row: &Row) -> f32 {
+    if row.hold_mask == 0 {
+        return 0.0;
+    }
+    let mut cost = 0.0;
+    let mut mask = row.hold_mask;
+
+    while mask != 0 {
+        let c = mask.trailing_zeros() as usize;
+        mask &= mask - 1;
+
+        let foot = result.combined_columns[c];
+        if foot == Foot::None {
+            continue;
+        }
+
+        let initial_foot = initial.combined_columns[c];
+        let switched = (foot.is_left() && !initial_foot.is_left())
+            || (foot.is_right() && !initial_foot.is_right());
+
+        if switched {
+            let prev_col = initial.where_the_feet_are[foot.as_index()];
+            let dist = if prev_col == INVALID_COLUMN {
+                1.0
+            } else {
+                (layout.get_distance_sq(c, prev_col as usize) as f64).sqrt() as f32
+            };
+            cost += HOLDSWITCH_WEIGHT * dist;
+        }
+    }
+    cost
+}
+
+fn calc_bracket_tap_cost(
+    initial: &State,
+    row: &Row,
+    lh: isize,
+    lt: isize,
+    rh: isize,
+    rt: isize,
+    elapsed: f32,
+) -> f32 {
+    if row.hold_mask == 0 {
+        return 0.0;
+    }
+    let mut cost = 0.0;
+
+    let check_pair = |heel: isize, toe: isize, pair: &FootPair| -> f32 {
+        if heel == INVALID_COLUMN || toe == INVALID_COLUMN {
+            return 0.0;
+        }
+        let jack_penalty = if initial.foot_moved(pair) {
+            1.0 / elapsed
+        } else {
+            1.0
+        };
+        let hm = (row.hold_mask & (1u8 << heel as usize)) != 0;
+        let tm = (row.hold_mask & (1u8 << toe as usize)) != 0;
+        if (hm && !tm) || (tm && !hm) {
+            BRACKETTAP_WEIGHT * jack_penalty
+        } else {
+            0.0
+        }
+    };
+
+    cost += check_pair(lh, lt, &LEFT_PAIR);
+    cost += check_pair(rh, rt, &RIGHT_PAIR);
+    cost
+}
+
+fn calc_bracket_jack_cost(
+    result: &State,
+    moved_left: bool,
+    moved_right: bool,
+    jacked_left: bool,
+    jacked_right: bool,
+    did_jump: bool,
+) -> f32 {
+    let hold_empty = result.hold_feet.iter().all(|&f| f == Foot::None);
+    if moved_left == moved_right || !hold_empty || did_jump {
+        return 0.0;
+    }
+
+    let mut cost = 0.0;
+    if jacked_left && result.did_the_foot_move[1] && result.did_the_foot_move[2] {
+        cost += BRACKETJACK_WEIGHT;
+    }
+    if jacked_right && result.did_the_foot_move[3] && result.did_the_foot_move[4] {
+        cost += BRACKETJACK_WEIGHT;
+    }
+    cost
+}
+
+fn calc_doublestep_cost(
+    initial: &State,
+    result: &State,
+    rows: &[Row],
+    row_idx: usize,
+    moved_left: bool,
+    moved_right: bool,
+    jacked_left: bool,
+    jacked_right: bool,
+    did_jump: bool,
+) -> f32 {
+    let hold_empty = result.hold_feet.iter().all(|&f| f == Foot::None);
+    if moved_left == moved_right || !hold_empty || did_jump {
+        return 0.0;
+    }
+
+    if did_double_step(
+        initial,
+        rows,
+        row_idx,
+        moved_left,
+        jacked_left,
+        moved_right,
+        jacked_right,
+    ) {
+        DOUBLESTEP_WEIGHT
+    } else {
+        0.0
+    }
+}
+
+fn calc_slow_bracket_cost(row: &Row, moved_left: bool, moved_right: bool, elapsed: f32) -> f32 {
+    if elapsed > SLOW_BRACKET_THRESHOLD && moved_left != moved_right && row.note_count >= 2 {
+        (elapsed - SLOW_BRACKET_THRESHOLD) * SLOW_BRACKET_WEIGHT
+    } else {
+        0.0
+    }
+}
+
+fn calc_twisted_foot_cost(layout: &StageLayout, result: &State) -> f32 {
+    let lh = result.what_note_the_foot_is_hitting[1];
+    let lt = result.what_note_the_foot_is_hitting[2];
+    let rh = result.what_note_the_foot_is_hitting[3];
+    let rt = result.what_note_the_foot_is_hitting[4];
+
+    let left_pos = layout.avg_point(lh, lt);
+    let right_pos = layout.avg_point(rh, rt);
+    let crossed = right_pos.x < left_pos.x;
+
+    let backward = |heel: isize, toe: isize| -> bool {
+        heel != INVALID_COLUMN
+            && toe != INVALID_COLUMN
+            && layout.columns[toe as usize].y < layout.columns[heel as usize].y
+    };
+
+    if !crossed && (backward(rh, rt) || backward(lh, lt)) {
+        TWISTED_FOOT_WEIGHT
+    } else {
+        0.0
+    }
+}
+
+fn calc_facing_cost(layout: &StageLayout, result: &State) -> f32 {
+    let get = |f: Foot| result.where_the_feet_are[f.as_index()];
+    let (lh, mut lt) = (get(Foot::LeftHeel), get(Foot::LeftToe));
+    let (rh, mut rt) = (get(Foot::RightHeel), get(Foot::RightToe));
+
+    if lt == INVALID_COLUMN {
+        lt = lh;
+    }
+    if rt == INVALID_COLUMN {
+        rt = rh;
+    }
+
+    let facing = |a: isize, b: isize, f: fn(&StageLayout, isize, isize) -> f32| -> f32 {
+        if a != INVALID_COLUMN && b != INVALID_COLUMN {
+            f(layout, a, b)
+        } else {
+            0.0
+        }
+    };
+
+    let penalty = |v: f32| -> f32 {
+        let base = -(v.min(0.0));
+        if base > 0.0 {
+            (base as f64).powf(1.8) as f32 * 100.0 * FACING_WEIGHT
+        } else {
+            0.0
+        }
+    };
+
+    penalty(facing(lh, rh, StageLayout::get_x_diff))
+        + penalty(facing(lt, rt, StageLayout::get_x_diff))
+        + penalty(facing(lh, lt, StageLayout::get_y_diff))
+        + penalty(facing(rh, rt, StageLayout::get_y_diff))
+}
+
+fn calc_spin_cost(layout: &StageLayout, initial: &State, result: &State) -> f32 {
+    let get = |s: &State, f: Foot| s.where_the_feet_are[f.as_index()];
+
+    let prev_left = layout.avg_point(get(initial, Foot::LeftHeel), get(initial, Foot::LeftToe));
+    let prev_right = layout.avg_point(get(initial, Foot::RightHeel), get(initial, Foot::RightToe));
+
+    let mut lt = get(result, Foot::LeftToe);
+    let mut rt = get(result, Foot::RightToe);
+    if lt == INVALID_COLUMN {
+        lt = get(result, Foot::LeftHeel);
+    }
+    if rt == INVALID_COLUMN {
+        rt = get(result, Foot::RightHeel);
+    }
+
+    let left = layout.avg_point(get(result, Foot::LeftHeel), lt);
+    let right = layout.avg_point(get(result, Foot::RightHeel), rt);
+
+    let mut cost = 0.0;
+    if right.x < left.x && prev_right.x < prev_left.x {
+        if (right.y < left.y && prev_right.y > prev_left.y)
+            || (right.y > left.y && prev_right.y < prev_left.y)
+        {
+            cost += SPIN_WEIGHT;
+        }
+    }
+    cost
+}
+
+fn calc_footswitch_cost(
+    initial: &State,
+    result: &State,
+    row: &Row,
+    elapsed: f32,
+    cols: usize,
+) -> f32 {
+    if elapsed < SLOW_FOOTSWITCH_THRESHOLD || elapsed >= SLOW_FOOTSWITCH_IGNORE {
+        return 0.0;
+    }
+    if row.mine_i32_mask != 0 || row.fake_mine_mask != 0 {
+        return 0.0;
+    }
+
+    let time_scaled = elapsed - SLOW_FOOTSWITCH_THRESHOLD;
+    for i in 0..cols {
+        let (init, res) = (initial.combined_columns[i], result.columns[i]);
+        if init == Foot::None || res == Foot::None {
+            continue;
+        }
+        if init != res && init != OTHER_PART_OF_FOOT[res.as_index()] {
+            let divisor = SLOW_FOOTSWITCH_THRESHOLD + time_scaled;
+            if divisor > 0.0 {
+                return (time_scaled / divisor) * FOOTSWITCH_WEIGHT;
+            }
+        }
+    }
+    0.0
+}
+
+fn calc_sideswitch_cost(layout: &StageLayout, initial: &State, result: &State) -> f32 {
+    layout
+        .side_arrows
+        .iter()
+        .filter(|&&c| {
+            initial.combined_columns[c] != result.columns[c]
+                && result.columns[c] != Foot::None
+                && initial.combined_columns[c] != Foot::None
+                && !result.did_the_foot_move[initial.combined_columns[c].as_index()]
+        })
+        .count() as f32
+        * SIDESWITCH_WEIGHT
+}
+
+fn calc_missed_footswitch_cost(row: &Row, jacked_left: bool, jacked_right: bool) -> f32 {
+    if (jacked_left || jacked_right) && (row.mine_i32_mask != 0 || row.fake_mine_mask != 0) {
+        MISSED_FOOTSWITCH_WEIGHT
+    } else {
+        0.0
+    }
+}
+
+fn calc_jack_cost(
+    moved_left: bool,
+    moved_right: bool,
+    jacked_left: bool,
+    jacked_right: bool,
+    elapsed: f32,
+) -> f32 {
+    if elapsed < JACK_THRESHOLD && moved_left != moved_right && (jacked_left || jacked_right) {
+        let ts = JACK_THRESHOLD - elapsed;
+        if ts > 0.0 {
+            return (1.0 / ts - 1.0 / JACK_THRESHOLD) * JACK_WEIGHT;
+        }
+    }
+    0.0
+}
+
+fn calc_big_movements_cost(
+    layout: &StageLayout,
+    initial: &State,
+    result: &State,
+    elapsed: f32,
+) -> f32 {
+    let mut cost = 0.0;
+    for &foot in &result.moved_feet {
+        if foot == Foot::None {
+            continue;
+        }
+        let init_pos = initial.where_the_feet_are[foot.as_index()];
+        if init_pos == INVALID_COLUMN {
+            continue;
+        }
+
+        let res_pos = result.what_note_the_foot_is_hitting[foot.as_index()];
+        let dist = layout.get_distance_weighted(init_pos as usize, res_pos as usize);
+        let mut d = (dist / elapsed as f64) as f32;
+
+        let other = OTHER_PART_OF_FOOT[foot.as_index()];
+        let other_pos = result.what_note_the_foot_is_hitting[other.as_index()];
+        if other_pos != INVALID_COLUMN {
+            if other_pos == init_pos {
+                continue;
+            }
+            d *= 0.2;
+        }
+        cost += d;
+    }
+    cost
+}
+
+fn did_double_step(
+    initial: &State,
+    rows: &[Row],
+    row_idx: usize,
+    moved_left: bool,
+    jacked_left: bool,
+    moved_right: bool,
+    jacked_right: bool,
+) -> bool {
+    let mut ds = false;
+    if moved_left && !jacked_left && initial.foot_moved_not_holding(&LEFT_PAIR) {
+        ds = true;
+    }
+    if moved_right && !jacked_right && initial.foot_moved_not_holding(&RIGHT_PAIR) {
+        ds = true;
+    }
+
+    if row_idx > 0 && ds {
+        let last = &rows[row_idx - 1];
+        let start = last.beat;
+
+        if last.column_count <= MAX_COLUMNS {
+            let mut mask = last.hold_mask;
+            while mask != 0 {
+                let idx = mask.trailing_zeros() as usize;
+                mask &= mask - 1;
+                let hold = &last.holds[idx];
+                let hold_end = hold.beat + hold.hold_length;
+                if hold_end > start {
+                    ds = false;
+                    break;
+                }
+            }
+        } else {
+            for hold in &last.holds {
+                if hold.note_type == TapNoteType::Empty {
+                    continue;
+                }
+                let hold_end = hold.beat + hold.hold_length;
+                if hold_end > start {
+                    ds = false;
+                    break;
+                }
+            }
+        }
+    }
+    ds
+}
+
+// --- Generator ---
 
 struct StepParityGenerator {
     layout: StageLayout,
     column_count: usize,
     permute_cache: FastMap<u32, Rc<[FootPlacement]>>,
     state_cache: FastMap<u64, Rc<State>>,
-    nodes: Vec<Box<StepParityNode>>,
+    nodes: NodeArena,
     rows: Vec<Row>,
 }
 
@@ -639,50 +1167,47 @@ impl StepParityGenerator {
             layout,
             permute_cache: FastMap::default(),
             state_cache: FastMap::default(),
-            nodes: Vec::new(),
+            nodes: NodeArena::new(),
             rows: Vec::new(),
         }
     }
 
-    fn analyze_note_data(
-        &mut self,
-        note_data: Vec<IntermediateNoteData>,
-        column_count: usize,
-    ) -> bool {
-        self.column_count = column_count;
+    fn analyze(&mut self, notes: Vec<IntermediateNoteData>, cols: usize) -> bool {
+        self.column_count = cols;
         self.permute_cache.clear();
         self.state_cache.clear();
         self.nodes.clear();
         self.rows.clear();
-        self.create_rows(note_data);
+        self.create_rows(notes);
         if self.rows.is_empty() {
             return false;
         }
-        self.build_state_graph();
-        self.analyze_graph()
+        self.build_graph();
+        self.trace_path()
     }
 
-    fn create_rows(&mut self, note_data: Vec<IntermediateNoteData>) {
-        let column_count = self.column_count;
-        let mut counter = RowCounter::new(column_count);
+    fn create_rows(&mut self, notes: Vec<IntermediateNoteData>) {
+        let cols = self.column_count;
+        let mut counter = RowCounter::new(cols);
 
-        for note in note_data.into_iter() {
+        for note in notes {
             if note.note_type == TapNoteType::Empty {
                 continue;
             }
 
             if note.note_type == TapNoteType::Mine {
-                if note.second == counter.last_column_second && !self.rows.is_empty() {
+                let target = if note.second == counter.last_second && !self.rows.is_empty() {
                     if note.fake {
-                        counter.next_fake_mines[note.col] = note.second;
+                        &mut counter.next_fake_mines
                     } else {
-                        counter.next_mines[note.col] = note.second;
+                        &mut counter.next_mines
                     }
                 } else if note.fake {
-                    counter.fake_mines[note.col] = note.second;
+                    &mut counter.fake_mines
                 } else {
-                    counter.mines[note.col] = note.second;
-                }
+                    &mut counter.mines
+                };
+                target[note.col] = note.second;
                 continue;
             }
 
@@ -690,1226 +1215,519 @@ impl StepParityGenerator {
                 continue;
             }
 
-            if counter.last_column_second != note.second {
-                if counter.last_column_second != CLM_SECOND_INVALID {
-                    self.add_row(&mut counter);
+            if counter.last_second != note.second {
+                if counter.last_second != CLM_SECOND_INVALID {
+                    self.flush_row(&mut counter);
                 }
-
-                counter.last_column_second = note.second;
-                counter.last_column_beat = note.beat;
-                counter.next_mines.clone_from(&counter.mines);
-                counter.next_fake_mines.clone_from(&counter.fake_mines);
-                counter.notes.fill(IntermediateNoteData::default());
-                counter.mines.fill(0.0);
-                counter.fake_mines.fill(0.0);
-
-                for c in 0..column_count {
-                    if counter.active_holds[c].note_type == TapNoteType::Empty
-                        || note.beat
-                            > counter.active_holds[c].beat + counter.active_holds[c].hold_length
-                    {
-                        counter.active_holds[c] = IntermediateNoteData::default();
-                    }
-                }
+                counter.reset_for_row(note.second, note.beat, cols);
             }
 
-            counter.notes[note.col] = note.clone();
-            if note.note_type == TapNoteType::HoldHead {
-                counter.active_holds[note.col] = note.clone();
+            let col = note.col;
+            let is_hold = note.note_type == TapNoteType::HoldHead;
+            counter.notes[col] = note.clone();
+            if is_hold {
+                counter.active_holds[col] = note;
             }
         }
-
-        self.add_row(&mut counter);
+        self.flush_row(&mut counter);
     }
 
-    fn add_row(&mut self, counter: &mut RowCounter) {
-        if counter.last_column_second == CLM_SECOND_INVALID {
+    fn flush_row(&mut self, counter: &mut RowCounter) {
+        if counter.last_second == CLM_SECOND_INVALID {
             return;
         }
-        let mut row = self.create_row(counter);
+        let mut row = self.build_row(counter);
         row.row_index = self.rows.len();
         self.rows.push(row);
     }
 
-    fn create_row(&self, counter: &RowCounter) -> Row {
+    fn build_row(&self, counter: &RowCounter) -> Row {
         let mut row = Row::new(self.column_count);
         row.notes.clone_from(&counter.notes);
         row.mines.clone_from(&counter.next_mines);
         row.fake_mines.clone_from(&counter.next_fake_mines);
-        row.second = counter.last_column_second;
-        row.beat = counter.last_column_beat;
+        row.second = counter.last_second;
+        row.beat = counter.last_beat;
 
-        for c in 0..self.column_count {
-            if counter.active_holds[c].note_type == TapNoteType::Empty
-                || counter.active_holds[c].second >= counter.last_column_second
+        for c in 0..self.column_count.min(MAX_COLUMNS) {
+            if row.notes[c].note_type != TapNoteType::Empty {
+                row.note_count += 1;
+                row.note_mask |= 1u8 << c;
+            }
+
+            row.holds[c] = if counter.active_holds[c].note_type == TapNoteType::Empty
+                || counter.active_holds[c].second >= counter.last_second
             {
-                row.holds[c] = IntermediateNoteData::default();
+                IntermediateNoteData::default()
             } else {
-                row.holds[c] = counter.active_holds[c].clone();
+                counter.active_holds[c].clone()
+            };
+
+            if row.holds[c].note_type != TapNoteType::Empty {
+                row.hold_mask |= 1u8 << c;
+            }
+            if row.mines[c] != 0.0 {
+                row.mine_mask |= 1u8 << c;
+            }
+            if (row.mines[c] as i32) != 0 {
+                row.mine_i32_mask |= 1u8 << c;
+            }
+            if (row.fake_mines[c] as i32) != 0 {
+                row.fake_mine_mask |= 1u8 << c;
             }
         }
-
         row
     }
 
-    fn build_state_graph(&mut self) {
-        self.nodes.clear();
-        self.state_cache.clear();
+    fn build_graph(&mut self) {
+        let start = Rc::new(State::new(self.column_count));
+        let start_sec = self.rows.first().map(|r| r.second - 1.0).unwrap_or(-1.0);
+        let start_id = self.add_node(start, start_sec);
 
-        let column_count = self.column_count;
-        let layout = &self.layout;
-        let cost_calculator = CostCalculator::new(layout);
-        let rows = &self.rows;
-        let permute_cache = &mut self.permute_cache;
-        let state_cache = &mut self.state_cache;
-        let nodes = &mut self.nodes;
+        let mut prev_ids = vec![start_id];
+        let mut next_ids: Vec<usize> = Vec::new();
+        let mut result_map: FastMap<usize, usize> = FastMap::default();
 
-        let start_state = Rc::new(State::new(column_count));
-        let start_second = rows.first().map(|r| r.second - 1.0).unwrap_or(-1.0);
-        let start_id = add_node(nodes, start_state, start_second);
+        for i in 0..self.rows.len() {
+            let perms = self.perms_for_row(i);
+            next_ids.clear();
+            result_map.clear();
+            result_map.reserve(perms.len());
 
-        let mut prev_node_ids = vec![start_id];
-
-        for (i, row) in rows.iter().enumerate() {
-            let permutations = perms_for_row(permute_cache, layout, row);
-            let mut result_nodes_for_row: Vec<usize> = Vec::with_capacity(permutations.len());
-            let mut result_node_map: FastMap<usize, usize> = FastMap::default();
-            result_node_map.reserve(permutations.len());
-
-            for &initial_node_id in &prev_node_ids {
-                let (initial_state, initial_second) = {
-                    let node = &nodes[initial_node_id];
-                    (Rc::clone(&node.state), node.second)
+            for &init_id in &prev_ids {
+                self.nodes[init_id].neighbors.reserve(perms.len());
+                let (init_state, init_sec) = {
+                    let n = &self.nodes[init_id];
+                    (Rc::clone(&n.state), n.second)
                 };
-                let elapsed = row.second - initial_second;
+                let row_second = self.rows[i].second;
+                let elapsed = row_second - init_sec;
 
-                for perm in permutations.iter() {
-                    let result_state = init_result_state(state_cache, &initial_state, row, perm);
-                    let cost = cost_calculator.get_action_cost(
-                        &initial_state,
-                        &result_state,
-                        rows,
+                for perm in perms.iter() {
+                    let result = self.init_result_state(&init_state, i, perm);
+                    let cost = calc_action_cost(
+                        &self.layout,
+                        &init_state,
+                        &result,
+                        &self.rows,
                         i,
                         elapsed,
                     );
 
-                    // Rc pointers are stable; use the address for per-row dedupe.
-                    let state_key = Rc::as_ptr(&result_state) as usize;
-                    let result_node_id = if let Some(&id) = result_node_map.get(&state_key) {
+                    let key = Rc::as_ptr(&result) as usize;
+                    let res_id = if let Some(&id) = result_map.get(&key) {
                         id
                     } else {
-                        let id = add_node(nodes, Rc::clone(&result_state), row.second);
-                        result_nodes_for_row.push(id);
-                        result_node_map.insert(state_key, id);
+                        let id = self.add_node(Rc::clone(&result), row_second);
+                        next_ids.push(id);
+                        result_map.insert(key, id);
                         id
                     };
-
-                    add_edge(nodes, initial_node_id, result_node_id, cost);
+                    self.add_edge(init_id, res_id, cost);
                 }
             }
-
-            prev_node_ids = result_nodes_for_row;
+            std::mem::swap(&mut prev_ids, &mut next_ids);
         }
 
-        let end_state = Rc::new(State::new(column_count));
-        let end_second = rows.last().map(|r| r.second + 1.0).unwrap_or(1.0);
-        let end_id = add_node(nodes, end_state, end_second);
+        let end = Rc::new(State::new(self.column_count));
+        let end_sec = self.rows.last().map(|r| r.second + 1.0).unwrap_or(1.0);
+        let end_id = self.add_node(end, end_sec);
 
-        for node_id in prev_node_ids {
-            add_edge(nodes, node_id, end_id, 0.0);
+        for &id in &prev_ids {
+            self.nodes[id].neighbors.reserve(1);
+            self.add_edge(id, end_id, 0.0);
         }
     }
 
-    fn compute_cheapest_path(&self) -> Vec<usize> {
-        if self.nodes.is_empty() {
-            return Vec::new();
+    fn add_node(&mut self, state: Rc<State>, second: f32) -> usize {
+        self.nodes.push(StepParityNode {
+            state,
+            second,
+            neighbors: NeighborMap::default(),
+        })
+    }
+
+    fn add_edge(&mut self, from: usize, to: usize, cost: f32) {
+        let key = self.nodes.ptr(to) as usize;
+        self.nodes[from].neighbors.insert_reserved(to, key, cost);
+    }
+
+    fn perms_for_row(&mut self, row_idx: usize) -> Rc<[FootPlacement]> {
+        let row = &self.rows[row_idx];
+        let key = (row.note_mask | row.hold_mask) as u32;
+        if let Some(p) = self.permute_cache.get(&key) {
+            return Rc::clone(p);
         }
 
-        let start_id = 0;
-        let end_id = self.nodes.len() - 1;
-        let mut cost = vec![f32::MAX; self.nodes.len()];
-        let mut predecessor = vec![usize::MAX; self.nodes.len()];
-        let dump_ties = env_flag("RSSP_STEP_PARITY_DUMP_TIES");
-        let mut tie_count = 0usize;
-        cost[start_id] = 0.0;
+        let mut cols = [Foot::None; MAX_COLUMNS];
+        let mut perms = Vec::new();
+        permute_row(
+            &self.layout,
+            row,
+            &mut cols,
+            0,
+            row.column_count,
+            false,
+            0,
+            &mut perms,
+        );
+        if perms.is_empty() {
+            permute_row(
+                &self.layout,
+                row,
+                &mut cols,
+                0,
+                row.column_count,
+                true,
+                0,
+                &mut perms,
+            );
+        }
+        if perms.is_empty() {
+            perms.push([Foot::None; MAX_COLUMNS]);
+        }
 
-        for i in start_id..=end_id {
+        let rc = Rc::from(perms.into_boxed_slice());
+        self.permute_cache.insert(key, Rc::clone(&rc));
+        rc
+    }
+
+    fn init_result_state(
+        &mut self,
+        initial: &State,
+        row_idx: usize,
+        cols: &FootPlacement,
+    ) -> Rc<State> {
+        let row = &self.rows[row_idx];
+        let n = self.column_count;
+        let hold_mask = row.hold_mask;
+
+        // Compute hash inline
+        let mut moved_mask = 0u8;
+        let mut hash = 0u64;
+
+        for i in 0..n {
+            let foot = cols[i];
+            hash = hash
+                .wrapping_mul(STATE_HASH_PRIME)
+                .wrapping_add(foot as u64);
+            if foot != Foot::None
+                && ((hold_mask & (1u8 << i)) == 0 || initial.combined_columns[i] != foot)
+            {
+                moved_mask |= FOOT_MASKS[foot.as_index()];
+            }
+        }
+
+        // combined_columns hash
+        let moved_left = (moved_mask & LEFT_FOOT_MASK) != 0;
+        let moved_right = (moved_mask & RIGHT_FOOT_MASK) != 0;
+        for i in 0..n {
+            let combined = if cols[i] != Foot::None {
+                cols[i]
+            } else {
+                let prev = initial.combined_columns[i];
+                match prev {
+                    Foot::LeftHeel | Foot::RightHeel
+                        if (moved_mask & FOOT_MASKS[prev.as_index()]) == 0 =>
+                    {
+                        prev
+                    }
+                    Foot::LeftToe if !moved_left => prev,
+                    Foot::RightToe if !moved_right => prev,
+                    _ => Foot::None,
+                }
+            };
+            hash = hash
+                .wrapping_mul(STATE_HASH_PRIME)
+                .wrapping_add(combined as u64);
+        }
+
+        // moved and hold hashes
+        for i in 0..n {
+            let foot = cols[i];
+            let moved = if foot != Foot::None
+                && ((hold_mask & (1u8 << i)) == 0 || initial.combined_columns[i] != foot)
+            {
+                foot
+            } else {
+                Foot::None
+            };
+            hash = hash
+                .wrapping_mul(STATE_HASH_PRIME)
+                .wrapping_add(moved as u64);
+        }
+        for i in 0..n {
+            let hold = if cols[i] != Foot::None && (hold_mask & (1u8 << i)) != 0 {
+                cols[i]
+            } else {
+                Foot::None
+            };
+            hash = hash
+                .wrapping_mul(STATE_HASH_PRIME)
+                .wrapping_add(hold as u64);
+        }
+
+        if let Some(existing) = self.state_cache.get(&hash) {
+            return Rc::clone(existing);
+        }
+
+        let mut state = State::new(n);
+        for i in 0..n {
+            let foot = cols[i];
+            state.columns[i] = foot;
+            if foot == Foot::None {
+                continue;
+            }
+
+            let fi = foot.as_index();
+            state.what_note_the_foot_is_hitting[fi] = i as isize;
+
+            let hold_empty = (hold_mask & (1u8 << i)) == 0;
+            if hold_empty || initial.combined_columns[i] != foot {
+                state.moved_feet[i] = foot;
+                state.did_the_foot_move[fi] = true;
+            }
+            if !hold_empty {
+                state.hold_feet[i] = foot;
+                state.is_the_foot_holding[fi] = true;
+            }
+        }
+
+        // Merge combined_columns
+        for i in 0..n {
+            let combined = if cols[i] != Foot::None {
+                cols[i]
+            } else {
+                let prev = initial.combined_columns[i];
+                match prev {
+                    Foot::LeftHeel | Foot::RightHeel
+                        if (moved_mask & FOOT_MASKS[prev.as_index()]) == 0 =>
+                    {
+                        prev
+                    }
+                    Foot::LeftToe if !moved_left => prev,
+                    Foot::RightToe if !moved_right => prev,
+                    _ => Foot::None,
+                }
+            };
+            if combined != Foot::None {
+                state.combined_columns[i] = combined;
+                state.where_the_feet_are[combined.as_index()] = i as isize;
+            }
+        }
+
+        let rc = Rc::new(state);
+        self.state_cache.insert(hash, Rc::clone(&rc));
+        rc
+    }
+
+    fn trace_path(&mut self) -> bool {
+        if self.nodes.is_empty() {
+            return false;
+        }
+
+        let n = self.nodes.len();
+        let mut cost = vec![f32::MAX; n];
+        let mut pred = vec![usize::MAX; n];
+        cost[0] = 0.0;
+
+        for i in 0..n {
             if cost[i] == f32::MAX {
                 continue;
             }
-            self.nodes[i]
-                .neighbors
-                .for_each_in_order(|neighbor_id, weight| {
-                    let new_cost = cost[i] + weight;
-                    if new_cost < cost[neighbor_id] {
-                        cost[neighbor_id] = new_cost;
-                        predecessor[neighbor_id] = i;
-                    } else if dump_ties && new_cost == cost[neighbor_id] {
-                        tie_count += 1;
-                    }
-                });
-        }
-        if dump_ties {
-            eprintln!("STEP_PARITY_TIES count={tie_count}");
-        }
-
-        let mut path = VecDeque::new();
-        let mut current = end_id;
-        if predecessor[current] == usize::MAX {
-            return Vec::new();
-        }
-
-        while current != start_id {
-            if current == usize::MAX {
-                return Vec::new();
+            let neighbors = &self.nodes[i].neighbors;
+            let mut cur = neighbors.head;
+            while cur != BUCKET_EMPTY {
+                let e = &neighbors.entries[cur];
+                let nc = cost[i] + e.cost;
+                if nc < cost[e.neighbor_id] {
+                    cost[e.neighbor_id] = nc;
+                    pred[e.neighbor_id] = i;
+                }
+                cur = e.next;
             }
-            if current != end_id {
-                path.push_front(current);
-            }
-            let next = predecessor[current];
-            if next == usize::MAX && current != start_id {
-                return Vec::new();
-            }
-            current = next;
         }
 
-        path.into_iter().collect()
-    }
-
-    fn analyze_graph(&mut self) -> bool {
-        let nodes_for_rows = self.compute_cheapest_path();
-        if nodes_for_rows.len() != self.rows.len() {
+        if pred[n - 1] == usize::MAX {
             return false;
         }
-        let dump_path = env_flag("RSSP_STEP_PARITY_DUMP_PATH");
-        let mut total_cost = 0.0f32;
-        if dump_path {
-            let end_id = self.nodes.len().saturating_sub(1);
-            eprintln!(
-                "STEP_PARITY_PATH start rows={} nodes={} start=0 end={}",
-                self.rows.len(),
-                self.nodes.len(),
-                end_id
-            );
+
+        // Trace back
+        let mut path = vec![usize::MAX; self.rows.len()];
+        let mut cur = n - 1;
+        let mut write = self.rows.len();
+
+        while cur != 0 {
+            let prev = pred[cur];
+            if prev == usize::MAX {
+                return false;
+            }
+            cur = prev;
+            if cur == 0 {
+                break;
+            }
+            if write == 0 {
+                return false;
+            }
+            write -= 1;
+            path[write] = cur;
         }
-        for (i, &node_id) in nodes_for_rows.iter().enumerate() {
+
+        if write != 0 {
+            return false;
+        }
+
+        for (i, &node_id) in path.iter().enumerate() {
             let state = Rc::clone(&self.nodes[node_id].state);
             self.rows[i].set_foot_placement(&state.combined_columns);
-            if dump_path {
-                let prev_id = if i == 0 { 0 } else { nodes_for_rows[i - 1] };
-                let edge_cost = self.nodes[prev_id]
-                    .neighbors
-                    .get(node_id)
-                    .unwrap_or(-1.0);
-                total_cost += edge_cost;
-                let row = &self.rows[i];
-                let columns = format_foot_vec(&state.columns);
-                let combined = format_foot_vec(&state.combined_columns);
-                let moved = format_foot_vec(&state.moved_feet);
-                let hold = format_foot_vec(&state.hold_feet);
-                let row_feet = format_foot_positions(row.where_the_feet_are.as_slice());
-                let state_feet = format_foot_positions(&state.where_the_feet_are);
-                let moved_flags = format_foot_flags(&state.did_the_foot_move);
-                let hold_flags = format_foot_flags(&state.is_the_foot_holding);
-                eprintln!(
-                    "STEP_PARITY_PATH row_idx={} node={} prev={} edge_cost={:.6} total_cost={:.6} beat={:.6} second={:.6} note_count={} columns={} combined={} moved={} hold={} row_feet={} state_feet={} moved_flags={} hold_flags={}",
-                    i,
-                    node_id,
-                    prev_id,
-                    edge_cost,
-                    total_cost,
-                    row.beat,
-                    row.second,
-                    row.note_count,
-                    columns,
-                    combined,
-                    moved,
-                    hold,
-                    row_feet,
-                    state_feet,
-                    moved_flags,
-                    hold_flags
-                );
-            }
-        }
-        if dump_path {
-            let end_id = self.nodes.len().saturating_sub(1);
-            let last_id = nodes_for_rows.last().copied().unwrap_or(0);
-            let edge_cost = self.nodes[last_id]
-                .neighbors
-                .get(end_id)
-                .unwrap_or(-1.0);
-            total_cost += edge_cost;
-            eprintln!(
-                "STEP_PARITY_PATH end last_node={} end_node={} edge_cost={:.6} total_cost={:.6}",
-                last_id,
-                end_id,
-                edge_cost,
-                total_cost
-            );
         }
         true
     }
-
 }
 
-fn init_result_state(
-    state_cache: &mut FastMap<u64, Rc<State>>,
-    initial_state: &State,
-    row: &Row,
-    columns: &[Foot],
-) -> Rc<State> {
-    let column_count = columns.len();
-    let mut result_state = State::new(column_count);
+// --- RowCounter ---
 
-    for foot_idx in 0..NUM_FEET {
-        result_state.where_the_feet_are[foot_idx] = INVALID_COLUMN;
-        result_state.what_note_the_foot_is_hitting[foot_idx] = INVALID_COLUMN;
-        result_state.did_the_foot_move[foot_idx] = false;
-        result_state.is_the_foot_holding[foot_idx] = false;
-    }
-
-    for i in 0..column_count {
-        result_state.columns[i] = columns[i];
-        result_state.combined_columns[i] = Foot::None;
-    }
-
-    for (i, &foot) in columns.iter().enumerate() {
-        if foot == Foot::None {
-            continue;
-        }
-        let foot_index = foot.as_index();
-        result_state.what_note_the_foot_is_hitting[foot_index] = i as isize;
-
-        if row.holds[i].note_type == TapNoteType::Empty {
-            result_state.moved_feet[i] = foot;
-            result_state.did_the_foot_move[foot_index] = true;
-            continue;
-        }
-        if initial_state.combined_columns[i] != foot {
-            result_state.moved_feet[i] = foot;
-            result_state.did_the_foot_move[foot_index] = true;
-        }
-    }
-
-    for (i, &foot) in columns.iter().enumerate() {
-        if foot == Foot::None {
-            continue;
-        }
-        if row.holds[i].note_type != TapNoteType::Empty {
-            result_state.hold_feet[i] = foot;
-            result_state.is_the_foot_holding[foot.as_index()] = true;
-        }
-    }
-
-    merge_initial_and_result_position(initial_state, &mut result_state);
-
-    for (col, &foot) in result_state.combined_columns.iter().enumerate() {
-        if foot != Foot::None {
-            result_state.where_the_feet_are[foot.as_index()] = col as isize;
-        }
-    }
-
-    let hash = get_state_cache_key(&result_state);
-    if let Some(existing) = state_cache.get(&hash) {
-        if env_flag("RSSP_STEP_PARITY_DUMP_STATE_COLLISIONS")
-            && **existing != result_state
-        {
-            eprintln!("STATE_HASH_COLLISION hash={hash}");
-        }
-        return Rc::clone(existing);
-    }
-
-    let rc = Rc::new(result_state);
-    state_cache.insert(hash, Rc::clone(&rc));
-    rc
+struct RowCounter {
+    notes: Vec<IntermediateNoteData>,
+    active_holds: Vec<IntermediateNoteData>,
+    mines: Vec<f32>,
+    fake_mines: Vec<f32>,
+    next_mines: Vec<f32>,
+    next_fake_mines: Vec<f32>,
+    last_second: f32,
+    last_beat: f32,
 }
 
-fn merge_initial_and_result_position(initial: &State, result: &mut State) {
-    for i in 0..result.columns.len() {
-        if result.columns[i] != Foot::None {
-            result.combined_columns[i] = result.columns[i];
-            continue;
+impl RowCounter {
+    fn new(cols: usize) -> Self {
+        Self {
+            notes: vec![IntermediateNoteData::default(); cols],
+            active_holds: vec![IntermediateNoteData::default(); cols],
+            mines: vec![0.0; cols],
+            fake_mines: vec![0.0; cols],
+            next_mines: vec![0.0; cols],
+            next_fake_mines: vec![0.0; cols],
+            last_second: CLM_SECOND_INVALID,
+            last_beat: CLM_SECOND_INVALID,
         }
+    }
 
-        match initial.combined_columns[i] {
-            Foot::LeftHeel | Foot::RightHeel => {
-                let prev = initial.combined_columns[i];
-                if prev != Foot::None && !result.did_the_foot_move[prev.as_index()] {
-                    result.combined_columns[i] = prev;
-                }
+    fn reset_for_row(&mut self, second: f32, beat: f32, cols: usize) {
+        self.last_second = second;
+        self.last_beat = beat;
+        self.next_mines.clone_from(&self.mines);
+        self.next_fake_mines.clone_from(&self.fake_mines);
+        self.notes.fill(IntermediateNoteData::default());
+        self.mines.fill(0.0);
+        self.fake_mines.fill(0.0);
+
+        for c in 0..cols {
+            if self.active_holds[c].note_type == TapNoteType::Empty
+                || beat > self.active_holds[c].beat + self.active_holds[c].hold_length
+            {
+                self.active_holds[c] = IntermediateNoteData::default();
             }
-            Foot::LeftToe => {
-                if !result.did_the_foot_move[Foot::LeftToe.as_index()]
-                    && !result.did_the_foot_move[Foot::LeftHeel.as_index()]
-                {
-                    result.combined_columns[i] = Foot::LeftToe;
-                }
-            }
-            Foot::RightToe => {
-                if !result.did_the_foot_move[Foot::RightToe.as_index()]
-                    && !result.did_the_foot_move[Foot::RightHeel.as_index()]
-                {
-                    result.combined_columns[i] = Foot::RightToe;
-                }
-            }
-            Foot::None => {}
         }
     }
 }
 
-fn add_node(nodes: &mut Vec<Box<StepParityNode>>, state: Rc<State>, second: f32) -> usize {
-    let id = nodes.len();
-    nodes.push(Box::new(StepParityNode::new(state, second)));
-    id
-}
-
-fn add_edge(nodes: &mut Vec<Box<StepParityNode>>, from_id: usize, to_id: usize, cost: f32) {
-    if to_id >= nodes.len() {
-        return;
-    }
-    let hash_key = nodes[to_id].as_ref() as *const StepParityNode as usize;
-    if let Some(node) = nodes.get_mut(from_id) {
-        node.neighbors.insert(to_id, hash_key, cost);
-    }
-}
-
-fn perms_for_row(
-    permute_cache: &mut FastMap<u32, Rc<[FootPlacement]>>,
-    layout: &StageLayout,
-    row: &Row,
-) -> Rc<[FootPlacement]> {
-    let mut key = 0u32;
-    for i in 0..row.column_count.min(32) {
-        if row.notes[i].note_type != TapNoteType::Empty
-            || row.holds[i].note_type != TapNoteType::Empty
-        {
-            key |= 1 << i;
-        }
-    }
-
-    if let Some(perms) = permute_cache.get(&key) {
-        return Rc::clone(perms);
-    }
-
-    let mut columns = vec![Foot::None; row.column_count];
-    let mut perms = Vec::new();
-    permute_row(layout, row, &mut columns, 0, false, 0, &mut perms);
-    if perms.is_empty() {
-        permute_row(layout, row, &mut columns, 0, true, 0, &mut perms);
-    }
-    if perms.is_empty() {
-        columns.fill(Foot::None);
-        perms.push(columns);
-    }
-
-    let perms = Rc::from(perms.into_boxed_slice());
-    permute_cache.insert(key, Rc::clone(&perms));
-    perms
-}
+// --- Permutation ---
 
 fn permute_row(
     layout: &StageLayout,
     row: &Row,
-    columns: &mut [Foot],
-    column: usize,
+    cols: &mut FootPlacement,
+    col: usize,
+    col_count: usize,
     ignore_holds: bool,
-    used_mask: u8,
+    used: u8,
     out: &mut Vec<FootPlacement>,
 ) {
-    if column >= columns.len() {
-        let mut left_heel = INVALID_COLUMN;
-        let mut left_toe = INVALID_COLUMN;
-        let mut right_heel = INVALID_COLUMN;
-        let mut right_toe = INVALID_COLUMN;
-
-        for (idx, foot) in columns.iter().enumerate() {
-            match foot {
-                Foot::LeftHeel => left_heel = idx as isize,
-                Foot::LeftToe => left_toe = idx as isize,
-                Foot::RightHeel => right_heel = idx as isize,
-                Foot::RightToe => right_toe = idx as isize,
+    if col >= col_count {
+        let (mut lh, mut lt, mut rh, mut rt) = (
+            INVALID_COLUMN,
+            INVALID_COLUMN,
+            INVALID_COLUMN,
+            INVALID_COLUMN,
+        );
+        for (i, &f) in cols.iter().enumerate().take(col_count) {
+            match f {
+                Foot::LeftHeel => lh = i as isize,
+                Foot::LeftToe => lt = i as isize,
+                Foot::RightHeel => rh = i as isize,
+                Foot::RightToe => rt = i as isize,
                 Foot::None => {}
             }
         }
 
-        if (left_heel == INVALID_COLUMN && left_toe != INVALID_COLUMN)
-            || (right_heel == INVALID_COLUMN && right_toe != INVALID_COLUMN)
+        // Toe without heel check
+        if (lh == INVALID_COLUMN && lt != INVALID_COLUMN)
+            || (rh == INVALID_COLUMN && rt != INVALID_COLUMN)
         {
             return;
         }
 
-        if left_heel != INVALID_COLUMN && left_toe != INVALID_COLUMN {
-            if !layout.bracket_check(left_heel as usize, left_toe as usize) {
-                return;
-            }
+        // Bracket distance check
+        if lh != INVALID_COLUMN
+            && lt != INVALID_COLUMN
+            && !layout.bracket_check(lh as usize, lt as usize)
+        {
+            return;
+        }
+        if rh != INVALID_COLUMN
+            && rt != INVALID_COLUMN
+            && !layout.bracket_check(rh as usize, rt as usize)
+        {
+            return;
         }
 
-        if right_heel != INVALID_COLUMN && right_toe != INVALID_COLUMN {
-            if !layout.bracket_check(right_heel as usize, right_toe as usize) {
-                return;
-            }
-        }
-
-        out.push(columns.to_vec());
+        out.push(*cols);
         return;
     }
 
-    if row.notes[column].note_type != TapNoteType::Empty
-        || (!ignore_holds && row.holds[column].note_type != TapNoteType::Empty)
-    {
+    let mask = if ignore_holds {
+        row.note_mask
+    } else {
+        row.note_mask | row.hold_mask
+    };
+    let active = (mask & (1u8 << col)) != 0;
+
+    if active {
         for &foot in &FEET {
-            let foot_mask = FOOT_MASKS[foot.as_index()];
-            if used_mask & foot_mask != 0 {
+            let fm = FOOT_MASKS[foot.as_index()];
+            if used & fm != 0 {
                 continue;
             }
-            columns[column] = foot;
+            cols[col] = foot;
             permute_row(
                 layout,
                 row,
-                columns,
-                column + 1,
+                cols,
+                col + 1,
+                col_count,
                 ignore_holds,
-                used_mask | foot_mask,
+                used | fm,
                 out,
             );
-            columns[column] = Foot::None;
+            cols[col] = Foot::None;
         }
-        return;
-    }
-
-    permute_row(layout, row, columns, column + 1, ignore_holds, used_mask, out);
-}
-
-fn get_state_cache_key(state: &State) -> u64 {
-    let mut value = 0u64;
-    let prime = 31u64;
-    for &foot in &state.columns {
-        value = value.wrapping_mul(prime).wrapping_add(foot as u64);
-    }
-    for &foot in &state.combined_columns {
-        value = value.wrapping_mul(prime).wrapping_add(foot as u64);
-    }
-
-    for &f in &state.moved_feet {
-        value = value.wrapping_mul(prime).wrapping_add(f as u64);
-    }
-
-    for &f in &state.hold_feet {
-        value = value.wrapping_mul(prime).wrapping_add(f as u64);
-    }
-
-    value
-}
-
-struct CostCalculator<'a> {
-    layout: &'a StageLayout,
-}
-
-impl<'a> CostCalculator<'a> {
-    fn new(layout: &'a StageLayout) -> Self {
-        Self { layout }
-    }
-
-    fn get_action_cost(
-        &self,
-        initial: &State,
-        result: &State,
-        rows: &[Row],
-        row_index: usize,
-        elapsed: f32,
-    ) -> f32 {
-        let row = &rows[row_index];
-        let column_count = row.column_count;
-
-        let mut left_heel = INVALID_COLUMN;
-        let mut left_toe = INVALID_COLUMN;
-        let mut right_heel = INVALID_COLUMN;
-        let mut right_toe = INVALID_COLUMN;
-
-        for (i, &foot) in result.columns.iter().enumerate() {
-            match foot {
-                Foot::LeftHeel => left_heel = i as isize,
-                Foot::LeftToe => left_toe = i as isize,
-                Foot::RightHeel => right_heel = i as isize,
-                Foot::RightToe => right_toe = i as isize,
-                Foot::None => {}
-            }
-        }
-
-        let moved_left = result.did_the_foot_move[Foot::LeftHeel.as_index()]
-            || result.did_the_foot_move[Foot::LeftToe.as_index()];
-        let moved_right = result.did_the_foot_move[Foot::RightHeel.as_index()]
-            || result.did_the_foot_move[Foot::RightToe.as_index()];
-
-        let did_jump = ((initial.did_the_foot_move[Foot::LeftHeel.as_index()]
-            && !initial.is_the_foot_holding[Foot::LeftHeel.as_index()])
-            || (initial.did_the_foot_move[Foot::LeftToe.as_index()]
-                && !initial.is_the_foot_holding[Foot::LeftToe.as_index()]))
-            && ((initial.did_the_foot_move[Foot::RightHeel.as_index()]
-                && !initial.is_the_foot_holding[Foot::RightHeel.as_index()])
-                || (initial.did_the_foot_move[Foot::RightToe.as_index()]
-                    && !initial.is_the_foot_holding[Foot::RightToe.as_index()]));
-
-        let jacked_left =
-            self.did_jack_left(initial, result, left_heel, left_toe, moved_left, did_jump);
-        let jacked_right = self.did_jack_right(
-            initial,
-            result,
-            right_heel,
-            right_toe,
-            moved_right,
-            did_jump,
-        );
-
-        let mut cost = 0.0;
-        cost += self.calc_mine_cost(result, row, column_count);
-        cost += self.calc_hold_switch_cost(initial, result, row, column_count);
-        cost += self.calc_bracket_tap_cost(
-            initial,
-            result,
+    } else {
+        permute_row(
+            layout,
             row,
-            left_heel,
-            left_toe,
-            right_heel,
-            right_toe,
-            elapsed,
-            column_count,
+            cols,
+            col + 1,
+            col_count,
+            ignore_holds,
+            used,
+            out,
         );
-        cost += self.calc_bracket_jack_cost(
-            initial,
-            result,
-            rows,
-            row_index,
-            moved_left,
-            moved_right,
-            jacked_left,
-            jacked_right,
-            did_jump,
-            column_count,
-        );
-        cost += self.calc_doublestep_cost(
-            initial,
-            result,
-            rows,
-            row_index,
-            moved_left,
-            moved_right,
-            jacked_left,
-            jacked_right,
-            did_jump,
-            column_count,
-        );
-        cost += self.calc_slow_bracket_cost(row, moved_left, moved_right, elapsed);
-        cost += self.calc_twisted_foot_cost(result);
-        cost += self.calc_facing_cost(initial, result, column_count);
-        cost += self.calc_spin_cost(initial, result, column_count);
-        cost += self.calc_footswitch_cost(initial, result, row, elapsed, column_count);
-        cost += self.calc_sideswitch_cost(initial, result);
-        cost += self.calc_missed_footswitch_cost(row, jacked_left, jacked_right);
-        cost += self.calc_jack_cost(moved_left, moved_right, jacked_left, jacked_right, elapsed);
-        cost += self.calc_big_movements_quickly_cost(initial, result, elapsed);
-
-        cost
-    }
-
-    fn calc_mine_cost(&self, result: &State, row: &Row, column_count: usize) -> f32 {
-        for i in 0..column_count {
-            if result.combined_columns[i] != Foot::None && row.mines[i] != 0.0 {
-                return MINE_WEIGHT;
-            }
-        }
-        0.0
-    }
-
-    fn calc_hold_switch_cost(
-        &self,
-        initial: &State,
-        result: &State,
-        row: &Row,
-        column_count: usize,
-    ) -> f32 {
-        let mut cost = 0.0;
-        for c in 0..column_count {
-            if row.holds[c].note_type == TapNoteType::Empty {
-                continue;
-            }
-            let current_foot = result.combined_columns[c];
-            if current_foot == Foot::None {
-                continue;
-            }
-
-            let is_left = matches!(current_foot, Foot::LeftHeel | Foot::LeftToe);
-            let initial_foot = initial.combined_columns[c];
-            let initial_is_left = matches!(initial_foot, Foot::LeftHeel | Foot::LeftToe);
-            let initial_is_right = matches!(initial_foot, Foot::RightHeel | Foot::RightToe);
-            let switch_left = is_left && !initial_is_left;
-            let switch_right = !is_left && !initial_is_right;
-
-            if switch_left || switch_right {
-                let previous_col = initial.where_the_feet_are[current_foot.as_index()];
-                let distance = if previous_col == INVALID_COLUMN {
-                    1.0
-                } else {
-                    (self.layout.get_distance_sq(c, previous_col as usize) as f64)
-                        .sqrt() as f32
-                };
-                cost += (HOLDSWITCH_WEIGHT as f64 * distance as f64) as f32;
-            }
-        }
-        cost
-    }
-
-    fn calc_bracket_tap_cost(
-        &self,
-        initial: &State,
-        _result: &State,
-        row: &Row,
-        left_heel: isize,
-        left_toe: isize,
-        right_heel: isize,
-        right_toe: isize,
-        elapsed: f32,
-        _column_count: usize,
-    ) -> f32 {
-        let mut cost = 0.0;
-        if left_heel != INVALID_COLUMN && left_toe != INVALID_COLUMN {
-            let jack_penalty = if initial.did_the_foot_move[Foot::LeftHeel.as_index()]
-                || initial.did_the_foot_move[Foot::LeftToe.as_index()]
-            {
-                1.0 / elapsed
-            } else {
-                1.0
-            };
-
-            let lh = left_heel as usize;
-            let lt = left_toe as usize;
-            if row.holds[lh].note_type != TapNoteType::Empty
-                && row.holds[lt].note_type == TapNoteType::Empty
-            {
-                cost += BRACKETTAP_WEIGHT * jack_penalty;
-            }
-            if row.holds[lt].note_type != TapNoteType::Empty
-                && row.holds[lh].note_type == TapNoteType::Empty
-            {
-                cost += BRACKETTAP_WEIGHT * jack_penalty;
-            }
-        }
-
-        if right_heel != INVALID_COLUMN && right_toe != INVALID_COLUMN {
-            let jack_penalty = if initial.did_the_foot_move[Foot::RightHeel.as_index()]
-                || initial.did_the_foot_move[Foot::RightToe.as_index()]
-            {
-                1.0 / elapsed
-            } else {
-                1.0
-            };
-
-            let rh = right_heel as usize;
-            let rt = right_toe as usize;
-            if row.holds[rh].note_type != TapNoteType::Empty
-                && row.holds[rt].note_type == TapNoteType::Empty
-            {
-                cost += BRACKETTAP_WEIGHT * jack_penalty;
-            }
-            if row.holds[rt].note_type != TapNoteType::Empty
-                && row.holds[rh].note_type == TapNoteType::Empty
-            {
-                cost += BRACKETTAP_WEIGHT * jack_penalty;
-            }
-        }
-
-        cost
-    }
-
-    fn calc_bracket_jack_cost(
-        &self,
-        _initial: &State,
-        result: &State,
-        _rows: &[Row],
-        _row_index: usize,
-        moved_left: bool,
-        moved_right: bool,
-        jacked_left: bool,
-        jacked_right: bool,
-        did_jump: bool,
-        _column_count: usize,
-    ) -> f32 {
-        let hold_empty = result.hold_feet.iter().all(|&f| f == Foot::None);
-
-        let mut cost = 0.0;
-        if moved_left != moved_right && (moved_left || moved_right) && hold_empty && !did_jump {
-            if jacked_left
-                && result.did_the_foot_move[Foot::LeftHeel.as_index()]
-                && result.did_the_foot_move[Foot::LeftToe.as_index()]
-            {
-                cost += BRACKETJACK_WEIGHT;
-            }
-            if jacked_right
-                && result.did_the_foot_move[Foot::RightHeel.as_index()]
-                && result.did_the_foot_move[Foot::RightToe.as_index()]
-            {
-                cost += BRACKETJACK_WEIGHT;
-            }
-        }
-
-        cost
-    }
-
-    fn calc_doublestep_cost(
-        &self,
-        initial: &State,
-        result: &State,
-        rows: &[Row],
-        row_index: usize,
-        moved_left: bool,
-        moved_right: bool,
-        jacked_left: bool,
-        jacked_right: bool,
-        did_jump: bool,
-        _column_count: usize,
-    ) -> f32 {
-        let hold_empty = result.hold_feet.iter().all(|&f| f == Foot::None);
-
-        if moved_left != moved_right && (moved_left || moved_right) && hold_empty && !did_jump {
-            if self.did_double_step(
-                initial,
-                result,
-                rows,
-                row_index,
-                moved_left,
-                jacked_left,
-                moved_right,
-                jacked_right,
-            ) {
-                return DOUBLESTEP_WEIGHT;
-            }
-        }
-        0.0
-    }
-
-    fn calc_slow_bracket_cost(
-        &self,
-        row: &Row,
-        moved_left: bool,
-        moved_right: bool,
-        elapsed: f32,
-    ) -> f32 {
-        if elapsed > SLOW_BRACKET_THRESHOLD
-            && moved_left != moved_right
-            && row
-                .notes
-                .iter()
-                .filter(|note| note.note_type != TapNoteType::Empty)
-                .count()
-                >= 2
-        {
-            let time_diff = elapsed - SLOW_BRACKET_THRESHOLD;
-            return time_diff * SLOW_BRACKET_WEIGHT;
-        }
-        0.0
-    }
-
-    fn calc_twisted_foot_cost(&self, result: &State) -> f32 {
-        let left_heel = result.what_note_the_foot_is_hitting[Foot::LeftHeel.as_index()];
-        let left_toe = result.what_note_the_foot_is_hitting[Foot::LeftToe.as_index()];
-        let right_heel = result.what_note_the_foot_is_hitting[Foot::RightHeel.as_index()];
-        let right_toe = result.what_note_the_foot_is_hitting[Foot::RightToe.as_index()];
-
-        let left_pos = self.layout.average_point(left_heel, left_toe);
-        let right_pos = self.layout.average_point(right_heel, right_toe);
-
-        let crossed_over = right_pos.x < left_pos.x;
-        let right_backwards = if right_heel != INVALID_COLUMN && right_toe != INVALID_COLUMN {
-            self.layout.columns[right_toe as usize].y < self.layout.columns[right_heel as usize].y
-        } else {
-            false
-        };
-        let left_backwards = if left_heel != INVALID_COLUMN && left_toe != INVALID_COLUMN {
-            self.layout.columns[left_toe as usize].y < self.layout.columns[left_heel as usize].y
-        } else {
-            false
-        };
-
-        if !crossed_over && (right_backwards || left_backwards) {
-            TWISTED_FOOT_WEIGHT
-        } else {
-            0.0
-        }
-    }
-
-    fn calc_facing_cost(&self, _initial: &State, result: &State, column_count: usize) -> f32 {
-        let mut end_left_heel = INVALID_COLUMN;
-        let mut end_left_toe = INVALID_COLUMN;
-        let mut end_right_heel = INVALID_COLUMN;
-        let mut end_right_toe = INVALID_COLUMN;
-
-        for i in 0..column_count {
-            match result.combined_columns[i] {
-                Foot::LeftHeel => end_left_heel = i as isize,
-                Foot::LeftToe => end_left_toe = i as isize,
-                Foot::RightHeel => end_right_heel = i as isize,
-                Foot::RightToe => end_right_toe = i as isize,
-                Foot::None => {}
-            }
-        }
-
-        if end_left_toe == INVALID_COLUMN {
-            end_left_toe = end_left_heel;
-        }
-        if end_right_toe == INVALID_COLUMN {
-            end_right_toe = end_right_heel;
-        }
-
-        let heel_facing = if end_left_heel != INVALID_COLUMN && end_right_heel != INVALID_COLUMN {
-            self.layout.get_x_difference(end_left_heel, end_right_heel)
-        } else {
-            0.0
-        };
-        let toe_facing = if end_left_toe != INVALID_COLUMN && end_right_toe != INVALID_COLUMN {
-            self.layout.get_x_difference(end_left_toe, end_right_toe)
-        } else {
-            0.0
-        };
-        let left_facing = if end_left_heel != INVALID_COLUMN && end_left_toe != INVALID_COLUMN {
-            self.layout.get_y_difference(end_left_heel, end_left_toe)
-        } else {
-            0.0
-        };
-        let right_facing = if end_right_heel != INVALID_COLUMN && end_right_toe != INVALID_COLUMN {
-            self.layout.get_y_difference(end_right_heel, end_right_toe)
-        } else {
-            0.0
-        };
-
-        let heel_base = -(heel_facing.min(0.0));
-        let toe_base = -(toe_facing.min(0.0));
-        let left_base = -(left_facing.min(0.0));
-        let right_base = -(right_facing.min(0.0));
-
-        let heel_penalty = (heel_base as f64).powf(1.8) as f32 * 100.0;
-        let toe_penalty = (toe_base as f64).powf(1.8) as f32 * 100.0;
-        let left_penalty = (left_base as f64).powf(1.8) as f32 * 100.0;
-        let right_penalty = (right_base as f64).powf(1.8) as f32 * 100.0;
-
-        let mut cost = 0.0;
-        if heel_penalty > 0.0 {
-            cost += heel_penalty * FACING_WEIGHT;
-        }
-        if toe_penalty > 0.0 {
-            cost += toe_penalty * FACING_WEIGHT;
-        }
-        if left_penalty > 0.0 {
-            cost += left_penalty * FACING_WEIGHT;
-        }
-        if right_penalty > 0.0 {
-            cost += right_penalty * FACING_WEIGHT;
-        }
-
-        cost
-    }
-
-    fn calc_spin_cost(&self, initial: &State, result: &State, column_count: usize) -> f32 {
-        let mut end_left_heel = INVALID_COLUMN;
-        let mut end_left_toe = INVALID_COLUMN;
-        let mut end_right_heel = INVALID_COLUMN;
-        let mut end_right_toe = INVALID_COLUMN;
-
-        for i in 0..column_count {
-            match result.combined_columns[i] {
-                Foot::LeftHeel => end_left_heel = i as isize,
-                Foot::LeftToe => end_left_toe = i as isize,
-                Foot::RightHeel => end_right_heel = i as isize,
-                Foot::RightToe => end_right_toe = i as isize,
-                Foot::None => {}
-            }
-        }
-
-        if end_left_toe == INVALID_COLUMN {
-            end_left_toe = end_left_heel;
-        }
-        if end_right_toe == INVALID_COLUMN {
-            end_right_toe = end_right_heel;
-        }
-
-        let previous_left = self.layout.average_point(
-            initial.where_the_feet_are[Foot::LeftHeel.as_index()],
-            initial.where_the_feet_are[Foot::LeftToe.as_index()],
-        );
-        let previous_right = self.layout.average_point(
-            initial.where_the_feet_are[Foot::RightHeel.as_index()],
-            initial.where_the_feet_are[Foot::RightToe.as_index()],
-        );
-        let left = self.layout.average_point(end_left_heel, end_left_toe);
-        let right = self.layout.average_point(end_right_heel, end_right_toe);
-
-        let mut cost = 0.0;
-        if right.x < left.x
-            && previous_right.x < previous_left.x
-            && right.y < left.y
-            && previous_right.y > previous_left.y
-        {
-            cost += SPIN_WEIGHT;
-        }
-        if right.x < left.x
-            && previous_right.x < previous_left.x
-            && right.y > left.y
-            && previous_right.y < previous_left.y
-        {
-            cost += SPIN_WEIGHT;
-        }
-        cost
-    }
-
-    fn calc_footswitch_cost(
-        &self,
-        initial: &State,
-        result: &State,
-        row: &Row,
-        elapsed: f32,
-        column_count: usize,
-    ) -> f32 {
-        if elapsed < SLOW_FOOTSWITCH_THRESHOLD || elapsed >= SLOW_FOOTSWITCH_IGNORE {
-            return 0.0;
-        }
-
-        if row.mines.iter().all(|mine| (*mine as i32) == 0)
-            && row.fake_mines.iter().all(|mine| (*mine as i32) == 0)
-        {
-            let time_scaled = elapsed - SLOW_FOOTSWITCH_THRESHOLD;
-            for i in 0..column_count {
-                if initial.combined_columns[i] == Foot::None || result.columns[i] == Foot::None {
-                    continue;
-                }
-                let initial_foot = initial.combined_columns[i];
-                let result_foot = result.columns[i];
-                if initial_foot != result_foot
-                    && initial_foot != OTHER_PART_OF_FOOT[result_foot.as_index()]
-                {
-                    let divisor = SLOW_FOOTSWITCH_THRESHOLD + time_scaled;
-                    if divisor > 0.0 {
-                        return (time_scaled / divisor) * FOOTSWITCH_WEIGHT;
-                    }
-                }
-            }
-        }
-        0.0
-    }
-
-    fn calc_sideswitch_cost(&self, initial: &State, result: &State) -> f32 {
-        let mut cost = 0.0;
-        for &column in &self.layout.side_arrows {
-            if initial.combined_columns[column] != result.columns[column]
-                && result.columns[column] != Foot::None
-                && initial.combined_columns[column] != Foot::None
-                && !result.did_the_foot_move[initial.combined_columns[column].as_index()]
-            {
-                cost += SIDESWITCH_WEIGHT;
-            }
-        }
-        cost
-    }
-
-    fn calc_missed_footswitch_cost(&self, row: &Row, jacked_left: bool, jacked_right: bool) -> f32 {
-        if (jacked_left || jacked_right)
-            && (row.mines.iter().any(|mine| (*mine as i32) != 0)
-                || row.fake_mines.iter().any(|mine| (*mine as i32) != 0))
-        {
-            MISSED_FOOTSWITCH_WEIGHT
-        } else {
-            0.0
-        }
-    }
-
-    fn calc_jack_cost(
-        &self,
-        moved_left: bool,
-        moved_right: bool,
-        jacked_left: bool,
-        jacked_right: bool,
-        elapsed: f32,
-    ) -> f32 {
-        if elapsed < JACK_THRESHOLD && moved_left != moved_right {
-            let time_scaled = JACK_THRESHOLD - elapsed;
-            if jacked_left || jacked_right {
-                if time_scaled > 0.0 {
-                    return (1.0 / time_scaled - 1.0 / JACK_THRESHOLD) * JACK_WEIGHT;
-                }
-            }
-        }
-        0.0
-    }
-
-    fn calc_big_movements_quickly_cost(
-        &self,
-        initial: &State,
-        result: &State,
-        elapsed: f32,
-    ) -> f32 {
-        let mut cost = 0.0;
-        for &foot in &result.moved_feet {
-            if foot == Foot::None {
-                continue;
-            }
-            let initial_position = initial.where_the_feet_are[foot.as_index()];
-            if initial_position == INVALID_COLUMN {
-                continue;
-            }
-            let result_position = result.what_note_the_foot_is_hitting[foot.as_index()];
-
-            let distance_sq = self
-                .layout
-                .get_distance_sq(initial_position as usize, result_position as usize)
-                as f64;
-            let mut distance =
-                ((distance_sq.sqrt() * DISTANCE_WEIGHT as f64) / elapsed as f64) as f32;
-
-            let other = OTHER_PART_OF_FOOT[foot.as_index()];
-            let is_bracketing =
-                result.what_note_the_foot_is_hitting[other.as_index()] != INVALID_COLUMN;
-            if is_bracketing
-                && result.what_note_the_foot_is_hitting[other.as_index()] == initial_position
-            {
-                continue;
-            }
-            if is_bracketing {
-                distance *= 0.2;
-            }
-            cost += distance;
-        }
-        cost
-    }
-
-    fn did_double_step(
-        &self,
-        initial: &State,
-        _result: &State,
-        rows: &[Row],
-        row_index: usize,
-        moved_left: bool,
-        jacked_left: bool,
-        moved_right: bool,
-        jacked_right: bool,
-    ) -> bool {
-        let mut doublestepped = false;
-        if moved_left
-            && !jacked_left
-            && ((initial.did_the_foot_move[Foot::LeftHeel.as_index()]
-                && !initial.is_the_foot_holding[Foot::LeftHeel.as_index()])
-                || (initial.did_the_foot_move[Foot::LeftToe.as_index()]
-                    && !initial.is_the_foot_holding[Foot::LeftToe.as_index()]))
-        {
-            doublestepped = true;
-        }
-        if moved_right
-            && !jacked_right
-            && ((initial.did_the_foot_move[Foot::RightHeel.as_index()]
-                && !initial.is_the_foot_holding[Foot::RightHeel.as_index()])
-                || (initial.did_the_foot_move[Foot::RightToe.as_index()]
-                    && !initial.is_the_foot_holding[Foot::RightToe.as_index()]))
-        {
-            doublestepped = true;
-        }
-
-        if row_index > 0 {
-            let last_row = &rows[row_index - 1];
-            for hold in &last_row.holds {
-                if hold.note_type == TapNoteType::Empty {
-                    continue;
-                }
-                let end_beat = rows[row_index].beat;
-                let start_beat = last_row.beat;
-                let hold_end = hold.beat + hold.hold_length;
-                if hold_end > start_beat && hold_end < end_beat {
-                    doublestepped = false;
-                }
-                if hold_end >= end_beat {
-                    doublestepped = false;
-                }
-            }
-        }
-
-        doublestepped
-    }
-
-    fn did_jack_left(
-        &self,
-        initial: &State,
-        result: &State,
-        left_heel: isize,
-        left_toe: isize,
-        moved_left: bool,
-        did_jump: bool,
-    ) -> bool {
-        if did_jump || !moved_left {
-            return false;
-        }
-
-        if left_heel > INVALID_COLUMN
-            && initial.combined_columns[left_heel as usize] == Foot::LeftHeel
-            && !result.is_the_foot_holding[Foot::LeftHeel.as_index()]
-            && ((initial.did_the_foot_move[Foot::LeftHeel.as_index()]
-                && !initial.is_the_foot_holding[Foot::LeftHeel.as_index()])
-                || (initial.did_the_foot_move[Foot::LeftToe.as_index()]
-                    && !initial.is_the_foot_holding[Foot::LeftToe.as_index()]))
-        {
-            return true;
-        }
-
-        if left_toe > INVALID_COLUMN
-            && initial.combined_columns[left_toe as usize] == Foot::LeftToe
-            && !result.is_the_foot_holding[Foot::LeftToe.as_index()]
-            && ((initial.did_the_foot_move[Foot::LeftHeel.as_index()]
-                && !initial.is_the_foot_holding[Foot::LeftHeel.as_index()])
-                || (initial.did_the_foot_move[Foot::LeftToe.as_index()]
-                    && !initial.is_the_foot_holding[Foot::LeftToe.as_index()]))
-        {
-            return true;
-        }
-
-        false
-    }
-
-    fn did_jack_right(
-        &self,
-        initial: &State,
-        result: &State,
-        right_heel: isize,
-        right_toe: isize,
-        moved_right: bool,
-        did_jump: bool,
-    ) -> bool {
-        if did_jump || !moved_right {
-            return false;
-        }
-
-        if right_heel > INVALID_COLUMN
-            && initial.combined_columns[right_heel as usize] == Foot::RightHeel
-            && !result.is_the_foot_holding[Foot::RightHeel.as_index()]
-            && ((initial.did_the_foot_move[Foot::RightHeel.as_index()]
-                && !initial.is_the_foot_holding[Foot::RightHeel.as_index()])
-                || (initial.did_the_foot_move[Foot::RightToe.as_index()]
-                    && !initial.is_the_foot_holding[Foot::RightToe.as_index()]))
-        {
-            return true;
-        }
-
-        if right_toe > INVALID_COLUMN
-            && initial.combined_columns[right_toe as usize] == Foot::RightToe
-            && !result.is_the_foot_holding[Foot::RightToe.as_index()]
-            && ((initial.did_the_foot_move[Foot::RightHeel.as_index()]
-                && !initial.is_the_foot_holding[Foot::RightHeel.as_index()])
-                || (initial.did_the_foot_move[Foot::RightToe.as_index()]
-                    && !initial.is_the_foot_holding[Foot::RightToe.as_index()]))
-        {
-            return true;
-        }
-
-        false
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+// --- Tech Counts ---
+
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TechCounts {
     pub crossovers: u32,
     pub half_crossovers: u32,
@@ -1923,135 +1741,101 @@ pub struct TechCounts {
     pub doublesteps: u32,
 }
 
-fn layout_for_lanes(lanes: usize) -> Option<StageLayout> {
-    match lanes {
-        4 => Some(StageLayout::new_dance_single()),
-        8 => Some(StageLayout::new_dance_double()),
-        _ => None,
-    }
-}
-
-fn time_between_beats(start: f32, end: f32, bpm_map: &[(f64, f64)]) -> f64 {
-    if end <= start {
-        return 0.0;
-    }
-
-    let mut bpm = if bpm_map.is_empty() { 60.0 } else { bpm_map[0].1 };
-    for &(beat, value) in bpm_map {
-        if beat <= start as f64 {
-            bpm = value;
-        } else {
-            break;
-        }
-    }
-
-    let mut time = 0.0;
-    let mut last = start as f64;
-    let target = end as f64;
-    for &(beat, value) in bpm_map {
-        if beat <= last {
-            continue;
-        }
-        if beat >= target {
-            break;
-        }
-        time += (beat - last) * 60.0 / bpm;
-        last = beat;
-        bpm = value;
-    }
-    time += (target - last) * 60.0 / bpm;
-    time
-}
-
-fn calculate_tech_counts_from_rows(
-    rows: &[Row],
-    layout: &StageLayout,
-    _bpm_map: &[(f64, f64)],
-) -> TechCounts {
+fn calculate_tech_counts(rows: &[Row], layout: &StageLayout) -> TechCounts {
     let mut out = TechCounts::default();
     if rows.len() < 2 {
         return out;
     }
 
     for i in 1..rows.len() {
-        let current_row = &rows[i];
-        let previous_row = &rows[i - 1];
-        let elapsed_time = current_row.second - previous_row.second;
+        let (curr, prev) = (&rows[i], &rows[i - 1]);
+        let elapsed = curr.second - prev.second;
 
-        if current_row.note_count == 1 && previous_row.note_count == 1 {
+        // Jacks and doublesteps
+        if curr.note_count == 1 && prev.note_count == 1 {
             for &foot in &FEET {
-                let current_col = current_row.where_the_feet_are[foot.as_index()];
-                let previous_col = previous_row.where_the_feet_are[foot.as_index()];
-                if current_col == INVALID_COLUMN || previous_col == INVALID_COLUMN {
+                let (cc, pc) = (
+                    curr.where_the_feet_are[foot.as_index()],
+                    prev.where_the_feet_are[foot.as_index()],
+                );
+                if cc == INVALID_COLUMN || pc == INVALID_COLUMN {
                     continue;
                 }
-
-                if current_col == previous_col {
-                    if elapsed_time < JACK_CUTOFF {
-                        out.jacks += 1;
-                    }
-                } else if elapsed_time < DOUBLESTEP_CUTOFF {
+                if cc == pc && elapsed < JACK_CUTOFF {
+                    out.jacks += 1;
+                } else if cc != pc && elapsed < DOUBLESTEP_CUTOFF {
                     out.doublesteps += 1;
                 }
             }
         }
 
-        if current_row.note_count >= 2 {
-            if current_row.where_the_feet_are[Foot::LeftHeel.as_index()] != INVALID_COLUMN
-                && current_row.where_the_feet_are[Foot::LeftToe.as_index()] != INVALID_COLUMN
+        // Brackets
+        if curr.note_count >= 2 {
+            if curr.where_the_feet_are[1] != INVALID_COLUMN
+                && curr.where_the_feet_are[2] != INVALID_COLUMN
             {
                 out.brackets += 1;
             }
-            if current_row.where_the_feet_are[Foot::RightHeel.as_index()] != INVALID_COLUMN
-                && current_row.where_the_feet_are[Foot::RightToe.as_index()] != INVALID_COLUMN
+            if curr.where_the_feet_are[3] != INVALID_COLUMN
+                && curr.where_the_feet_are[4] != INVALID_COLUMN
             {
                 out.brackets += 1;
             }
         }
 
+        // Footswitches by arrow type
+        let is_switch = |c: usize| -> bool {
+            let (p, r) = (prev.columns[c], curr.columns[c]);
+            p != Foot::None
+                && r != Foot::None
+                && p != r
+                && OTHER_PART_OF_FOOT[p.as_index()] != r
+                && elapsed < FOOTSWITCH_CUTOFF
+        };
+
         for &c in &layout.up_arrows {
-            if is_footswitch(c, current_row, previous_row, elapsed_time) {
+            if is_switch(c) {
                 out.up_footswitches += 1;
                 out.footswitches += 1;
             }
         }
         for &c in &layout.down_arrows {
-            if is_footswitch(c, current_row, previous_row, elapsed_time) {
+            if is_switch(c) {
                 out.down_footswitches += 1;
                 out.footswitches += 1;
             }
         }
         for &c in &layout.side_arrows {
-            if is_footswitch(c, current_row, previous_row, elapsed_time) {
+            if is_switch(c) {
                 out.sideswitches += 1;
             }
         }
 
-        let left_heel = current_row.where_the_feet_are[Foot::LeftHeel.as_index()];
-        let left_toe = current_row.where_the_feet_are[Foot::LeftToe.as_index()];
-        let right_heel = current_row.where_the_feet_are[Foot::RightHeel.as_index()];
-        let right_toe = current_row.where_the_feet_are[Foot::RightToe.as_index()];
+        // Crossovers - restored original logic with prev_prev checks
+        let left_heel = curr.where_the_feet_are[Foot::LeftHeel.as_index()];
+        let left_toe = curr.where_the_feet_are[Foot::LeftToe.as_index()];
+        let right_heel = curr.where_the_feet_are[Foot::RightHeel.as_index()];
+        let right_toe = curr.where_the_feet_are[Foot::RightToe.as_index()];
 
-        let prev_left_heel = previous_row.where_the_feet_are[Foot::LeftHeel.as_index()];
-        let prev_left_toe = previous_row.where_the_feet_are[Foot::LeftToe.as_index()];
-        let prev_right_heel = previous_row.where_the_feet_are[Foot::RightHeel.as_index()];
-        let prev_right_toe = previous_row.where_the_feet_are[Foot::RightToe.as_index()];
+        let prev_left_heel = prev.where_the_feet_are[Foot::LeftHeel.as_index()];
+        let prev_left_toe = prev.where_the_feet_are[Foot::LeftToe.as_index()];
+        let prev_right_heel = prev.where_the_feet_are[Foot::RightHeel.as_index()];
+        let prev_right_toe = prev.where_the_feet_are[Foot::RightToe.as_index()];
 
+        // Right foot crossing over left
         if right_heel != INVALID_COLUMN
             && prev_left_heel != INVALID_COLUMN
             && prev_right_heel == INVALID_COLUMN
         {
-            let left_pos = layout.average_point(prev_left_heel, prev_left_toe);
-            let right_pos = layout.average_point(right_heel, right_toe);
+            let left_pos = layout.avg_point(prev_left_heel, prev_left_toe);
+            let right_pos = layout.avg_point(right_heel, right_toe);
             if right_pos.x < left_pos.x {
                 if i > 1 {
-                    let prev_prev_row = &rows[i - 2];
-                    let prev_prev_right_heel =
-                        prev_prev_row.where_the_feet_are[Foot::RightHeel.as_index()];
-                    if prev_prev_right_heel != INVALID_COLUMN && prev_prev_right_heel != right_heel
-                    {
-                        let prev_prev_right_pos = layout.columns[prev_prev_right_heel as usize];
-                        if prev_prev_right_pos.x > left_pos.x {
+                    let prev_prev = &rows[i - 2];
+                    let prev_prev_rh = prev_prev.where_the_feet_are[Foot::RightHeel.as_index()];
+                    if prev_prev_rh != INVALID_COLUMN && prev_prev_rh != right_heel {
+                        let prev_prev_pos = layout.columns[prev_prev_rh as usize];
+                        if prev_prev_pos.x > left_pos.x {
                             out.full_crossovers += 1;
                         } else {
                             out.half_crossovers += 1;
@@ -2063,20 +1847,20 @@ fn calculate_tech_counts_from_rows(
                     out.crossovers += 1;
                 }
             }
+        // Left foot crossing over right
         } else if left_heel != INVALID_COLUMN
             && prev_right_heel != INVALID_COLUMN
             && prev_left_heel == INVALID_COLUMN
         {
-            let left_pos = layout.average_point(left_heel, left_toe);
-            let right_pos = layout.average_point(prev_right_heel, prev_right_toe);
+            let left_pos = layout.avg_point(left_heel, left_toe);
+            let right_pos = layout.avg_point(prev_right_heel, prev_right_toe);
             if right_pos.x < left_pos.x {
                 if i > 1 {
-                    let prev_prev_row = &rows[i - 2];
-                    let prev_prev_left_heel =
-                        prev_prev_row.where_the_feet_are[Foot::LeftHeel.as_index()];
-                    if prev_prev_left_heel != INVALID_COLUMN && prev_prev_left_heel != left_heel {
-                        let prev_prev_left_pos = layout.columns[prev_prev_left_heel as usize];
-                        if right_pos.x > prev_prev_left_pos.x {
+                    let prev_prev = &rows[i - 2];
+                    let prev_prev_lh = prev_prev.where_the_feet_are[Foot::LeftHeel.as_index()];
+                    if prev_prev_lh != INVALID_COLUMN && prev_prev_lh != left_heel {
+                        let prev_prev_pos = layout.columns[prev_prev_lh as usize];
+                        if right_pos.x > prev_prev_pos.x {
                             out.full_crossovers += 1;
                         } else {
                             out.half_crossovers += 1;
@@ -2090,201 +1874,10 @@ fn calculate_tech_counts_from_rows(
             }
         }
     }
-
     out
 }
 
-fn calculate_tech_counts_from_rows_with_timing(
-    rows: &[Row],
-    layout: &StageLayout,
-    _timing: &TimingData,
-) -> TechCounts {
-    let mut out = TechCounts::default();
-    if rows.len() < 2 {
-        return out;
-    }
-
-    for i in 1..rows.len() {
-        let current_row = &rows[i];
-        let previous_row = &rows[i - 1];
-        let elapsed_time = current_row.second - previous_row.second;
-
-        if current_row.note_count == 1 && previous_row.note_count == 1 {
-            for &foot in &FEET {
-                let current_col = current_row.where_the_feet_are[foot.as_index()];
-                let previous_col = previous_row.where_the_feet_are[foot.as_index()];
-                if current_col == INVALID_COLUMN || previous_col == INVALID_COLUMN {
-                    continue;
-                }
-
-                if current_col == previous_col {
-                    if elapsed_time < JACK_CUTOFF {
-                        out.jacks += 1;
-                    }
-                } else if elapsed_time < DOUBLESTEP_CUTOFF {
-                    out.doublesteps += 1;
-                }
-            }
-        }
-
-        if current_row.note_count >= 2 {
-            if current_row.where_the_feet_are[Foot::LeftHeel.as_index()] != INVALID_COLUMN
-                && current_row.where_the_feet_are[Foot::LeftToe.as_index()] != INVALID_COLUMN
-            {
-                out.brackets += 1;
-            }
-            if current_row.where_the_feet_are[Foot::RightHeel.as_index()] != INVALID_COLUMN
-                && current_row.where_the_feet_are[Foot::RightToe.as_index()] != INVALID_COLUMN
-            {
-                out.brackets += 1;
-            }
-        }
-
-        for &c in &layout.up_arrows {
-            if is_footswitch(c, current_row, previous_row, elapsed_time) {
-                out.up_footswitches += 1;
-                out.footswitches += 1;
-            }
-        }
-        for &c in &layout.down_arrows {
-            if is_footswitch(c, current_row, previous_row, elapsed_time) {
-                out.down_footswitches += 1;
-                out.footswitches += 1;
-            }
-        }
-        for &c in &layout.side_arrows {
-            if is_footswitch(c, current_row, previous_row, elapsed_time) {
-                out.sideswitches += 1;
-            }
-        }
-
-        let left_heel = current_row.where_the_feet_are[Foot::LeftHeel.as_index()];
-        let left_toe = current_row.where_the_feet_are[Foot::LeftToe.as_index()];
-        let right_heel = current_row.where_the_feet_are[Foot::RightHeel.as_index()];
-        let right_toe = current_row.where_the_feet_are[Foot::RightToe.as_index()];
-
-        let prev_left_heel = previous_row.where_the_feet_are[Foot::LeftHeel.as_index()];
-        let prev_left_toe = previous_row.where_the_feet_are[Foot::LeftToe.as_index()];
-        let prev_right_heel = previous_row.where_the_feet_are[Foot::RightHeel.as_index()];
-        let prev_right_toe = previous_row.where_the_feet_are[Foot::RightToe.as_index()];
-
-        if right_heel != INVALID_COLUMN
-            && prev_left_heel != INVALID_COLUMN
-            && prev_right_heel == INVALID_COLUMN
-        {
-            let left_pos = layout.average_point(prev_left_heel, prev_left_toe);
-            let right_pos = layout.average_point(right_heel, right_toe);
-            if right_pos.x < left_pos.x {
-                if i > 1 {
-                    let prev_prev_row = &rows[i - 2];
-                    let prev_prev_right_heel =
-                        prev_prev_row.where_the_feet_are[Foot::RightHeel.as_index()];
-                    if prev_prev_right_heel != INVALID_COLUMN && prev_prev_right_heel != right_heel
-                    {
-                        let prev_prev_right_pos = layout.columns[prev_prev_right_heel as usize];
-                        if prev_prev_right_pos.x > left_pos.x {
-                            out.full_crossovers += 1;
-                        } else {
-                            out.half_crossovers += 1;
-                        }
-                        out.crossovers += 1;
-                    }
-                } else {
-                    out.half_crossovers += 1;
-                    out.crossovers += 1;
-                }
-            }
-        } else if left_heel != INVALID_COLUMN
-            && prev_right_heel != INVALID_COLUMN
-            && prev_left_heel == INVALID_COLUMN
-        {
-            let left_pos = layout.average_point(left_heel, left_toe);
-            let right_pos = layout.average_point(prev_right_heel, prev_right_toe);
-            if right_pos.x < left_pos.x {
-                if i > 1 {
-                    let prev_prev_row = &rows[i - 2];
-                    let prev_prev_left_heel =
-                        prev_prev_row.where_the_feet_are[Foot::LeftHeel.as_index()];
-                    if prev_prev_left_heel != INVALID_COLUMN && prev_prev_left_heel != left_heel {
-                        let prev_prev_left_pos = layout.columns[prev_prev_left_heel as usize];
-                        if right_pos.x > prev_prev_left_pos.x {
-                            out.full_crossovers += 1;
-                        } else {
-                            out.half_crossovers += 1;
-                        }
-                        out.crossovers += 1;
-                    }
-                } else {
-                    out.half_crossovers += 1;
-                    out.crossovers += 1;
-                }
-            }
-        }
-    }
-
-    out
-}
-
-fn is_footswitch(column: usize, current_row: &Row, previous_row: &Row, elapsed_time: f32) -> bool {
-    let prev = previous_row.columns[column];
-    let curr = current_row.columns[column];
-    if prev == Foot::None || curr == Foot::None {
-        return false;
-    }
-
-    prev != curr && OTHER_PART_OF_FOOT[prev.as_index()] != curr && elapsed_time < FOOTSWITCH_CUTOFF
-}
-
-const JACK_CUTOFF: f32 = 0.176;
-const FOOTSWITCH_CUTOFF: f32 = 0.3;
-const DOUBLESTEP_CUTOFF: f32 = 0.235;
-pub fn analyze(minimized_note_data: &[u8], bpm_map: &[(f64, f64)], offset: f64) -> TechCounts {
-    analyze_lanes(minimized_note_data, bpm_map, offset, 4)
-}
-
-pub fn analyze_lanes(
-    minimized_note_data: &[u8],
-    bpm_map: &[(f64, f64)],
-    offset: f64,
-    lanes: usize,
-) -> TechCounts {
-    let Some(layout) = layout_for_lanes(lanes) else {
-        return TechCounts::default();
-    };
-    let parsed_rows = parse_chart_rows(minimized_note_data, bpm_map, offset, layout.column_count());
-    let note_data = build_intermediate_notes(&parsed_rows);
-    let mut generator = StepParityGenerator::new(layout.clone());
-    if !generator.analyze_note_data(note_data, layout.column_count()) {
-        return TechCounts::default();
-    }
-    calculate_tech_counts_from_rows(&generator.rows, &generator.layout, bpm_map)
-}
-
-pub fn analyze_with_timing(minimized_note_data: &[u8], timing: &TimingData) -> TechCounts {
-    analyze_timing_lanes(minimized_note_data, timing, 4)
-}
-
-pub fn analyze_timing_lanes(
-    minimized_note_data: &[u8],
-    timing: &TimingData,
-    lanes: usize,
-) -> TechCounts {
-    let Some(layout) = layout_for_lanes(lanes) else {
-        return TechCounts::default();
-    };
-    let parsed_rows =
-        parse_chart_rows_with_timing(minimized_note_data, timing, layout.column_count());
-    let note_data = build_intermediate_notes_with_timing(&parsed_rows, timing);
-    let mut generator = StepParityGenerator::new(layout.clone());
-    if !generator.analyze_note_data(note_data, layout.column_count()) {
-        return TechCounts::default();
-    }
-    calculate_tech_counts_from_rows_with_timing(&generator.rows, &generator.layout, timing)
-}
-
-fn beat_to_time(beat: f64, bpm_map: &[(f64, f64)], offset: f64) -> f64 {
-    time_between_beats(0.0, beat as f32, bpm_map) - offset
-}
+// --- Parsing ---
 
 #[derive(Clone)]
 struct ParsedRow {
@@ -2295,239 +1888,143 @@ struct ParsedRow {
     second: f32,
 }
 
-fn env_flag(name: &str) -> bool {
-    match std::env::var(name) {
-        Ok(value) => {
-            let trimmed = value.trim();
-            !trimmed.is_empty() && trimmed != "0"
-        }
-        Err(_) => false,
+fn layout_for_lanes(lanes: usize) -> Option<StageLayout> {
+    match lanes {
+        4 => Some(StageLayout::new_dance_single()),
+        8 => Some(StageLayout::new_dance_double()),
+        _ => None,
     }
-}
-
-fn hash_bytes(bytes: &[u8]) -> u64 {
-    let mut hasher = IdentityHasher::default();
-    hasher.write(bytes);
-    hasher.finish()
-}
-
-fn hash_rows(rows: &[ParsedRow]) -> u64 {
-    let mut hasher = IdentityHasher::default();
-    for row in rows {
-        let cols = row.columns as usize;
-        hasher.write(&row.chars[..cols]);
-        hasher.write(&row.row.to_le_bytes());
-        hasher.write(&row.beat.to_bits().to_le_bytes());
-        hasher.write(&row.second.to_bits().to_le_bytes());
-    }
-    hasher.finish()
 }
 
 #[inline(always)]
-fn trim_ascii_whitespace(mut line: &[u8]) -> &[u8] {
-    while let Some((&first, rest)) = line.split_first() {
-        if first.is_ascii_whitespace() {
-            line = rest;
+fn trim_ws(mut s: &[u8]) -> &[u8] {
+    while let Some((&f, r)) = s.split_first() {
+        if f.is_ascii_whitespace() {
+            s = r;
         } else {
             break;
         }
     }
-    while let Some((&last, rest)) = line.split_last() {
-        if last.is_ascii_whitespace() {
-            line = rest;
+    while let Some((&l, r)) = s.split_last() {
+        if l.is_ascii_whitespace() {
+            s = r;
         } else {
             break;
         }
     }
-    line
+    s
 }
 
 #[inline(always)]
-fn row_has_obj(line: &[u8]) -> bool {
-    for &b in line {
-        if b != b'0' {
-            return true;
-        }
-    }
-    false
+fn has_obj(line: &[u8]) -> bool {
+    line.iter().any(|&b| b != b'0')
 }
 
-#[inline(always)]
-fn count_measure_rows(measure: &[u8]) -> usize {
-    measure
-        .split(|&b| b == b'\n')
-        .filter(|line| !trim_ascii_whitespace(*line).is_empty())
-        .count()
-}
-
-fn parse_chart_rows(
-    note_data: &[u8],
-    bpm_map: &[(f64, f64)],
-    offset: f64,
-    column_count: usize,
-) -> Vec<ParsedRow> {
+fn parse_rows<F>(data: &[u8], cols: usize, mut get_second: F) -> Vec<ParsedRow>
+where
+    F: FnMut(f32) -> f32,
+{
     let mut rows = Vec::new();
-    let mut measure_index = 0usize;
-    if column_count == 0 || column_count > 8 {
+    if cols == 0 || cols > 8 {
         return rows;
     }
 
-    for measure in note_data.split(|&b| b == b',') {
-        let num_rows = count_measure_rows(measure);
-        if num_rows == 0 {
-            measure_index += 1;
+    let mut measure_idx = 0usize;
+    for measure in data.split(|&b| b == b',') {
+        let lines: Vec<_> = measure
+            .split(|&b| b == b'\n')
+            .map(trim_ws)
+            .filter(|l| !l.is_empty())
+            .collect();
+        if lines.is_empty() {
+            measure_idx += 1;
             continue;
         }
 
-        rows.reserve(num_rows);
-        let measure_start = measure_index as f32 * 4.0;
-        let row_step = 4.0 / num_rows as f32;
-        let mut row_in_measure = 0usize;
-        for line in measure.split(|&b| b == b'\n') {
-            let trimmed = trim_ascii_whitespace(line);
-            if trimmed.is_empty() {
+        let num = lines.len();
+        let start = measure_idx as f32 * 4.0;
+        let step = 4.0 / num as f32;
+
+        for (j, line) in lines.into_iter().enumerate() {
+            let copy = line.len().min(cols);
+            if !has_obj(&line[..copy]) {
                 continue;
             }
-            let copy_len = trimmed.len().min(column_count);
-            if row_has_obj(&trimmed[..copy_len]) {
-                let beat = measure_start + row_in_measure as f32 * row_step;
-                let note_row = beat_to_note_row_f32_exact(beat);
-                let beat = note_row as f32 / ROWS_PER_BEAT as f32;
-                let second = beat_to_time(beat as f64, bpm_map, offset);
-                let mut chars = [b'0'; 8];
-                chars[..copy_len].copy_from_slice(&trimmed[..copy_len]);
-                rows.push(ParsedRow {
-                    chars,
-                    columns: column_count as u8,
-                    row: note_row,
-                    beat,
-                    second: second as f32,
-                });
-            }
-            row_in_measure += 1;
+
+            let beat = start + j as f32 * step;
+            let note_row = beat_to_note_row_f32(beat);
+            let beat = note_row as f32 / ROWS_PER_BEAT as f32;
+            let second = get_second(beat);
+
+            let mut chars = [b'0'; 8];
+            chars[..copy].copy_from_slice(&line[..copy]);
+            rows.push(ParsedRow {
+                chars,
+                columns: cols as u8,
+                row: note_row,
+                beat,
+                second,
+            });
         }
-
-        measure_index += 1;
+        measure_idx += 1;
     }
-
     rows
 }
 
-fn parse_chart_rows_with_timing(
-    note_data: &[u8],
+fn parse_rows_from_arrays<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
     timing: &TimingData,
-    column_count: usize,
+    cols: usize,
 ) -> Vec<ParsedRow> {
-    let mut rows = Vec::new();
-    let mut measure_index = 0usize;
-    let dump_rows = env_flag("RSSP_STEP_PARITY_DUMP_ROWS");
-    if column_count == 0 || column_count > 8 {
-        return rows;
+    let mut parsed = Vec::new();
+    if cols == 0 || cols > 8 {
+        return parsed;
     }
 
-    if dump_rows {
-        let hash = hash_bytes(note_data);
-        eprintln!(
-            "STEP_PARITY_ROWS start hash={:016x} columns={}",
-            hash, column_count
-        );
-    }
-
-    for measure in note_data.split(|&b| b == b',') {
-        let num_rows = count_measure_rows(measure);
-        if num_rows == 0 {
-            measure_index += 1;
+    let copy_len = cols.min(LANES);
+    for (idx, row) in rows.iter().enumerate() {
+        if !has_obj(&row[..copy_len]) {
             continue;
         }
 
-        rows.reserve(num_rows);
-        let measure_start = measure_index as f32 * 4.0;
-        let row_step = 4.0 / num_rows as f32;
-        let mut row_in_measure = 0usize;
-        for line in measure.split(|&b| b == b'\n') {
-            let trimmed = trim_ascii_whitespace(line);
-            if trimmed.is_empty() {
-                continue;
-            }
-            let copy_len = trimmed.len().min(column_count);
-            if row_has_obj(&trimmed[..copy_len]) {
-                let beat = measure_start + row_in_measure as f32 * row_step;
-                let note_row = beat_to_note_row_f32_exact(beat);
-                let beat = note_row as f32 / ROWS_PER_BEAT as f32;
-                let second = timing.get_time_for_beat_f32(beat as f64);
-                let mut chars = [b'0'; 8];
-                chars[..copy_len].copy_from_slice(&trimmed[..copy_len]);
-                rows.push(ParsedRow {
-                    chars,
-                    columns: column_count as u8,
-                    row: note_row,
-                    beat,
-                    second: second as f32,
-                });
-                let row_index = rows.len() - 1;
-                if dump_rows {
-                    let cols = rows[row_index].columns as usize;
-                    let row_text = String::from_utf8_lossy(&rows[row_index].chars[..cols]);
-                    eprintln!(
-                        "STEP_PARITY_ROW idx={} measure={} line={}/{} row={} beat={:.6} second={:.6} data={}",
-                        row_index,
-                        measure_index,
-                        row_in_measure,
-                        num_rows,
-                        note_row,
-                        beat,
-                        second as f32,
-                        row_text
-                    );
-                }
-            }
-            row_in_measure += 1;
-        }
+        let beat_raw = row_to_beat[idx];
+        let note_row = beat_to_note_row_f32(beat_raw);
+        let beat = note_row as f32 / ROWS_PER_BEAT as f32;
+        let second = timing.get_time_for_beat_f32(beat as f64) as f32;
 
-        measure_index += 1;
+        let mut chars = [b'0'; 8];
+        chars[..copy_len].copy_from_slice(&row[..copy_len]);
+        parsed.push(ParsedRow {
+            chars,
+            columns: cols as u8,
+            row: note_row,
+            beat,
+            second,
+        });
     }
-
-    if dump_rows {
-        let rows_hash = hash_rows(&rows);
-        eprintln!(
-            "STEP_PARITY_ROWS end total={} rows_hash={:016x}",
-            rows.len(),
-            rows_hash
-        );
-    }
-
-    rows
+    parsed
 }
 
-#[inline(always)]
-fn is_hold_blocker(ch: u8) -> bool {
-    matches!(ch, b'1' | b'M' | b'L' | b'F')
-}
-
-#[inline(always)]
-fn hold_lengths_for_rows(rows: &[ParsedRow], column_count: usize) -> Vec<f32> {
-    if rows.is_empty() || column_count == 0 {
+fn build_notes(rows: &[ParsedRow], timing: Option<&TimingData>) -> Vec<IntermediateNoteData> {
+    let cols = rows.first().map(|r| r.columns as usize).unwrap_or(0);
+    if cols == 0 {
         return Vec::new();
     }
 
-    let mut hold_starts = vec![None; column_count];
-    let mut lengths = vec![MISSING_HOLD_LENGTH_BEATS; rows.len() * column_count];
+    // Compute hold lengths
+    let mut hold_starts = vec![None; cols];
+    let mut lengths = vec![MISSING_HOLD_LENGTH_BEATS; rows.len() * cols];
 
-    for (row_idx, row) in rows.iter().enumerate() {
-        for col in 0..column_count {
-            match row.chars[col] {
-                ch if is_hold_blocker(ch) => {
-                    hold_starts[col] = None;
-                }
-                b'2' | b'4' => {
-                    hold_starts[col] = Some((row_idx, row.row));
-                }
+    for (idx, row) in rows.iter().enumerate() {
+        for c in 0..cols {
+            match row.chars[c] {
+                b'1' | b'M' | b'L' | b'F' => hold_starts[c] = None,
+                b'2' | b'4' => hold_starts[c] = Some((idx, row.row)),
                 b'3' => {
-                    if let Some((start_idx, start_row)) = hold_starts[col] {
-                        let length_rows = row.row - start_row;
-                        let length = length_rows as f32 / ROWS_PER_BEAT as f32;
-                        lengths[start_idx * column_count + col] = length;
-                        hold_starts[col] = None;
+                    if let Some((si, sr)) = hold_starts[c] {
+                        lengths[si * cols + c] = (row.row - sr) as f32 / ROWS_PER_BEAT as f32;
+                        hold_starts[c] = None;
                     }
                 }
                 _ => {}
@@ -2535,144 +2032,117 @@ fn hold_lengths_for_rows(rows: &[ParsedRow], column_count: usize) -> Vec<f32> {
         }
     }
 
-    lengths
-}
-
-fn build_intermediate_notes(rows: &[ParsedRow]) -> Vec<IntermediateNoteData> {
-    let column_count = rows.first().map(|row| row.columns as usize).unwrap_or(0);
-    if column_count == 0 {
-        return Vec::new();
-    }
-    let hold_lengths = hold_lengths_for_rows(rows, column_count);
-
     let mut notes = Vec::new();
-    for (row_idx, row) in rows.iter().enumerate() {
-        for col in 0..column_count {
-            let ch = row.chars[col];
+    for (idx, row) in rows.iter().enumerate() {
+        let row_fake = timing.map_or(false, |t| t.is_fake_at_beat(row.row as f64));
+
+        for c in 0..cols {
+            let ch = row.chars[c];
             let note_type = match ch {
-                b'0' => TapNoteType::Empty,
-                b'1' => TapNoteType::Tap,
+                b'1' | b'K' | b'L' => TapNoteType::Tap,
                 b'2' | b'4' => TapNoteType::HoldHead,
-                b'3' => TapNoteType::HoldTail,
                 b'M' => TapNoteType::Mine,
-                b'K' | b'L' => TapNoteType::Tap,
                 b'F' => TapNoteType::Fake,
-                _ => TapNoteType::Empty,
+                _ => continue,
             };
 
-            if matches!(note_type, TapNoteType::Empty | TapNoteType::HoldTail) {
-                continue;
-            }
-
-            let mut note = IntermediateNoteData::default();
-            note.note_type = note_type;
-            note.col = col;
-            note.row = row.row as usize;
-            note.beat = row.beat;
-            note.second = row.second;
-            note.fake = note_type == TapNoteType::Fake;
-            note.subtype = match ch {
-                b'4' => TapNoteSubType::Roll,
-                b'2' => TapNoteSubType::Hold,
-                _ => TapNoteSubType::Invalid,
+            let mut note = IntermediateNoteData {
+                note_type,
+                col: c,
+                beat: row.beat,
+                second: row.second,
+                fake: note_type == TapNoteType::Fake || row_fake,
+                ..Default::default()
             };
 
             if note_type == TapNoteType::HoldHead {
-                let hold_length = hold_lengths[row_idx * column_count + col];
-                if hold_length >= MISSING_HOLD_LENGTH_BEATS {
+                let len = lengths[idx * cols + c];
+                if len >= MISSING_HOLD_LENGTH_BEATS {
                     continue;
                 }
-                note.hold_length = hold_length;
+                note.hold_length = len;
             }
-
             notes.push(note);
         }
     }
     notes
 }
 
-fn build_intermediate_notes_with_timing(
-    rows: &[ParsedRow],
+// --- Public API ---
+
+pub fn analyze_lanes(data: &[u8], bpm_map: &[(f64, f64)], offset: f64, lanes: usize) -> TechCounts {
+    let Some(layout) = layout_for_lanes(lanes) else {
+        return TechCounts::default();
+    };
+
+    let rows = parse_rows(data, layout.column_count(), |beat| {
+        time_between_beats(0.0, beat, bpm_map) as f32 - offset as f32
+    });
+    let notes = build_notes(&rows, None);
+
+    let mut generator = StepParityGenerator::new(layout.clone());
+    if !generator.analyze(notes, layout.column_count()) {
+        return TechCounts::default();
+    }
+    calculate_tech_counts(&generator.rows, &generator.layout)
+}
+
+pub fn analyze_timing_lanes(data: &[u8], timing: &TimingData, lanes: usize) -> TechCounts {
+    let Some(layout) = layout_for_lanes(lanes) else {
+        return TechCounts::default();
+    };
+
+    let rows = parse_rows(data, layout.column_count(), |beat| {
+        timing.get_time_for_beat_f32(beat as f64) as f32
+    });
+    let notes = build_notes(&rows, Some(timing));
+
+    let mut generator = StepParityGenerator::new(layout.clone());
+    if !generator.analyze(notes, layout.column_count()) {
+        return TechCounts::default();
+    }
+    calculate_tech_counts(&generator.rows, &generator.layout)
+}
+
+pub(crate) fn analyze_timing_rows<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
     timing: &TimingData,
-) -> Vec<IntermediateNoteData> {
-    let column_count = rows.first().map(|row| row.columns as usize).unwrap_or(0);
-    if column_count == 0 {
-        return Vec::new();
+    _minimized_note_data: &[u8],
+) -> TechCounts {
+    let Some(layout) = layout_for_lanes(LANES) else {
+        return TechCounts::default();
+    };
+
+    let parsed = parse_rows_from_arrays(rows, row_to_beat, timing, layout.column_count());
+    let notes = build_notes(&parsed, Some(timing));
+
+    let mut generator = StepParityGenerator::new(layout.clone());
+    if !generator.analyze(notes, layout.column_count()) {
+        return TechCounts::default();
     }
-    let dump_notes = env_flag("RSSP_STEP_PARITY_DUMP_NOTES");
-    let hold_lengths = hold_lengths_for_rows(rows, column_count);
+    calculate_tech_counts(&generator.rows, &generator.layout)
+}
 
-    let mut notes = Vec::new();
-    if dump_notes {
-        let rows_hash = hash_rows(rows);
-        eprintln!(
-            "STEP_PARITY_NOTES start rows={} columns={} rows_hash={:016x}",
-            rows.len(),
-            column_count,
-            rows_hash
-        );
+fn time_between_beats(start: f32, end: f32, bpm_map: &[(f64, f64)]) -> f64 {
+    if end <= start {
+        return 0.0;
     }
-    for (row_idx, row) in rows.iter().enumerate() {
-        let row_fake = timing.is_fake_at_beat(row.row as f64);
-        for col in 0..column_count {
-            let ch = row.chars[col];
-            let note_type = match ch {
-                b'0' => TapNoteType::Empty,
-                b'1' => TapNoteType::Tap,
-                b'2' | b'4' => TapNoteType::HoldHead,
-                b'3' => TapNoteType::HoldTail,
-                b'M' => TapNoteType::Mine,
-                b'K' | b'L' => TapNoteType::Tap,
-                b'F' => TapNoteType::Fake,
-                _ => TapNoteType::Empty,
-            };
+    let mut bpm = bpm_map.first().map(|b| b.1).unwrap_or(60.0);
+    let mut time = 0.0;
+    let mut last = start as f64;
 
-            if matches!(note_type, TapNoteType::Empty | TapNoteType::HoldTail) {
-                continue;
-            }
-
-            let mut note = IntermediateNoteData::default();
-            note.note_type = note_type;
-            note.col = col;
-            note.row = row.row as usize;
-            note.beat = row.beat;
-            note.second = row.second;
-            note.fake = note_type == TapNoteType::Fake || row_fake;
-            note.subtype = match ch {
-                b'4' => TapNoteSubType::Roll,
-                b'2' => TapNoteSubType::Hold,
-                _ => TapNoteSubType::Invalid,
-            };
-
-            if note_type == TapNoteType::HoldHead {
-                let hold_length = hold_lengths[row_idx * column_count + col];
-                if hold_length >= MISSING_HOLD_LENGTH_BEATS {
-                    continue;
-                }
-                note.hold_length = hold_length;
-            }
-
-            if dump_notes {
-                eprintln!(
-                    "STEP_PARITY_NOTE row_idx={} row={} beat={:.6} second={:.6} col={} ch={} type={:?} subtype={:?} fake={} hold_len={:.6}",
-                    row_idx,
-                    row.row,
-                    row.beat,
-                    row.second,
-                    col,
-                    ch as char,
-                    note.note_type,
-                    note.subtype,
-                    note.fake,
-                    note.hold_length
-                );
-            }
-
-            notes.push(note);
+    for &(beat, value) in bpm_map {
+        if beat <= last {
+            bpm = value;
+            continue;
         }
+        if beat >= end as f64 {
+            break;
+        }
+        time += (beat - last) * 60.0 / bpm;
+        last = beat;
+        bpm = value;
     }
-    if dump_notes {
-        eprintln!("STEP_PARITY_NOTES end total={}", notes.len());
-    }
-    notes
+    time + (end as f64 - last) * 60.0 / bpm
 }

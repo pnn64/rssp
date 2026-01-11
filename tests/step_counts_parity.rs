@@ -69,8 +69,7 @@ fn compute_chart_step_counts(
         compute_tech_counts: false,
         ..AnalysisOptions::default()
     };
-    let summary = analyze(simfile_data, extension, options)
-        .map_err(|e| e.to_string())?;
+    let summary = analyze(simfile_data, extension, options).map_err(|e| e.to_string())?;
     let mut results = Vec::new();
     for chart in summary.charts {
         results.push(ChartStepCounts {
@@ -91,11 +90,19 @@ fn compute_chart_step_counts(
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
-    let compressed_bytes = fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
-
-    let raw_bytes = zstd::decode_all(&compressed_bytes[..])
-        .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
+    let (raw_bytes, ext) = if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("zst"))
+    {
+        let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        let raw_bytes = zstd::decode_all(&compressed_bytes[..])
+            .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
+        (raw_bytes, extension)
+    } else {
+        let sim = rssp::simfile::open(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        (sim.data, sim.extension)
+    };
 
     let file_hash = format!("{:x}", md5::compute(&raw_bytes));
     let subfolder = &file_hash[0..2];
@@ -113,8 +120,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         ));
     }
 
-    let compressed_golden = fs::read(&golden_path)
-        .map_err(|e| format!("Failed to read baseline file: {}", e))?;
+    let compressed_golden =
+        fs::read(&golden_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
 
     let json_bytes = zstd::decode_all(&compressed_golden[..])
         .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
@@ -122,7 +129,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     let golden_charts: Vec<GoldenChart> = serde_json::from_slice(&json_bytes)
         .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
 
-    let rssp_charts = compute_chart_step_counts(&raw_bytes, extension)
+    let rssp_charts = compute_chart_step_counts(&raw_bytes, ext)
         .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
 
     let mut golden_map: HashMap<(String, String), Vec<GoldenChart>> = HashMap::new();
@@ -175,22 +182,21 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 .unwrap_or_else(|| (idx + 1).to_string());
 
             let mut all_match = true;
-            let mut field =
-                |label: &str, expected: Option<u32>, actual: Option<u32>| -> String {
-                    let status = if expected.is_some() && expected == actual {
-                        "ok"
-                    } else {
-                        all_match = false;
-                        "MISMATCH"
-                    };
-                    format!(
-                        "{} {} -> {} {}",
-                        label,
-                        format_count(expected),
-                        format_count(actual),
-                        status
-                    )
+            let mut field = |label: &str, expected: Option<u32>, actual: Option<u32>| -> String {
+                let status = if expected.is_some() && expected == actual {
+                    "ok"
+                } else {
+                    all_match = false;
+                    "MISMATCH"
                 };
+                format!(
+                    "{} {} -> {} {}",
+                    label,
+                    format_count(expected),
+                    format_count(actual),
+                    status
+                )
+            };
 
             let holds = field("holds", expected.map(|e| e.holds), actual.map(|a| a.holds));
             let mines = field("mines", expected.map(|e| e.mines), actual.map(|a| a.mines));
@@ -309,21 +315,26 @@ fn main() {
         }
 
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if ext != "zst" {
-            continue;
-        }
+        let extension = if ext.eq_ignore_ascii_case("zst") {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let inner_path = Path::new(stem);
+            let inner_extension = inner_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_default();
 
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        let inner_path = Path::new(stem);
-        let inner_extension = inner_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|s| s.to_lowercase())
-            .unwrap_or_default();
-
-        if inner_extension != "sm" && inner_extension != "ssc" {
+            if inner_extension != "sm" && inner_extension != "ssc" {
+                continue;
+            }
+            inner_extension
+        } else if ext.eq_ignore_ascii_case("sm") {
+            "sm".to_string()
+        } else if ext.eq_ignore_ascii_case("ssc") {
+            "ssc".to_string()
+        } else {
             continue;
-        }
+        };
 
         let test_name = path
             .strip_prefix(&packs_dir)
@@ -334,7 +345,7 @@ fn main() {
         tests.push(TestCase {
             name: test_name,
             path: path.to_path_buf(),
-            extension: inner_extension,
+            extension,
         });
     }
 

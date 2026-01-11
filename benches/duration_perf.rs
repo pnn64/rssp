@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -93,18 +93,17 @@ fn build_duration_inputs() -> (Vec<DurationChartInput>, DurationGlobals) {
         .notes_list
         .into_iter()
         .filter_map(|entry| {
-            let (fields, chart_data) = rssp::parse::split_notes_fields(&entry.notes);
-            if fields.len() < 5 {
+            if entry.field_count < 5 {
                 return None;
             }
 
-            let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim();
+            let step_type = std::str::from_utf8(entry.fields[0]).unwrap_or("").trim();
             if step_type == "lights-cabinet" {
                 return None;
             }
 
             Some(DurationChartInput {
-                chart_data: chart_data.to_vec(),
+                chart_data: entry.note_data.to_vec(),
                 lanes: rssp::step_type_lanes(step_type),
                 chart_offset: chart_offset_seconds(entry.chart_offset.as_deref()),
                 chart_bpms: clean_chart_tag(entry.chart_bpms.as_deref()),
@@ -125,10 +124,7 @@ fn build_minimized_inputs(charts: &[DurationChartInput]) -> Vec<MinimizedChartIn
     let mut minimized = Vec::with_capacity(charts.len());
     for chart in charts {
         let (mut minimized_chart, _stats, _measure_densities) =
-            rssp::stats::minimize_chart_and_count_with_lanes(
-                &chart.chart_data,
-                chart.lanes,
-            );
+            rssp::stats::minimize_chart_and_count_with_lanes(&chart.chart_data, chart.lanes);
         if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
             minimized_chart.truncate(pos + 1);
         }
@@ -217,8 +213,7 @@ fn bench_duration_inner(c: &mut Criterion) {
                     minimized_chart.truncate(pos + 1);
                 }
 
-                let target_beat =
-                    rssp::bpm::compute_last_beat(&minimized_chart, chart.lanes);
+                let target_beat = rssp::bpm::compute_last_beat(&minimized_chart, chart.lanes);
                 let chart_offset = if globals.allow_steps_timing && chart.chart_offset.is_some() {
                     chart.chart_offset.unwrap()
                 } else {
@@ -300,9 +295,10 @@ fn bench_duration_inner(c: &mut Criterion) {
                     },
                     timing_fakes_global,
                     globals.timing_format,
+                    true,
                 );
                 let duration = timing.get_time_for_beat(target_beat);
-                let duration = rssp::timing::round_millis(duration);
+                let duration = rssp::math::round_sig_figs_itg(duration);
                 durations.push(duration);
             }
             black_box(durations);
@@ -410,9 +406,10 @@ fn bench_duration_timing(c: &mut Criterion) {
                     },
                     timing_fakes_global,
                     globals.timing_format,
+                    true,
                 );
                 let duration = timing.get_time_for_beat(entry.target_beat);
-                durations.push(rssp::timing::round_millis(duration));
+                durations.push(rssp::math::round_sig_figs_itg(duration));
             }
             black_box(durations);
         })

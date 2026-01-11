@@ -1,28 +1,26 @@
-use criterion::{criterion_group, criterion_main, Criterion};
-use std::hint::black_box;
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::borrow::Cow;
+use std::hint::black_box;
 use std::time::Duration;
 
 const FIXTURE: &str = include_str!("fixtures/camellia_mix.ssc");
 
 #[derive(Clone)]
 struct ChartInput {
-    notes: Vec<u8>,
+    field_count: u8,
+    fields: [&'static [u8]; 5],
+    note_data: &'static [u8],
     chart_bpms: Option<Vec<u8>>,
 }
 
 fn step_type_lanes(step_type: &str) -> usize {
     let normalized = step_type.trim().to_ascii_lowercase().replace('_', "-");
-    if normalized == "dance-double" {
-        8
-    } else {
-        4
-    }
+    if normalized == "dance-double" { 8 } else { 4 }
 }
 
 fn build_chart_inputs() -> (Vec<ChartInput>, String) {
-    let parsed = rssp::parse::extract_sections(FIXTURE.as_bytes(), "ssc")
-        .expect("fixture should parse");
+    let parsed =
+        rssp::parse::extract_sections(FIXTURE.as_bytes(), "ssc").expect("fixture should parse");
     let normalized_global_bpms = {
         let raw = std::str::from_utf8(parsed.bpms.unwrap_or(b"")).unwrap_or("");
         rssp::bpm::normalize_float_digits(raw)
@@ -31,7 +29,9 @@ fn build_chart_inputs() -> (Vec<ChartInput>, String) {
         .notes_list
         .into_iter()
         .map(|entry| ChartInput {
-            notes: entry.notes,
+            field_count: entry.field_count,
+            fields: entry.fields,
+            note_data: entry.note_data,
             chart_bpms: entry.chart_bpms.map(|v| v.into_owned()),
         })
         .collect();
@@ -62,18 +62,18 @@ fn bench_hash_inner(c: &mut Criterion) {
         b.iter(|| {
             let mut hashes = Vec::with_capacity(charts.len());
             for entry in &charts {
-                let (fields, chart_data) = rssp::parse::split_notes_fields(&entry.notes);
-                if fields.len() < 5 {
+                if entry.field_count < 5 {
                     continue;
                 }
 
-                let step_type = std::str::from_utf8(fields[0]).unwrap_or("").trim();
+                let step_type = std::str::from_utf8(entry.fields[0]).unwrap_or("").trim();
                 if step_type == "lights-cabinet" {
                     continue;
                 }
 
                 let lanes = step_type_lanes(step_type);
-                let mut minimized_chart = rssp::stats::minimize_chart_for_hash(chart_data, lanes);
+                let mut minimized_chart =
+                    rssp::stats::minimize_chart_for_hash(entry.note_data, lanes);
                 if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
                     minimized_chart.truncate(pos + 1);
                 }
@@ -87,7 +87,8 @@ fn bench_hash_inner(c: &mut Criterion) {
                     Cow::Borrowed(normalized_global_bpms.as_str())
                 };
 
-                let hash = rssp::hashing::compute_chart_hash(&minimized_chart, bpms_to_use.as_ref());
+                let hash =
+                    rssp::hashing::compute_chart_hash(&minimized_chart, bpms_to_use.as_ref());
                 hashes.push(hash);
             }
             black_box(hashes);

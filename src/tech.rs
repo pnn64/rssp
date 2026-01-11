@@ -3,16 +3,15 @@ use std::sync::OnceLock;
 const KNOWN_TECH_LIST: &[&str] = &[
     "24ths", "32nds", "br", "BR", "BR+", "BR-", "BT", "BT+", "BT-", "bu", "BU", "BU+", "BU-",
     "BXF", "BXF+", "BXF-", "bXF", "bXF+", "bXF-", "BxF", "BXf", "BxF+", "BxF-", "bXf", "bXf+",
-    "bXf-", "bxF", "bxF+", "bxF-", "B+XF", "BX-F", "BX-F+", "BX+F+", "B+X-F", "B-X-F-",
-    "B-XF+", "ds", "DS", "DS++", "DS+", "DS-", "dr", "DR", "DR+", "DR-", "dt", "dt-", "DT",
-    "DT+", "DT-", "FL", "FL+", "FL-", "fs", "FS", "FS+", "FS-", "FX", "FX+", "FX-", "GH",
-    "GH+", "GH-", "HA", "HA+", "HA-", "HS", "HS+", "HS-", "ITL+", "ja", "ja-", "JA", "JA+",
-    "JA-", "ju", "ju-", "JU", "JU+", "JU-", "JUMPS", "JUMPS+", "JUMPS-", "KS", "KS+", "KS-",
-    "KT", "KT+", "KT-", "LOL", "ma", "ma-", "MA", "MA+", "MA-", "MD", "MD+", "MD-", "rh",
-    "rh-", "RH", "RH+", "RH-", "Rolls-", "RS", "RS+", "RS-", "SC", "SC+", "SC-", "SDS", "SDS+",
-    "SDS-", "SJ", "SJ+", "SJ-", "SK", "SK+", "SK-", "SS", "SS+", "SS-", "SKT", "SKT+", "SKT-",
-    "SPD", "SPD+", "SPD-", "STR", "STR+", "STR-", "TR", "TR+", "TR-", "WA", "WA+", "WA-",
-    "XMOD", "XMOD+", "XMOD-", "xo", "XO", "XO+", "XO-",
+    "bXf-", "bxF", "bxF+", "bxF-", "B+XF", "BX-F", "BX-F+", "BX+F+", "B+X-F", "B-X-F-", "B-XF+",
+    "ds", "DS", "DS++", "DS+", "DS-", "dr", "DR", "DR+", "DR-", "dt", "dt-", "DT", "DT+", "DT-",
+    "FL", "FL+", "FL-", "fs", "FS", "FS+", "FS-", "FX", "FX+", "FX-", "GH", "GH+", "GH-", "HA",
+    "HA+", "HA-", "HS", "HS+", "HS-", "ITL+", "ja", "ja-", "JA", "JA+", "JA-", "ju", "ju-", "JU",
+    "JU+", "JU-", "JUMPS", "JUMPS+", "JUMPS-", "KS", "KS+", "KS-", "KT", "KT+", "KT-", "LOL", "ma",
+    "ma-", "MA", "MA+", "MA-", "MD", "MD+", "MD-", "rh", "rh-", "RH", "RH+", "RH-", "Rolls-", "RS",
+    "RS+", "RS-", "SC", "SC+", "SC-", "SDS", "SDS+", "SDS-", "SJ", "SJ+", "SJ-", "SK", "SK+",
+    "SK-", "SS", "SS+", "SS-", "SKT", "SKT+", "SKT-", "SPD", "SPD+", "SPD-", "STR", "STR+", "STR-",
+    "TR", "TR+", "TR-", "WA", "WA+", "WA-", "XMOD", "XMOD+", "XMOD-", "xo", "XO", "XO+", "XO-",
 ];
 
 /// Checks if a chunk resembles measure data (contains symbols like / - * | ~ . ' but no letters).
