@@ -1,12 +1,13 @@
 use std::env::args;
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 
 use rssp::AnalysisOptions;
 use rssp::analyze;
 use rssp::graph::{ColorScheme, generate_density_graph_png};
 use rssp::matrix::get_difficulty;
-use rssp::report::{OutputMode, SimfileSummary, write_reports};
+use rssp::report::{OutputMode, SimfileSummary, write_course_reports, write_reports};
 
 /// Analyzes a single simfile and returns the summary
 fn analyze_simfile(
@@ -155,6 +156,25 @@ fn main() -> io::Result<()> {
         translate_markers: false,
     };
 
+    // --- Course flags (only used for .crs input) ---
+    let songs_dir: Option<PathBuf> = args
+        .iter()
+        .position(|a| a == "--songs-dir")
+        .and_then(|pos| args.get(pos + 1))
+        .map(PathBuf::from);
+    let course_difficulty = args
+        .iter()
+        .position(|a| a == "--course-difficulty" || a == "--course-diff")
+        .and_then(|pos| args.get(pos + 1))
+        .cloned()
+        .unwrap_or_else(|| "Medium".to_string());
+    let steps_type = args
+        .iter()
+        .position(|a| a == "--steps-type" || a == "--stepstype")
+        .and_then(|pos| args.get(pos + 1))
+        .cloned()
+        .unwrap_or_else(|| "dance-single".to_string());
+
     // --- Determine output mode ---
     let mode = if args.iter().any(|a| a == "--csv") {
         OutputMode::CSV
@@ -172,6 +192,28 @@ fn main() -> io::Result<()> {
     if !path.exists() {
         eprintln!("Error: Path does not exist: {}", path.display());
         std::process::exit(1);
+    }
+
+    // --- Course Analysis Mode (.crs) ---
+    if path.is_file()
+        && path
+            .extension()
+            .and_then(|s| s.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("crs"))
+    {
+        let course = rssp::course::analyze_crs_path(
+            path,
+            songs_dir.as_deref(),
+            &steps_type,
+            &course_difficulty,
+            options,
+        )
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        write_course_reports(&course, mode, &mut handle)?;
+        return Ok(());
     }
 
     let simfiles = if path.is_file() {

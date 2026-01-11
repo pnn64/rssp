@@ -281,6 +281,32 @@ pub struct SimfileSummary {
     pub total_elapsed: Duration,
 }
 
+#[derive(Debug)]
+pub struct CourseEntrySummary {
+    pub song: String,
+    pub song_dir: String,
+    pub step_type: String,
+    pub difficulty: String,
+    pub rating: String,
+    pub sha1: String,
+    pub bpm_neutral_sha1: String,
+}
+
+#[derive(Debug)]
+pub struct CourseSummary {
+    pub course: String,
+    pub course_difficulty: String,
+    pub step_type: String,
+    pub total_length: i32,
+    pub entries: Vec<CourseEntrySummary>,
+    pub chart: ChartSummary,
+    pub sha1_hashes: Vec<String>,
+    pub bpm_neutral_sha1_hashes: Vec<String>,
+    pub pattern_counts_enabled: bool,
+    pub tech_counts_enabled: bool,
+    pub total_elapsed: Duration,
+}
+
 #[derive(Debug, Clone)]
 pub struct TimingSnapshot {
     pub beat0_offset_seconds: f64,
@@ -322,6 +348,19 @@ pub fn write_reports<W: Write>(
     }
 }
 
+pub fn write_course_reports<W: Write>(
+    course: &CourseSummary,
+    mode: OutputMode,
+    writer: &mut W,
+) -> io::Result<()> {
+    match mode {
+        OutputMode::Full => write_full_course(writer, course),
+        OutputMode::Pretty => write_pretty_course(writer, course),
+        OutputMode::JSON => write_json_course(course, writer),
+        OutputMode::CSV => write_csv_course(writer, course),
+    }
+}
+
 #[inline(always)]
 pub fn format_json_float(value: f64) -> String {
     format!("{:.2}", value)
@@ -331,6 +370,248 @@ fn format_duration(seconds: i32) -> String {
     let minutes = seconds / 60;
     let seconds = seconds % 60;
     format!("{}m {:02}s", minutes, seconds)
+}
+
+fn dummy_simfile_for_course(course: &CourseSummary) -> SimfileSummary {
+    SimfileSummary {
+        title_str: course.course.clone(),
+        subtitle_str: String::new(),
+        artist_str: String::new(),
+        titletranslit_str: String::new(),
+        subtitletranslit_str: String::new(),
+        artisttranslit_str: String::new(),
+        offset: 0.0,
+        normalized_bpms: String::new(),
+        normalized_stops: String::new(),
+        normalized_delays: String::new(),
+        normalized_speeds: String::new(),
+        normalized_scrolls: String::new(),
+        normalized_fakes: String::new(),
+        normalized_time_signatures: String::new(),
+        normalized_labels: String::new(),
+        normalized_tickcounts: String::new(),
+        normalized_combos: String::new(),
+        ssc_version: f32::NAN,
+        timing_format: TimingFormat::Sm,
+        banner_path: String::new(),
+        background_path: String::new(),
+        music_path: String::new(),
+        display_bpm_str: String::new(),
+        sample_start: 0.0,
+        sample_length: 0.0,
+        min_bpm: 0.0,
+        max_bpm: 0.0,
+        normalized_warps: String::new(),
+        median_bpm: 0.0,
+        average_bpm: 0.0,
+        total_length: course.total_length,
+        pattern_counts_enabled: course.pattern_counts_enabled,
+        tech_counts_enabled: course.tech_counts_enabled,
+        charts: Vec::new(),
+        total_elapsed: course.total_elapsed,
+    }
+}
+
+fn write_pretty_course<W: Write>(writer: &mut W, course: &CourseSummary) -> io::Result<()> {
+    writeln!(writer, "--- Course Details ---")?;
+    writeln!(writer, "Course: {}", course.course)?;
+    writeln!(writer, "Difficulty: {}", course.course_difficulty)?;
+    writeln!(writer, "StepsType: {}", course.step_type)?;
+    writeln!(writer, "Length: {}", format_duration(course.total_length))?;
+    writeln!(writer, "Entries: {}", course.entries.len())?;
+
+    if !course.entries.is_empty() {
+        writeln!(writer, "\n--- Entries ---")?;
+        for (i, entry) in course.entries.iter().enumerate() {
+            writeln!(
+                writer,
+                "{:2}. {} ({}) {} {}",
+                i + 1,
+                entry.song,
+                entry.song_dir,
+                entry.difficulty,
+                entry.rating
+            )?;
+        }
+    }
+
+    let dummy = dummy_simfile_for_course(course);
+    write_pretty_chart(writer, &course.chart, &dummy)?;
+    Ok(())
+}
+
+fn write_full_course<W: Write>(writer: &mut W, course: &CourseSummary) -> io::Result<()> {
+    writeln!(writer, "--- Course Details ---")?;
+    writeln!(writer, "Course: {}", course.course)?;
+    writeln!(writer, "Difficulty: {}", course.course_difficulty)?;
+    writeln!(writer, "StepsType: {}", course.step_type)?;
+    writeln!(writer, "Length: {}", format_duration(course.total_length))?;
+    writeln!(writer, "Entries: {}", course.entries.len())?;
+
+    if !course.entries.is_empty() {
+        writeln!(writer, "\n--- Entries ---")?;
+        for (i, entry) in course.entries.iter().enumerate() {
+            writeln!(
+                writer,
+                "{:2}. {} ({}) {} {}",
+                i + 1,
+                entry.song,
+                entry.song_dir,
+                entry.difficulty,
+                entry.rating
+            )?;
+            writeln!(writer, "    sha1: {}", entry.sha1)?;
+            writeln!(writer, "    bpm_neutral_sha1: {}", entry.bpm_neutral_sha1)?;
+        }
+    }
+
+    let dummy = dummy_simfile_for_course(course);
+    write_full_chart(writer, &course.chart, &dummy)?;
+    writeln!(writer, "\nElapsed Time: {:?}", course.total_elapsed)?;
+    Ok(())
+}
+
+fn write_json_course<W: Write>(course: &CourseSummary, writer: &mut W) -> io::Result<()> {
+    let mut root_obj = JsonMap::new();
+    root_obj.insert("course".to_string(), JsonValue::from(course.course.clone()));
+    root_obj.insert(
+        "course_difficulty".to_string(),
+        JsonValue::from(course.course_difficulty.clone()),
+    );
+    root_obj.insert(
+        "step_type".to_string(),
+        JsonValue::from(course.step_type.clone()),
+    );
+    root_obj.insert(
+        "length".to_string(),
+        JsonValue::from(course.total_length.to_string()),
+    );
+    root_obj.insert(
+        "sha1_hashes".to_string(),
+        JsonValue::from(course.sha1_hashes.clone()),
+    );
+    root_obj.insert(
+        "bpm_neutral_sha1_hashes".to_string(),
+        JsonValue::from(course.bpm_neutral_sha1_hashes.clone()),
+    );
+
+    let entries: Vec<JsonValue> = course
+        .entries
+        .iter()
+        .map(|entry| {
+            let mut obj = JsonMap::new();
+            obj.insert("song".to_string(), JsonValue::from(entry.song.clone()));
+            obj.insert(
+                "song_dir".to_string(),
+                JsonValue::from(entry.song_dir.clone()),
+            );
+            obj.insert(
+                "step_type".to_string(),
+                JsonValue::from(entry.step_type.clone()),
+            );
+            obj.insert(
+                "difficulty".to_string(),
+                JsonValue::from(entry.difficulty.clone()),
+            );
+            obj.insert("rating".to_string(), JsonValue::from(entry.rating.clone()));
+            obj.insert("sha1".to_string(), JsonValue::from(entry.sha1.clone()));
+            obj.insert(
+                "bpm_neutral_sha1".to_string(),
+                JsonValue::from(entry.bpm_neutral_sha1.clone()),
+            );
+            JsonValue::Object(obj)
+        })
+        .collect();
+    root_obj.insert("entries".to_string(), JsonValue::from(entries));
+
+    let dummy = dummy_simfile_for_course(course);
+    let mut chart_obj = JsonMap::new();
+    chart_obj.insert("chart_info".to_string(), json_chart_info(&course.chart));
+    chart_obj.insert("arrow_stats".to_string(), json_arrow_stats(&course.chart));
+    chart_obj.insert("gimmicks".to_string(), json_gimmicks(&course.chart, &dummy));
+    chart_obj.insert("timing".to_string(), json_timing(&course.chart, &dummy));
+    chart_obj.insert("stream_info".to_string(), json_stream_info(&course.chart));
+    chart_obj.insert("nps".to_string(), json_nps(&course.chart));
+    chart_obj.insert("breakdown".to_string(), json_sn_breakdown(&course.chart));
+    chart_obj.insert(
+        "stream_breakdown".to_string(),
+        json_stream_breakdown(&course.chart),
+    );
+    if course.pattern_counts_enabled {
+        chart_obj.insert(
+            "mono_candle_stats".to_string(),
+            json_mono_candle_stats(&course.chart),
+        );
+        chart_obj.insert(
+            "pattern_counts".to_string(),
+            json_pattern_counts(&course.chart),
+        );
+    }
+    if course.tech_counts_enabled {
+        chart_obj.insert("tech_counts".to_string(), json_tech_counts(&course.chart));
+    }
+    root_obj.insert("chart".to_string(), JsonValue::Object(chart_obj));
+
+    let root = JsonValue::Object(root_obj);
+
+    write_json_value_with_key(writer, None, &root, 0)?;
+    writeln!(writer)?;
+    Ok(())
+}
+
+fn write_csv_course<W: Write>(writer: &mut W, course: &CourseSummary) -> io::Result<()> {
+    let header = [
+        "Course",
+        "Difficulty",
+        "StepsType",
+        "Length",
+        "Entries",
+        "sha1_hashes",
+        "bpm_neutral_sha1_hashes",
+        "total_arrows",
+        "total_steps",
+        "jumps",
+        "hands",
+        "holds",
+        "rolls",
+        "mines",
+        "lifts",
+        "fakes",
+        "total_streams",
+        "total_breaks",
+        "max_nps",
+        "median_nps",
+    ];
+    writeln!(writer, "{}", header.join(","))?;
+
+    let chart = &course.chart;
+    let hashes = course.sha1_hashes.join("|");
+    let bpm_hashes = course.bpm_neutral_sha1_hashes.join("|");
+    writeln!(
+        writer,
+        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.6},{:.2}",
+        course.course,
+        course.course_difficulty,
+        course.step_type,
+        format_duration(course.total_length),
+        course.entries.len(),
+        hashes,
+        bpm_hashes,
+        chart.stats.total_arrows,
+        chart.stats.total_steps,
+        chart.stats.jumps,
+        chart.stats.hands,
+        chart.stats.holds,
+        chart.stats.rolls,
+        chart.stats.mines,
+        chart.stats.lifts,
+        chart.stats.fakes,
+        chart.total_streams,
+        chart.stream_counts.total_breaks,
+        chart.max_nps,
+        chart.median_nps
+    )?;
+    Ok(())
 }
 
 fn count(map: &HashMap<PatternVariant, u32>, variant: PatternVariant) -> u32 {

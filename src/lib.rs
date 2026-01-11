@@ -1,6 +1,7 @@
 pub mod analysis;
 pub mod assets;
 pub mod bpm;
+pub mod course;
 pub mod duration;
 pub mod graph;
 pub mod hashing;
@@ -34,4 +35,5 @@ pub use analysis::{
 pub use duration::{ChartDuration, TimingOffsets, compute_chart_durations};
 pub use nps::compute_chart_peak_nps;
 pub use report::{ChartSummary, SimfileSummary};
+pub use report::{CourseEntrySummary, CourseSummary};
 pub use step_parity::TechCounts;
