@@ -1,56 +1,18 @@
 use std::env::args;
+<<<<<<< Updated upstream
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+=======
+use std::io;
+use std::path::Path;
+>>>>>>> Stashed changes
 
 use rssp::analyze;
 use rssp::graph::{generate_density_graph_png, ColorScheme};
 use rssp::matrix::get_difficulty;
 use rssp::report::{print_reports, OutputMode, SimfileSummary};
 use rssp::AnalysisOptions;
-
-/// Recursively finds all simfiles in a directory structure.
-/// Directories containing a simfile are treated as leaves.
-fn find_all_simfiles(root: &Path) -> Vec<PathBuf> {
-    let mut simfiles = Vec::new();
-    let Ok(entries) = fs::read_dir(root) else {
-        return simfiles;
-    };
-
-    let mut ssc_file: Option<PathBuf> = None;
-    let mut sm_file: Option<PathBuf> = None;
-    let mut subdirs: Vec<PathBuf> = Vec::new();
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            subdirs.push(path);
-            continue;
-        }
-        if !path.is_file() {
-            continue;
-        }
-        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-            continue;
-        };
-        if ext.eq_ignore_ascii_case("ssc") {
-            ssc_file = Some(path);
-        } else if ext.eq_ignore_ascii_case("sm") && ssc_file.is_none() {
-            sm_file = Some(path);
-        }
-    }
-
-    if let Some(simfile) = ssc_file.or(sm_file) {
-        simfiles.push(simfile);
-        return simfiles;
-    }
-
-    for dir in subdirs {
-        simfiles.extend(find_all_simfiles(&dir));
-    }
-
-    simfiles
-}
 
 /// Analyzes a single simfile and returns the summary
 fn analyze_simfile(path: &Path, options: &AnalysisOptions) -> io::Result<rssp::report::SimfileSummary> {
@@ -224,7 +186,7 @@ fn main() -> io::Result<()> {
     let simfiles = if path.is_file() {
         vec![path.to_path_buf()]
     } else if path.is_dir() {
-        let files = find_all_simfiles(path);
+        let files = rssp::pack::find_simfiles(path, rssp::pack::ScanOpt::default());
         if files.is_empty() {
             eprintln!("No simfiles found in directory: {}", path.display());
             std::process::exit(1);

@@ -1,7 +1,12 @@
+<<<<<<< Updated upstream
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::time::Instant;
 
+=======
+pub mod analysis;
+pub mod assets;
+>>>>>>> Stashed changes
 pub mod bpm;
 pub mod graph;
 pub mod hashing;
@@ -10,6 +15,7 @@ pub mod notes;
 pub mod parse;
 pub mod pack;
 pub mod patterns;
+pub mod pack;
 pub mod report;
 pub mod stats;
 pub mod step_parity;
