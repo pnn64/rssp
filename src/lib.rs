@@ -9,6 +9,7 @@ pub mod nps;
 pub mod parse;
 pub mod patterns;
 pub mod report;
+pub mod simfile;
 pub mod stats;
 pub mod step_parity;
 pub mod streams;

@@ -1,6 +1,6 @@
 use std::env::args;
-use std::fs::{self, File};
-use std::io::{self, Read};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use rssp::AnalysisOptions;
@@ -57,13 +57,8 @@ fn analyze_simfile(
     path: &Path,
     options: &AnalysisOptions,
 ) -> io::Result<rssp::report::SimfileSummary> {
-    let mut file = File::open(path)?;
-    let mut simfile_data = Vec::new();
-    file.read_to_end(&mut simfile_data)?;
-
-    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-
-    analyze(&simfile_data, extension, options.clone())
+    let sim = rssp::simfile::open(path)?;
+    analyze(&sim.data, sim.extension, options.clone())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
