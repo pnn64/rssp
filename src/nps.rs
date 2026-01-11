@@ -97,65 +97,48 @@ pub fn compute_chart_peak_nps(
             chart_fakes,
         ) = timing_tags;
 
-        let chart_offset = if allow_steps_timing && entry.chart_offset.is_some() {
-            parse_offset_seconds(entry.chart_offset.as_deref())
-        } else {
-            song_offset
-        };
-
-        let chart_has_own_timing = allow_steps_timing
-            && (entry.chart_bpms.is_some()
-                || entry.chart_stops.is_some()
-                || entry.chart_delays.is_some()
-                || entry.chart_warps.is_some()
-                || entry.chart_speeds.is_some()
-                || entry.chart_scrolls.is_some()
-                || entry.chart_fakes.is_some()
-                || entry.chart_time_signatures.is_some()
-                || entry.chart_labels.is_some()
-                || entry.chart_tickcounts.is_some()
-                || entry.chart_combos.is_some()
-                || entry.chart_offset.is_some());
-
-        let (
-            timing_bpms_global,
-            timing_stops_global,
-            timing_delays_global,
-            timing_warps_global,
-            timing_speeds_global,
-            timing_scrolls_global,
-            timing_fakes_global,
-        ) = if chart_has_own_timing {
-            ("", "", "", "", "", "", "")
-        } else {
-            (
-                cleaned_global_bpms.as_str(),
-                cleaned_global_stops.as_str(),
-                cleaned_global_delays.as_str(),
-                cleaned_global_warps.as_str(),
-                cleaned_global_speeds.as_str(),
-                cleaned_global_scrolls.as_str(),
-                cleaned_global_fakes.as_str(),
-            )
-        };
+        let timing_src = crate::timing::resolve_chart_timing(
+            allow_steps_timing,
+            song_offset,
+            entry.chart_offset.as_deref(),
+            entry.chart_bpms.as_deref(),
+            entry.chart_stops.as_deref(),
+            entry.chart_delays.as_deref(),
+            entry.chart_warps.as_deref(),
+            entry.chart_speeds.as_deref(),
+            entry.chart_scrolls.as_deref(),
+            entry.chart_fakes.as_deref(),
+            entry.chart_time_signatures.as_deref(),
+            entry.chart_labels.as_deref(),
+            entry.chart_tickcounts.as_deref(),
+            entry.chart_combos.as_deref(),
+            cleaned_global_bpms.as_str(),
+            cleaned_global_stops.as_str(),
+            cleaned_global_delays.as_str(),
+            cleaned_global_warps.as_str(),
+            cleaned_global_speeds.as_str(),
+            cleaned_global_scrolls.as_str(),
+            cleaned_global_fakes.as_str(),
+        );
+        let chart_offset = timing_src.chart_offset_seconds;
 
         let timing = TimingData::from_chart_data(
             chart_offset,
             0.0,
             chart_bpms.as_deref(),
-            timing_bpms_global,
+            timing_src.global_bpms,
             chart_stops.as_deref(),
-            timing_stops_global,
+            timing_src.global_stops,
             chart_delays.as_deref(),
-            timing_delays_global,
+            timing_src.global_delays,
             chart_warps.as_deref(),
-            timing_warps_global,
+            timing_src.global_warps,
             chart_speeds.as_deref(),
-            timing_speeds_global,
+            timing_src.global_speeds,
             chart_scrolls.as_deref(),
-            timing_scrolls_global,
+            timing_src.global_scrolls,
             chart_fakes.as_deref(),
-            timing_fakes_global,
+            timing_src.global_fakes,
             timing_format,
             true,
         );

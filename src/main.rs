@@ -7,7 +7,7 @@ use rssp::AnalysisOptions;
 use rssp::analyze;
 use rssp::graph::{ColorScheme, generate_density_graph_png};
 use rssp::matrix::get_difficulty;
-use rssp::report::{OutputMode, SimfileSummary, print_reports};
+use rssp::report::{OutputMode, SimfileSummary, write_reports};
 
 /// Recursively finds all simfiles in a directory structure.
 /// Directories containing a simfile are treated as leaves.
@@ -258,7 +258,9 @@ fn main() -> io::Result<()> {
         };
 
         // --- Print reports ---
-        print_reports(&simfile, mode);
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        write_reports(&simfile, mode, &mut handle)?;
         if debug_output {
             // Debug output goes to stderr to avoid polluting structured stdout formats.
             print_minimized_notes(&simfile);

@@ -1,5 +1,6 @@
 use crate::bpm::{clean_timing_map_cow, parse_beat_or_row, parse_bpm_map};
 use crate::math::{fmt_dec3_itg, lrint_f32, lrint_f64, roundtrip_bpm_itg};
+use crate::parse::parse_offset_seconds;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -89,6 +90,98 @@ fn quantize_beat_f32(beat: f32) -> f32 {
 #[inline(always)]
 pub fn steps_timing_allowed(version: f32, format: TimingFormat) -> bool {
     matches!(format, TimingFormat::Sm) || version >= VERSION_SPLIT_TIMING
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ChartTiming<'a> {
+    pub chart_offset_seconds: f64,
+    pub chart_has_own_timing: bool,
+    pub global_bpms: &'a str,
+    pub global_stops: &'a str,
+    pub global_delays: &'a str,
+    pub global_warps: &'a str,
+    pub global_speeds: &'a str,
+    pub global_scrolls: &'a str,
+    pub global_fakes: &'a str,
+}
+
+#[inline(always)]
+pub(crate) fn resolve_chart_timing<'a>(
+    allow_steps_timing: bool,
+    song_offset_seconds: f64,
+    chart_offset: Option<&[u8]>,
+    chart_bpms: Option<&[u8]>,
+    chart_stops: Option<&[u8]>,
+    chart_delays: Option<&[u8]>,
+    chart_warps: Option<&[u8]>,
+    chart_speeds: Option<&[u8]>,
+    chart_scrolls: Option<&[u8]>,
+    chart_fakes: Option<&[u8]>,
+    chart_time_signatures: Option<&[u8]>,
+    chart_labels: Option<&[u8]>,
+    chart_tickcounts: Option<&[u8]>,
+    chart_combos: Option<&[u8]>,
+    global_bpms: &'a str,
+    global_stops: &'a str,
+    global_delays: &'a str,
+    global_warps: &'a str,
+    global_speeds: &'a str,
+    global_scrolls: &'a str,
+    global_fakes: &'a str,
+) -> ChartTiming<'a> {
+    let chart_offset_seconds = if allow_steps_timing && chart_offset.is_some() {
+        parse_offset_seconds(chart_offset)
+    } else {
+        song_offset_seconds
+    };
+
+    let chart_has_own_timing = allow_steps_timing
+        && (chart_bpms.is_some()
+            || chart_stops.is_some()
+            || chart_delays.is_some()
+            || chart_warps.is_some()
+            || chart_speeds.is_some()
+            || chart_scrolls.is_some()
+            || chart_fakes.is_some()
+            || chart_time_signatures.is_some()
+            || chart_labels.is_some()
+            || chart_tickcounts.is_some()
+            || chart_combos.is_some()
+            || chart_offset.is_some());
+
+    let (
+        global_bpms,
+        global_stops,
+        global_delays,
+        global_warps,
+        global_speeds,
+        global_scrolls,
+        global_fakes,
+    ) = if chart_has_own_timing {
+        ("", "", "", "", "", "", "")
+    } else {
+        (
+            global_bpms,
+            global_stops,
+            global_delays,
+            global_warps,
+            global_speeds,
+            global_scrolls,
+            global_fakes,
+        )
+    };
+
+    ChartTiming {
+        chart_offset_seconds,
+        chart_has_own_timing,
+        global_bpms,
+        global_stops,
+        global_delays,
+        global_warps,
+        global_speeds,
+        global_scrolls,
+        global_fakes,
+    }
 }
 
 #[inline(always)]

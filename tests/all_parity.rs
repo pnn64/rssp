@@ -2,18 +2,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use libtest_mimic::Arguments;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
 use rssp::math::round_sig_figs_itg;
-use rssp::report::format_json_float;
-use rssp::{display_metadata, normalize_difficulty_label};
-
-// Full JSON output (tech/pattern counts enabled).
-const RSSP_ARGS: [&str; 1] = ["--json"];
+use rssp::report::{OutputMode, format_json_float, write_reports};
+use rssp::{AnalysisOptions, analyze, display_metadata, normalize_difficulty_label};
 
 #[derive(Debug, Clone, PartialEq)]
 struct ExpectedMetadata {
@@ -2530,36 +2526,19 @@ fn compare_rssp_unique(
     Ok(())
 }
 
-fn run_rssp_json(
-    bin_path: &Path,
-    raw_bytes: &[u8],
-    extension: &str,
-    file_hash: &str,
-) -> Result<RsspJsonFile, String> {
-    let pid = std::process::id();
-    let mut tmp_path = std::env::temp_dir();
-    tmp_path.push(format!("rssp_all_{}_{}.{}", pid, file_hash, extension));
-
-    fs::write(&tmp_path, raw_bytes).map_err(|e| format!("Failed to write temp simfile: {}", e))?;
-
-    let output = Command::new(bin_path)
-        .arg(&tmp_path)
-        .args(RSSP_ARGS)
-        .output();
-
-    let _ = fs::remove_file(&tmp_path);
-
-    let output = output.map_err(|e| format!("Failed to run rssp: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "rssp failed: exit={} stderr={}",
-            output.status, stderr
-        ));
-    }
-
-    serde_json::from_slice(&output.stdout).map_err(|e| format!("Failed to parse rssp JSON: {}", e))
+fn run_rssp_json(raw_bytes: &[u8], extension: &str) -> Result<RsspJsonFile, String> {
+    let options = AnalysisOptions {
+        strip_tags: false,
+        mono_threshold: 6,
+        custom_patterns: Vec::new(),
+        compute_tech_counts: true,
+        compute_pattern_counts: true,
+        translate_markers: false,
+    };
+    let summary = analyze(raw_bytes, extension, options).map_err(|e| e.to_string())?;
+    let mut stdout = Vec::new();
+    write_reports(&summary, OutputMode::JSON, &mut stdout).map_err(|e| e.to_string())?;
+    serde_json::from_slice(&stdout).map_err(|e| format!("Failed to parse rssp JSON: {}", e))
 }
 
 fn read_zst(path: &Path) -> Result<Vec<u8>, String> {
@@ -2567,40 +2546,7 @@ fn read_zst(path: &Path) -> Result<Vec<u8>, String> {
     zstd::decode_all(&compressed[..]).map_err(|e| format!("Failed to decompress file: {}", e))
 }
 
-fn resolve_rssp_bin() -> Result<PathBuf, String> {
-    if let Ok(bin) = std::env::var("CARGO_BIN_EXE_rssp") {
-        return Ok(PathBuf::from(bin));
-    }
-    if let Some(bin) = option_env!("CARGO_BIN_EXE_rssp") {
-        return Ok(PathBuf::from(bin));
-    }
-
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let target_dir = std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    let exe_name = if cfg!(windows) { "rssp.exe" } else { "rssp" };
-    let candidate = manifest_dir.join(target_dir).join(profile).join(exe_name);
-
-    if candidate.is_file() {
-        return Ok(candidate);
-    }
-
-    Err(format!(
-        "CARGO_BIN_EXE_rssp is not set and {} does not exist; run `cargo build --release --bin rssp` or set CARGO_BIN_EXE_rssp",
-        candidate.display()
-    ))
-}
-
-fn check_file(
-    path: &Path,
-    extension: &str,
-    baseline_dir: &Path,
-    rssp_bin: &Path,
-) -> Result<(), String> {
+fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
     let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     let raw_bytes = zstd::decode_all(&compressed_bytes[..])
@@ -2641,7 +2587,7 @@ fn check_file(
     let rssp_file: RsspBaselineFile = serde_json::from_slice(&rssp_json)
         .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
 
-    let actual = run_rssp_json(rssp_bin, &raw_bytes, extension, &file_hash)?;
+    let actual = run_rssp_json(&raw_bytes, extension)?;
 
     let harness_map = build_index(&harness_charts, |c| &c.step_type, |c| &c.difficulty);
     let actual_map = build_index(
@@ -2751,14 +2697,6 @@ fn main() {
     let packs_dir = manifest_dir.join("tests/data/packs");
     let baseline_dir = manifest_dir.join("tests/data/baseline");
 
-    let rssp_bin = match resolve_rssp_bin() {
-        Ok(path) => path,
-        Err(msg) => {
-            println!("{}", msg);
-            return;
-        }
-    };
-
     if !packs_dir.exists() {
         println!("No tests/packs directory found.");
         return;
@@ -2843,7 +2781,7 @@ fn main() {
             extension,
         } = test;
 
-        let res = check_file(&path, &extension, &baseline_dir, &rssp_bin);
+        let res = check_file(&path, &extension, &baseline_dir);
         match res {
             Ok(()) => {
                 println!("test {} ... ok", name);

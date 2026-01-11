@@ -309,12 +309,16 @@ pub enum OutputMode {
     CSV,
 }
 
-pub fn print_reports(simfile: &SimfileSummary, mode: OutputMode) {
+pub fn write_reports<W: Write>(
+    simfile: &SimfileSummary,
+    mode: OutputMode,
+    writer: &mut W,
+) -> io::Result<()> {
     match mode {
-        OutputMode::Full => print_full_all(simfile),
-        OutputMode::Pretty => print_pretty_all(simfile),
-        OutputMode::JSON => print_json_all(simfile),
-        OutputMode::CSV => print_csv_all(simfile),
+        OutputMode::Full => write_full_all(writer, simfile),
+        OutputMode::Pretty => write_pretty_all(writer, simfile),
+        OutputMode::JSON => write_json_all(simfile, writer),
+        OutputMode::CSV => write_csv_all(writer, simfile),
     }
 }
 
@@ -772,7 +776,11 @@ fn chart_mine_fake_counts(chart: &ChartSummary) -> (u32, u32) {
     (chart.stats.mines, chart.stats.fakes)
 }
 
-fn print_gimmicks(chart: &ChartSummary, simfile: &SimfileSummary) {
+fn write_gimmicks<W: Write>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    simfile: &SimfileSummary,
+) -> io::Result<()> {
     let has_lifts = chart.stats.lifts > 0;
     let (_, fakes) = chart_mine_fake_counts(chart);
     let has_fakes = fakes > 0;
@@ -822,36 +830,39 @@ fn print_gimmicks(chart: &ChartSummary, simfile: &SimfileSummary) {
         && speed_count == 0
         && scroll_count == 0
     {
-        return;
+        return Ok(());
     }
 
-    println!("\n--- Gimmicks ---");
+    writeln!(writer, "\n--- Gimmicks ---")?;
     if has_lifts {
-        println!("Lifts: {}", chart.stats.lifts);
+        writeln!(writer, "Lifts: {}", chart.stats.lifts)?;
     }
     if has_fakes {
-        println!("Fakes: {}", fakes);
+        writeln!(writer, "Fakes: {}", fakes)?;
     }
     if stop_count > 0 {
-        println!("Stops/Freezes: {}", stop_count);
+        writeln!(writer, "Stops/Freezes: {}", stop_count)?;
     }
     if speed_count > 0 {
-        println!("Speeds: {}", speed_count);
+        writeln!(writer, "Speeds: {}", speed_count)?;
     }
     if scroll_count > 0 {
-        println!("Scrolls: {}", scroll_count);
+        writeln!(writer, "Scrolls: {}", scroll_count)?;
     }
     if delay_count > 0 {
-        println!("Delays: {}", delay_count);
+        writeln!(writer, "Delays: {}", delay_count)?;
     }
     if warp_count > 0 {
-        println!("Warps: {}", warp_count);
+        writeln!(writer, "Warps: {}", warp_count)?;
     }
+
+    Ok(())
 }
 
-fn print_pretty_all(simfile: &SimfileSummary) {
-    println!("--- Song Details ---");
-    println!(
+fn write_pretty_all<W: Write>(writer: &mut W, simfile: &SimfileSummary) -> io::Result<()> {
+    writeln!(writer, "--- Song Details ---")?;
+    writeln!(
+        writer,
         "Title: {}{} by {}",
         simfile.title_str,
         if simfile.subtitle_str.is_empty() {
@@ -860,36 +871,43 @@ fn print_pretty_all(simfile: &SimfileSummary) {
             format!(" {}", simfile.subtitle_str)
         },
         simfile.artist_str
-    );
-    println!("Length: {}", format_duration(simfile.total_length));
+    )?;
+    writeln!(writer, "Length: {}", format_duration(simfile.total_length))?;
     if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
-        println!("BPM: {:.0}", simfile.min_bpm);
+        writeln!(writer, "BPM: {:.0}", simfile.min_bpm)?;
     } else {
-        println!("BPM: {:.0}-{:.0}", simfile.min_bpm, simfile.max_bpm);
-        println!("Median BPM: {:.0}", simfile.median_bpm);
-        println!("Average BPM: {:.0}", simfile.average_bpm);
+        writeln!(writer, "BPM: {:.0}-{:.0}", simfile.min_bpm, simfile.max_bpm)?;
+        writeln!(writer, "Median BPM: {:.0}", simfile.median_bpm)?;
+        writeln!(writer, "Average BPM: {:.0}", simfile.average_bpm)?;
     }
 
     for chart in &simfile.charts {
-        print_pretty_chart(chart, simfile);
+        write_pretty_chart(writer, chart, simfile)?;
     }
+
+    Ok(())
 }
 
-fn print_pretty_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
+fn write_pretty_chart<W: Write>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    simfile: &SimfileSummary,
+) -> io::Result<()> {
     let header = format!(
         "{} {} : {}",
         chart.difficulty_str, chart.rating_str, chart.step_artist_str
     );
-    println!("\n{}", header);
-    println!("{}", "-".repeat(header.len()));
+    writeln!(writer, "\n{}", header)?;
+    writeln!(writer, "{}", "-".repeat(header.len()))?;
 
     if (chart.median_nps - chart.max_nps).abs() < f64::EPSILON {
-        println!("NPS: {:.2} Median/Peak", chart.median_nps);
+        writeln!(writer, "NPS: {:.2} Median/Peak", chart.median_nps)?;
     } else {
-        println!(
+        writeln!(
+            writer,
             "NPS: {:.2} Median, {:.2} Peak",
             chart.median_nps, chart.max_nps
-        );
+        )?;
     }
 
     let total_stream = chart.total_streams;
@@ -898,27 +916,33 @@ fn print_pretty_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
     let (stream_percent, adjusted_stream_percent, break_percent) =
         compute_stream_percentages(total_stream, total_break, total_measures);
 
-    println!(
+    writeln!(
+        writer,
         "Total Stream: {} ({:.2}%/{:.2}% Adj.)",
         total_stream, stream_percent, adjusted_stream_percent
-    );
-    println!("Total Break: {} ({:.2}%)", total_break, break_percent);
+    )?;
+    writeln!(
+        writer,
+        "Total Break: {} ({:.2}%)",
+        total_break, break_percent
+    )?;
 
-    println!("\n--- Chart Info ---");
-    println!(
+    writeln!(writer, "\n--- Chart Info ---")?;
+    writeln!(
+        writer,
         "Steps: {} ({} arrows)",
         chart.stats.total_steps, chart.stats.total_arrows
-    );
-    println!("Jumps: {}", chart.stats.jumps);
-    println!("Hands: {}", chart.stats.hands);
-    println!("Holds: {}", chart.stats.holds);
-    println!("Rolls: {}", chart.stats.rolls);
+    )?;
+    writeln!(writer, "Jumps: {}", chart.stats.jumps)?;
+    writeln!(writer, "Hands: {}", chart.stats.hands)?;
+    writeln!(writer, "Holds: {}", chart.stats.holds)?;
+    writeln!(writer, "Rolls: {}", chart.stats.rolls)?;
     let (mines_judgable, _) = chart_mine_fake_counts(chart);
-    println!("Mines: {}", mines_judgable);
+    writeln!(writer, "Mines: {}", mines_judgable)?;
 
-    print_gimmicks(chart, simfile);
+    write_gimmicks(writer, chart, simfile)?;
     if simfile.pattern_counts_enabled {
-        println!("\n--- Pattern Analysis ---");
+        writeln!(writer, "\n--- Pattern Analysis ---")?;
         let candle_left = chart
             .detected_patterns
             .get(&PatternVariant::CandleLeft)
@@ -927,136 +951,154 @@ fn print_pretty_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
             .detected_patterns
             .get(&PatternVariant::CandleRight)
             .unwrap_or(&0);
-        println!(
+        writeln!(
+            writer,
             "Candles: {} ({} left, {} right)",
             candle_left + candle_right,
             candle_left,
             candle_right
-        );
-        println!("Candle%: {:.2}%", chart.candle_percent);
-        println!(
+        )?;
+        writeln!(writer, "Candle%: {:.2}%", chart.candle_percent)?;
+        writeln!(
+            writer,
             "Mono: {} ({} left-facing, {} right-facing)",
             chart.mono_total, chart.facing_left, chart.facing_right
-        );
-        println!("Mono%: {:.2}%", chart.mono_percent);
+        )?;
+        writeln!(writer, "Mono%: {:.2}%", chart.mono_percent)?;
 
         let box_parts = compute_box_parts(&chart.detected_patterns);
         let box_corners = box_parts.ld + box_parts.lu + box_parts.rd + box_parts.ru;
-        println!(
+        writeln!(
+            writer,
             "Boxes: {} ({} LRLR, {} UDUD, {} corner)",
             box_parts.lr + box_parts.ud + box_corners,
             box_parts.lr,
             box_parts.ud,
             box_corners
-        );
+        )?;
 
         let anchor_total =
             chart.anchor_left + chart.anchor_down + chart.anchor_up + chart.anchor_right;
-        println!(
+        writeln!(
+            writer,
             "Anchors: {} ({} left, {} down, {} up, {} right)",
             anchor_total, chart.anchor_left, chart.anchor_down, chart.anchor_up, chart.anchor_right
-        );
+        )?;
     }
 
     if simfile.tech_counts_enabled {
-        println!("\n--- Step Parity Analysis ---");
-        println!("Crossovers: {}", chart.tech_counts.crossovers);
-        println!(
+        writeln!(writer, "\n--- Step Parity Analysis ---")?;
+        writeln!(writer, "Crossovers: {}", chart.tech_counts.crossovers)?;
+        writeln!(
+            writer,
             "Footswitches: {} ({} up, {} down)",
             chart.tech_counts.footswitches,
             chart.tech_counts.up_footswitches,
             chart.tech_counts.down_footswitches
-        );
-        println!("Sideswitches: {}", chart.tech_counts.sideswitches);
-        println!("Jacks: {}", chart.tech_counts.jacks);
-        println!("Brackets: {}", chart.tech_counts.brackets);
-        println!("Doublesteps: {}", chart.tech_counts.doublesteps);
+        )?;
+        writeln!(writer, "Sideswitches: {}", chart.tech_counts.sideswitches)?;
+        writeln!(writer, "Jacks: {}", chart.tech_counts.jacks)?;
+        writeln!(writer, "Brackets: {}", chart.tech_counts.brackets)?;
+        writeln!(writer, "Doublesteps: {}", chart.tech_counts.doublesteps)?;
     }
 
     if simfile.pattern_counts_enabled && !chart.custom_patterns.is_empty() {
-        println!("\n--- Custom Patterns ---");
+        writeln!(writer, "\n--- Custom Patterns ---")?;
         for cp in &chart.custom_patterns {
-            println!("{}: {}", cp.pattern, cp.count);
+            writeln!(writer, "{}: {}", cp.pattern, cp.count)?;
         }
     }
 
     if !chart.detailed_breakdown.is_empty() {
-        println!("\n--- Detailed Breakdown ---");
-        println!("{}", chart.detailed_breakdown);
-        println!("--- Partial Breakdown ---");
-        println!("{}", chart.partial_breakdown);
-        println!("--- Simple Breakdown ---");
-        println!("{}", chart.simple_breakdown);
+        writeln!(writer, "\n--- Detailed Breakdown ---")?;
+        writeln!(writer, "{}", chart.detailed_breakdown)?;
+        writeln!(writer, "--- Partial Breakdown ---")?;
+        writeln!(writer, "{}", chart.partial_breakdown)?;
+        writeln!(writer, "--- Simple Breakdown ---")?;
+        writeln!(writer, "{}", chart.simple_breakdown)?;
     }
 
     if !chart.sn_detailed_breakdown.is_empty() {
-        println!("\n--- SN Detailed Breakdown ---");
-        println!("{}", chart.sn_detailed_breakdown);
-        println!("--- SN Partially Simplified ---");
-        println!("{}", chart.sn_partial_breakdown);
-        println!("--- SN Simplified Breakdown ---");
-        println!("{}", chart.sn_simple_breakdown);
+        writeln!(writer, "\n--- SN Detailed Breakdown ---")?;
+        writeln!(writer, "{}", chart.sn_detailed_breakdown)?;
+        writeln!(writer, "--- SN Partially Simplified ---")?;
+        writeln!(writer, "{}", chart.sn_partial_breakdown)?;
+        writeln!(writer, "--- SN Simplified Breakdown ---")?;
+        writeln!(writer, "{}", chart.sn_simple_breakdown)?;
     }
+
+    Ok(())
 }
 
-fn print_full_all(simfile: &SimfileSummary) {
-    println!("--- Song Details ---");
-    println!("Title: {}", simfile.title_str);
+fn write_full_all<W: Write>(writer: &mut W, simfile: &SimfileSummary) -> io::Result<()> {
+    writeln!(writer, "--- Song Details ---")?;
+    writeln!(writer, "Title: {}", simfile.title_str)?;
     if !simfile.subtitle_str.is_empty() {
-        println!("Subtitle: {}", simfile.subtitle_str);
+        writeln!(writer, "Subtitle: {}", simfile.subtitle_str)?;
     }
-    println!("Artist: {}", simfile.artist_str);
+    writeln!(writer, "Artist: {}", simfile.artist_str)?;
     if !simfile.titletranslit_str.is_empty() {
-        println!("Title trans: {}", simfile.titletranslit_str);
+        writeln!(writer, "Title trans: {}", simfile.titletranslit_str)?;
     }
     if !simfile.subtitletranslit_str.is_empty() {
-        println!("Subtitle trans: {}", simfile.subtitletranslit_str);
+        writeln!(writer, "Subtitle trans: {}", simfile.subtitletranslit_str)?;
     }
     if !simfile.artisttranslit_str.is_empty() {
-        println!("Artist trans: {}", simfile.artisttranslit_str);
+        writeln!(writer, "Artist trans: {}", simfile.artisttranslit_str)?;
     }
 
-    println!("Length: {}", format_duration(simfile.total_length));
+    writeln!(writer, "Length: {}", format_duration(simfile.total_length))?;
     if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
-        println!("BPM: {:.0}", simfile.min_bpm);
+        writeln!(writer, "BPM: {:.0}", simfile.min_bpm)?;
     } else {
-        println!("BPM: {:.0}-{:.0}", simfile.min_bpm, simfile.max_bpm);
+        writeln!(writer, "BPM: {:.0}-{:.0}", simfile.min_bpm, simfile.max_bpm)?;
     }
-    println!("Average BPM: {:.2}", simfile.average_bpm);
-    println!("Median BPM: {:.2}", simfile.median_bpm);
-    println!("BPM Data: {}", simfile.normalized_bpms);
-    println!("Offset: {:.3}", simfile.offset);
+    writeln!(writer, "Average BPM: {:.2}", simfile.average_bpm)?;
+    writeln!(writer, "Median BPM: {:.2}", simfile.median_bpm)?;
+    writeln!(writer, "BPM Data: {}", simfile.normalized_bpms)?;
+    writeln!(writer, "Offset: {:.3}", simfile.offset)?;
 
     for chart in &simfile.charts {
-        print_full_chart(chart, simfile);
+        write_full_chart(writer, chart, simfile)?;
     }
-    println!("\nElapsed Time: {:?}", simfile.total_elapsed);
+    writeln!(writer, "\nElapsed Time: {:?}", simfile.total_elapsed)?;
+
+    Ok(())
 }
 
-fn print_full_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
+fn write_full_chart<W: Write>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    simfile: &SimfileSummary,
+) -> io::Result<()> {
     let header = format!(
         "{} {} : {}",
         chart.difficulty_str, chart.rating_str, chart.step_artist_str
     );
-    println!("\n{}", header);
-    println!("{}", "-".repeat(header.len()));
+    writeln!(writer, "\n{}", header)?;
+    writeln!(writer, "{}", "-".repeat(header.len()))?;
 
-    println!("Step Type: {}", chart.step_type_str);
-    println!("Matrix Rating: {:.4}", chart.matrix_rating);
-    println!("Tier BPM: {}", chart.tier_bpm);
+    writeln!(writer, "Step Type: {}", chart.step_type_str)?;
+    writeln!(writer, "Matrix Rating: {:.4}", chart.matrix_rating)?;
+    writeln!(writer, "Tier BPM: {}", chart.tier_bpm)?;
     if !chart.tech_notation_str.is_empty() {
-        println!("Tech Notations: {}", chart.tech_notation_str);
+        writeln!(writer, "Tech Notations: {}", chart.tech_notation_str)?;
     }
-    println!("SHA1 Hash: {}", chart.short_hash);
-    println!("BPM Neutral SHA1 Hash: {}\n", chart.bpm_neutral_hash);
+    writeln!(writer, "SHA1 Hash: {}", chart.short_hash)?;
+    writeln!(
+        writer,
+        "BPM Neutral SHA1 Hash: {}\n",
+        chart.bpm_neutral_hash
+    )?;
 
     if (chart.median_nps - chart.max_nps).abs() < f64::EPSILON {
-        println!("NPS: {:.2} Median/Peak", chart.median_nps);
+        writeln!(writer, "NPS: {:.2} Median/Peak", chart.median_nps)?;
     } else {
-        println!(
+        writeln!(
+            writer,
             "NPS: {:.2} Median, {:.2} Peak",
             chart.median_nps, chart.max_nps
-        );
+        )?;
     }
     let total_stream = chart.total_streams;
     let total_break = chart.stream_counts.total_breaks;
@@ -1064,18 +1106,40 @@ fn print_full_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
     let (stream_percent, adjusted_stream_percent, break_percent) =
         compute_stream_percentages(total_stream, total_break, total_measures);
 
-    println!(
+    writeln!(
+        writer,
         "Total Stream: {} ({:.2}%/{:.2}% Adj.)",
         total_stream, stream_percent, adjusted_stream_percent
-    );
-    println!("    16th_streams: {}", chart.stream_counts.run16_streams);
-    println!("    20th_streams: {}", chart.stream_counts.run20_streams);
-    println!("    24th_streams: {}", chart.stream_counts.run24_streams);
-    println!("    32nd_streams: {}", chart.stream_counts.run32_streams);
-    println!("Total Break: {} ({:.2}%)", total_break, break_percent);
+    )?;
+    writeln!(
+        writer,
+        "    16th_streams: {}",
+        chart.stream_counts.run16_streams
+    )?;
+    writeln!(
+        writer,
+        "    20th_streams: {}",
+        chart.stream_counts.run20_streams
+    )?;
+    writeln!(
+        writer,
+        "    24th_streams: {}",
+        chart.stream_counts.run24_streams
+    )?;
+    writeln!(
+        writer,
+        "    32nd_streams: {}",
+        chart.stream_counts.run32_streams
+    )?;
+    writeln!(
+        writer,
+        "Total Break: {} ({:.2}%)",
+        total_break, break_percent
+    )?;
 
-    println!("\n--- Chart Info ---");
-    println!(
+    writeln!(writer, "\n--- Chart Info ---")?;
+    writeln!(
+        writer,
         "Steps: {} ({} arrows) [{} left, {} down, {} up, {} right]",
         chart.stats.total_steps,
         chart.stats.total_arrows,
@@ -1083,18 +1147,18 @@ fn print_full_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
         chart.stats.down,
         chart.stats.up,
         chart.stats.right
-    );
-    println!("Jumps: {}", chart.stats.jumps);
-    println!("Hands: {}", chart.stats.hands);
-    println!("Holds: {}", chart.stats.holds);
-    println!("Rolls: {}", chart.stats.rolls);
+    )?;
+    writeln!(writer, "Jumps: {}", chart.stats.jumps)?;
+    writeln!(writer, "Hands: {}", chart.stats.hands)?;
+    writeln!(writer, "Holds: {}", chart.stats.holds)?;
+    writeln!(writer, "Rolls: {}", chart.stats.rolls)?;
     let (mines_judgable, _) = chart_mine_fake_counts(chart);
-    println!("Mines: {}", mines_judgable);
+    writeln!(writer, "Mines: {}", mines_judgable)?;
 
-    print_gimmicks(chart, simfile);
+    write_gimmicks(writer, chart, simfile)?;
 
     if simfile.pattern_counts_enabled {
-        println!("\n--- Pattern Analysis ---");
+        writeln!(writer, "\n--- Pattern Analysis ---")?;
         let candle_left = chart
             .detected_patterns
             .get(&PatternVariant::CandleLeft)
@@ -1103,23 +1167,26 @@ fn print_full_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
             .detected_patterns
             .get(&PatternVariant::CandleRight)
             .unwrap_or(&0);
-        println!(
+        writeln!(
+            writer,
             "Candles: {} ({} left, {} right)",
             candle_left + candle_right,
             candle_left,
             candle_right
-        );
-        println!("Candle%: {:.2}%", chart.candle_percent);
-        println!(
+        )?;
+        writeln!(writer, "Candle%: {:.2}%", chart.candle_percent)?;
+        writeln!(
+            writer,
             "Mono: {} ({} left-facing, {} right-facing)",
             chart.mono_total, chart.facing_left, chart.facing_right
-        );
-        println!("Mono%: {:.2}%", chart.mono_percent);
+        )?;
+        writeln!(writer, "Mono%: {:.2}%", chart.mono_percent)?;
 
         let box_parts = compute_box_parts(&chart.detected_patterns);
         let box_corners =
             box_parts.lr + box_parts.ud + box_parts.ld + box_parts.lu + box_parts.rd + box_parts.ru;
-        println!(
+        writeln!(
+            writer,
             "Boxes: {} ({} LRLR, {} UDUD, {} LDLD, {} LULU, {} RDRD, {} RURU)",
             box_parts.lr + box_parts.ud + box_corners,
             box_parts.lr,
@@ -1128,60 +1195,65 @@ fn print_full_chart(chart: &ChartSummary, simfile: &SimfileSummary) {
             box_parts.lu,
             box_parts.rd,
             box_parts.ru
-        );
+        )?;
 
         let anchor_total =
             chart.anchor_left + chart.anchor_down + chart.anchor_up + chart.anchor_right;
-        println!(
+        writeln!(
+            writer,
             "Anchors: {} ({} left, {} down, {} up, {} right)",
             anchor_total, chart.anchor_left, chart.anchor_down, chart.anchor_up, chart.anchor_right
-        );
+        )?;
     }
 
     if simfile.tech_counts_enabled {
-        println!("\n--- Step Parity Analysis ---");
-        println!("Crossovers: {}", chart.tech_counts.crossovers);
-        println!(
+        writeln!(writer, "\n--- Step Parity Analysis ---")?;
+        writeln!(writer, "Crossovers: {}", chart.tech_counts.crossovers)?;
+        writeln!(
+            writer,
             "Footswitches: {} ({} up, {} down)",
             chart.tech_counts.footswitches,
             chart.tech_counts.up_footswitches,
             chart.tech_counts.down_footswitches
-        );
-        println!("Sideswitches: {}", chart.tech_counts.sideswitches);
-        println!("Jacks: {}", chart.tech_counts.jacks);
-        println!("Brackets: {}", chart.tech_counts.brackets);
-        println!("Doublesteps: {}", chart.tech_counts.doublesteps);
+        )?;
+        writeln!(writer, "Sideswitches: {}", chart.tech_counts.sideswitches)?;
+        writeln!(writer, "Jacks: {}", chart.tech_counts.jacks)?;
+        writeln!(writer, "Brackets: {}", chart.tech_counts.brackets)?;
+        writeln!(writer, "Doublesteps: {}", chart.tech_counts.doublesteps)?;
     }
 
     if !chart.detailed_breakdown.is_empty() {
-        println!("\n--- Detailed Breakdown ---");
-        println!("{}", chart.detailed_breakdown);
-        println!("--- Partial Breakdown ---");
-        println!("{}", chart.partial_breakdown);
-        println!("--- Simple Breakdown ---");
-        println!("{}", chart.simple_breakdown);
+        writeln!(writer, "\n--- Detailed Breakdown ---")?;
+        writeln!(writer, "{}", chart.detailed_breakdown)?;
+        writeln!(writer, "--- Partial Breakdown ---")?;
+        writeln!(writer, "{}", chart.partial_breakdown)?;
+        writeln!(writer, "--- Simple Breakdown ---")?;
+        writeln!(writer, "{}", chart.simple_breakdown)?;
     }
 
     if !chart.sn_detailed_breakdown.is_empty() {
-        println!("\n--- SN Detailed Breakdown ---");
-        println!("{}", chart.sn_detailed_breakdown);
-        println!("--- SN Partially Simplified ---");
-        println!("{}", chart.sn_partial_breakdown);
-        println!("--- SN Simplified Breakdown ---");
-        println!("{}", chart.sn_simple_breakdown);
+        writeln!(writer, "\n--- SN Detailed Breakdown ---")?;
+        writeln!(writer, "{}", chart.sn_detailed_breakdown)?;
+        writeln!(writer, "--- SN Partially Simplified ---")?;
+        writeln!(writer, "{}", chart.sn_partial_breakdown)?;
+        writeln!(writer, "--- SN Simplified Breakdown ---")?;
+        writeln!(writer, "{}", chart.sn_simple_breakdown)?;
     }
 
     if simfile.pattern_counts_enabled {
-        print_other_patterns(chart);
+        write_other_patterns(writer, chart)?;
     }
+
+    Ok(())
 }
 
-fn print_other_patterns(chart: &ChartSummary) {
-    println!("\n--- Other Patterns ---");
+fn write_other_patterns<W: Write>(writer: &mut W, chart: &ChartSummary) -> io::Result<()> {
+    writeln!(writer, "\n--- Other Patterns ---")?;
     let tower_parts = compute_tower_parts(&chart.detected_patterns);
     let corner_towers = tower_parts.ld + tower_parts.lu + tower_parts.rd + tower_parts.ru;
     let total_towers = tower_parts.lr + tower_parts.ud + corner_towers;
-    println!(
+    writeln!(
+        writer,
         "Total Towers: {} ({} LR, {} UD, {} LD, {} LU, {} RD, {} RU)",
         total_towers,
         tower_parts.lr,
@@ -1190,20 +1262,21 @@ fn print_other_patterns(chart: &ChartSummary) {
         tower_parts.lu,
         tower_parts.rd,
         tower_parts.ru
-    );
+    )?;
 
     // Triangles
     let triangle_parts = compute_triangle_parts(&chart.detected_patterns);
     let total_triangles =
         triangle_parts.ldl + triangle_parts.lul + triangle_parts.rdr + triangle_parts.rur;
-    println!(
+    writeln!(
+        writer,
         "Total Triangles: {} ({} LDL, {} LUL, {} RDR, {} RUR)",
         total_triangles,
         triangle_parts.ldl,
         triangle_parts.lul,
         triangle_parts.rdr,
         triangle_parts.rur
-    );
+    )?;
 
     // Staircases
     let stairs = compute_stair_parts(
@@ -1214,10 +1287,11 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::StaircaseInvRight,
     );
     let total_staircases = stairs.left + stairs.right + stairs.left_inv + stairs.right_inv;
-    println!(
+    writeln!(
+        writer,
         "Staircases: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
         total_staircases, stairs.left, stairs.right, stairs.left_inv, stairs.right_inv
-    );
+    )?;
 
     // Alternate Staircases
     let alt_stairs = compute_stair_parts(
@@ -1228,10 +1302,11 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::AltStaircasesInvRight,
     );
     let total_alt = alt_stairs.left + alt_stairs.right + alt_stairs.left_inv + alt_stairs.right_inv;
-    println!(
+    writeln!(
+        writer,
         "Alt Staircases: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
         total_alt, alt_stairs.left, alt_stairs.right, alt_stairs.left_inv, alt_stairs.right_inv
-    );
+    )?;
 
     // Double Staircases
     let double_stairs = compute_stair_parts(
@@ -1243,14 +1318,15 @@ fn print_other_patterns(chart: &ChartSummary) {
     );
     let total_double =
         double_stairs.left + double_stairs.right + double_stairs.left_inv + double_stairs.right_inv;
-    println!(
+    writeln!(
+        writer,
         "Double Staircases: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
         total_double,
         double_stairs.left,
         double_stairs.right,
         double_stairs.left_inv,
         double_stairs.right_inv
-    );
+    )?;
 
     // Sweeps
     let sweeps = compute_sweep_parts(
@@ -1261,10 +1337,11 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::SweepInvRight,
     );
     let total_sweeps = sweeps.left + sweeps.right + sweeps.left_inv + sweeps.right_inv;
-    println!(
+    writeln!(
+        writer,
         "Sweeps: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
         total_sweeps, sweeps.left, sweeps.right, sweeps.left_inv, sweeps.right_inv
-    );
+    )?;
 
     // Candle Sweeps
     let candle_sweeps = compute_sweep_parts(
@@ -1276,14 +1353,15 @@ fn print_other_patterns(chart: &ChartSummary) {
     );
     let total_candle_sweeps =
         candle_sweeps.left + candle_sweeps.right + candle_sweeps.left_inv + candle_sweeps.right_inv;
-    println!(
+    writeln!(
+        writer,
         "Candle Sweeps: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
         total_candle_sweeps,
         candle_sweeps.left,
         candle_sweeps.right,
         candle_sweeps.left_inv,
         candle_sweeps.right_inv
-    );
+    )?;
 
     // Copters
     let copters = compute_simple_quad_parts(
@@ -1294,10 +1372,11 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::CopterInvRight,
     );
     let total_copters = copters.a + copters.b + copters.c + copters.d;
-    println!(
+    writeln!(
+        writer,
         "Copters: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
         total_copters, copters.a, copters.b, copters.c, copters.d
-    );
+    )?;
 
     // Spirals
     let spirals = compute_simple_quad_parts(
@@ -1308,10 +1387,11 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::SpiralInvRight,
     );
     let total_spirals = spirals.a + spirals.b + spirals.c + spirals.d;
-    println!(
+    writeln!(
+        writer,
         "Spirals: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
         total_spirals, spirals.a, spirals.b, spirals.c, spirals.d
-    );
+    )?;
 
     // Turbo Candles
     let turbo_candles = compute_simple_quad_parts(
@@ -1322,10 +1402,11 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::TurboCandleInvRight,
     );
     let total_turbo_candles = turbo_candles.a + turbo_candles.b + turbo_candles.c + turbo_candles.d;
-    println!(
+    writeln!(
+        writer,
         "Turbo Candles: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
         total_turbo_candles, turbo_candles.a, turbo_candles.b, turbo_candles.c, turbo_candles.d
-    );
+    )?;
 
     // Hip Breakers
     let hip_breakers = compute_simple_quad_parts(
@@ -1336,10 +1417,11 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::HipBreakerInvRight,
     );
     let total_hip_breakers = hip_breakers.a + hip_breakers.b + hip_breakers.c + hip_breakers.d;
-    println!(
+    writeln!(
+        writer,
         "Hip Breakers: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
         total_hip_breakers, hip_breakers.a, hip_breakers.b, hip_breakers.c, hip_breakers.d
-    );
+    )?;
 
     // Doritos
     let doritos = compute_simple_quad_parts(
@@ -1350,10 +1432,11 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::DoritoInvRight,
     );
     let total_doritos = doritos.a + doritos.b + doritos.c + doritos.d;
-    println!(
+    writeln!(
+        writer,
         "Doritos: {} ({} Left, {} Right, {} Left Inv, {} Right Inv)",
         total_doritos, doritos.a, doritos.b, doritos.c, doritos.d
-    );
+    )?;
 
     // Luchis
     let luchis = compute_simple_quad_parts(
@@ -1364,17 +1447,20 @@ fn print_other_patterns(chart: &ChartSummary) {
         PatternVariant::LuchiRightUD,
     );
     let total_luchis = luchis.a + luchis.b + luchis.c + luchis.d;
-    println!(
+    writeln!(
+        writer,
         "Luchis: {} ({} Left DU, {} Left UD, {} Right DU, {} Right UD)",
         total_luchis, luchis.a, luchis.b, luchis.c, luchis.d
-    );
+    )?;
 
     if !chart.custom_patterns.is_empty() {
-        println!("\n--- Custom Patterns ---");
+        writeln!(writer, "\n--- Custom Patterns ---")?;
         for cp in &chart.custom_patterns {
-            println!("{}: {}", cp.pattern, cp.count);
+            writeln!(writer, "{}: {}", cp.pattern, cp.count)?;
         }
     }
+
+    Ok(())
 }
 
 fn json_chart_info(chart: &ChartSummary) -> JsonValue {
@@ -2120,7 +2206,7 @@ fn write_json_object<W: Write>(
     writer.write_all(b"}")
 }
 
-pub fn print_json_all(simfile: &SimfileSummary) {
+pub fn write_json_all<W: Write>(simfile: &SimfileSummary, writer: &mut W) -> io::Result<()> {
     let bpm_value = if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
         JsonValue::from(simfile.min_bpm)
     } else {
@@ -2205,11 +2291,9 @@ pub fn print_json_all(simfile: &SimfileSummary) {
 
     let root = JsonValue::Object(root_obj);
 
-    let stdout = std::io::stdout();
-    let mut handle = stdout.lock();
-    if write_json_value_with_key(&mut handle, None, &root, 0).is_ok() {
-        let _ = writeln!(handle);
-    }
+    write_json_value_with_key(writer, None, &root, 0)?;
+    writeln!(writer)?;
+    Ok(())
 }
 
 const CSV_HEADER_BASE: &str = "Title,Subtitle,Artist,Title trans,Subtitle trans,Artist trans,Length,BPM,BPM Tier,min_bpm,max_bpm,average_bpm,median bpm,BPM-data,offset,file_md5_hash,step_type,difficulty,rating,step_artist,tech_notation,sha1_hash,bpm_neutral_hash,total_arrows,left_arrows,down_arrows,up_arrows,right_arrows,total_steps,jumps,hands,holds,rolls,mines,lifts,fakes,stops_freezes,delays,warps,speeds,scrolls,total_streams,16th_streams,20th_streams,24th_streams,32nd_streams,total_breaks,sn_breaks,stream_percent,adj_stream_percent,max_nps,median_nps,matrix_rating";
@@ -2219,7 +2303,7 @@ const CSV_HEADER_PATTERN_2: &str = "total_towers,lr_towers,ud_towers,corner_towe
 const CSV_HEADER_TECH: &str = "crossovers,half_crossovers,full_crossovers,footswitches,up_footswitches,down_footswitches,sideswitches,jacks,brackets,doublesteps";
 const CSV_HEADER_PATTERN_3: &str = "total staircases,left_staircases,right_staircases,left_inv_staircases,right_inv_staircases,total_alt_staircases,left_alt_staircases,right_alt_staircases,left_inv_alt_staircases,right_inv_alt_staircases,total_double_staircases,left_double_staircases,right_double_staircases,left_inv_double_staircases,right_inv_double_staircases,total_sweeps,left_sweeps,right_sweeps,left_inv_sweeps,right_inv_sweeps,total_candle_sweeps,left_candle_sweeps,right_candle_sweeps,left_inv_candle_sweeps,right_inv_candle_sweeps,total copters,left_copters,right_copters,left_inv_copters,right_inv_copters,total_spirals,left_spirals,right_spirals,left_inv_spirals,right_inv_spirals,total_turbo_candles,left_turbo_candles,right_turbo_candles,left_inv_turbo_candles,right_inv_turbo_candles,total_hip_breakers,left_hip_breakers,right_hip_breakers,left_inv_hip_breakers,right_inv_hip_breakers,total_doritos,left_doritos,right_doritos,left_inv_doritos,right_inv_doritos,total_luchis,left_du_luchis,left_ud_luchis,right_du_luchis,right_ud_luchis";
 
-fn print_csv_all(simfile: &SimfileSummary) {
+fn write_csv_all<W: Write>(writer: &mut W, simfile: &SimfileSummary) -> io::Result<()> {
     let mut header: Vec<String> = CSV_HEADER_BASE.split(',').map(str::to_string).collect();
     if simfile.pattern_counts_enabled {
         header.extend(CSV_HEADER_PATTERN_1.split(',').map(str::to_string));
@@ -2240,14 +2324,20 @@ fn print_csv_all(simfile: &SimfileSummary) {
         }
     }
 
-    println!("{}", header.join(","));
+    writeln!(writer, "{}", header.join(","))?;
 
     for chart in &simfile.charts {
-        print_csv_row(simfile, chart);
+        write_csv_row(writer, simfile, chart)?;
     }
+
+    Ok(())
 }
 
-fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
+fn write_csv_row<W: Write>(
+    writer: &mut W,
+    simfile: &SimfileSummary,
+    chart: &ChartSummary,
+) -> io::Result<()> {
     fn esc_csv(s: &str) -> String {
         if s.contains('"') || s.contains(',') {
             format!("\"{}\"", s.replace('"', "\"\""))
@@ -2626,5 +2716,6 @@ fn print_csv_row(simfile: &SimfileSummary, chart: &ChartSummary) {
         }
     }
 
-    println!("{}", row.join(","));
+    writeln!(writer, "{}", row.join(","))?;
+    Ok(())
 }

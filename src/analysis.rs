@@ -564,65 +564,51 @@ fn build_chart_summary(
             .map(str::to_string)
     });
     let chart_display_bpm = chart_display_bpm_tag(chart_display_bpm_opt);
-    let chart_offset = if allow_steps_timing && chart_offset_opt.is_some() {
-        parse_offset_seconds(chart_offset_opt)
-    } else {
-        song_offset
-    };
+    let timing_src = crate::timing::resolve_chart_timing(
+        allow_steps_timing,
+        song_offset,
+        chart_offset_opt,
+        chart_bpms_opt,
+        chart_stops_opt,
+        chart_delays_opt,
+        chart_warps_opt,
+        chart_speeds_opt,
+        chart_scrolls_opt,
+        chart_fakes_opt,
+        chart_time_signatures_opt,
+        chart_labels_opt,
+        chart_tickcounts_opt,
+        chart_combos_opt,
+        global_bpms_raw,
+        global_stops_raw,
+        global_delays_raw,
+        global_warps_raw,
+        global_speeds_raw,
+        global_scrolls_raw,
+        global_fakes_raw,
+    );
+    let chart_offset = timing_src.chart_offset_seconds;
     let cached_radar_values = if extension.eq_ignore_ascii_case("sm") {
         parse_radar_values_bytes(fields.get(4).copied(), false)
     } else {
         parse_radar_values_bytes(chart_radar_values_opt, true)
     };
-    let chart_has_own_timing = allow_steps_timing
-        && (chart_bpms_opt.is_some()
-            || chart_stops_opt.is_some()
-            || chart_delays_opt.is_some()
-            || chart_warps_opt.is_some()
-            || chart_speeds_opt.is_some()
-            || chart_scrolls_opt.is_some()
-            || chart_fakes_opt.is_some()
-            || chart_time_signatures_opt.is_some()
-            || chart_labels_opt.is_some()
-            || chart_tickcounts_opt.is_some()
-            || chart_combos_opt.is_some()
-            || chart_offset_opt.is_some());
-    let (
-        timing_bpms_global,
-        timing_stops_global,
-        timing_delays_global,
-        timing_warps_global,
-        timing_speeds_global,
-        timing_scrolls_global,
-        timing_fakes_global,
-    ) = if chart_has_own_timing {
-        ("", "", "", "", "", "", "")
-    } else {
-        (
-            global_bpms_raw,
-            global_stops_raw,
-            global_delays_raw,
-            global_warps_raw,
-            global_speeds_raw,
-            global_scrolls_raw,
-            global_fakes_raw,
-        )
-    };
+    let chart_has_own_timing = timing_src.chart_has_own_timing;
     let timing_segments = compute_timing_segments(
         chart_bpms_timing,
-        timing_bpms_global,
+        timing_src.global_bpms,
         chart_stops_timing,
-        timing_stops_global,
+        timing_src.global_stops,
         chart_delays_timing,
-        timing_delays_global,
+        timing_src.global_delays,
         chart_warps_timing,
-        timing_warps_global,
+        timing_src.global_warps,
         chart_speeds_timing,
-        timing_speeds_global,
+        timing_src.global_speeds,
         chart_scrolls_timing,
-        timing_scrolls_global,
+        timing_src.global_scrolls,
         chart_fakes_timing,
-        timing_fakes_global,
+        timing_src.global_fakes,
         timing_format,
         true,
     );
