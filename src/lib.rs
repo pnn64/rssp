@@ -7,6 +7,7 @@ pub mod math;
 pub mod matrix;
 pub mod nps;
 pub mod parse;
+pub mod pack;
 pub mod patterns;
 pub mod report;
 pub mod stats;
