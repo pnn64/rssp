@@ -274,7 +274,7 @@ pub fn resolve_song_assets(
     imgs.sort_by_cached_key(|p| lc_name(p));
 
     if banner.is_none() {
-        banner = find_hint(&imgs, &[], &["banner"], &[" bn"]);
+        banner = find_hint(&imgs, &[], &["banner"], &["bn"]);
     }
     if background.is_none() {
         background = find_hint(&imgs, &[], &["background"], &["bg"]);
