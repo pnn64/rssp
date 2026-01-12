@@ -232,10 +232,12 @@ pub fn get_nps_stats(nps: &[f64]) -> (f64, f64) {
 }
 
 pub fn measure_equally_spaced(data: &[u8], lanes: usize) -> Vec<bool> {
+    let lanes = if lanes == 8 { 8 } else { 4 };
+    let minimized = crate::stats::minimize_chart_for_hash(data, lanes);
     if lanes == 8 {
-        equally_spaced_impl::<8>(data)
+        equally_spaced_impl::<8>(&minimized)
     } else {
-        equally_spaced_impl::<4>(data)
+        equally_spaced_impl::<4>(&minimized)
     }
 }
 

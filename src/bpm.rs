@@ -581,64 +581,9 @@ fn elapsed_with_events(
     time
 }
 
-fn compute_last_beat_impl<const N: usize>(data: &[u8]) -> f64 {
-    let mut holds = [0u32; N];
-    let (mut last_m, mut last_r, mut rows, mut m, mut r) = (None::<usize>, 0, 0, 0, 0);
-
-    for line in data.split(|&b| b == b'\n') {
-        let line = line.strip_suffix(&[b'\r']).unwrap_or(line);
-        if line.is_empty() {
-            continue;
-        }
-        match line[0] {
-            b',' => {
-                if last_m == Some(m) {
-                    rows = r;
-                }
-                m += 1;
-                r = 0;
-                continue;
-            }
-            b';' => {
-                if last_m == Some(m) {
-                    rows = r;
-                }
-                break;
-            }
-            _ => {}
-        }
-        if line.len() < N {
-            continue;
-        }
-        let mut has = false;
-        for (c, &ch) in line[..N].iter().enumerate() {
-            match ch {
-                b'1' | b'M' | b'K' | b'L' | b'F' => has = true,
-                b'2' | b'4' => holds[c] = holds[c].saturating_add(1),
-                b'3' if holds[c] > 0 => {
-                    holds[c] -= 1;
-                    has = true;
-                }
-                _ => {}
-            }
-        }
-        if has {
-            last_m = Some(m);
-            last_r = r;
-        }
-        r += 1;
-    }
-    let m = last_m.unwrap_or(0);
-    let beat = m as f64 * 4.0 + 4.0 * (last_r as f64 / rows.max(1) as f64);
-    crate::timing::note_row_to_beat(crate::timing::beat_to_note_row(beat))
-}
-
 pub fn compute_last_beat(data: &[u8], lanes: usize) -> f64 {
-    match lanes {
-        4 => compute_last_beat_impl::<4>(data),
-        8 => compute_last_beat_impl::<8>(data),
-        _ => compute_last_beat_impl::<4>(data),
-    }
+    let (_, _, _, _, last_beat) = crate::stats::minimize_chart_count_rows(data, lanes);
+    last_beat
 }
 
 pub fn compute_total_chart_length(
@@ -663,12 +608,13 @@ pub fn compute_mines_nonfake(
     warps: &[(f64, f64)],
     fakes: &[(f64, f64)],
 ) -> u32 {
-    let lanes = lanes.max(1);
+    let lanes = if lanes == 8 { 8 } else { 4 };
+    let minimized = crate::stats::minimize_chart_for_hash(data, lanes);
     let mut rows = Vec::new();
     let mut per_measure = Vec::new();
     let (mut m, mut r, mut cnt) = (0usize, 0usize, 0usize);
 
-    for line in data.split(|&b| b == b'\n') {
+    for line in minimized.split(|&b| b == b'\n') {
         if line.is_empty() {
             continue;
         }
