@@ -271,10 +271,11 @@ struct StageLayout {
     side_arrows: Vec<usize>,
     pair_stride: usize,
     avg_points: Vec<StagePoint>,
-    x_diffs: Vec<f32>,
-    y_diffs: Vec<f32>,
+    facing_x_penalty: Vec<f32>,
+    facing_y_penalty: Vec<f32>,
     dist_stride: usize,
     dist_sq: Vec<f32>,
+    hold_switch_cost: Vec<f32>,
     dist_weighted: Vec<f64>,
 }
 
@@ -322,8 +323,17 @@ impl StageLayout {
         let invalid = columns.len();
 
         let mut avg_points = vec![StagePoint::default(); pair_len];
-        let mut x_diffs = vec![0.0f32; pair_len];
-        let mut y_diffs = vec![0.0f32; pair_len];
+        let mut facing_x_penalty = vec![0.0f32; pair_len];
+        let mut facing_y_penalty = vec![0.0f32; pair_len];
+
+        let facing_penalty = |v: f32| -> f32 {
+            let base = -(v.min(0.0));
+            if base > 0.0 {
+                (base as f64).powf(1.8) as f32 * 100.0 * FACING_WEIGHT
+            } else {
+                0.0
+            }
+        };
 
         for left in 0..pair_stride {
             for right in 0..pair_stride {
@@ -363,21 +373,24 @@ impl StageLayout {
                 }
 
                 let (ndx, ndy) = (dx / dist, dy / dist);
-                let (mut xm, mut ym) = (ndx.abs().powf(4.0) as f32, ndy.abs().powf(4.0) as f32);
+                let (adx, ady) = (ndx.abs(), ndy.abs());
+                let (adx2, ady2) = (adx * adx, ady * ady);
+                let (mut xm, mut ym) = ((adx2 * adx2) as f32, (ady2 * ady2) as f32);
                 if ndx <= 0.0 {
                     xm = -xm;
                 }
                 if ndy <= 0.0 {
                     ym = -ym;
                 }
-                x_diffs[idx] = xm;
-                y_diffs[idx] = ym;
+                facing_x_penalty[idx] = facing_penalty(xm);
+                facing_y_penalty[idx] = facing_penalty(ym);
             }
         }
 
         let dist_stride = columns.len();
         let dist_len = dist_stride * dist_stride;
         let mut dist_sq = vec![0.0f32; dist_len];
+        let mut hold_switch_cost = vec![0.0f32; dist_len];
         let mut dist_weighted = vec![0.0f64; dist_len];
 
         for l in 0..dist_stride {
@@ -386,7 +399,9 @@ impl StageLayout {
                 let sq = dx * dx + dy * dy;
                 let idx = l * dist_stride + r;
                 dist_sq[idx] = sq;
-                dist_weighted[idx] = (sq as f64).sqrt() * DISTANCE_WEIGHT as f64;
+                let dist = (sq as f64).sqrt();
+                hold_switch_cost[idx] = dist as f32 * HOLDSWITCH_WEIGHT;
+                dist_weighted[idx] = dist * DISTANCE_WEIGHT as f64;
             }
         }
 
@@ -397,10 +412,11 @@ impl StageLayout {
             side_arrows,
             pair_stride,
             avg_points,
-            x_diffs,
-            y_diffs,
+            facing_x_penalty,
+            facing_y_penalty,
             dist_stride,
             dist_sq,
+            hold_switch_cost,
             dist_weighted,
         }
     }
@@ -412,14 +428,12 @@ impl StageLayout {
 
     #[inline(always)]
     fn bracket_check(&self, c1: usize, c2: usize) -> bool {
-        let (p1, p2) = (self.columns[c1], self.columns[c2]);
-        let (dx, dy) = (p1.x - p2.x, p1.y - p2.y);
-        dx * dx + dy * dy <= 2.0
+        self.dist_sq[c1 * self.dist_stride + c2] <= 2.0
     }
 
     #[inline(always)]
-    fn get_distance_sq(&self, c1: usize, c2: usize) -> f32 {
-        self.dist_sq[c1 * self.dist_stride + c2]
+    fn get_hold_switch_cost(&self, c1: usize, c2: usize) -> f32 {
+        self.hold_switch_cost[c1 * self.dist_stride + c2]
     }
 
     #[inline(always)]
@@ -444,13 +458,13 @@ impl StageLayout {
     }
 
     #[inline(always)]
-    fn get_x_diff(&self, l: isize, r: isize) -> f32 {
-        self.x_diffs[self.pair_index(l, r)]
+    fn get_facing_x_penalty(&self, l: isize, r: isize) -> f32 {
+        self.facing_x_penalty[self.pair_index(l, r)]
     }
 
     #[inline(always)]
-    fn get_y_diff(&self, l: isize, r: isize) -> f32 {
-        self.y_diffs[self.pair_index(l, r)]
+    fn get_facing_y_penalty(&self, l: isize, r: isize) -> f32 {
+        self.facing_y_penalty[self.pair_index(l, r)]
     }
 
     #[inline(always)]
@@ -802,12 +816,11 @@ fn calc_hold_switch_cost(layout: &StageLayout, initial: &State, result: &State, 
 
         if switched {
             let prev_col = initial.where_the_feet_are[foot.as_index()];
-            let dist = if prev_col == INVALID_COLUMN {
-                1.0
+            if prev_col == INVALID_COLUMN {
+                cost += HOLDSWITCH_WEIGHT;
             } else {
-                (layout.get_distance_sq(c, prev_col as usize) as f64).sqrt() as f32
+                cost += layout.get_hold_switch_cost(c, prev_col as usize);
             };
-            cost += HOLDSWITCH_WEIGHT * dist;
         }
     }
     cost
@@ -947,27 +960,10 @@ fn calc_facing_cost(layout: &StageLayout, result: &State) -> f32 {
         rt = rh;
     }
 
-    let facing = |a: isize, b: isize, f: fn(&StageLayout, isize, isize) -> f32| -> f32 {
-        if a != INVALID_COLUMN && b != INVALID_COLUMN {
-            f(layout, a, b)
-        } else {
-            0.0
-        }
-    };
-
-    let penalty = |v: f32| -> f32 {
-        let base = -(v.min(0.0));
-        if base > 0.0 {
-            (base as f64).powf(1.8) as f32 * 100.0 * FACING_WEIGHT
-        } else {
-            0.0
-        }
-    };
-
-    penalty(facing(lh, rh, StageLayout::get_x_diff))
-        + penalty(facing(lt, rt, StageLayout::get_x_diff))
-        + penalty(facing(lh, lt, StageLayout::get_y_diff))
-        + penalty(facing(rh, rt, StageLayout::get_y_diff))
+    layout.get_facing_x_penalty(lh, rh)
+        + layout.get_facing_x_penalty(lt, rt)
+        + layout.get_facing_y_penalty(lh, lt)
+        + layout.get_facing_y_penalty(rh, rt)
 }
 
 fn calc_spin_cost(layout: &StageLayout, initial: &State, result: &State) -> f32 {
