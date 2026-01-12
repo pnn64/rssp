@@ -4,7 +4,7 @@ use crate::parse::{
     decode_bytes, extract_sections, normalize_chart_desc, parse_offset_seconds, parse_version,
     unescape_trim,
 };
-use crate::timing::{TimingData, TimingFormat, steps_timing_allowed};
+use crate::timing::{TimingData, TimingFormat, compute_timing_segments, steps_timing_allowed};
 
 #[derive(Debug, Clone)]
 pub struct ChartDuration {
@@ -171,10 +171,7 @@ pub fn compute_chart_durations(
         } else {
             None
         };
-
-        let timing = TimingData::from_chart_data(
-            chart_offset,
-            0.0,
+        let timing_segments = compute_timing_segments(
             chart_bpms.as_deref(),
             timing_src.global_bpms,
             chart_stops.as_deref(),
@@ -192,6 +189,8 @@ pub fn compute_chart_durations(
             timing_format,
             true,
         );
+
+        let timing = TimingData::from_segments(chart_offset, 0.0, &timing_segments);
         let duration_seconds = chart_duration_seconds(last_beat, &timing, offsets);
 
         results.push(ChartDuration {

@@ -6,7 +6,7 @@ use crate::parse::{
     decode_bytes, extract_sections, normalize_chart_desc, parse_offset_seconds, parse_version,
     unescape_trim,
 };
-use crate::timing::{TimingData, TimingFormat, steps_timing_allowed};
+use crate::timing::{TimingData, TimingFormat, compute_timing_segments, steps_timing_allowed};
 
 pub fn compute_chart_peak_nps(
     simfile_data: &[u8],
@@ -75,29 +75,6 @@ pub fn compute_chart_peak_nps(
         let lanes = crate::step_type_lanes(&step_type);
         let measure_densities = crate::stats::measure_densities(chart_data, lanes);
 
-        let timing_tags = if allow_steps_timing {
-            (
-                crate::chart_timing_tag_raw(entry.chart_bpms.as_deref()),
-                crate::chart_timing_tag_raw(entry.chart_stops.as_deref()),
-                crate::chart_timing_tag_raw(entry.chart_delays.as_deref()),
-                crate::chart_timing_tag_raw(entry.chart_warps.as_deref()),
-                crate::chart_timing_tag_raw(entry.chart_speeds.as_deref()),
-                crate::chart_timing_tag_raw(entry.chart_scrolls.as_deref()),
-                crate::chart_timing_tag_raw(entry.chart_fakes.as_deref()),
-            )
-        } else {
-            (None, None, None, None, None, None, None)
-        };
-        let (
-            chart_bpms,
-            chart_stops,
-            chart_delays,
-            chart_warps,
-            chart_speeds,
-            chart_scrolls,
-            chart_fakes,
-        ) = timing_tags;
-
         let timing_src = crate::timing::resolve_chart_timing(
             allow_steps_timing,
             song_offset,
@@ -122,10 +99,42 @@ pub fn compute_chart_peak_nps(
             cleaned_global_fakes.as_str(),
         );
         let chart_offset = timing_src.chart_offset_seconds;
-
-        let timing = TimingData::from_chart_data(
-            chart_offset,
-            0.0,
+        let chart_bpms = if allow_steps_timing {
+            crate::chart_timing_tag_raw(entry.chart_bpms.as_deref())
+        } else {
+            None
+        };
+        let chart_stops = if allow_steps_timing {
+            crate::chart_timing_tag_raw(entry.chart_stops.as_deref())
+        } else {
+            None
+        };
+        let chart_delays = if allow_steps_timing {
+            crate::chart_timing_tag_raw(entry.chart_delays.as_deref())
+        } else {
+            None
+        };
+        let chart_warps = if allow_steps_timing {
+            crate::chart_timing_tag_raw(entry.chart_warps.as_deref())
+        } else {
+            None
+        };
+        let chart_speeds = if allow_steps_timing {
+            crate::chart_timing_tag_raw(entry.chart_speeds.as_deref())
+        } else {
+            None
+        };
+        let chart_scrolls = if allow_steps_timing {
+            crate::chart_timing_tag_raw(entry.chart_scrolls.as_deref())
+        } else {
+            None
+        };
+        let chart_fakes = if allow_steps_timing {
+            crate::chart_timing_tag_raw(entry.chart_fakes.as_deref())
+        } else {
+            None
+        };
+        let timing_segments = compute_timing_segments(
             chart_bpms.as_deref(),
             timing_src.global_bpms,
             chart_stops.as_deref(),
@@ -143,6 +152,7 @@ pub fn compute_chart_peak_nps(
             timing_format,
             true,
         );
+        let timing = TimingData::from_segments(chart_offset, 0.0, &timing_segments);
 
         let measure_nps_vec = compute_measure_nps_vec_with_timing(&measure_densities, &timing);
         let (max_nps, _median_nps) = get_nps_stats(&measure_nps_vec);

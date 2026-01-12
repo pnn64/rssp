@@ -828,34 +828,9 @@ pub fn measure_densities(data: &[u8], lanes: usize) -> Vec<usize> {
 }
 
 fn densities_impl<const L: usize>(data: &[u8]) -> Vec<usize> {
-    let mut densities = Vec::new();
-    let mut density = 0;
-    let mut saw_term = false;
-
-    for raw in data.split(|&b| b == b'\n') {
-        let line = skip_ws(raw);
-        if line.is_empty() || line[0] == b'/' {
-            continue;
-        }
-
-        match line[0] {
-            b',' => {
-                densities.push(density);
-                density = 0;
-            }
-            b';' => {
-                densities.push(density);
-                saw_term = true;
-                break;
-            }
-            _ if line.len() >= L && has_step::<L>(line) => density += 1,
-            _ => {}
-        }
-    }
-
-    if !saw_term {
-        densities.push(density);
-    }
-
+    let mut on_rows = |_, _| {};
+    let mut on_line = |_: &[u8; L], _, _, _| {};
+    let mut on_count = |line: &[u8; L]| has_step::<L>(line);
+    let (_, densities) = minimize_chart_core(data, &mut on_rows, &mut on_line, &mut on_count);
     densities
 }
