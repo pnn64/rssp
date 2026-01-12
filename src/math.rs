@@ -51,27 +51,13 @@ pub(crate) fn fmt_dec3_half_up(value: f64) -> String {
     format!("{:.3}", ((value * 1000.0 + 0.5).floor()) / 1000.0)
 }
 
+// Rust 1.77+ version (preferred - uses CPU rounding instructions):
 #[inline(always)]
 pub(crate) fn lrint_f64(v: f64) -> f64 {
     if !v.is_finite() {
         return 0.0;
     }
-    if v.fract() == 0.0 {
-        return v;
-    }
-    let floor = v.floor();
-    let frac = v - floor;
-    match frac.partial_cmp(&0.5) {
-        Some(Ordering::Less) => floor,
-        Some(Ordering::Greater) => floor + 1.0,
-        _ => {
-            if ((floor as i64) & 1) == 0 {
-                floor
-            } else {
-                floor + 1.0
-            }
-        }
-    }
+    v.round_ties_even()
 }
 
 #[inline(always)]
@@ -79,21 +65,5 @@ pub(crate) fn lrint_f32(v: f32) -> i32 {
     if !v.is_finite() {
         return 0;
     }
-    if v.fract() == 0.0 {
-        return v as i32;
-    }
-    let floor = v.floor();
-    let frac = v - floor;
-    let fi = floor as i32;
-    match frac.partial_cmp(&0.5) {
-        Some(Ordering::Less) => fi,
-        Some(Ordering::Greater) => fi + 1,
-        _ => {
-            if (fi & 1) == 0 {
-                fi
-            } else {
-                fi + 1
-            }
-        }
-    }
+    v.round_ties_even() as i32
 }
