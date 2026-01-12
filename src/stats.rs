@@ -538,7 +538,9 @@ fn minimize_hash_impl<const L: usize>(data: &[u8]) -> Vec<u8> {
 // ============================================================================
 
 pub fn compute_timing_aware_stats(data: &[u8], lanes: usize, timing: &TimingData) -> ArrowStats {
-    dispatch_lanes!(lanes, timing_stats_impl(data, timing))
+    let (minimized, _stats, _densities, beats, _last_beat) =
+        minimize_chart_count_rows(data, lanes);
+    compute_timing_aware_stats_with_row_to_beat(&minimized, lanes, timing, &beats)
 }
 
 pub(crate) fn compute_timing_aware_stats_with_row_to_beat(
@@ -547,7 +549,16 @@ pub(crate) fn compute_timing_aware_stats_with_row_to_beat(
     timing: &TimingData,
     beats: &[f32],
 ) -> ArrowStats {
-    dispatch_lanes!(lanes, timing_stats_beats_impl(data, timing, beats))
+    match lanes {
+        8 => {
+            let rows = parse_minimized_rows::<8>(data);
+            compute_timing_aware_stats_from_rows_with_row_to_beat::<8>(&rows, timing, beats)
+        }
+        _ => {
+            let rows = parse_minimized_rows::<4>(data);
+            compute_timing_aware_stats_from_rows_with_row_to_beat::<4>(&rows, timing, beats)
+        }
+    }
 }
 
 pub(crate) fn compute_timing_aware_stats_from_rows_with_row_to_beat<const L: usize>(
@@ -560,158 +571,6 @@ pub(crate) fn compute_timing_aware_stats_from_rows_with_row_to_beat<const L: usi
     }
     let ends = scan_hold_ends(rows);
     process_timing_rows::<L>(rows.iter(), &ends, timing, beats)
-}
-
-fn timing_stats_impl<const L: usize>(data: &[u8], timing: &TimingData) -> ArrowStats {
-    let (ends, measures) = scan_holds_with_measures::<L>(data);
-    if ends.is_empty() {
-        return ArrowStats::default();
-    }
-
-    let mut stats = ArrowStats::default();
-    let mut ends_per = vec![0u32; ends.len()];
-    let (mut ridx, mut midx, mut rim, mut active) = (0, 0, 0, 0i32);
-    let mut rows_m = *measures.first().unwrap_or(&0);
-    let (mut rows_f, mut m_f) = (rows_m as f32, 0.0f32);
-
-    for raw in data.split(|&b| b == b'\n') {
-        let line = trim_cr(raw);
-        if line.is_empty() {
-            continue;
-        }
-
-        match line[0] {
-            b',' => {
-                midx += 1;
-                rim = 0;
-                rows_m = *measures.get(midx).unwrap_or(&0);
-                rows_f = rows_m as f32;
-                m_f = midx as f32;
-                continue;
-            }
-            b';' => break,
-            _ => {}
-        }
-        if line.len() < L {
-            continue;
-        }
-
-        if ridx > 0 {
-            active -= ends_per[ridx - 1] as i32;
-        }
-
-        let row = if rows_m > 0 {
-            beat_to_note_row(((m_f + rim as f32 / rows_f) * 4.0) as f64)
-        } else {
-            0
-        };
-
-        process_timing_row::<L>(
-            line,
-            &ends[ridx],
-            timing.is_judgable_at_row(row),
-            &mut stats,
-            &mut ends_per,
-            &mut active,
-        );
-        ridx += 1;
-        rim += 1;
-    }
-    stats
-}
-
-fn timing_stats_beats_impl<const L: usize>(
-    data: &[u8],
-    timing: &TimingData,
-    beats: &[f32],
-) -> ArrowStats {
-    let ends = scan_holds_data::<L>(data);
-    if ends.is_empty() {
-        return ArrowStats::default();
-    }
-
-    let mut stats = ArrowStats::default();
-    let mut ends_per = vec![0u32; ends.len()];
-    let (mut ridx, mut active) = (0, 0i32);
-
-    for raw in data.split(|&b| b == b'\n') {
-        let line = trim_cr(raw);
-        if line.is_empty() || matches!(line[0], b',' | b';') {
-            if line.first() == Some(&b';') {
-                break;
-            }
-            continue;
-        }
-        if line.len() < L {
-            continue;
-        }
-
-        if ridx > 0 {
-            active -= ends_per[ridx - 1] as i32;
-        }
-
-        process_timing_row::<L>(
-            line,
-            &ends[ridx],
-            timing.is_judgable_at_beat(beats[ridx] as f64),
-            &mut stats,
-            &mut ends_per,
-            &mut active,
-        );
-        ridx += 1;
-    }
-    stats
-}
-
-fn scan_holds_data<const L: usize>(data: &[u8]) -> Vec<[usize; L]> {
-    scan_holds_with_measures::<L>(data).0
-}
-
-fn scan_holds_with_measures<const L: usize>(data: &[u8]) -> (Vec<[usize; L]>, Vec<usize>) {
-    let mut stacks: [Vec<usize>; L] = std::array::from_fn(|_| Vec::new());
-    let mut ends = Vec::new();
-    let mut measures = Vec::new();
-    let (mut ridx, mut mrows) = (0, 0);
-
-    for raw in data.split(|&b| b == b'\n') {
-        let line = trim_cr(raw);
-        if line.is_empty() {
-            continue;
-        }
-
-        match line[0] {
-            b',' => {
-                measures.push(mrows);
-                mrows = 0;
-                continue;
-            }
-            b';' => {
-                measures.push(mrows);
-                break;
-            }
-            _ => {}
-        }
-        if line.len() < L {
-            continue;
-        }
-
-        ends.push([HOLD_END_NONE; L]);
-        for c in 0..L {
-            match line[c] {
-                ch if is_hold_blocker(ch) => stacks[c].clear(),
-                b'2' | b'4' => stacks[c].push(ridx),
-                b'3' => {
-                    if let Some(s) = stacks[c].pop() {
-                        ends[s][c] = ridx;
-                    }
-                }
-                _ => {}
-            }
-        }
-        ridx += 1;
-        mrows += 1;
-    }
-    (ends, measures)
 }
 
 fn process_timing_rows<'a, const L: usize>(
