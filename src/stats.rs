@@ -302,50 +302,55 @@ pub(crate) fn calc_last_beat(midx: Option<usize>, row: usize, rows: usize) -> f6
 // Chart Processing - Unified Implementation
 // ============================================================================
 
-fn process_chart<const L: usize, R, N>(
+fn finalize_measure<const L: usize, R, N, C>(
+    m: &mut Vec<[u8; L]>,
+    idx: usize,
+    output: &mut Vec<u8>,
+    densities: &mut Vec<usize>,
+    on_rows: &mut R,
+    on_line: &mut N,
+    on_count: &mut C,
+) where
+    R: FnMut(usize, usize),
+    N: FnMut(&[u8; L], usize, usize, usize),
+    C: FnMut(&[u8; L]) -> bool,
+{
+    if m.is_empty() {
+        densities.push(0);
+        return;
+    }
+    minimize_measure(m);
+    on_rows(idx, m.len());
+    output.reserve(m.len() * (L + 1));
+    let rows = m.len();
+    let mut density = 0;
+    for (i, line) in m.iter().enumerate() {
+        on_line(line, idx, i, rows);
+        if on_count(line) {
+            density += 1;
+        }
+        output.extend_from_slice(line);
+        output.push(b'\n');
+    }
+    m.clear();
+    densities.push(density);
+}
+
+fn minimize_chart_core<const L: usize, R, N, C>(
     data: &[u8],
     on_rows: &mut R,
     on_line: &mut N,
-) -> (Vec<u8>, ArrowStats, Vec<usize>)
+    on_count: &mut C,
+) -> (Vec<u8>, Vec<usize>)
 where
     R: FnMut(usize, usize),
     N: FnMut(&[u8; L], usize, usize, usize),
+    C: FnMut(&[u8; L]) -> bool,
 {
     let mut output = Vec::with_capacity(data.len());
     let mut measure = Vec::with_capacity(64);
-    let mut stats = ArrowStats::default();
     let mut densities = Vec::new();
-    let (mut holds, mut ends, mut midx, mut done) = (0u32, 0u32, 0usize, false);
-
-    let finalize = |m: &mut Vec<[u8; L]>,
-                    out: &mut Vec<u8>,
-                    s: &mut ArrowStats,
-                    d: &mut Vec<usize>,
-                    hs: &mut u32,
-                    es: &mut u32,
-                    idx: usize,
-                    or: &mut R,
-                    ol: &mut N| {
-        if m.is_empty() {
-            d.push(0);
-            return;
-        }
-        minimize_measure(m);
-        or(idx, m.len());
-        out.reserve(m.len() * (L + 1));
-        let rows = m.len();
-        let mut density = 0;
-        for (i, line) in m.iter().enumerate() {
-            ol(line, idx, i, rows);
-            if count_line(line, s, hs, es) {
-                density += 1;
-            }
-            out.extend_from_slice(line);
-            out.push(b'\n');
-        }
-        m.clear();
-        d.push(density);
-    };
+    let (mut midx, mut done) = (0usize, false);
 
     for raw in data.split(|&b| b == b'\n') {
         let line = skip_ws(raw);
@@ -355,31 +360,27 @@ where
 
         match line[0] {
             b',' => {
-                finalize(
+                finalize_measure(
                     &mut measure,
-                    &mut output,
-                    &mut stats,
-                    &mut densities,
-                    &mut holds,
-                    &mut ends,
                     midx,
+                    &mut output,
+                    &mut densities,
                     on_rows,
                     on_line,
+                    on_count,
                 );
                 output.extend_from_slice(b",\n");
                 midx += 1;
             }
             b';' => {
-                finalize(
+                finalize_measure(
                     &mut measure,
-                    &mut output,
-                    &mut stats,
-                    &mut densities,
-                    &mut holds,
-                    &mut ends,
                     midx,
+                    &mut output,
+                    &mut densities,
                     on_rows,
                     on_line,
+                    on_count,
                 );
                 done = true;
                 break;
@@ -394,18 +395,33 @@ where
     }
 
     if !done {
-        finalize(
+        finalize_measure(
             &mut measure,
-            &mut output,
-            &mut stats,
-            &mut densities,
-            &mut holds,
-            &mut ends,
             midx,
+            &mut output,
+            &mut densities,
             on_rows,
             on_line,
+            on_count,
         );
     }
+
+    (output, densities)
+}
+
+fn process_chart<const L: usize, R, N>(
+    data: &[u8],
+    on_rows: &mut R,
+    on_line: &mut N,
+) -> (Vec<u8>, ArrowStats, Vec<usize>)
+where
+    R: FnMut(usize, usize),
+    N: FnMut(&[u8; L], usize, usize, usize),
+{
+    let mut stats = ArrowStats::default();
+    let (mut holds, mut ends) = (0u32, 0u32);
+    let mut count = |line: &[u8; L]| count_line(line, &mut stats, &mut holds, &mut ends);
+    let (output, densities) = minimize_chart_core(data, on_rows, on_line, &mut count);
 
     // Fix phantom holds
     if holds > 0 && (holds != ends || has_phantoms::<L>(&output)) {
@@ -510,46 +526,11 @@ pub fn minimize_chart_for_hash(data: &[u8], lanes: usize) -> Vec<u8> {
 }
 
 fn minimize_hash_impl<const L: usize>(data: &[u8]) -> Vec<u8> {
-    let mut output = Vec::with_capacity(data.len());
-    let mut measure = Vec::with_capacity(64);
-
-    for raw in data.split(|&b| b == b'\n') {
-        let line = skip_ws(raw);
-        if line.is_empty() || line[0] == b' ' || line[0] == b'/' {
-            continue;
-        }
-
-        match line[0] {
-            b',' => {
-                flush_hash_measure::<L>(&mut measure, &mut output);
-                output.extend_from_slice(b",\n");
-            }
-            b';' => {
-                flush_hash_measure::<L>(&mut measure, &mut output);
-                break;
-            }
-            _ if line.len() >= L => {
-                let mut arr = [0u8; L];
-                arr.copy_from_slice(&line[..L]);
-                measure.push(arr);
-            }
-            _ => {}
-        }
-    }
+    let mut on_rows = |_, _| {};
+    let mut on_line = |_: &[u8; L], _, _, _| {};
+    let mut on_count = |_: &[u8; L]| false;
+    let (output, _) = minimize_chart_core(data, &mut on_rows, &mut on_line, &mut on_count);
     output
-}
-
-fn flush_hash_measure<const L: usize>(m: &mut Vec<[u8; L]>, out: &mut Vec<u8>) {
-    if m.is_empty() {
-        return;
-    }
-    minimize_measure(m);
-    out.reserve(m.len() * (L + 1));
-    for line in m.iter() {
-        out.extend_from_slice(line);
-        out.push(b'\n');
-    }
-    m.clear();
 }
 
 // ============================================================================
