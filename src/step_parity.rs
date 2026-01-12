@@ -2075,7 +2075,8 @@ pub fn analyze_lanes(data: &[u8], bpm_map: &[(f64, f64)], offset: f64, lanes: us
         return TechCounts::default();
     };
 
-    let rows = parse_rows(data, layout.column_count(), |beat| {
+    let minimized = crate::stats::minimize_chart_for_hash(data, layout.column_count());
+    let rows = parse_rows(&minimized, layout.column_count(), |beat| {
         time_between_beats(0.0, beat, bpm_map) as f32 - offset as f32
     });
     let notes = build_notes(&rows, None);
@@ -2092,7 +2093,8 @@ pub fn analyze_timing_lanes(data: &[u8], timing: &TimingData, lanes: usize) -> T
         return TechCounts::default();
     };
 
-    let rows = parse_rows(data, layout.column_count(), |beat| {
+    let minimized = crate::stats::minimize_chart_for_hash(data, layout.column_count());
+    let rows = parse_rows(&minimized, layout.column_count(), |beat| {
         timing.get_time_for_beat_f32(beat as f64) as f32
     });
     let notes = build_notes(&rows, Some(timing));
