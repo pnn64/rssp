@@ -1,5 +1,3 @@
-use std::cmp::Ordering;
-
 #[inline(always)]
 fn round_sig_figs_6_fmt(value: f64, fallback: f64) -> f64 {
     let formatted = format!("{:.5e}", value);
@@ -51,7 +49,6 @@ pub(crate) fn fmt_dec3_half_up(value: f64) -> String {
     format!("{:.3}", ((value * 1000.0 + 0.5).floor()) / 1000.0)
 }
 
-// Rust 1.77+ version (preferred - uses CPU rounding instructions):
 #[inline(always)]
 pub(crate) fn lrint_f64(v: f64) -> f64 {
     if !v.is_finite() {
