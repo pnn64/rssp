@@ -1,5 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::LazyLock;
+
+// ============================================================================
+// Pattern Variant Enum
+// ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PatternVariant {
@@ -67,6 +71,10 @@ pub enum PatternVariant {
     TurboCandleInvRight,
 }
 
+// ============================================================================
+// Summary Types
+// ============================================================================
+
 #[derive(Debug, Clone)]
 pub struct CustomPatternSummary {
     pub pattern: String,
@@ -77,41 +85,160 @@ pub struct CustomPatternSummary {
 pub(crate) struct CompiledPattern {
     pattern: String,
     bits: Vec<u8>,
-    packed: Option<PackedPattern>,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct PackedPattern {
-    value: u64,
-    mask: u64,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoxCounts {
+    pub total_boxes: u32,
+    pub lr_boxes: u32,
+    pub ud_boxes: u32,
+    pub corner_boxes: u32,
+    pub ld_boxes: u32,
+    pub lu_boxes: u32,
+    pub rd_boxes: u32,
+    pub ru_boxes: u32,
+}
+
+// ============================================================================
+// Aho-Corasick Core Implementation
+// ============================================================================
+
+const AC_ALPHA: usize = 16;
+
+#[derive(Debug, Clone)]
+pub(crate) struct AcDfa<T> {
+    goto: Vec<u32>,
+    output: Vec<Vec<T>>,
+}
+
+fn ac_build<T: Copy>(patterns: &[(T, &[u8])]) -> AcDfa<T> {
+    let mut goto: Vec<[u32; AC_ALPHA]> = vec![[u32::MAX; AC_ALPHA]];
+    let mut output: Vec<Vec<T>> = vec![vec![]];
+
+    for &(id, pat) in patterns {
+        if pat.is_empty() {
+            continue;
+        }
+        let mut state = 0usize;
+        for &b in pat {
+            let sym = (b & 0x0F) as usize;
+            if goto[state][sym] == u32::MAX {
+                goto[state][sym] = goto.len() as u32;
+                goto.push([u32::MAX; AC_ALPHA]);
+                output.push(vec![]);
+            }
+            state = goto[state][sym] as usize;
+        }
+        output[state].push(id);
+    }
+
+    let n = goto.len();
+    if n == 1 {
+        return AcDfa {
+            goto: vec![0; AC_ALPHA],
+            output: vec![vec![]],
+        };
+    }
+
+    let mut fail = vec![0u32; n];
+    let mut queue: VecDeque<usize> = (0..AC_ALPHA)
+        .filter_map(|s| {
+            let next = goto[0][s];
+            (next != u32::MAX).then_some(next as usize)
+        })
+        .collect();
+
+    while let Some(state) = queue.pop_front() {
+        for sym in 0..AC_ALPHA {
+            let child = goto[state][sym];
+            if child == u32::MAX {
+                continue;
+            }
+            let child_idx = child as usize;
+            queue.push_back(child_idx);
+
+            let mut f = fail[state] as usize;
+            while f != 0 && goto[f][sym] == u32::MAX {
+                f = fail[f] as usize;
+            }
+
+            let fail_target = match goto[f][sym] {
+                t if t != u32::MAX && t as usize != child_idx => t,
+                _ => 0,
+            };
+            fail[child_idx] = fail_target;
+
+            if fail_target != 0 {
+                let suffix_matches: Vec<T> = output[fail_target as usize].clone();
+                output[child_idx].extend(suffix_matches);
+            }
+        }
+    }
+
+    for state in 0..n {
+        for sym in 0..AC_ALPHA {
+            if goto[state][sym] == u32::MAX {
+                let mut f = state;
+                while f != 0 && goto[f][sym] == u32::MAX {
+                    f = fail[f] as usize;
+                }
+                goto[state][sym] = if goto[f][sym] != u32::MAX {
+                    goto[f][sym]
+                } else {
+                    0
+                };
+            }
+        }
+    }
+
+    AcDfa {
+        goto: goto.into_iter().flatten().collect(),
+        output,
+    }
 }
 
 #[inline]
-fn pack_pattern(bits: &[u8]) -> Option<PackedPattern> {
-    let len = bits.len();
-    if len == 0 || len > 8 {
-        return None;
+fn ac_search<T: Copy + Eq + std::hash::Hash>(text: &[u8], dfa: &AcDfa<T>) -> HashMap<T, u32> {
+    let mut counts = HashMap::new();
+    let mut state = 0u32;
+
+    for &b in text {
+        let sym = (b & 0x0F) as usize;
+        state = dfa.goto[state as usize * AC_ALPHA + sym];
+        for &id in &dfa.output[state as usize] {
+            *counts.entry(id).or_insert(0) += 1;
+        }
     }
-    let mut value = 0u64;
-    for (i, &b) in bits.iter().enumerate() {
-        value |= (b as u64) << (i * 8);
-    }
-    let mask = if len == 8 {
-        u64::MAX
-    } else {
-        (1u64 << (len * 8)) - 1
-    };
-    Some(PackedPattern { value, mask })
+
+    counts
 }
 
-#[inline]
-fn pack_u64_prefix(bytes: &[u8]) -> u64 {
-    let mut value = 0u64;
-    for (i, &b) in bytes.iter().enumerate() {
-        value |= (b as u64) << (i * 8);
+fn ac_empty<T>() -> AcDfa<T> {
+    AcDfa {
+        goto: vec![0; AC_ALPHA],
+        output: vec![vec![]],
     }
-    value
 }
+
+// ============================================================================
+// Pattern Conversion
+// ============================================================================
+
+fn string_to_pattern_bits(p: &str) -> Vec<u8> {
+    p.chars()
+        .map(|c| match c {
+            'L' => 0b0001,
+            'D' => 0b0010,
+            'U' => 0b0100,
+            'R' => 0b1000,
+            _ => 0b0000,
+        })
+        .collect()
+}
+
+// ============================================================================
+// Static Pattern Definitions
+// ============================================================================
 
 pub static DEFAULT_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::new(|| {
     vec![
@@ -138,23 +265,11 @@ pub static DEFAULT_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock
 
 pub static EXTRA_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::new(|| {
     vec![
-        //Staircases
-        (
-            PatternVariant::StaircaseLeft,
-            string_to_pattern_bits("LDUR"),
-        ),
-        (
-            PatternVariant::StaircaseRight,
-            string_to_pattern_bits("RUDL"),
-        ),
-        (
-            PatternVariant::StaircaseInvLeft,
-            string_to_pattern_bits("LUDR"),
-        ),
-        (
-            PatternVariant::StaircaseInvRight,
-            string_to_pattern_bits("RDUL"),
-        ),
+        // Staircases
+        (PatternVariant::StaircaseLeft, string_to_pattern_bits("LDUR")),
+        (PatternVariant::StaircaseRight, string_to_pattern_bits("RUDL")),
+        (PatternVariant::StaircaseInvLeft, string_to_pattern_bits("LUDR")),
+        (PatternVariant::StaircaseInvRight, string_to_pattern_bits("RDUL")),
         // Triangles
         (PatternVariant::TriangleRUR, string_to_pattern_bits("RUR")),
         (PatternVariant::TriangleLUL, string_to_pattern_bits("LUL")),
@@ -163,192 +278,66 @@ pub static EXTRA_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::
         // Doritos
         (PatternVariant::DoritoLeft, string_to_pattern_bits("LDUDL")),
         (PatternVariant::DoritoRight, string_to_pattern_bits("RUDUR")),
-        (
-            PatternVariant::DoritoInvLeft,
-            string_to_pattern_bits("LUDUL"),
-        ),
-        (
-            PatternVariant::DoritoInvRight,
-            string_to_pattern_bits("RDUDR"),
-        ),
+        (PatternVariant::DoritoInvLeft, string_to_pattern_bits("LUDUL")),
+        (PatternVariant::DoritoInvRight, string_to_pattern_bits("RDUDR")),
         // Sweeps
         (PatternVariant::SweepLeft, string_to_pattern_bits("LDURUDL")),
-        (
-            PatternVariant::SweepRight,
-            string_to_pattern_bits("RUDLDUR"),
-        ),
-        (
-            PatternVariant::SweepInvLeft,
-            string_to_pattern_bits("LUDRDUL"),
-        ),
-        (
-            PatternVariant::SweepInvRight,
-            string_to_pattern_bits("RDULUDR"),
-        ),
+        (PatternVariant::SweepRight, string_to_pattern_bits("RUDLDUR")),
+        (PatternVariant::SweepInvLeft, string_to_pattern_bits("LUDRDUL")),
+        (PatternVariant::SweepInvRight, string_to_pattern_bits("RDULUDR")),
         // Towers
         (PatternVariant::TowerLR, string_to_pattern_bits("LRLRL")),
         (PatternVariant::TowerLR, string_to_pattern_bits("RLRLR")),
         (PatternVariant::TowerUD, string_to_pattern_bits("UDUDU")),
         (PatternVariant::TowerUD, string_to_pattern_bits("DUDUD")),
-        (
-            PatternVariant::TowerCornerLD,
-            string_to_pattern_bits("LDLDL"),
-        ),
-        (
-            PatternVariant::TowerCornerLD,
-            string_to_pattern_bits("DLDLD"),
-        ),
-        (
-            PatternVariant::TowerCornerLU,
-            string_to_pattern_bits("LULUL"),
-        ),
-        (
-            PatternVariant::TowerCornerLU,
-            string_to_pattern_bits("ULULU"),
-        ),
-        (
-            PatternVariant::TowerCornerRD,
-            string_to_pattern_bits("RDRDR"),
-        ),
-        (
-            PatternVariant::TowerCornerRD,
-            string_to_pattern_bits("DRDRD"),
-        ),
-        (
-            PatternVariant::TowerCornerRU,
-            string_to_pattern_bits("RURUR"),
-        ),
-        (
-            PatternVariant::TowerCornerRU,
-            string_to_pattern_bits("URURU"),
-        ),
+        (PatternVariant::TowerCornerLD, string_to_pattern_bits("LDLDL")),
+        (PatternVariant::TowerCornerLD, string_to_pattern_bits("DLDLD")),
+        (PatternVariant::TowerCornerLU, string_to_pattern_bits("LULUL")),
+        (PatternVariant::TowerCornerLU, string_to_pattern_bits("ULULU")),
+        (PatternVariant::TowerCornerRD, string_to_pattern_bits("RDRDR")),
+        (PatternVariant::TowerCornerRD, string_to_pattern_bits("DRDRD")),
+        (PatternVariant::TowerCornerRU, string_to_pattern_bits("RURUR")),
+        (PatternVariant::TowerCornerRU, string_to_pattern_bits("URURU")),
         // Double staircases
-        (
-            PatternVariant::DStaircaseLeft,
-            string_to_pattern_bits("LUDRLUDR"),
-        ),
-        (
-            PatternVariant::DStaircaseRight,
-            string_to_pattern_bits("RDULRDUL"),
-        ),
-        (
-            PatternVariant::DStaircaseInvLeft,
-            string_to_pattern_bits("LDURLDUR"),
-        ),
-        (
-            PatternVariant::DStaircaseInvRight,
-            string_to_pattern_bits("RDULRDUL"),
-        ),
+        (PatternVariant::DStaircaseLeft, string_to_pattern_bits("LUDRLUDR")),
+        (PatternVariant::DStaircaseRight, string_to_pattern_bits("RDULRDUL")),
+        (PatternVariant::DStaircaseInvLeft, string_to_pattern_bits("LDURLDUR")),
+        (PatternVariant::DStaircaseInvRight, string_to_pattern_bits("RDULRDUL")),
         // Alternating staircases
-        (
-            PatternVariant::AltStaircasesLeft,
-            string_to_pattern_bits("LUDRLDUR"),
-        ),
-        (
-            PatternVariant::AltStaircasesRight,
-            string_to_pattern_bits("RDULRUDL"),
-        ),
-        (
-            PatternVariant::AltStaircasesInvLeft,
-            string_to_pattern_bits("LDURLUDR"),
-        ),
-        (
-            PatternVariant::AltStaircasesInvRight,
-            string_to_pattern_bits("RUDLRDUL"),
-        ),
+        (PatternVariant::AltStaircasesLeft, string_to_pattern_bits("LUDRLDUR")),
+        (PatternVariant::AltStaircasesRight, string_to_pattern_bits("RDULRUDL")),
+        (PatternVariant::AltStaircasesInvLeft, string_to_pattern_bits("LDURLUDR")),
+        (PatternVariant::AltStaircasesInvRight, string_to_pattern_bits("RUDLRDUL")),
         // Luchi
         (PatternVariant::LuchiLeftDU, string_to_pattern_bits("LDLUL")),
         (PatternVariant::LuchiLeftUD, string_to_pattern_bits("LULDL")),
-        (
-            PatternVariant::LuchiRightUD,
-            string_to_pattern_bits("RURDR"),
-        ),
-        (
-            PatternVariant::LuchiRightDU,
-            string_to_pattern_bits("RDRUR"),
-        ),
+        (PatternVariant::LuchiRightUD, string_to_pattern_bits("RURDR")),
+        (PatternVariant::LuchiRightDU, string_to_pattern_bits("RDRUR")),
         // Copters
-        (
-            PatternVariant::CopterLeft,
-            string_to_pattern_bits("LDURDULDUR"),
-        ),
-        (
-            PatternVariant::CopterRight,
-            string_to_pattern_bits("RUDLUDRUDL"),
-        ),
-        (
-            PatternVariant::CopterInvLeft,
-            string_to_pattern_bits("LUDRUDLUDR"),
-        ),
-        (
-            PatternVariant::CopterInvRight,
-            string_to_pattern_bits("RDULDURDUL"),
-        ),
+        (PatternVariant::CopterLeft, string_to_pattern_bits("LDURDULDUR")),
+        (PatternVariant::CopterRight, string_to_pattern_bits("RUDLUDRUDL")),
+        (PatternVariant::CopterInvLeft, string_to_pattern_bits("LUDRUDLUDR")),
+        (PatternVariant::CopterInvRight, string_to_pattern_bits("RDULDURDUL")),
         // Hip-Breakers
-        (
-            PatternVariant::HipBreakerLeft,
-            string_to_pattern_bits("LDUDLUDUL"),
-        ),
-        (
-            PatternVariant::HipBreakerRight,
-            string_to_pattern_bits("RUDURDUDR"),
-        ),
-        (
-            PatternVariant::HipBreakerInvLeft,
-            string_to_pattern_bits("LUDULDUDL"),
-        ),
-        (
-            PatternVariant::HipBreakerInvRight,
-            string_to_pattern_bits("RDUDRUDUR"),
-        ),
+        (PatternVariant::HipBreakerLeft, string_to_pattern_bits("LDUDLUDUL")),
+        (PatternVariant::HipBreakerRight, string_to_pattern_bits("RUDURDUDR")),
+        (PatternVariant::HipBreakerInvLeft, string_to_pattern_bits("LUDULDUDL")),
+        (PatternVariant::HipBreakerInvRight, string_to_pattern_bits("RDUDRUDUR")),
         // Spirals
         (PatternVariant::SpiralLeft, string_to_pattern_bits("LDURDR")),
-        (
-            PatternVariant::SpiralRight,
-            string_to_pattern_bits("RUDLUL"),
-        ),
-        (
-            PatternVariant::SpiralInvLeft,
-            string_to_pattern_bits("LUDRUR"),
-        ),
-        (
-            PatternVariant::SpiralInvRight,
-            string_to_pattern_bits("RDULDL"),
-        ),
+        (PatternVariant::SpiralRight, string_to_pattern_bits("RUDLUL")),
+        (PatternVariant::SpiralInvLeft, string_to_pattern_bits("LUDRUR")),
+        (PatternVariant::SpiralInvRight, string_to_pattern_bits("RDULDL")),
         // Turbo Candle
-        (
-            PatternVariant::TurboCandleLeft,
-            string_to_pattern_bits("LDLUDRUR"),
-        ),
-        (
-            PatternVariant::TurboCandleRight,
-            string_to_pattern_bits("RURDULDL"),
-        ),
-        (
-            PatternVariant::TurboCandleInvLeft,
-            string_to_pattern_bits("LULDURDR"),
-        ),
-        (
-            PatternVariant::TurboCandleInvRight,
-            string_to_pattern_bits("RDRUDLUL"),
-        ),
+        (PatternVariant::TurboCandleLeft, string_to_pattern_bits("LDLUDRUR")),
+        (PatternVariant::TurboCandleRight, string_to_pattern_bits("RURDULDL")),
+        (PatternVariant::TurboCandleInvLeft, string_to_pattern_bits("LULDURDR")),
+        (PatternVariant::TurboCandleInvRight, string_to_pattern_bits("RDRUDLUL")),
         // Sweeping Candle
-        (
-            PatternVariant::SweepCandleLeft,
-            string_to_pattern_bits("LDURDRUDL"),
-        ),
-        (
-            PatternVariant::SweepCandleRight,
-            string_to_pattern_bits("RUDLULDUR"),
-        ),
-        (
-            PatternVariant::SweepCandleInvLeft,
-            string_to_pattern_bits("LUDRURDUL"),
-        ),
-        (
-            PatternVariant::SweepCandleInvRight,
-            string_to_pattern_bits("RDULDLUDR"),
-        ),
+        (PatternVariant::SweepCandleLeft, string_to_pattern_bits("LDURDRUDL")),
+        (PatternVariant::SweepCandleRight, string_to_pattern_bits("RUDLULDUR")),
+        (PatternVariant::SweepCandleInvLeft, string_to_pattern_bits("LUDRURDUL")),
+        (PatternVariant::SweepCandleInvRight, string_to_pattern_bits("RDULDLUDR")),
     ]
 });
 
@@ -359,102 +348,102 @@ pub static ALL_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::ne
     patterns
 });
 
-static ALL_PATTERNS_PACKED: LazyLock<Vec<Option<PackedPattern>>> = LazyLock::new(|| {
-    ALL_PATTERNS
+static PATTERN_DFA: LazyLock<AcDfa<PatternVariant>> = LazyLock::new(|| {
+    let patterns: Vec<(PatternVariant, &[u8])> = ALL_PATTERNS
         .iter()
-        .map(|(_, bits)| pack_pattern(bits))
-        .collect()
+        .map(|(v, bits)| (*v, bits.as_slice()))
+        .collect();
+    ac_build(&patterns)
 });
 
-static ALL_PATTERN_INDICES_BY_FIRST: LazyLock<Vec<Vec<usize>>> = LazyLock::new(|| {
-    let mut groups = vec![Vec::new(); 16];
-    for (idx, (_, bits)) in ALL_PATTERNS.iter().enumerate() {
-        let first = bits.first().copied().unwrap_or(0) as usize;
-        if first < groups.len() {
-            groups[first].push(idx);
-        }
-    }
-    groups
-});
-
-fn string_to_pattern_bits(p: &str) -> Vec<u8> {
-    let mut result = Vec::with_capacity(p.len());
-    for c in p.chars() {
-        let mask = match c {
-            'L' => 0b0001,
-            'D' => 0b0010,
-            'U' => 0b0100,
-            'R' => 0b1000,
-            'N' => 0b0000,
-            _ => 0b0000,
-        };
-        result.push(mask);
-    }
-    result
-}
+// ============================================================================
+// Pattern Detection Functions
+// ============================================================================
 
 pub fn detect_patterns(
     bitmasks: &[u8],
     patterns: &[(PatternVariant, Vec<u8>)],
 ) -> HashMap<PatternVariant, u32> {
-    let mut results = HashMap::new();
-    for i in 0..bitmasks.len() {
-        for (variant, pat_bits) in patterns {
-            let plen = pat_bits.len();
-            if i + plen <= bitmasks.len() && bitmasks[i..i + plen] == pat_bits[..] {
-                *results.entry(*variant).or_insert(0) += 1;
-            }
-        }
-    }
-    results
+    let pat_refs: Vec<(PatternVariant, &[u8])> = patterns
+        .iter()
+        .map(|(v, bits)| (*v, bits.as_slice()))
+        .collect();
+    let dfa = ac_build(&pat_refs);
+    ac_search(bitmasks, &dfa)
 }
 
 pub(crate) fn detect_default_patterns(bitmasks: &[u8]) -> HashMap<PatternVariant, u32> {
-    let mut results = HashMap::new();
-    let groups = &*ALL_PATTERN_INDICES_BY_FIRST;
-    let patterns = &*ALL_PATTERNS;
-    let packed_patterns = &*ALL_PATTERNS_PACKED;
-    for i in 0..bitmasks.len() {
-        let mask = bitmasks[i] as usize;
-        if mask >= groups.len() {
-            continue;
-        }
-        let group = &groups[mask];
-        if group.is_empty() {
-            continue;
-        }
-        let remaining = bitmasks.len() - i;
-        let mut chunk_ready = false;
-        let mut chunk = 0u64;
-        for &idx in group {
-            let (variant, pat_bits) = &patterns[idx];
-            let plen = pat_bits.len();
-            if plen == 0 || plen > remaining {
-                continue;
-            }
-            if let Some(packed) = packed_patterns[idx] {
-                if remaining >= 8 {
-                    if !chunk_ready {
-                        let mut bytes = [0u8; 8];
-                        bytes.copy_from_slice(&bitmasks[i..i + 8]);
-                        chunk = u64::from_le_bytes(bytes);
-                        chunk_ready = true;
-                    }
-                    if (chunk & packed.mask) == packed.value {
-                        *results.entry(*variant).or_insert(0) += 1;
-                    }
-                } else {
-                    let value = pack_u64_prefix(&bitmasks[i..i + plen]);
-                    if value == packed.value {
-                        *results.entry(*variant).or_insert(0) += 1;
-                    }
-                }
-            } else if bitmasks[i..i + plen] == pat_bits[..] {
-                *results.entry(*variant).or_insert(0) += 1;
-            }
-        }
+    ac_search(bitmasks, &PATTERN_DFA)
+}
+
+// ============================================================================
+// Custom Pattern Detection
+// ============================================================================
+
+#[derive(Debug, Clone)]
+pub(crate) struct CompiledCustomPatterns {
+    pub patterns: Vec<CompiledPattern>,
+    pub dfa: AcDfa<usize>,
+}
+
+/// Creates an empty compiled custom patterns structure
+#[inline]
+pub(crate) fn compiled_custom_empty() -> CompiledCustomPatterns {
+    CompiledCustomPatterns {
+        patterns: Vec::new(),
+        dfa: ac_empty(),
     }
-    results
+}
+
+/// Checks if compiled custom patterns is empty
+#[inline]
+pub(crate) fn compiled_custom_is_empty(compiled: &CompiledCustomPatterns) -> bool {
+    compiled.patterns.is_empty()
+}
+
+pub(crate) fn compile_custom_patterns(patterns: &[String]) -> CompiledCustomPatterns {
+    let mut compiled = Vec::with_capacity(patterns.len());
+    let mut seen = HashSet::with_capacity(patterns.len());
+
+    for pattern_str in patterns {
+        let upper = pattern_str.to_ascii_uppercase();
+        if !seen.insert(upper.clone()) {
+            continue;
+        }
+        let bits = string_to_pattern_bits(&upper);
+        compiled.push(CompiledPattern {
+            pattern: upper,
+            bits,
+        });
+    }
+
+    let dfa_patterns: Vec<(usize, &[u8])> = compiled
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (i, p.bits.as_slice()))
+        .collect();
+
+    CompiledCustomPatterns {
+        dfa: ac_build(&dfa_patterns),
+        patterns: compiled,
+    }
+}
+
+pub(crate) fn detect_custom_patterns_compiled(
+    bitmasks: &[u8],
+    compiled: &CompiledCustomPatterns,
+) -> Vec<CustomPatternSummary> {
+    let counts = ac_search(bitmasks, &compiled.dfa);
+
+    compiled
+        .patterns
+        .iter()
+        .enumerate()
+        .map(|(i, p)| CustomPatternSummary {
+            pattern: p.pattern.clone(),
+            count: counts.get(&i).copied().unwrap_or(0),
+        })
+        .collect()
 }
 
 pub fn detect_custom_patterns(bitmasks: &[u8], patterns: &[String]) -> Vec<CustomPatternSummary> {
@@ -462,72 +451,9 @@ pub fn detect_custom_patterns(bitmasks: &[u8], patterns: &[String]) -> Vec<Custo
     detect_custom_patterns_compiled(bitmasks, &compiled)
 }
 
-pub(crate) fn compile_custom_patterns(patterns: &[String]) -> Vec<CompiledPattern> {
-    let mut compiled = Vec::with_capacity(patterns.len());
-    let mut seen = HashSet::with_capacity(patterns.len());
-    for pattern_str in patterns {
-        let upper = pattern_str.to_ascii_uppercase();
-        if !seen.insert(upper.clone()) {
-            continue;
-        }
-        let bits = string_to_pattern_bits(&upper);
-        let packed = pack_pattern(&bits);
-        compiled.push(CompiledPattern {
-            pattern: upper,
-            bits,
-            packed,
-        });
-    }
-    compiled
-}
-
-pub(crate) fn detect_custom_patterns_compiled(
-    bitmasks: &[u8],
-    patterns: &[CompiledPattern],
-) -> Vec<CustomPatternSummary> {
-    let mut summaries = Vec::with_capacity(patterns.len());
-
-    for pattern in patterns {
-        let pat_bits = &pattern.bits;
-        let plen = pat_bits.len();
-        let mut count = 0u32;
-
-        if plen > 0 && bitmasks.len() >= plen {
-            let remaining_max = bitmasks.len() - plen;
-            if let Some(packed) = pattern.packed {
-                for i in 0..=remaining_max {
-                    let remaining = bitmasks.len() - i;
-                    if remaining >= 8 {
-                        let mut bytes = [0u8; 8];
-                        bytes.copy_from_slice(&bitmasks[i..i + 8]);
-                        let chunk = u64::from_le_bytes(bytes);
-                        if (chunk & packed.mask) == packed.value {
-                            count += 1;
-                        }
-                    } else {
-                        let value = pack_u64_prefix(&bitmasks[i..i + plen]);
-                        if value == packed.value {
-                            count += 1;
-                        }
-                    }
-                }
-            } else {
-                for i in 0..=remaining_max {
-                    if bitmasks[i..i + plen] == pat_bits[..] {
-                        count += 1;
-                    }
-                }
-            }
-        }
-
-        summaries.push(CustomPatternSummary {
-            pattern: pattern.pattern.clone(),
-            count,
-        });
-    }
-
-    summaries
-}
+// ============================================================================
+// Anchor Counting
+// ============================================================================
 
 pub fn count_anchors(bitmasks: &[u8]) -> (u32, u32, u32, u32) {
     let mut anchor_left = 0u32;
@@ -555,6 +481,10 @@ pub fn count_anchors(bitmasks: &[u8]) -> (u32, u32, u32, u32) {
     (anchor_left, anchor_down, anchor_up, anchor_right)
 }
 
+// ============================================================================
+// Facing Step Analysis
+// ============================================================================
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Direction {
     Left,
@@ -576,10 +506,10 @@ enum Foot {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Arrow {
-    L, // Must use LeftFoot
-    R, // Must use RightFoot
-    U, // Can be either foot
-    D, // Can be either foot
+    L,
+    R,
+    U,
+    D,
 }
 
 #[inline(always)]
@@ -593,7 +523,6 @@ const fn map_bitmask_to_arrow(mask: u8) -> Option<Arrow> {
     }
 }
 
-// Add this function if it’s missing
 #[inline(always)]
 const fn determine_direction(prev: Arrow, curr: Arrow) -> Option<Direction> {
     use Arrow::*;
@@ -605,7 +534,6 @@ const fn determine_direction(prev: Arrow, curr: Arrow) -> Option<Direction> {
     }
 }
 
-// Helper function to determine the opposite foot
 #[inline(always)]
 const fn opposite_foot(f: Foot) -> Foot {
     match f {
@@ -638,7 +566,6 @@ fn next_foot(prev_foot: Option<Foot>, curr_arrow: Arrow) -> (Option<Foot>, bool)
     }
 }
 
-// Updates the facing state based on direction
 #[inline(always)]
 fn update_facing_state(
     state: FacingState,
@@ -674,7 +601,6 @@ fn update_facing_state(
     }
 }
 
-// Finalizes the current segment
 #[inline(always)]
 fn finalize_segment(
     state: &mut FacingState,
@@ -720,7 +646,7 @@ pub fn count_facing_steps(bitmasks: &[u8], mono_threshold: usize) -> (u32, u32) 
         };
 
         let direction = determine_direction(prev_arrow_value, curr_arrow);
-        let (next_foot, should_finalize) = next_foot(prev_foot, curr_arrow);
+        let (new_foot, should_finalize) = next_foot(prev_foot, curr_arrow);
         if should_finalize {
             finalize_segment(
                 &mut state,
@@ -729,7 +655,7 @@ pub fn count_facing_steps(bitmasks: &[u8], mono_threshold: usize) -> (u32, u32) 
                 mono_threshold,
             );
         }
-        prev_foot = next_foot;
+        prev_foot = new_foot;
         state = update_facing_state(
             state,
             direction,
@@ -751,17 +677,9 @@ pub fn count_facing_steps(bitmasks: &[u8], mono_threshold: usize) -> (u32, u32) 
     (final_left, final_right)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BoxCounts {
-    pub total_boxes: u32,
-    pub lr_boxes: u32,
-    pub ud_boxes: u32,
-    pub corner_boxes: u32,
-    pub ld_boxes: u32,
-    pub lu_boxes: u32,
-    pub rd_boxes: u32,
-    pub ru_boxes: u32,
-}
+// ============================================================================
+// Box Count Helpers
+// ============================================================================
 
 #[inline(always)]
 pub fn count_pattern(map: &HashMap<PatternVariant, u32>, variant: PatternVariant) -> u32 {

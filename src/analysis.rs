@@ -12,10 +12,14 @@ use crate::hashing::*;
 use crate::math::{round_dp, round_sig_figs_6};
 use crate::matrix::compute_matrix_rating;
 use crate::parse::*;
-use crate::patterns::*;
 use crate::stats::*;
 use crate::tech::parse_tech_notation;
 use crate::timing::{TimingData, TimingFormat, compute_timing_segments, steps_timing_allowed};
+use crate::patterns::{
+    compile_custom_patterns, compiled_custom_empty, compiled_custom_is_empty,
+    detect_custom_patterns_compiled, detect_default_patterns, count_anchors,
+    count_facing_steps, PatternVariant, CompiledCustomPatterns,
+};
 
 /// Options for controlling simfile analysis.
 #[derive(Debug, Clone)]
@@ -411,7 +415,7 @@ fn build_chart_summary(
     timing_format: TimingFormat,
     ssc_version: f32,
     allow_steps_timing: bool,
-    compiled_custom_patterns: &[CompiledPattern],
+    compiled_custom_patterns: &CompiledCustomPatterns,
     options: &AnalysisOptions,
 ) -> Option<(ChartSummary, i32)> {
     let chart_start_time = Instant::now();
@@ -640,7 +644,7 @@ fn build_chart_summary(
     let mono_percent = round_dp(mono_percent_raw, 2);
     let candle_percent = round_dp(candle_percent_raw, 2);
 
-    let custom_patterns = if compute_patterns && !compiled_custom_patterns.is_empty() {
+    let custom_patterns = if compute_patterns && !compiled_custom_is_empty(compiled_custom_patterns) {
         detect_custom_patterns_compiled(bitmasks.as_ref().unwrap(), compiled_custom_patterns)
     } else {
         Vec::new()
@@ -958,7 +962,7 @@ pub fn analyze(
         if options.compute_pattern_counts && !options.custom_patterns.is_empty() {
             compile_custom_patterns(&options.custom_patterns)
         } else {
-            Vec::new()
+            compiled_custom_empty()
         };
     let global_timing_segments = compute_timing_segments(
         None,
