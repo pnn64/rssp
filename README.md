@@ -1,6 +1,36 @@
 # rssp - Rust Stepmania Simfile Parser
 
-A command-line tool written in Rust for parsing, analyzing, and reporting statistics on StepMania simfiles (`.sm`, `.ssc`). It focuses on detailed analysis of 4-panel dance game charts (like DDR/ITG). It also powers the simfile parser in the [DeadSync](https://github.com/pnn64/deadsync) game engine, where it's included as a Git submodule.
+[![Parity Test](https://github.com/pnn64/rssp/actions/workflows/parity.yml/badge.svg)](https://github.com/pnn64/rssp/actions/workflows/parity.yml)
+
+`rssp` is a high-performance, correctness-first Rust library (with a CLI) for parsing and analyzing StepMania simfiles (`.sm`, `.ssc`) and a subset of course files (`.crs`). It focuses on detailed analysis of dance charts (primarily 4-panel / 8-panel) and is designed to batch-process large song libraries quickly.
+
+It also powers the simfile parser in the [DeadSync](https://github.com/pnn64/deadsync) game engine, where it's included as a Git submodule.
+
+## Correctness & Parity
+
+For the fields that `rssp` parses and computes, the goal is **100% parity** with the reference behavior from:
+
+* [ITGmania](https://github.com/itgmania/itgmania) (engine/parser/timing/tech counts)
+* [Simply Love](https://github.com/Simply-Love/Simply-Love-SM5) (hashing/breakdowns)
+
+Golden outputs are generated with [itgmania-reference-harness](https://github.com/pnn64/itgmania-reference-harness), and the test corpus is stored in [rssp-tests](https://github.com/pnn64/rssp-tests) (included here as the `tests/data` submodule).
+
+## Test Status
+
+The parity suite runs across a large pinned corpus (the `tests/data` submodule) and compares `rssp` output to golden data. The badge at the top of this README reflects the last recorded parity run.
+
+Current corpus stats (as pinned by this repo):
+
+* Packs: **422**
+* Compressed simfiles under test: **28,284** (`*.sm.zst` / `*.ssc.zst`)
+* Baselined simfiles (MD5-keyed): **28,034** (duplicate files collapse to the same MD5)
+* Baseline pairs: **28,034** ITGmania + **28,034** `rssp` (zstd-compressed JSON in `tests/data/baseline/`)
+
+Parity suites (see `tests/`):
+
+* ITGmania parity: `hash_parity`, `bpm_parity`, `metadata_parity`, `step_counts_parity`, `duration_parity`, `nps_parity`, `breakdown_parity`, `timing_parity`, `tech_counts_parity`
+* Aggregates: `all_parity`, `fast_all_parity`
+* RSSP-only regression: `rssp_unique_parity`
 
 ## Inspiration
 
@@ -11,9 +41,9 @@ This project is inspired by Breakdown Buddy and builds upon ideas from [simfile-
 Why create another simfile parser?
 
 * **Focus & Flexibility:** While previous tools might have focused on integrating with databases or Discord bots, `rssp` is primarily designed for direct command-line analysis of individual simfiles. However, its speed makes it trivial to script for processing thousands of files.
-* **Performance:** The previous Python-based tool could take many minutes to process large collections (10k+ files). This Rust implementation achieves significantly better performance, capable of parsing similar numbers of files in seconds.
+* **Performance:** The previous Python-based tool could take many minutes to process large collections (10k+ files). This Rust implementation achieves significantly better performance and is designed to process large libraries quickly.
 * **Enhanced Statistics & Features:** `rssp` aims to add features and refine statistics, including:
-    *   Generating a chart's SHA1 hash.
+    *   Generating ITGmania-style chart hashes (SHA1-derived, 64-bit).
     *   Detection of a wider range of predefined step patterns.
     *   An improved algorithm for detecting monotonic (mono) stepping sequences.
     *   Parsing of common technical notations embedded in chart metadata.
@@ -21,7 +51,8 @@ Why create another simfile parser?
 
 ## Features
 
-*   **Simfile Parsing:** Supports both `.sm` and `.ssc` formats.
+*   **Simfile Parsing:** Supports `.sm` and `.ssc` formats.
+*   **Course Parsing (partial):** Supports `.crs` with fixed `#SONG` entries (no RANDOM/BEST/WORST/SONGSELECT yet).
 *   **Metadata Extraction:** Retrieves Title, Subtitle, Artist, Transliterations, Offset, BPMs, etc.
 *   **Tag Cleaning:** Optionally strips common leading tags (e.g., `[Foo]`, `123- `) from titles.
 *   **Chart Statistics:** Calculates comprehensive stats per chart:
@@ -36,7 +67,7 @@ Why create another simfile parser?
     *   Computes a "Tier BPM" based on sustained density and BPM.
 *   **Difficulty Rating:**
     *   Calculates a Matrix Rating by aggregating stream sections and applying a difficulty matrix.
-*   **Pattern Detection:** Identifies various common and complex step patterns:
+*   **Pattern Detection (4-panel):** Identifies various common and complex step patterns:
     *   Candles (Left/Right) & Candle Percentage
     *   Mono (Left-Facing/Right-Facing) & Mono Percentage (configurable threshold)
     *   Boxes (LR, UD, Corners)
@@ -45,9 +76,9 @@ Why create another simfile parser?
     *   Sweeps (Regular, Candle, Inverted)
     *   Copters, Spirals, Turbo Candles, Hip Breakers, Doritos, Luchis (and their inverted variants)
 *   **Technical Notation Parsing:** Extracts known technical notations (e.g., `STR+`, `BXF`, `FS-`) from the Credit/Description fields.
-*   **Hashing:** Generates SHA1 hashes for charts:
-    *   Standard hash (based on minimized notes + effective BPMs)
-    *   BPM-Neutral hash (useful for comparing FB/FP charts regardless of speed)
+*   **Hashing:** Generates ITGmania-style chart hashes (first 8 bytes of SHA1; shown as 16 hex chars):
+    *   Standard hash (minimized notes + effective BPMs)
+    *   BPM-neutral hash (minimized notes + `0.000=0.000`)
 *   **Multiple Output Formats:**
     *   `Pretty`: Human-readable summary (Default).
     *   `Full`: Detailed text output including all patterns and stats.
@@ -62,6 +93,8 @@ Why create another simfile parser?
     ```bash
     git clone https://github.com/pnn64/rssp.git
     cd rssp
+    # Optional: fetch the parity corpus + baselines (large)
+    git submodule update --init --recursive
     ```
 3. **Build the Project:**
     ```bash
@@ -69,19 +102,32 @@ Why create another simfile parser?
     ```
     The executable will be located at `target/release/rssp`. You can copy this to a directory in your system's `PATH` for easier access.
 
+## Library
+
+The CLI in `src/main.rs` is a thin wrapper around the public library API.
+
+```rust
+let sim = rssp::simfile::open("song.ssc")?;
+let opts = rssp::AnalysisOptions { mono_threshold: 6, ..Default::default() };
+let summary = rssp::analyze(&sim.data, sim.extension, opts)?;
+```
+
 ## Usage
 
-The basic command structure is:
+Common invocations are:
 
 ```bash
 rssp <path/to/simfile_or_folder> [options]
+rssp <path/to/course.crs> [course options] [options]
+rssp --matrix --bpm <BPM> --measures <MEASURES>
 ```
 
 **Arguments:**
 
-* `<path/to/simfile_or_folder>`: **Required.** The path to a simfile (`.sm` or `.ssc`) or a folder containing simfiles.
+* `<path/to/simfile_or_folder>`: **Required.** The path to a simfile (`.sm` / `.ssc`), a course (`.crs`), or a folder containing simfiles.
   * **Single File:** Analyzes the specified simfile.
   * **Folder:** Recursively scans the folder for simfiles. When both `.sm` and `.ssc` files exist in the same directory, the `.ssc` file is preferred.
+  * **Course (`.crs`):** Analyzes a course (fixed `#SONG` entries only). You may need to pass `--songs-dir` if `Songs/` cannot be located automatically.
 
 **Options:**
 
@@ -92,7 +138,17 @@ rssp <path/to/simfile_or_folder> [options]
 * `--png-alt`: Generate a density graph PNG image for each chart (using the alternative color scheme). The filename will be `<chart_hash>-alt.png`.
 * `--strip-tags`: Clean common prefixes like `[TAG]` or `123- ` from the song title before displaying.
 * `--debug`: Print the minimized chart note data to stderr alongside the chosen report.
+* `--skip-tech`: Skip step parity / tech count analysis.
+* `--skip-slow`: Skip slower analysis (`--skip-tech` plus pattern detection).
 * `--mono-threshold <N>`: Set the minimum number of consecutive steps required to count a segment as "mono" (default: 6). `<N>` must be a positive integer.
+* `--custom-pattern <PATTERN>`: Count a custom LRUDN pattern (repeatable; e.g. `DULDUDLR`).
+* `--matrix`: Matrix rating mode (no file input). Requires `--bpm` (`-b`) and `--measures` (`-m`).
+
+**Course options (`.crs` only):**
+
+* `--songs-dir <PATH>`: Path to `Songs/` (used to resolve `#SONG` entries).
+* `--course-difficulty <DIFF>` / `--course-diff <DIFF>`: Target course difficulty (default: `Medium`).
+* `--steps-type <TYPE>` / `--stepstype <TYPE>`: Steps type to select (default: `dance-single`).
 
 **Examples:**
 
@@ -128,6 +184,10 @@ rssp <path/to/simfile_or_folder> [options]
     ```bash
     ./rssp --matrix --bpm <BPM> --measures <MEASURES>
     ```
+*   Analyze a course file:
+    ```bash
+    ./rssp "Courses/MyCourse.crs" --songs-dir "C:/Games/ITGmania/Songs" --json
+    ```
 
 ## Output Formats
 
@@ -135,7 +195,7 @@ rssp <path/to/simfile_or_folder> [options]
 * **Full:** A comprehensive text output including all song metadata, detailed BPM info, full chart stats, all detected pattern counts (including complex ones like sweeps, spirals, etc.), and the detailed/partial/simplified SN breakdowns.
 * **JSON:** A structured JSON object containing all song and chart information, suitable for programmatic use. Fields are grouped logically (e.g., `chart_info`, `arrow_stats`, `pattern_counts`).
 * **CSV:** A header row followed by one data row per chart. Contains a flattened representation of most song and chart statistics, suitable for spreadsheets or data analysis pipelines.
-* **PNG / PNG-Alt:** Generates density graph images visualizing NPS over the chart's duration. Useful for quickly identifying high-intensity sections. Filenames are based on the chart's unique SHA1 hash.
+* **PNG / PNG-Alt:** Generates density graph images visualizing NPS over the chart's duration. Useful for quickly identifying high-intensity sections. Filenames are based on the chart hash (SHA1-derived 64-bit, shown as 16 hex chars).
 
 ## Sample Output
 ```
@@ -214,13 +274,14 @@ Elapsed Time: 18.667896ms
 - [x] Count Fakes and Lifts
 - [x] Properly parse Ivaltek (indented NOTES) from SHARPNELSTREAMZ v2
 - [ ] Properly handle empty charts
-- [ ] Parse courses
+- [x] Basic `.crs` parsing (fixed `#SONG` entries)
+- [ ] Full `.crs` spec support (RANDOM/BEST/WORST/SONGSELECT, meter ranges, etc.)
 - [x] Fix parsing of multiple simfile authors with '&' (for instance Maxx & Zaia)
-- [x] Check that some special characters are parser correctly (CODE:Ø as opposed to CODE\:Ø)
+- [x] Check that some special characters are parsed correctly (CODE:Ø as opposed to CODE\:Ø)
 - [x] Fix parsing for "No Tech" in artist name
 - [x] Doubles (8-panel) parsing
 - [x] Custom patterns flag --custom-pattern DULDUDLR
-- [x] Proper parsing for Tech (port Step Parity from ITGMania)
+- [x] Proper parsing for Tech (port Step Parity from ITGmania)
 - [x] Add many tests for edge case simfiles
 - [x] Add "matrix rating" (calculate estimated rating based on rating matrix sheet)
 
