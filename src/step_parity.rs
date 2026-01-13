@@ -64,6 +64,9 @@ impl Foot {
 
 const NUM_FEET: usize = 5;
 const MAX_COLUMNS: usize = 8;
+const PAIR_STRIDE: usize = MAX_COLUMNS + 1;
+const PAIR_LEN: usize = PAIR_STRIDE * PAIR_STRIDE;
+const DIST_LEN: usize = MAX_COLUMNS * MAX_COLUMNS;
 const FEET: [Foot; 4] = [
     Foot::LeftHeel,
     Foot::LeftToe,
@@ -80,7 +83,6 @@ const OTHER_PART_OF_FOOT: [Foot; NUM_FEET] = [
     Foot::RightToe,
     Foot::RightHeel,
 ];
-const STATE_HASH_PRIME: u64 = 31;
 
 // Foot pair for symmetric operations
 struct FootPair {
@@ -138,38 +140,37 @@ struct StagePoint {
 
 #[derive(Debug, Clone)]
 struct StageLayout {
-    columns: Vec<StagePoint>,
+    cols: u8,
+    columns: [StagePoint; MAX_COLUMNS],
     up_mask: u8,
     down_mask: u8,
     side_mask: u8,
-    pair_stride: usize,
-    avg_points: Vec<StagePoint>,
-    facing_x_penalty: Vec<f32>,
-    facing_y_penalty: Vec<f32>,
-    dist_stride: usize,
-    dist_sq: Vec<f32>,
-    hold_switch_cost: Vec<f32>,
-    dist_weighted: Vec<f64>,
+    avg_points: [StagePoint; PAIR_LEN],
+    facing_x_penalty: [f32; PAIR_LEN],
+    facing_y_penalty: [f32; PAIR_LEN],
+    dist_sq: [f32; DIST_LEN],
+    hold_switch_cost: [f32; DIST_LEN],
+    dist_weighted: [f64; DIST_LEN],
 }
 
 impl StageLayout {
     fn new_dance_single() -> Self {
         Self::new(
-            vec![
+            &[
                 StagePoint { x: 0.0, y: 1.0 },
                 StagePoint { x: 1.0, y: 0.0 },
                 StagePoint { x: 1.0, y: 2.0 },
                 StagePoint { x: 2.0, y: 1.0 },
             ],
-            1 << 2,
-            1 << 1,
-            (1 << 0) | (1 << 3),
+            1u8 << 2,
+            1u8 << 1,
+            (1u8 << 0) | (1u8 << 3),
         )
     }
 
     fn new_dance_double() -> Self {
         Self::new(
-            vec![
+            &[
                 StagePoint { x: 0.0, y: 1.0 },
                 StagePoint { x: 1.0, y: 0.0 },
                 StagePoint { x: 1.0, y: 2.0 },
@@ -179,25 +180,29 @@ impl StageLayout {
                 StagePoint { x: 4.0, y: 2.0 },
                 StagePoint { x: 5.0, y: 1.0 },
             ],
-            (1 << 2) | (1 << 6),
-            (1 << 1) | (1 << 5),
-            (1 << 0) | (1 << 3) | (1 << 4) | (1 << 7),
+            (1u8 << 2) | (1u8 << 6),
+            (1u8 << 1) | (1u8 << 5),
+            (1u8 << 0) | (1u8 << 3) | (1u8 << 4) | (1u8 << 7),
         )
     }
 
     fn new(
-        columns: Vec<StagePoint>,
+        points: &[StagePoint],
         up_mask: u8,
         down_mask: u8,
         side_mask: u8,
     ) -> Self {
-        let pair_stride = columns.len() + 1;
-        let pair_len = pair_stride * pair_stride;
-        let invalid = columns.len();
+        let cols = points.len();
+        debug_assert!(cols <= MAX_COLUMNS);
+        let mut columns = [StagePoint::default(); MAX_COLUMNS];
+        columns[..cols].copy_from_slice(points);
 
-        let mut avg_points = vec![StagePoint::default(); pair_len];
-        let mut facing_x_penalty = vec![0.0f32; pair_len];
-        let mut facing_y_penalty = vec![0.0f32; pair_len];
+        let pair_stride = cols + 1;
+        let invalid = cols;
+
+        let mut avg_points = [StagePoint::default(); PAIR_LEN];
+        let mut facing_x_penalty = [0.0f32; PAIR_LEN];
+        let mut facing_y_penalty = [0.0f32; PAIR_LEN];
 
         let facing_penalty = |v: f32| -> f32 {
             let base = -(v.min(0.0));
@@ -210,7 +215,7 @@ impl StageLayout {
 
         for left in 0..pair_stride {
             for right in 0..pair_stride {
-                let idx = left * pair_stride + right;
+                let idx = left * PAIR_STRIDE + right;
                 let lp = if left == invalid {
                     None
                 } else {
@@ -260,17 +265,15 @@ impl StageLayout {
             }
         }
 
-        let dist_stride = columns.len();
-        let dist_len = dist_stride * dist_stride;
-        let mut dist_sq = vec![0.0f32; dist_len];
-        let mut hold_switch_cost = vec![0.0f32; dist_len];
-        let mut dist_weighted = vec![0.0f64; dist_len];
+        let mut dist_sq = [0.0f32; DIST_LEN];
+        let mut hold_switch_cost = [0.0f32; DIST_LEN];
+        let mut dist_weighted = [0.0f64; DIST_LEN];
 
-        for l in 0..dist_stride {
-            for r in 0..dist_stride {
+        for l in 0..cols {
+            for r in 0..cols {
                 let (dx, dy) = (columns[l].x - columns[r].x, columns[l].y - columns[r].y);
                 let sq = dx * dx + dy * dy;
-                let idx = l * dist_stride + r;
+                let idx = l * MAX_COLUMNS + r;
                 dist_sq[idx] = sq;
                 let dist = (sq as f64).sqrt();
                 hold_switch_cost[idx] = dist as f32 * HOLDSWITCH_WEIGHT;
@@ -279,15 +282,14 @@ impl StageLayout {
         }
 
         Self {
+            cols: cols as u8,
             columns,
             up_mask,
             down_mask,
             side_mask,
-            pair_stride,
             avg_points,
             facing_x_penalty,
             facing_y_penalty,
-            dist_stride,
             dist_sq,
             hold_switch_cost,
             dist_weighted,
@@ -296,27 +298,27 @@ impl StageLayout {
 
     #[inline(always)]
     fn column_count(&self) -> usize {
-        self.columns.len()
+        self.cols as usize
     }
 
     #[inline(always)]
     fn bracket_check(&self, c1: usize, c2: usize) -> bool {
-        self.dist_sq[c1 * self.dist_stride + c2] <= 2.0
+        self.dist_sq[c1 * MAX_COLUMNS + c2] <= 2.0
     }
 
     #[inline(always)]
     fn get_hold_switch_cost(&self, c1: usize, c2: usize) -> f32 {
-        self.hold_switch_cost[c1 * self.dist_stride + c2]
+        self.hold_switch_cost[c1 * MAX_COLUMNS + c2]
     }
 
     #[inline(always)]
     fn get_distance_weighted(&self, c1: usize, c2: usize) -> f64 {
-        self.dist_weighted[c1 * self.dist_stride + c2]
+        self.dist_weighted[c1 * MAX_COLUMNS + c2]
     }
 
     #[inline(always)]
     fn pair_index(&self, left: i8, right: i8) -> usize {
-        let max = self.pair_stride - 1;
+        let max = self.cols as usize;
         let l = if left == INVALID_COLUMN {
             max
         } else {
@@ -327,7 +329,7 @@ impl StageLayout {
         } else {
             right as usize
         };
-        l * self.pair_stride + r
+        l * PAIR_STRIDE + r
     }
 
     #[inline(always)]
@@ -419,8 +421,6 @@ impl Row {
 struct State {
     columns: [Foot; MAX_COLUMNS],
     combined_columns: [Foot; MAX_COLUMNS],
-    moved_feet: [Foot; MAX_COLUMNS],
-    hold_feet: [Foot; MAX_COLUMNS],
     where_the_feet_are: [i8; NUM_FEET],
     what_note_the_foot_is_hitting: [i8; NUM_FEET],
     moved_mask: u8,
@@ -432,8 +432,6 @@ impl State {
         Self {
             columns: [Foot::None; MAX_COLUMNS],
             combined_columns: [Foot::None; MAX_COLUMNS],
-            moved_feet: [Foot::None; MAX_COLUMNS],
-            hold_feet: [Foot::None; MAX_COLUMNS],
             where_the_feet_are: [INVALID_COLUMN; NUM_FEET],
             what_note_the_foot_is_hitting: [INVALID_COLUMN; NUM_FEET],
             moved_mask: 0,
@@ -458,13 +456,22 @@ impl PartialEq for State {
     fn eq(&self, other: &Self) -> bool {
         self.columns == other.columns
             && self.combined_columns == other.combined_columns
-            && self.moved_feet == other.moved_feet
-            && self.hold_feet == other.hold_feet
+            && self.moved_mask == other.moved_mask
+            && self.holding_mask == other.holding_mask
     }
 }
 impl Eq for State {}
 
 type FootPlacement = [Foot; MAX_COLUMNS];
+
+#[inline(always)]
+fn pack_cols(cols: &[Foot; MAX_COLUMNS]) -> u32 {
+    let mut out = 0u32;
+    for i in 0..MAX_COLUMNS {
+        out |= (cols[i] as u32) << (i * 3);
+    }
+    out
+}
 
 #[derive(Debug, Clone)]
 struct StepParityNode {
@@ -851,8 +858,8 @@ fn calc_big_movements_cost(
     elapsed: f32,
 ) -> f32 {
     let mut cost = 0.0;
-    for &foot in &result.moved_feet {
-        if foot == Foot::None {
+    for &foot in &FEET {
+        if (result.moved_mask & FOOT_MASKS[foot.as_index()]) == 0 {
             continue;
         }
         let init_pos = initial.where_the_feet_are[foot.as_index()];
@@ -1182,14 +1189,10 @@ impl StepParityGenerator {
 
         let mut state = State::new(n);
         let mut moved_mask = 0u8;
-        let mut hash = 0u64;
 
         for i in 0..n {
             let foot = cols[i];
             state.columns[i] = foot;
-            hash = hash
-                .wrapping_mul(STATE_HASH_PRIME)
-                .wrapping_add(foot as u64);
             let hold_empty = (hold_mask & (1u8 << i)) == 0;
             let moved = foot != Foot::None && (hold_empty || initial.combined_columns[i] != foot);
 
@@ -1200,11 +1203,7 @@ impl StepParityGenerator {
                 if moved {
                     moved_mask |= FOOT_MASKS[fi];
                 }
-                if moved {
-                    state.moved_feet[i] = foot;
-                }
                 if !hold_empty {
-                    state.hold_feet[i] = foot;
                     state.holding_mask |= FOOT_MASKS[fi];
                 }
             }
@@ -1230,27 +1229,19 @@ impl StepParityGenerator {
                     _ => Foot::None,
                 }
             };
-            hash = hash
-                .wrapping_mul(STATE_HASH_PRIME)
-                .wrapping_add(combined as u64);
             if combined != Foot::None {
                 state.combined_columns[i] = combined;
                 state.where_the_feet_are[combined.as_index()] = i as i8;
             }
         }
 
-        for i in 0..n {
-            hash = hash
-                .wrapping_mul(STATE_HASH_PRIME)
-                .wrapping_add(state.moved_feet[i] as u64);
-        }
-        for i in 0..n {
-            hash = hash
-                .wrapping_mul(STATE_HASH_PRIME)
-                .wrapping_add(state.hold_feet[i] as u64);
-        }
-
-        (state, hash)
+        let cols_p = pack_cols(&state.columns) as u64;
+        let comb_p = pack_cols(&state.combined_columns) as u64;
+        let key = cols_p
+            | (comb_p << 24)
+            | ((state.moved_mask as u64) << 48)
+            | ((state.holding_mask as u64) << 56);
+        (state, key)
     }
 
     fn trace_path(&mut self) -> bool {
