@@ -430,15 +430,6 @@ impl PackedCols {
         let shift = col * Self::SHIFT;
         self.0 = (self.0 & !(Self::MASK << shift)) | ((foot as u32) << shift);
     }
-
-    #[inline(always)]
-    fn to_placement(self) -> FootPlacement {
-        let mut out = [Foot::None; MAX_COLUMNS];
-        for i in 0..MAX_COLUMNS {
-            out[i] = self.get(i);
-        }
-        out
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -943,7 +934,7 @@ struct StepParityGenerator {
     nodes: Vec<StepParityNode>,
     edges: Vec<Edge>,
     rows: Vec<Row>,
-    result_columns: Vec<FootPlacement>,
+    result_columns: Vec<PackedCols>,
 }
 
 impl StepParityGenerator {
@@ -1300,7 +1291,7 @@ impl StepParityGenerator {
         let mut cur = (n - 1) as u32;
         self.result_columns.clear();
         self.result_columns
-            .resize(rows.len(), [Foot::None; MAX_COLUMNS]);
+            .resize(rows.len(), PackedCols::new());
 
         let mut write = self.result_columns.len();
         while cur != 0 {
@@ -1316,7 +1307,7 @@ impl StepParityGenerator {
                 return false;
             }
             write -= 1;
-            self.result_columns[write] = nodes[cur as usize].state.combined_columns.to_placement();
+            self.result_columns[write] = nodes[cur as usize].state.combined_columns;
         }
 
         write == 0
@@ -1470,7 +1461,7 @@ pub struct TechCounts {
     pub doublesteps: u32,
 }
 
-fn calculate_tech_counts(rows: &[Row], placements: &[FootPlacement], layout: &StageLayout) -> TechCounts {
+fn calculate_tech_counts(rows: &[Row], placements: &[PackedCols], layout: &StageLayout) -> TechCounts {
     let mut out = TechCounts::default();
     if rows.len() < 2 || placements.len() != rows.len() {
         return out;
@@ -1478,7 +1469,7 @@ fn calculate_tech_counts(rows: &[Row], placements: &[FootPlacement], layout: &St
 
     let cols = layout.column_count().min(MAX_COLUMNS);
 
-    let hit_positions = |combined: &FootPlacement, mask: u8| -> [i8; NUM_FEET] {
+    let hit_positions = |combined: PackedCols, mask: u8| -> [i8; NUM_FEET] {
         let mut pos = [INVALID_COLUMN; NUM_FEET];
         let mut m = mask;
         while m != 0 {
@@ -1487,7 +1478,7 @@ fn calculate_tech_counts(rows: &[Row], placements: &[FootPlacement], layout: &St
             if c >= cols {
                 continue;
             }
-            let foot = combined[c];
+            let foot = combined.get(c);
             if foot != Foot::None {
                 pos[foot.as_index()] = c as i8;
             }
@@ -1495,9 +1486,9 @@ fn calculate_tech_counts(rows: &[Row], placements: &[FootPlacement], layout: &St
         pos
     };
 
-    let col_foot = |combined: &FootPlacement, mask: u8, c: usize| -> Foot {
-        if (mask & (1u8 << c)) != 0 {
-            combined[c]
+    let col_foot = |combined: PackedCols, mask: u8, c: usize| -> Foot {
+        if c < cols && (mask & (1u8 << c)) != 0 {
+            combined.get(c)
         } else {
             Foot::None
         }
@@ -1505,7 +1496,7 @@ fn calculate_tech_counts(rows: &[Row], placements: &[FootPlacement], layout: &St
 
     for i in 1..rows.len() {
         let (curr, prev) = (&rows[i], &rows[i - 1]);
-        let (curr_combined, prev_combined) = (&placements[i], &placements[i - 1]);
+        let (curr_combined, prev_combined) = (placements[i], placements[i - 1]);
         let elapsed = curr.second - prev.second;
 
         let curr_pos = hit_positions(curr_combined, curr.note_mask);
@@ -1597,7 +1588,7 @@ fn calculate_tech_counts(rows: &[Row], placements: &[FootPlacement], layout: &St
             if right_pos.x < left_pos.x {
                 if i > 1 {
                     let prev_prev = &rows[i - 2];
-                    let prev_prev_pos = hit_positions(&placements[i - 2], prev_prev.note_mask);
+                    let prev_prev_pos = hit_positions(placements[i - 2], prev_prev.note_mask);
                     let prev_prev_rh = prev_prev_pos[Foot::RightHeel.as_index()];
                     if prev_prev_rh != INVALID_COLUMN && prev_prev_rh != right_heel {
                         let prev_prev_pos = layout.columns[prev_prev_rh as usize];
@@ -1623,7 +1614,7 @@ fn calculate_tech_counts(rows: &[Row], placements: &[FootPlacement], layout: &St
             if right_pos.x < left_pos.x {
                 if i > 1 {
                     let prev_prev = &rows[i - 2];
-                    let prev_prev_pos = hit_positions(&placements[i - 2], prev_prev.note_mask);
+                    let prev_prev_pos = hit_positions(placements[i - 2], prev_prev.note_mask);
                     let prev_prev_lh = prev_prev_pos[Foot::LeftHeel.as_index()];
                     if prev_prev_lh != INVALID_COLUMN && prev_prev_lh != left_heel {
                         let prev_prev_pos = layout.columns[prev_prev_lh as usize];
