@@ -476,7 +476,6 @@ fn pack_cols(cols: &[Foot; MAX_COLUMNS]) -> u32 {
 #[derive(Debug, Clone)]
 struct StepParityNode {
     state: State,
-    second: f32,
     first_edge: u32,
     edge_count: u16,
 }
@@ -1060,28 +1059,29 @@ impl StepParityGenerator {
     }
 
     fn build_graph(&mut self) {
-        let start_sec = self.rows.first().map(|r| r.second - 1.0).unwrap_or(-1.0);
-        let start_id = self.add_node(State::new(self.column_count), start_sec);
+        let start_id = self.add_node(State::new(self.column_count));
 
         let mut prev_ids = vec![start_id];
         let mut next_ids: Vec<usize> = Vec::new();
         let mut state_map: FastMap<u64, usize> = FastMap::default();
 
+        let mut prev_second = self.rows.first().map(|r| r.second - 1.0).unwrap_or(-1.0);
+
         for i in 0..self.rows.len() {
+            let row_second = self.rows[i].second;
+            let elapsed = row_second - prev_second;
+            prev_second = row_second;
+
             let perms = self.perms_for_row(i);
             next_ids.clear();
             state_map.clear();
             state_map.reserve(perms.len());
+            self.edges
+                .reserve(prev_ids.len().saturating_mul(perms.len()));
 
             for &init_id in &prev_ids {
                 let node_edge_start = self.edges.len() as u32;
-                self.edges.reserve(perms.len());
-                let (init_state, init_sec) = {
-                    let n = &self.nodes[init_id];
-                    (n.state, n.second)
-                };
-                let row_second = self.rows[i].second;
-                let elapsed = row_second - init_sec;
+                let init_state = self.nodes[init_id].state;
 
                 for perm in perms.iter() {
                     let (result, key) = self.result_state(&init_state, i, perm);
@@ -1098,7 +1098,7 @@ impl StepParityGenerator {
                     let res_id = if let Some(&id) = state_map.get(&key) {
                         id
                     } else {
-                        let id = self.add_node(result, row_second);
+                        let id = self.add_node(result);
                         next_ids.push(id);
                         state_map.insert(key, id);
                         id
@@ -1116,8 +1116,7 @@ impl StepParityGenerator {
             std::mem::swap(&mut prev_ids, &mut next_ids);
         }
 
-        let end_sec = self.rows.last().map(|r| r.second + 1.0).unwrap_or(1.0);
-        let end_id = self.add_node(State::new(self.column_count), end_sec);
+        let end_id = self.add_node(State::new(self.column_count));
 
         for &id in &prev_ids {
             let edge_start = self.edges.len() as u32;
@@ -1131,11 +1130,10 @@ impl StepParityGenerator {
         }
     }
 
-    fn add_node(&mut self, state: State, second: f32) -> usize {
+    fn add_node(&mut self, state: State) -> usize {
         let idx = self.nodes.len();
         self.nodes.push(StepParityNode {
             state,
-            second,
             first_edge: 0,
             edge_count: 0,
         });
