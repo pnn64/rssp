@@ -76,6 +76,7 @@ const FEET: [Foot; 4] = [
 const FOOT_MASKS: [u8; NUM_FEET] = [0, 1, 2, 4, 8];
 const LEFT_FOOT_MASK: u8 = FOOT_MASKS[1] | FOOT_MASKS[2];
 const RIGHT_FOOT_MASK: u8 = FOOT_MASKS[3] | FOOT_MASKS[4];
+const PERM_CAP: [usize; 9] = [1, 4, 12, 24, 24, 0, 0, 0, 0];
 const OTHER_PART_OF_FOOT: [Foot; NUM_FEET] = [
     Foot::None,
     Foot::LeftToe,
@@ -370,8 +371,6 @@ struct IntermediateNoteData {
 
 #[derive(Debug, Clone)]
 struct Row {
-    columns: [Foot; MAX_COLUMNS],
-    where_the_feet_are: [i8; NUM_FEET],
     second: f32,
     beat: f32,
     note_count: u8,
@@ -386,8 +385,6 @@ struct Row {
 impl Row {
     fn new() -> Self {
         Self {
-            columns: [Foot::None; MAX_COLUMNS],
-            where_the_feet_are: [INVALID_COLUMN; NUM_FEET],
             second: 0.0,
             beat: 0.0,
             note_count: 0,
@@ -397,22 +394,6 @@ impl Row {
             mine_mask: 0,
             mine_i32_mask: 0,
             fake_mine_mask: 0,
-        }
-    }
-
-    fn set_foot_placement(&mut self, placement: &[Foot]) {
-        self.note_count = self.note_mask.count_ones() as u8;
-        self.where_the_feet_are = [INVALID_COLUMN; NUM_FEET];
-        for c in 0..MAX_COLUMNS {
-            if (self.note_mask & (1u8 << c)) != 0 {
-                let foot = placement[c];
-                self.columns[c] = foot;
-                if foot != Foot::None {
-                    self.where_the_feet_are[foot.as_index()] = c as i8;
-                }
-            } else {
-                self.columns[c] = Foot::None;
-            }
         }
     }
 }
@@ -926,6 +907,7 @@ struct StepParityGenerator {
     nodes: Vec<StepParityNode>,
     edges: Vec<Edge>,
     rows: Vec<Row>,
+    result_columns: Vec<FootPlacement>,
 }
 
 impl StepParityGenerator {
@@ -937,6 +919,7 @@ impl StepParityGenerator {
             nodes: Vec::new(),
             edges: Vec::new(),
             rows: Vec::new(),
+            result_columns: Vec::new(),
         }
     }
 
@@ -946,6 +929,7 @@ impl StepParityGenerator {
         self.nodes.clear();
         self.edges.clear();
         self.rows.clear();
+        self.result_columns.clear();
         self.create_rows(notes);
         if self.rows.is_empty() {
             return false;
@@ -1149,23 +1133,28 @@ impl StepParityGenerator {
 
         let mut cols = [Foot::None; MAX_COLUMNS];
         let mask = row.note_mask | row.hold_mask;
-        let cap = 1usize << (mask.count_ones() as usize * 2);
-        let mut perms = Vec::with_capacity(cap);
-        permute_row(&self.layout, mask, &mut cols, 0, self.column_count, 0, &mut perms);
+        let mut perms = Vec::new();
+        let bits = mask.count_ones() as usize;
+        if bits <= 4 {
+            perms = Vec::with_capacity(PERM_CAP[bits]);
+            permute_row(&self.layout, mask, &mut cols, 0, self.column_count, 0, &mut perms);
+        }
         if perms.is_empty() {
             cols.fill(Foot::None);
             let mask = row.note_mask;
-            let cap = 1usize << (mask.count_ones() as usize * 2);
-            perms = Vec::with_capacity(cap);
-            permute_row(
-                &self.layout,
-                mask,
-                &mut cols,
-                0,
-                self.column_count,
-                0,
-                &mut perms,
-            );
+            let bits = mask.count_ones() as usize;
+            if bits <= 4 {
+                perms = Vec::with_capacity(PERM_CAP[bits]);
+                permute_row(
+                    &self.layout,
+                    mask,
+                    &mut cols,
+                    0,
+                    self.column_count,
+                    0,
+                    &mut perms,
+                );
+            }
         }
         if perms.is_empty() {
             perms.push([Foot::None; MAX_COLUMNS]);
@@ -1270,10 +1259,14 @@ impl StepParityGenerator {
         }
 
         let nodes = &self.nodes;
-        let rows = &mut self.rows;
+        let rows = &self.rows;
 
         let mut cur = n - 1;
-        let mut write = rows.len();
+        self.result_columns.clear();
+        self.result_columns
+            .resize(rows.len(), [Foot::None; MAX_COLUMNS]);
+
+        let mut write = self.result_columns.len();
         while cur != 0 {
             let prev = pred[cur];
             if prev == usize::MAX {
@@ -1287,7 +1280,7 @@ impl StepParityGenerator {
                 return false;
             }
             write -= 1;
-            rows[write].set_foot_placement(&nodes[cur].state.combined_columns);
+            self.result_columns[write] = nodes[cur].state.combined_columns;
         }
 
         write == 0
@@ -1441,23 +1434,51 @@ pub struct TechCounts {
     pub doublesteps: u32,
 }
 
-fn calculate_tech_counts(rows: &[Row], layout: &StageLayout) -> TechCounts {
+fn calculate_tech_counts(rows: &[Row], placements: &[FootPlacement], layout: &StageLayout) -> TechCounts {
     let mut out = TechCounts::default();
-    if rows.len() < 2 {
+    if rows.len() < 2 || placements.len() != rows.len() {
         return out;
     }
 
+    let cols = layout.column_count().min(MAX_COLUMNS);
+
+    let hit_positions = |combined: &FootPlacement, mask: u8| -> [i8; NUM_FEET] {
+        let mut pos = [INVALID_COLUMN; NUM_FEET];
+        let mut m = mask;
+        while m != 0 {
+            let c = m.trailing_zeros() as usize;
+            m &= m - 1;
+            if c >= cols {
+                continue;
+            }
+            let foot = combined[c];
+            if foot != Foot::None {
+                pos[foot.as_index()] = c as i8;
+            }
+        }
+        pos
+    };
+
+    let col_foot = |combined: &FootPlacement, mask: u8, c: usize| -> Foot {
+        if (mask & (1u8 << c)) != 0 {
+            combined[c]
+        } else {
+            Foot::None
+        }
+    };
+
     for i in 1..rows.len() {
         let (curr, prev) = (&rows[i], &rows[i - 1]);
+        let (curr_combined, prev_combined) = (&placements[i], &placements[i - 1]);
         let elapsed = curr.second - prev.second;
+
+        let curr_pos = hit_positions(curr_combined, curr.note_mask);
+        let prev_pos = hit_positions(prev_combined, prev.note_mask);
 
         // Jacks and doublesteps
         if curr.note_count == 1 && prev.note_count == 1 {
             for &foot in &FEET {
-                let (cc, pc) = (
-                    curr.where_the_feet_are[foot.as_index()],
-                    prev.where_the_feet_are[foot.as_index()],
-                );
+                let (cc, pc) = (curr_pos[foot.as_index()], prev_pos[foot.as_index()]);
                 if cc == INVALID_COLUMN || pc == INVALID_COLUMN {
                     continue;
                 }
@@ -1471,21 +1492,20 @@ fn calculate_tech_counts(rows: &[Row], layout: &StageLayout) -> TechCounts {
 
         // Brackets
         if curr.note_count >= 2 {
-            if curr.where_the_feet_are[1] != INVALID_COLUMN
-                && curr.where_the_feet_are[2] != INVALID_COLUMN
-            {
+            if curr_pos[1] != INVALID_COLUMN && curr_pos[2] != INVALID_COLUMN {
                 out.brackets += 1;
             }
-            if curr.where_the_feet_are[3] != INVALID_COLUMN
-                && curr.where_the_feet_are[4] != INVALID_COLUMN
-            {
+            if curr_pos[3] != INVALID_COLUMN && curr_pos[4] != INVALID_COLUMN {
                 out.brackets += 1;
             }
         }
 
         // Footswitches by arrow type
         let is_switch = |c: usize| -> bool {
-            let (p, r) = (prev.columns[c], curr.columns[c]);
+            let (p, r) = (
+                col_foot(prev_combined, prev.note_mask, c),
+                col_foot(curr_combined, curr.note_mask, c),
+            );
             p != Foot::None
                 && r != Foot::None
                 && p != r
@@ -1521,15 +1541,15 @@ fn calculate_tech_counts(rows: &[Row], layout: &StageLayout) -> TechCounts {
         }
 
         // Crossovers - restored original logic with prev_prev checks
-        let left_heel = curr.where_the_feet_are[Foot::LeftHeel.as_index()];
-        let left_toe = curr.where_the_feet_are[Foot::LeftToe.as_index()];
-        let right_heel = curr.where_the_feet_are[Foot::RightHeel.as_index()];
-        let right_toe = curr.where_the_feet_are[Foot::RightToe.as_index()];
+        let left_heel = curr_pos[Foot::LeftHeel.as_index()];
+        let left_toe = curr_pos[Foot::LeftToe.as_index()];
+        let right_heel = curr_pos[Foot::RightHeel.as_index()];
+        let right_toe = curr_pos[Foot::RightToe.as_index()];
 
-        let prev_left_heel = prev.where_the_feet_are[Foot::LeftHeel.as_index()];
-        let prev_left_toe = prev.where_the_feet_are[Foot::LeftToe.as_index()];
-        let prev_right_heel = prev.where_the_feet_are[Foot::RightHeel.as_index()];
-        let prev_right_toe = prev.where_the_feet_are[Foot::RightToe.as_index()];
+        let prev_left_heel = prev_pos[Foot::LeftHeel.as_index()];
+        let prev_left_toe = prev_pos[Foot::LeftToe.as_index()];
+        let prev_right_heel = prev_pos[Foot::RightHeel.as_index()];
+        let prev_right_toe = prev_pos[Foot::RightToe.as_index()];
 
         // Right foot crossing over left
         if right_heel != INVALID_COLUMN
@@ -1541,7 +1561,8 @@ fn calculate_tech_counts(rows: &[Row], layout: &StageLayout) -> TechCounts {
             if right_pos.x < left_pos.x {
                 if i > 1 {
                     let prev_prev = &rows[i - 2];
-                    let prev_prev_rh = prev_prev.where_the_feet_are[Foot::RightHeel.as_index()];
+                    let prev_prev_pos = hit_positions(&placements[i - 2], prev_prev.note_mask);
+                    let prev_prev_rh = prev_prev_pos[Foot::RightHeel.as_index()];
                     if prev_prev_rh != INVALID_COLUMN && prev_prev_rh != right_heel {
                         let prev_prev_pos = layout.columns[prev_prev_rh as usize];
                         if prev_prev_pos.x > left_pos.x {
@@ -1566,7 +1587,8 @@ fn calculate_tech_counts(rows: &[Row], layout: &StageLayout) -> TechCounts {
             if right_pos.x < left_pos.x {
                 if i > 1 {
                     let prev_prev = &rows[i - 2];
-                    let prev_prev_lh = prev_prev.where_the_feet_are[Foot::LeftHeel.as_index()];
+                    let prev_prev_pos = hit_positions(&placements[i - 2], prev_prev.note_mask);
+                    let prev_prev_lh = prev_prev_pos[Foot::LeftHeel.as_index()];
                     if prev_prev_lh != INVALID_COLUMN && prev_prev_lh != left_heel {
                         let prev_prev_pos = layout.columns[prev_prev_lh as usize];
                         if right_pos.x > prev_prev_pos.x {
@@ -1794,7 +1816,7 @@ pub fn analyze_lanes(data: &[u8], bpm_map: &[(f64, f64)], offset: f64, lanes: us
     if !generator.analyze(notes, layout.column_count()) {
         return TechCounts::default();
     }
-    calculate_tech_counts(&generator.rows, &generator.layout)
+    calculate_tech_counts(&generator.rows, &generator.result_columns, &generator.layout)
 }
 
 pub fn analyze_timing_lanes(data: &[u8], timing: &TimingData, lanes: usize) -> TechCounts {
@@ -1812,7 +1834,7 @@ pub fn analyze_timing_lanes(data: &[u8], timing: &TimingData, lanes: usize) -> T
     if !generator.analyze(notes, layout.column_count()) {
         return TechCounts::default();
     }
-    calculate_tech_counts(&generator.rows, &generator.layout)
+    calculate_tech_counts(&generator.rows, &generator.result_columns, &generator.layout)
 }
 
 pub(crate) fn analyze_timing_rows<const LANES: usize>(
@@ -1832,7 +1854,7 @@ pub(crate) fn analyze_timing_rows<const LANES: usize>(
     if !generator.analyze(notes, layout.column_count()) {
         return TechCounts::default();
     }
-    calculate_tech_counts(&generator.rows, &generator.layout)
+    calculate_tech_counts(&generator.rows, &generator.result_columns, &generator.layout)
 }
 
 fn time_between_beats(start: f32, end: f32, bpm_map: &[(f64, f64)]) -> f64 {
