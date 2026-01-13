@@ -1908,15 +1908,16 @@ pub fn analyze_lanes(data: &[u8], bpm_map: &[(f64, f64)], offset: f64, lanes: us
     let Some(layout) = layout_for_lanes(lanes) else {
         return TechCounts::default();
     };
+    let cols = layout.column_count();
 
-    let minimized = crate::stats::minimize_chart_for_hash(data, layout.column_count());
-    let rows = parse_rows(&minimized, layout.column_count(), |beat| {
+    let minimized = crate::stats::minimize_chart_for_hash(data, cols);
+    let rows = parse_rows(&minimized, cols, |beat| {
         time_between_beats(0.0, beat, bpm_map) as f32 - offset as f32
     });
     let notes = build_notes(&rows, None);
 
-    let mut generator = StepParityGenerator::new(layout.clone());
-    if !generator.analyze(notes, layout.column_count()) {
+    let mut generator = StepParityGenerator::new(layout);
+    if !generator.analyze(notes, cols) {
         return TechCounts::default();
     }
     calculate_tech_counts(&generator.rows, &generator.result_columns, &generator.layout)
@@ -1926,15 +1927,16 @@ pub fn analyze_timing_lanes(data: &[u8], timing: &TimingData, lanes: usize) -> T
     let Some(layout) = layout_for_lanes(lanes) else {
         return TechCounts::default();
     };
+    let cols = layout.column_count();
 
-    let minimized = crate::stats::minimize_chart_for_hash(data, layout.column_count());
-    let rows = parse_rows(&minimized, layout.column_count(), |beat| {
+    let minimized = crate::stats::minimize_chart_for_hash(data, cols);
+    let rows = parse_rows(&minimized, cols, |beat| {
         timing.get_time_for_beat_f32(beat as f64) as f32
     });
     let notes = build_notes(&rows, Some(timing));
 
-    let mut generator = StepParityGenerator::new(layout.clone());
-    if !generator.analyze(notes, layout.column_count()) {
+    let mut generator = StepParityGenerator::new(layout);
+    if !generator.analyze(notes, cols) {
         return TechCounts::default();
     }
     calculate_tech_counts(&generator.rows, &generator.result_columns, &generator.layout)
@@ -1949,12 +1951,13 @@ pub(crate) fn analyze_timing_rows<const LANES: usize>(
     let Some(layout) = layout_for_lanes(LANES) else {
         return TechCounts::default();
     };
+    let cols = layout.column_count();
 
-    let parsed = parse_rows_from_arrays(rows, row_to_beat, timing, layout.column_count());
+    let parsed = parse_rows_from_arrays(rows, row_to_beat, timing, cols);
     let notes = build_notes(&parsed, Some(timing));
 
-    let mut generator = StepParityGenerator::new(layout.clone());
-    if !generator.analyze(notes, layout.column_count()) {
+    let mut generator = StepParityGenerator::new(layout);
+    if !generator.analyze(notes, cols) {
         return TechCounts::default();
     }
     calculate_tech_counts(&generator.rows, &generator.result_columns, &generator.layout)
