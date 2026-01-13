@@ -398,10 +398,53 @@ impl Row {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(transparent)]
+struct PackedCols(u32);
+
+impl PackedCols {
+    const SHIFT: usize = 3;
+    const MASK: u32 = 0x7;
+
+    #[inline(always)]
+    const fn new() -> Self {
+        Self(0)
+    }
+
+    #[inline(always)]
+    fn get(self, col: usize) -> Foot {
+        debug_assert!(col < MAX_COLUMNS);
+        match ((self.0 >> (col * Self::SHIFT)) & Self::MASK) as u8 {
+            0 => Foot::None,
+            1 => Foot::LeftHeel,
+            2 => Foot::LeftToe,
+            3 => Foot::RightHeel,
+            4 => Foot::RightToe,
+            _ => Foot::None,
+        }
+    }
+
+    #[inline(always)]
+    fn set(&mut self, col: usize, foot: Foot) {
+        debug_assert!(col < MAX_COLUMNS);
+        let shift = col * Self::SHIFT;
+        self.0 = (self.0 & !(Self::MASK << shift)) | ((foot as u32) << shift);
+    }
+
+    #[inline(always)]
+    fn to_placement(self) -> FootPlacement {
+        let mut out = [Foot::None; MAX_COLUMNS];
+        for i in 0..MAX_COLUMNS {
+            out[i] = self.get(i);
+        }
+        out
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct State {
-    columns: [Foot; MAX_COLUMNS],
-    combined_columns: [Foot; MAX_COLUMNS],
+    columns: PackedCols,
+    combined_columns: PackedCols,
     where_the_feet_are: [i8; NUM_FEET],
     what_note_the_foot_is_hitting: [i8; NUM_FEET],
     moved_mask: u8,
@@ -411,8 +454,8 @@ struct State {
 impl State {
     fn new(_cols: usize) -> Self {
         Self {
-            columns: [Foot::None; MAX_COLUMNS],
-            combined_columns: [Foot::None; MAX_COLUMNS],
+            columns: PackedCols::new(),
+            combined_columns: PackedCols::new(),
             where_the_feet_are: [INVALID_COLUMN; NUM_FEET],
             what_note_the_foot_is_hitting: [INVALID_COLUMN; NUM_FEET],
             moved_mask: 0,
@@ -445,15 +488,6 @@ impl Eq for State {}
 
 type FootPlacement = [Foot; MAX_COLUMNS];
 
-#[inline(always)]
-fn pack_cols(cols: &[Foot; MAX_COLUMNS]) -> u32 {
-    let mut out = 0u32;
-    for i in 0..MAX_COLUMNS {
-        out |= (cols[i] as u32) << (i * 3);
-    }
-    out
-}
-
 #[derive(Debug, Clone)]
 struct StepParityNode {
     state: State,
@@ -478,7 +512,7 @@ fn did_jack(
 
     let check = |col: i8, foot: Foot| -> bool {
         col > INVALID_COLUMN
-            && initial.combined_columns[col as usize] == foot
+            && initial.combined_columns.get(col as usize) == foot
             && (result.holding_mask & FOOT_MASKS[foot.as_index()]) == 0
             && initial.foot_moved_not_holding(pair)
     };
@@ -553,7 +587,7 @@ fn calc_mine_cost(result: &State, row: &Row, cols: usize) -> f32 {
     let mut mask = row.mine_mask;
     while mask != 0 {
         let idx = mask.trailing_zeros() as usize;
-        if idx < cols && result.combined_columns[idx] != Foot::None {
+        if idx < cols && result.combined_columns.get(idx) != Foot::None {
             return MINE_WEIGHT;
         }
         mask &= mask - 1;
@@ -572,12 +606,12 @@ fn calc_hold_switch_cost(layout: &StageLayout, initial: &State, result: &State, 
         let c = mask.trailing_zeros() as usize;
         mask &= mask - 1;
 
-        let foot = result.combined_columns[c];
+        let foot = result.combined_columns.get(c);
         if foot == Foot::None {
             continue;
         }
 
-        let initial_foot = initial.combined_columns[c];
+        let initial_foot = initial.combined_columns.get(c);
         let switched = (foot.is_left() && !initial_foot.is_left())
             || (foot.is_right() && !initial_foot.is_right());
 
@@ -776,7 +810,7 @@ fn calc_footswitch_cost(
 
     let time_scaled = elapsed - SLOW_FOOTSWITCH_THRESHOLD;
     for i in 0..cols {
-        let (init, res) = (initial.combined_columns[i], result.columns[i]);
+        let (init, res) = (initial.combined_columns.get(i), result.columns.get(i));
         if init == Foot::None || res == Foot::None {
             continue;
         }
@@ -796,10 +830,12 @@ fn calc_sideswitch_cost(layout: &StageLayout, initial: &State, result: &State) -
     while mask != 0 {
         let c = mask.trailing_zeros() as usize;
         mask &= mask - 1;
-        if initial.combined_columns[c] != result.columns[c]
-            && result.columns[c] != Foot::None
-            && initial.combined_columns[c] != Foot::None
-            && (result.moved_mask & FOOT_MASKS[initial.combined_columns[c].as_index()]) == 0
+        let init = initial.combined_columns.get(c);
+        let res = result.columns.get(c);
+        if init != res
+            && res != Foot::None
+            && init != Foot::None
+            && (result.moved_mask & FOOT_MASKS[init.as_index()]) == 0
         {
             count += 1;
         }
@@ -1175,9 +1211,10 @@ impl StepParityGenerator {
 
         for i in 0..n {
             let foot = cols[i];
-            state.columns[i] = foot;
+            state.columns.set(i, foot);
             let hold_empty = (hold_mask & (1u8 << i)) == 0;
-            let moved = foot != Foot::None && (hold_empty || initial.combined_columns[i] != foot);
+            let moved =
+                foot != Foot::None && (hold_empty || initial.combined_columns.get(i) != foot);
 
             if foot != Foot::None {
                 let fi = foot.as_index();
@@ -1197,10 +1234,11 @@ impl StepParityGenerator {
         let moved_right = (moved_mask & RIGHT_FOOT_MASK) != 0;
 
         for i in 0..n {
-            let combined = if state.columns[i] != Foot::None {
-                state.columns[i]
+            let col_foot = state.columns.get(i);
+            let combined = if col_foot != Foot::None {
+                col_foot
             } else {
-                let prev = initial.combined_columns[i];
+                let prev = initial.combined_columns.get(i);
                 match prev {
                     Foot::LeftHeel | Foot::RightHeel
                         if (moved_mask & FOOT_MASKS[prev.as_index()]) == 0 =>
@@ -1213,15 +1251,13 @@ impl StepParityGenerator {
                 }
             };
             if combined != Foot::None {
-                state.combined_columns[i] = combined;
+                state.combined_columns.set(i, combined);
                 state.where_the_feet_are[combined.as_index()] = i as i8;
             }
         }
 
-        let cols_p = pack_cols(&state.columns) as u64;
-        let comb_p = pack_cols(&state.combined_columns) as u64;
-        let key = cols_p
-            | (comb_p << 24)
+        let key = state.columns.0 as u64
+            | ((state.combined_columns.0 as u64) << 24)
             | ((state.moved_mask as u64) << 48)
             | ((state.holding_mask as u64) << 56);
         (state, key)
@@ -1280,7 +1316,7 @@ impl StepParityGenerator {
                 return false;
             }
             write -= 1;
-            self.result_columns[write] = nodes[cur as usize].state.combined_columns;
+            self.result_columns[write] = nodes[cur as usize].state.combined_columns.to_placement();
         }
 
         write == 0
