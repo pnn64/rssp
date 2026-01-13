@@ -148,7 +148,7 @@ struct StageLayout {
     avg_points: [StagePoint; PAIR_LEN],
     facing_x_penalty: [f32; PAIR_LEN],
     facing_y_penalty: [f32; PAIR_LEN],
-    dist_sq: [f32; DIST_LEN],
+    bracket_ok: [bool; DIST_LEN],
     hold_switch_cost: [f32; DIST_LEN],
     dist_weighted: [f64; DIST_LEN],
 }
@@ -265,7 +265,7 @@ impl StageLayout {
             }
         }
 
-        let mut dist_sq = [0.0f32; DIST_LEN];
+        let mut bracket_ok = [false; DIST_LEN];
         let mut hold_switch_cost = [0.0f32; DIST_LEN];
         let mut dist_weighted = [0.0f64; DIST_LEN];
 
@@ -274,7 +274,7 @@ impl StageLayout {
                 let (dx, dy) = (columns[l].x - columns[r].x, columns[l].y - columns[r].y);
                 let sq = dx * dx + dy * dy;
                 let idx = l * MAX_COLUMNS + r;
-                dist_sq[idx] = sq;
+                bracket_ok[idx] = sq <= 2.0;
                 let dist = (sq as f64).sqrt();
                 hold_switch_cost[idx] = dist as f32 * HOLDSWITCH_WEIGHT;
                 dist_weighted[idx] = dist * DISTANCE_WEIGHT as f64;
@@ -290,7 +290,7 @@ impl StageLayout {
             avg_points,
             facing_x_penalty,
             facing_y_penalty,
-            dist_sq,
+            bracket_ok,
             hold_switch_cost,
             dist_weighted,
         }
@@ -303,7 +303,7 @@ impl StageLayout {
 
     #[inline(always)]
     fn bracket_check(&self, c1: usize, c2: usize) -> bool {
-        self.dist_sq[c1 * MAX_COLUMNS + c2] <= 2.0
+        self.bracket_ok[c1 * MAX_COLUMNS + c2]
     }
 
     #[inline(always)]
