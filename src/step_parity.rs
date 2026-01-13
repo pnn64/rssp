@@ -125,136 +125,9 @@ impl Hasher for IdentityHasher {
 type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<IdentityHasher>>;
 
 #[derive(Debug, Clone, Copy)]
-struct NeighborEntry {
-    neighbor_id: usize,
+struct Edge {
+    to: u32,
     cost: f32,
-    next: usize,
-    hash_key: usize,
-}
-
-const BUCKET_EMPTY: usize = usize::MAX;
-const BUCKET_SENTINEL: usize = usize::MAX - 1;
-
-#[derive(Debug, Clone)]
-struct NeighborMap {
-    entries: Vec<NeighborEntry>,
-    head: usize,
-    bucket_before: Vec<usize>,
-    bucket_count: usize,
-}
-
-impl Default for NeighborMap {
-    fn default() -> Self {
-        Self {
-            entries: Vec::new(),
-            head: BUCKET_EMPTY,
-            bucket_before: vec![BUCKET_EMPTY; 13],
-            bucket_count: 13,
-        }
-    }
-}
-
-impl NeighborMap {
-    fn reserve(&mut self, additional: usize) {
-        if additional == 0 {
-            return;
-        }
-        let target = self.entries.len().saturating_add(additional);
-        if target > self.bucket_count {
-            self.rehash(next_prime(target.max(1)));
-        }
-        self.entries.reserve(additional);
-    }
-
-    fn insert_reserved(&mut self, neighbor_id: usize, hash_key: usize, cost: f32) {
-        #[cfg(debug_assertions)]
-        if let Some(entry) = self
-            .entries
-            .iter_mut()
-            .find(|e| e.neighbor_id == neighbor_id)
-        {
-            entry.cost = cost;
-            return;
-        }
-        self.insert_new_reserved(neighbor_id, hash_key, cost);
-    }
-
-    fn insert_new_reserved(&mut self, neighbor_id: usize, hash_key: usize, cost: f32) {
-        debug_assert!(self.entries.len() + 1 <= self.bucket_count);
-        let idx = self.entries.len();
-        self.entries.push(NeighborEntry {
-            neighbor_id,
-            cost,
-            next: BUCKET_EMPTY,
-            hash_key,
-        });
-        self.insert_index(idx);
-    }
-
-    fn rehash(&mut self, new_count: usize) {
-        self.bucket_count = new_count;
-        self.bucket_before = vec![BUCKET_EMPTY; new_count];
-        let mut prev = None;
-        let mut current = self.head;
-        while current != BUCKET_EMPTY {
-            let bucket = self.entries[current].hash_key % new_count;
-            if self.bucket_before[bucket] == BUCKET_EMPTY {
-                self.bucket_before[bucket] = prev.unwrap_or(BUCKET_SENTINEL);
-            }
-            prev = Some(current);
-            current = self.entries[current].next;
-        }
-    }
-
-    fn insert_index(&mut self, idx: usize) {
-        let bucket = self.entries[idx].hash_key % self.bucket_count;
-        let before = self.bucket_before[bucket];
-
-        if before == BUCKET_EMPTY {
-            let old_head = self.head;
-            self.entries[idx].next = old_head;
-            self.head = idx;
-            self.bucket_before[bucket] = BUCKET_SENTINEL;
-            if old_head != BUCKET_EMPTY {
-                let old_bucket = self.entries[old_head].hash_key % self.bucket_count;
-                self.bucket_before[old_bucket] = idx;
-            }
-        } else if before == BUCKET_SENTINEL {
-            self.entries[idx].next = self.head;
-            self.head = idx;
-        } else {
-            self.entries[idx].next = self.entries[before].next;
-            self.entries[before].next = idx;
-        }
-    }
-}
-
-fn next_prime(start: usize) -> usize {
-    if start <= 2 {
-        return 2;
-    }
-    let mut c = if start % 2 == 0 { start + 1 } else { start };
-    while !is_prime(c) {
-        c = c.saturating_add(2);
-    }
-    c
-}
-
-fn is_prime(v: usize) -> bool {
-    if v <= 3 {
-        return v > 1;
-    }
-    if v % 2 == 0 || v % 3 == 0 {
-        return false;
-    }
-    let mut i = 5usize;
-    while i.saturating_mul(i) <= v {
-        if v % i == 0 || v % (i + 2) == 0 {
-            return false;
-        }
-        i += 6;
-    }
-    true
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -610,7 +483,8 @@ type FootPlacement = [Foot; MAX_COLUMNS];
 struct StepParityNode {
     state: Rc<State>,
     second: f32,
-    neighbors: NeighborMap,
+    first_edge: u32,
+    edge_count: u16,
 }
 
 const NODE_CHUNK_SIZE: usize = 1024;
@@ -673,12 +547,6 @@ impl NodeArena {
         } else {
             None
         }
-    }
-
-    fn ptr(&self, idx: usize) -> *const StepParityNode {
-        self.get(idx)
-            .map(|n| n as *const _)
-            .unwrap_or(std::ptr::null())
     }
 }
 
@@ -1154,6 +1022,7 @@ struct StepParityGenerator {
     permute_cache: [Option<Rc<[FootPlacement]>>; 256],
     state_cache: FastMap<u64, Rc<State>>,
     nodes: NodeArena,
+    edges: Vec<Edge>,
     rows: Vec<Row>,
 }
 
@@ -1165,6 +1034,7 @@ impl StepParityGenerator {
             permute_cache: std::array::from_fn(|_| None),
             state_cache: FastMap::default(),
             nodes: NodeArena::new(),
+            edges: Vec::new(),
             rows: Vec::new(),
         }
     }
@@ -1174,6 +1044,7 @@ impl StepParityGenerator {
         self.permute_cache.fill(None);
         self.state_cache.clear();
         self.nodes.clear();
+        self.edges.clear();
         self.rows.clear();
         self.create_rows(notes);
         if self.rows.is_empty() {
@@ -1292,7 +1163,8 @@ impl StepParityGenerator {
             result_map.reserve(perms.len());
 
             for &init_id in &prev_ids {
-                self.nodes[init_id].neighbors.reserve(perms.len());
+                let node_edge_start = self.edges.len() as u32;
+                self.edges.reserve(perms.len());
                 let (init_state, init_sec) = {
                     let n = &self.nodes[init_id];
                     (Rc::clone(&n.state), n.second)
@@ -1320,8 +1192,15 @@ impl StepParityGenerator {
                         result_map.insert(key, id);
                         id
                     };
-                    self.add_edge(init_id, res_id, cost);
+                    self.edges.push(Edge {
+                        to: res_id as u32,
+                        cost,
+                    });
                 }
+                let edge_count = (self.edges.len() as u32 - node_edge_start) as u16;
+                let node = &mut self.nodes[init_id];
+                node.first_edge = node_edge_start;
+                node.edge_count = edge_count;
             }
             std::mem::swap(&mut prev_ids, &mut next_ids);
         }
@@ -1331,8 +1210,14 @@ impl StepParityGenerator {
         let end_id = self.add_node(end, end_sec);
 
         for &id in &prev_ids {
-            self.nodes[id].neighbors.reserve(1);
-            self.add_edge(id, end_id, 0.0);
+            let edge_start = self.edges.len() as u32;
+            self.edges.push(Edge {
+                to: end_id as u32,
+                cost: 0.0,
+            });
+            let node = &mut self.nodes[id];
+            node.first_edge = edge_start;
+            node.edge_count = 1;
         }
     }
 
@@ -1340,13 +1225,9 @@ impl StepParityGenerator {
         self.nodes.push(StepParityNode {
             state,
             second,
-            neighbors: NeighborMap::default(),
+            first_edge: 0,
+            edge_count: 0,
         })
-    }
-
-    fn add_edge(&mut self, from: usize, to: usize, cost: f32) {
-        let key = self.nodes.ptr(to) as usize;
-        self.nodes[from].neighbors.insert_reserved(to, key, cost);
     }
 
     fn perms_for_row(&mut self, row_idx: usize) -> Rc<[FootPlacement]> {
@@ -1532,16 +1413,16 @@ impl StepParityGenerator {
             if cost[i] == f32::MAX {
                 continue;
             }
-            let neighbors = &self.nodes[i].neighbors;
-            let mut cur = neighbors.head;
-            while cur != BUCKET_EMPTY {
-                let e = &neighbors.entries[cur];
+            let node = &self.nodes[i];
+            let start = node.first_edge as usize;
+            let end = start + node.edge_count as usize;
+            for e in &self.edges[start..end] {
+                let to = e.to as usize;
                 let nc = cost[i] + e.cost;
-                if nc < cost[e.neighbor_id] {
-                    cost[e.neighbor_id] = nc;
-                    pred[e.neighbor_id] = i;
+                if nc < cost[to] {
+                    cost[to] = nc;
+                    pred[to] = i;
                 }
-                cur = e.next;
             }
         }
 
