@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use crate::timing::{ROWS_PER_BEAT, TimingData, beat_to_note_row_f32};
 
-const INVALID_COLUMN: isize = -1;
+const INVALID_COLUMN: i8 = -1;
 const CLM_SECOND_INVALID: f32 = -1.0;
 const HOLD_END_NONE: f32 = -1.0;
 const MAX_NOTE_ROW: i32 = 1 << 30;
@@ -315,7 +315,7 @@ impl StageLayout {
     }
 
     #[inline(always)]
-    fn pair_index(&self, left: isize, right: isize) -> usize {
+    fn pair_index(&self, left: i8, right: i8) -> usize {
         let max = self.pair_stride - 1;
         let l = if left == INVALID_COLUMN {
             max
@@ -331,17 +331,17 @@ impl StageLayout {
     }
 
     #[inline(always)]
-    fn get_facing_x_penalty(&self, l: isize, r: isize) -> f32 {
+    fn get_facing_x_penalty(&self, l: i8, r: i8) -> f32 {
         self.facing_x_penalty[self.pair_index(l, r)]
     }
 
     #[inline(always)]
-    fn get_facing_y_penalty(&self, l: isize, r: isize) -> f32 {
+    fn get_facing_y_penalty(&self, l: i8, r: i8) -> f32 {
         self.facing_y_penalty[self.pair_index(l, r)]
     }
 
     #[inline(always)]
-    fn avg_point(&self, l: isize, r: isize) -> StagePoint {
+    fn avg_point(&self, l: i8, r: i8) -> StagePoint {
         self.avg_points[self.pair_index(l, r)]
     }
 }
@@ -369,7 +369,7 @@ struct IntermediateNoteData {
 #[derive(Debug, Clone)]
 struct Row {
     columns: [Foot; MAX_COLUMNS],
-    where_the_feet_are: [isize; NUM_FEET],
+    where_the_feet_are: [i8; NUM_FEET],
     second: f32,
     beat: f32,
     note_count: u8,
@@ -406,7 +406,7 @@ impl Row {
                 let foot = placement[c];
                 self.columns[c] = foot;
                 if foot != Foot::None {
-                    self.where_the_feet_are[foot.as_index()] = c as isize;
+                    self.where_the_feet_are[foot.as_index()] = c as i8;
                 }
             } else {
                 self.columns[c] = Foot::None;
@@ -421,8 +421,8 @@ struct State {
     combined_columns: [Foot; MAX_COLUMNS],
     moved_feet: [Foot; MAX_COLUMNS],
     hold_feet: [Foot; MAX_COLUMNS],
-    where_the_feet_are: [isize; NUM_FEET],
-    what_note_the_foot_is_hitting: [isize; NUM_FEET],
+    where_the_feet_are: [i8; NUM_FEET],
+    what_note_the_foot_is_hitting: [i8; NUM_FEET],
     moved_mask: u8,
     holding_mask: u8,
 }
@@ -480,8 +480,8 @@ fn did_jack(
     initial: &State,
     result: &State,
     pair: &FootPair,
-    heel_col: isize,
-    toe_col: isize,
+    heel_col: i8,
+    toe_col: i8,
     moved: bool,
     did_jump: bool,
 ) -> bool {
@@ -489,7 +489,7 @@ fn did_jack(
         return false;
     }
 
-    let check = |col: isize, foot: Foot| -> bool {
+    let check = |col: i8, foot: Foot| -> bool {
         col > INVALID_COLUMN
             && initial.combined_columns[col as usize] == foot
             && (result.holding_mask & FOOT_MASKS[foot.as_index()]) == 0
@@ -609,10 +609,10 @@ fn calc_hold_switch_cost(layout: &StageLayout, initial: &State, result: &State, 
 fn calc_bracket_tap_cost(
     initial: &State,
     row: &Row,
-    lh: isize,
-    lt: isize,
-    rh: isize,
-    rt: isize,
+    lh: i8,
+    lt: i8,
+    rh: i8,
+    rt: i8,
     elapsed: f32,
 ) -> f32 {
     if row.hold_mask == 0 {
@@ -620,7 +620,7 @@ fn calc_bracket_tap_cost(
     }
     let mut cost = 0.0;
 
-    let check_pair = |heel: isize, toe: isize, pair: &FootPair| -> f32 {
+    let check_pair = |heel: i8, toe: i8, pair: &FootPair| -> f32 {
         if heel == INVALID_COLUMN || toe == INVALID_COLUMN {
             return 0.0;
         }
@@ -713,7 +713,7 @@ fn calc_twisted_foot_cost(layout: &StageLayout, result: &State) -> f32 {
     let right_pos = layout.avg_point(rh, rt);
     let crossed = right_pos.x < left_pos.x;
 
-    let backward = |heel: isize, toe: isize| -> bool {
+    let backward = |heel: i8, toe: i8| -> bool {
         heel != INVALID_COLUMN
             && toe != INVALID_COLUMN
             && layout.columns[toe as usize].y < layout.columns[heel as usize].y
@@ -1195,7 +1195,7 @@ impl StepParityGenerator {
 
             if foot != Foot::None {
                 let fi = foot.as_index();
-                state.what_note_the_foot_is_hitting[fi] = i as isize;
+                state.what_note_the_foot_is_hitting[fi] = i as i8;
 
                 if moved {
                     moved_mask |= FOOT_MASKS[fi];
@@ -1235,7 +1235,7 @@ impl StepParityGenerator {
                 .wrapping_add(combined as u64);
             if combined != Foot::None {
                 state.combined_columns[i] = combined;
-                state.where_the_feet_are[combined.as_index()] = i as isize;
+                state.where_the_feet_are[combined.as_index()] = i as i8;
             }
         }
 
@@ -1375,10 +1375,10 @@ fn permute_row(
         );
         for (i, &f) in cols.iter().enumerate().take(col_count) {
             match f {
-                Foot::LeftHeel => lh = i as isize,
-                Foot::LeftToe => lt = i as isize,
-                Foot::RightHeel => rh = i as isize,
-                Foot::RightToe => rt = i as isize,
+                Foot::LeftHeel => lh = i as i8,
+                Foot::LeftToe => lt = i as i8,
+                Foot::RightHeel => rh = i as i8,
+                Foot::RightToe => rt = i as i8,
                 Foot::None => {}
             }
         }
