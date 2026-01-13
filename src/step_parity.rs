@@ -1148,25 +1148,21 @@ impl StepParityGenerator {
         }
 
         let mut cols = [Foot::None; MAX_COLUMNS];
-        let mut perms = Vec::new();
-        permute_row(
-            &self.layout,
-            row,
-            &mut cols,
-            0,
-            self.column_count,
-            false,
-            0,
-            &mut perms,
-        );
+        let mask = row.note_mask | row.hold_mask;
+        let cap = 1usize << (mask.count_ones() as usize * 2);
+        let mut perms = Vec::with_capacity(cap);
+        permute_row(&self.layout, mask, &mut cols, 0, self.column_count, 0, &mut perms);
         if perms.is_empty() {
+            cols.fill(Foot::None);
+            let mask = row.note_mask;
+            let cap = 1usize << (mask.count_ones() as usize * 2);
+            perms = Vec::with_capacity(cap);
             permute_row(
                 &self.layout,
-                row,
+                mask,
                 &mut cols,
                 0,
                 self.column_count,
-                true,
                 0,
                 &mut perms,
             );
@@ -1347,11 +1343,10 @@ impl RowCounter {
 
 fn permute_row(
     layout: &StageLayout,
-    row: &Row,
+    mask: u8,
     cols: &mut FootPlacement,
     col: usize,
     col_count: usize,
-    ignore_holds: bool,
     used: u8,
     out: &mut Vec<FootPlacement>,
 ) {
@@ -1397,11 +1392,6 @@ fn permute_row(
         return;
     }
 
-    let mask = if ignore_holds {
-        row.note_mask
-    } else {
-        row.note_mask | row.hold_mask
-    };
     let active = (mask & (1u8 << col)) != 0;
 
     if active {
@@ -1413,11 +1403,10 @@ fn permute_row(
             cols[col] = foot;
             permute_row(
                 layout,
-                row,
+                mask,
                 cols,
                 col + 1,
                 col_count,
-                ignore_holds,
                 used | fm,
                 out,
             );
@@ -1426,11 +1415,10 @@ fn permute_row(
     } else {
         permute_row(
             layout,
-            row,
+            mask,
             cols,
             col + 1,
             col_count,
-            ignore_holds,
             used,
             out,
         );
