@@ -139,9 +139,9 @@ struct StagePoint {
 #[derive(Debug, Clone)]
 struct StageLayout {
     columns: Vec<StagePoint>,
-    up_arrows: Vec<usize>,
-    down_arrows: Vec<usize>,
-    side_arrows: Vec<usize>,
+    up_mask: u8,
+    down_mask: u8,
+    side_mask: u8,
     pair_stride: usize,
     avg_points: Vec<StagePoint>,
     facing_x_penalty: Vec<f32>,
@@ -161,9 +161,9 @@ impl StageLayout {
                 StagePoint { x: 1.0, y: 2.0 },
                 StagePoint { x: 2.0, y: 1.0 },
             ],
-            vec![2],
-            vec![1],
-            vec![0, 3],
+            1 << 2,
+            1 << 1,
+            (1 << 0) | (1 << 3),
         )
     }
 
@@ -179,17 +179,17 @@ impl StageLayout {
                 StagePoint { x: 4.0, y: 2.0 },
                 StagePoint { x: 5.0, y: 1.0 },
             ],
-            vec![2, 6],
-            vec![1, 5],
-            vec![0, 3, 4, 7],
+            (1 << 2) | (1 << 6),
+            (1 << 1) | (1 << 5),
+            (1 << 0) | (1 << 3) | (1 << 4) | (1 << 7),
         )
     }
 
     fn new(
         columns: Vec<StagePoint>,
-        up_arrows: Vec<usize>,
-        down_arrows: Vec<usize>,
-        side_arrows: Vec<usize>,
+        up_mask: u8,
+        down_mask: u8,
+        side_mask: u8,
     ) -> Self {
         let pair_stride = columns.len() + 1;
         let pair_len = pair_stride * pair_stride;
@@ -280,9 +280,9 @@ impl StageLayout {
 
         Self {
             columns,
-            up_arrows,
-            down_arrows,
-            side_arrows,
+            up_mask,
+            down_mask,
+            side_mask,
             pair_stride,
             avg_points,
             facing_x_penalty,
@@ -372,9 +372,7 @@ struct Row {
     where_the_feet_are: [isize; NUM_FEET],
     second: f32,
     beat: f32,
-    row_index: usize,
-    column_count: usize,
-    note_count: usize,
+    note_count: u8,
     note_mask: u8,
     hold_mask: u8,
     hold_ends: [f32; MAX_COLUMNS],
@@ -384,14 +382,12 @@ struct Row {
 }
 
 impl Row {
-    fn new(cols: usize) -> Self {
+    fn new() -> Self {
         Self {
             columns: [Foot::None; MAX_COLUMNS],
             where_the_feet_are: [INVALID_COLUMN; NUM_FEET],
             second: 0.0,
             beat: 0.0,
-            row_index: 0,
-            column_count: cols,
             note_count: 0,
             note_mask: 0,
             hold_mask: 0,
@@ -403,9 +399,9 @@ impl Row {
     }
 
     fn set_foot_placement(&mut self, placement: &[Foot]) {
-        self.note_count = self.note_mask.count_ones() as usize;
+        self.note_count = self.note_mask.count_ones() as u8;
         self.where_the_feet_are = [INVALID_COLUMN; NUM_FEET];
-        for c in 0..self.column_count.min(MAX_COLUMNS) {
+        for c in 0..MAX_COLUMNS {
             if (self.note_mask & (1u8 << c)) != 0 {
                 let foot = placement[c];
                 self.columns[c] = foot;
@@ -427,8 +423,8 @@ struct State {
     hold_feet: [Foot; MAX_COLUMNS],
     where_the_feet_are: [isize; NUM_FEET],
     what_note_the_foot_is_hitting: [isize; NUM_FEET],
-    did_the_foot_move: [bool; NUM_FEET],
-    is_the_foot_holding: [bool; NUM_FEET],
+    moved_mask: u8,
+    holding_mask: u8,
 }
 
 impl State {
@@ -440,22 +436,21 @@ impl State {
             hold_feet: [Foot::None; MAX_COLUMNS],
             where_the_feet_are: [INVALID_COLUMN; NUM_FEET],
             what_note_the_foot_is_hitting: [INVALID_COLUMN; NUM_FEET],
-            did_the_foot_move: [false; NUM_FEET],
-            is_the_foot_holding: [false; NUM_FEET],
+            moved_mask: 0,
+            holding_mask: 0,
         }
     }
 
     #[inline(always)]
     fn foot_moved(&self, pair: &FootPair) -> bool {
-        self.did_the_foot_move[pair.heel.as_index()] || self.did_the_foot_move[pair.toe.as_index()]
+        let mask = FOOT_MASKS[pair.heel.as_index()] | FOOT_MASKS[pair.toe.as_index()];
+        (self.moved_mask & mask) != 0
     }
 
     #[inline(always)]
     fn foot_moved_not_holding(&self, pair: &FootPair) -> bool {
-        (self.did_the_foot_move[pair.heel.as_index()]
-            && !self.is_the_foot_holding[pair.heel.as_index()])
-            || (self.did_the_foot_move[pair.toe.as_index()]
-                && !self.is_the_foot_holding[pair.toe.as_index()])
+        let mask = FOOT_MASKS[pair.heel.as_index()] | FOOT_MASKS[pair.toe.as_index()];
+        ((self.moved_mask & !self.holding_mask) & mask) != 0
     }
 }
 
@@ -497,7 +492,7 @@ fn did_jack(
     let check = |col: isize, foot: Foot| -> bool {
         col > INVALID_COLUMN
             && initial.combined_columns[col as usize] == foot
-            && !result.is_the_foot_holding[foot.as_index()]
+            && (result.holding_mask & FOOT_MASKS[foot.as_index()]) == 0
             && initial.foot_moved_not_holding(pair)
     };
 
@@ -511,9 +506,9 @@ fn calc_action_cost(
     rows: &[Row],
     row_idx: usize,
     elapsed: f32,
+    cols: usize,
 ) -> f32 {
     let row = &rows[row_idx];
-    let cols = row.column_count;
 
     let lh = result.what_note_the_foot_is_hitting[Foot::LeftHeel.as_index()];
     let lt = result.what_note_the_foot_is_hitting[Foot::LeftToe.as_index()];
@@ -656,16 +651,15 @@ fn calc_bracket_jack_cost(
     jacked_right: bool,
     did_jump: bool,
 ) -> f32 {
-    let hold_empty = result.hold_feet.iter().all(|&f| f == Foot::None);
-    if moved_left == moved_right || !hold_empty || did_jump {
+    if moved_left == moved_right || result.holding_mask != 0 || did_jump {
         return 0.0;
     }
 
     let mut cost = 0.0;
-    if jacked_left && result.did_the_foot_move[1] && result.did_the_foot_move[2] {
+    if jacked_left && (result.moved_mask & LEFT_FOOT_MASK) == LEFT_FOOT_MASK {
         cost += BRACKETJACK_WEIGHT;
     }
-    if jacked_right && result.did_the_foot_move[3] && result.did_the_foot_move[4] {
+    if jacked_right && (result.moved_mask & RIGHT_FOOT_MASK) == RIGHT_FOOT_MASK {
         cost += BRACKETJACK_WEIGHT;
     }
     cost
@@ -682,8 +676,7 @@ fn calc_doublestep_cost(
     jacked_right: bool,
     did_jump: bool,
 ) -> f32 {
-    let hold_empty = result.hold_feet.iter().all(|&f| f == Foot::None);
-    if moved_left == moved_right || !hold_empty || did_jump {
+    if moved_left == moved_right || result.holding_mask != 0 || did_jump {
         return 0.0;
     }
 
@@ -811,17 +804,20 @@ fn calc_footswitch_cost(
 }
 
 fn calc_sideswitch_cost(layout: &StageLayout, initial: &State, result: &State) -> f32 {
-    layout
-        .side_arrows
-        .iter()
-        .filter(|&&c| {
-            initial.combined_columns[c] != result.columns[c]
-                && result.columns[c] != Foot::None
-                && initial.combined_columns[c] != Foot::None
-                && !result.did_the_foot_move[initial.combined_columns[c].as_index()]
-        })
-        .count() as f32
-        * SIDESWITCH_WEIGHT
+    let mut mask = layout.side_mask;
+    let mut count = 0u32;
+    while mask != 0 {
+        let c = mask.trailing_zeros() as usize;
+        mask &= mask - 1;
+        if initial.combined_columns[c] != result.columns[c]
+            && result.columns[c] != Foot::None
+            && initial.combined_columns[c] != Foot::None
+            && (result.moved_mask & FOOT_MASKS[initial.combined_columns[c].as_index()]) == 0
+        {
+            count += 1;
+        }
+    }
+    count as f32 * SIDESWITCH_WEIGHT
 }
 
 fn calc_missed_footswitch_cost(row: &Row, jacked_left: bool, jacked_right: bool) -> f32 {
@@ -1030,17 +1026,15 @@ impl StepParityGenerator {
         if counter.last_second == CLM_SECOND_INVALID {
             return;
         }
-        let mut row = self.build_row(counter);
-        row.row_index = self.rows.len();
-        self.rows.push(row);
+        self.rows.push(self.build_row(counter));
     }
 
     fn build_row(&self, counter: &RowCounter) -> Row {
-        let mut row = Row::new(self.column_count);
+        let mut row = Row::new();
         row.second = counter.last_second;
         row.beat = counter.last_beat;
         row.note_mask = counter.note_mask;
-        row.note_count = row.note_mask.count_ones() as usize;
+        row.note_count = row.note_mask.count_ones() as u8;
         row.mine_mask = counter.next_mine_mask;
         row.mine_i32_mask = counter.next_mine_i32_mask;
         row.fake_mine_mask = counter.next_fake_mine_mask;
@@ -1091,6 +1085,7 @@ impl StepParityGenerator {
                         &self.rows,
                         i,
                         elapsed,
+                        self.column_count,
                     );
 
                     let res_id = if let Some(&id) = state_map.get(&key) {
@@ -1154,7 +1149,7 @@ impl StepParityGenerator {
             row,
             &mut cols,
             0,
-            row.column_count,
+            self.column_count,
             false,
             0,
             &mut perms,
@@ -1165,7 +1160,7 @@ impl StepParityGenerator {
                 row,
                 &mut cols,
                 0,
-                row.column_count,
+                self.column_count,
                 true,
                 0,
                 &mut perms,
@@ -1207,15 +1202,15 @@ impl StepParityGenerator {
                 }
                 if moved {
                     state.moved_feet[i] = foot;
-                    state.did_the_foot_move[fi] = true;
                 }
                 if !hold_empty {
                     state.hold_feet[i] = foot;
-                    state.is_the_foot_holding[fi] = true;
+                    state.holding_mask |= FOOT_MASKS[fi];
                 }
             }
         }
 
+        state.moved_mask = moved_mask;
         let moved_left = (moved_mask & LEFT_FOOT_MASK) != 0;
         let moved_right = (moved_mask & RIGHT_FOOT_MASK) != 0;
 
@@ -1521,19 +1516,28 @@ fn calculate_tech_counts(rows: &[Row], layout: &StageLayout) -> TechCounts {
                 && elapsed < FOOTSWITCH_CUTOFF
         };
 
-        for &c in &layout.up_arrows {
+        let mut mask = layout.up_mask;
+        while mask != 0 {
+            let c = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
             if is_switch(c) {
                 out.up_footswitches += 1;
                 out.footswitches += 1;
             }
         }
-        for &c in &layout.down_arrows {
+        mask = layout.down_mask;
+        while mask != 0 {
+            let c = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
             if is_switch(c) {
                 out.down_footswitches += 1;
                 out.footswitches += 1;
             }
         }
-        for &c in &layout.side_arrows {
+        mask = layout.side_mask;
+        while mask != 0 {
+            let c = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
             if is_switch(c) {
                 out.sideswitches += 1;
             }
