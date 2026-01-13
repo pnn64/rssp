@@ -524,7 +524,6 @@ impl Eq for State {}
 struct StepParityNode {
     state: State,
     first_edge: u32,
-    edge_count: u16,
 }
 
 // --- Cost Calculations (free functions to avoid borrow issues) ---
@@ -1160,10 +1159,8 @@ impl StepParityGenerator {
                         cost,
                     });
                 }
-                let edge_count = (self.edges.len() as u32 - node_edge_start) as u16;
                 let node = &mut self.nodes[init_id as usize];
                 node.first_edge = node_edge_start;
-                node.edge_count = edge_count;
             }
             std::mem::swap(&mut prev_ids, &mut next_ids);
         }
@@ -1178,8 +1175,9 @@ impl StepParityGenerator {
             });
             let node = &mut self.nodes[id as usize];
             node.first_edge = edge_start;
-            node.edge_count = 1;
         }
+
+        self.nodes[end_id as usize].first_edge = self.edges.len() as u32;
     }
 
     fn add_node(&mut self, state: State) -> u32 {
@@ -1187,7 +1185,6 @@ impl StepParityGenerator {
         self.nodes.push(StepParityNode {
             state,
             first_edge: 0,
-            edge_count: 0,
         });
         idx as u32
     }
@@ -1317,7 +1314,11 @@ impl StepParityGenerator {
             }
             let node = &self.nodes[i];
             let start = node.first_edge as usize;
-            let end = start + node.edge_count as usize;
+            let end = if i + 1 < n {
+                self.nodes[i + 1].first_edge as usize
+            } else {
+                self.edges.len()
+            };
             for e in &self.edges[start..end] {
                 let to = e.to as usize;
                 let nc = cost[i] + e.cost;
