@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
-use std::rc::Rc;
 
 use crate::timing::{ROWS_PER_BEAT, TimingData, beat_to_note_row_f32};
 
@@ -903,7 +902,7 @@ fn did_double_step(
 struct StepParityGenerator {
     layout: StageLayout,
     column_count: usize,
-    permute_cache: [Option<Rc<[FootPlacement]>>; 256],
+    permute_cache: [Option<Box<[FootPlacement]>>; 256],
     nodes: Vec<StepParityNode>,
     edges: Vec<Edge>,
     rows: Vec<Row>,
@@ -1056,7 +1055,7 @@ impl StepParityGenerator {
             let elapsed = row_second - prev_second;
             prev_second = row_second;
 
-            let perms = self.perms_for_row(i);
+            let (perm_key, perms) = self.perms_for_row(i);
             next_ids.clear();
             state_map.clear();
             state_map.reserve(perms.len());
@@ -1097,6 +1096,7 @@ impl StepParityGenerator {
                 node.first_edge = node_edge_start;
                 node.edge_count = edge_count;
             }
+            self.permute_cache[perm_key] = Some(perms);
             std::mem::swap(&mut prev_ids, &mut next_ids);
         }
 
@@ -1124,11 +1124,11 @@ impl StepParityGenerator {
         idx as u32
     }
 
-    fn perms_for_row(&mut self, row_idx: usize) -> Rc<[FootPlacement]> {
+    fn perms_for_row(&mut self, row_idx: usize) -> (usize, Box<[FootPlacement]>) {
         let row = &self.rows[row_idx];
         let key = (row.note_mask | row.hold_mask) as usize;
-        if let Some(p) = &self.permute_cache[key] {
-            return Rc::clone(p);
+        if let Some(p) = self.permute_cache[key].take() {
+            return (key, p);
         }
 
         let mut cols = [Foot::None; MAX_COLUMNS];
@@ -1160,9 +1160,7 @@ impl StepParityGenerator {
             perms.push([Foot::None; MAX_COLUMNS]);
         }
 
-        let rc = Rc::from(perms.into_boxed_slice());
-        self.permute_cache[key] = Some(Rc::clone(&rc));
-        rc
+        (key, perms.into_boxed_slice())
     }
 
     fn result_state(&self, initial: &State, row_idx: usize, cols: &FootPlacement) -> (State, u64) {
