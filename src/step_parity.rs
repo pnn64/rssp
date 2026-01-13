@@ -1046,8 +1046,8 @@ impl StepParityGenerator {
         let start_id = self.add_node(State::new(self.column_count));
 
         let mut prev_ids = vec![start_id];
-        let mut next_ids: Vec<usize> = Vec::new();
-        let mut state_map: FastMap<u64, usize> = FastMap::default();
+        let mut next_ids: Vec<u32> = Vec::new();
+        let mut state_map: FastMap<u64, u32> = FastMap::default();
 
         let mut prev_second = self.rows.first().map(|r| r.second - 1.0).unwrap_or(-1.0);
 
@@ -1065,7 +1065,7 @@ impl StepParityGenerator {
 
             for &init_id in &prev_ids {
                 let node_edge_start = self.edges.len() as u32;
-                let init_state = self.nodes[init_id].state;
+                let init_state = self.nodes[init_id as usize].state;
 
                 for perm in perms.iter() {
                     let (result, key) = self.result_state(&init_state, i, perm);
@@ -1088,12 +1088,12 @@ impl StepParityGenerator {
                         id
                     };
                     self.edges.push(Edge {
-                        to: res_id as u32,
+                        to: res_id,
                         cost,
                     });
                 }
                 let edge_count = (self.edges.len() as u32 - node_edge_start) as u16;
-                let node = &mut self.nodes[init_id];
+                let node = &mut self.nodes[init_id as usize];
                 node.first_edge = node_edge_start;
                 node.edge_count = edge_count;
             }
@@ -1105,23 +1105,23 @@ impl StepParityGenerator {
         for &id in &prev_ids {
             let edge_start = self.edges.len() as u32;
             self.edges.push(Edge {
-                to: end_id as u32,
+                to: end_id,
                 cost: 0.0,
             });
-            let node = &mut self.nodes[id];
+            let node = &mut self.nodes[id as usize];
             node.first_edge = edge_start;
             node.edge_count = 1;
         }
     }
 
-    fn add_node(&mut self, state: State) -> usize {
+    fn add_node(&mut self, state: State) -> u32 {
         let idx = self.nodes.len();
         self.nodes.push(StepParityNode {
             state,
             first_edge: 0,
             edge_count: 0,
         });
-        idx
+        idx as u32
     }
 
     fn perms_for_row(&mut self, row_idx: usize) -> Rc<[FootPlacement]> {
@@ -1234,7 +1234,7 @@ impl StepParityGenerator {
 
         let n = self.nodes.len();
         let mut cost = vec![f32::MAX; n];
-        let mut pred = vec![usize::MAX; n];
+        let mut pred = vec![u32::MAX; n];
         cost[0] = 0.0;
 
         for i in 0..n {
@@ -1249,27 +1249,27 @@ impl StepParityGenerator {
                 let nc = cost[i] + e.cost;
                 if nc < cost[to] {
                     cost[to] = nc;
-                    pred[to] = i;
+                    pred[to] = i as u32;
                 }
             }
         }
 
-        if pred[n - 1] == usize::MAX {
+        if pred[n - 1] == u32::MAX {
             return false;
         }
 
         let nodes = &self.nodes;
         let rows = &self.rows;
 
-        let mut cur = n - 1;
+        let mut cur = (n - 1) as u32;
         self.result_columns.clear();
         self.result_columns
             .resize(rows.len(), [Foot::None; MAX_COLUMNS]);
 
         let mut write = self.result_columns.len();
         while cur != 0 {
-            let prev = pred[cur];
-            if prev == usize::MAX {
+            let prev = pred[cur as usize];
+            if prev == u32::MAX {
                 return false;
             }
             cur = prev;
@@ -1280,7 +1280,7 @@ impl StepParityGenerator {
                 return false;
             }
             write -= 1;
-            self.result_columns[write] = nodes[cur].state.combined_columns;
+            self.result_columns[write] = nodes[cur as usize].state.combined_columns;
         }
 
         write == 0
