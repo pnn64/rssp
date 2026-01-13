@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
-use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
 use crate::timing::{ROWS_PER_BEAT, TimingData, beat_to_note_row_f32};
@@ -487,82 +486,6 @@ struct StepParityNode {
     edge_count: u16,
 }
 
-const NODE_CHUNK_SIZE: usize = 1024;
-
-struct NodeArena {
-    chunks: Vec<Vec<StepParityNode>>,
-    len: usize,
-}
-
-impl NodeArena {
-    fn new() -> Self {
-        Self {
-            chunks: Vec::new(),
-            len: 0,
-        }
-    }
-    fn len(&self) -> usize {
-        self.len
-    }
-    fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    fn clear(&mut self) {
-        for chunk in &mut self.chunks {
-            chunk.clear();
-        }
-        self.len = 0;
-    }
-
-    fn push(&mut self, node: StepParityNode) -> usize {
-        let idx = self.len;
-        if self
-            .chunks
-            .last()
-            .map_or(true, |c| c.len() == NODE_CHUNK_SIZE)
-        {
-            self.chunks.push(Vec::with_capacity(NODE_CHUNK_SIZE));
-        }
-        self.chunks.last_mut().unwrap().push(node);
-        self.len = idx + 1;
-        idx
-    }
-
-    fn get(&self, idx: usize) -> Option<&StepParityNode> {
-        if idx < self.len {
-            self.chunks
-                .get(idx / NODE_CHUNK_SIZE)?
-                .get(idx % NODE_CHUNK_SIZE)
-        } else {
-            None
-        }
-    }
-
-    fn get_mut(&mut self, idx: usize) -> Option<&mut StepParityNode> {
-        if idx < self.len {
-            self.chunks
-                .get_mut(idx / NODE_CHUNK_SIZE)?
-                .get_mut(idx % NODE_CHUNK_SIZE)
-        } else {
-            None
-        }
-    }
-}
-
-impl Index<usize> for NodeArena {
-    type Output = StepParityNode;
-    fn index(&self, idx: usize) -> &Self::Output {
-        self.get(idx).expect("node index out of bounds")
-    }
-}
-
-impl IndexMut<usize> for NodeArena {
-    fn index_mut(&mut self, idx: usize) -> &mut Self::Output {
-        self.get_mut(idx).expect("node index out of bounds")
-    }
-}
-
 // --- Cost Calculations (free functions to avoid borrow issues) ---
 
 fn did_jack(
@@ -1021,7 +944,7 @@ struct StepParityGenerator {
     column_count: usize,
     permute_cache: [Option<Rc<[FootPlacement]>>; 256],
     state_cache: FastMap<u64, Rc<State>>,
-    nodes: NodeArena,
+    nodes: Vec<StepParityNode>,
     edges: Vec<Edge>,
     rows: Vec<Row>,
 }
@@ -1033,7 +956,7 @@ impl StepParityGenerator {
             layout,
             permute_cache: std::array::from_fn(|_| None),
             state_cache: FastMap::default(),
-            nodes: NodeArena::new(),
+            nodes: Vec::new(),
             edges: Vec::new(),
             rows: Vec::new(),
         }
@@ -1222,12 +1145,14 @@ impl StepParityGenerator {
     }
 
     fn add_node(&mut self, state: Rc<State>, second: f32) -> usize {
+        let idx = self.nodes.len();
         self.nodes.push(StepParityNode {
             state,
             second,
             first_edge: 0,
             edge_count: 0,
-        })
+        });
+        idx
     }
 
     fn perms_for_row(&mut self, row_idx: usize) -> Rc<[FootPlacement]> {
@@ -1430,11 +1355,11 @@ impl StepParityGenerator {
             return false;
         }
 
-        // Trace back
-        let mut path = vec![usize::MAX; self.rows.len()];
-        let mut cur = n - 1;
-        let mut write = self.rows.len();
+        let nodes = &self.nodes;
+        let rows = &mut self.rows;
 
+        let mut cur = n - 1;
+        let mut write = rows.len();
         while cur != 0 {
             let prev = pred[cur];
             if prev == usize::MAX {
@@ -1448,18 +1373,10 @@ impl StepParityGenerator {
                 return false;
             }
             write -= 1;
-            path[write] = cur;
+            rows[write].set_foot_placement(&nodes[cur].state.combined_columns);
         }
 
-        if write != 0 {
-            return false;
-        }
-
-        for (i, &node_id) in path.iter().enumerate() {
-            let state = Rc::clone(&self.nodes[node_id].state);
-            self.rows[i].set_foot_placement(&state.combined_columns);
-        }
-        true
+        write == 0
     }
 }
 
