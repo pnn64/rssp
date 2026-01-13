@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
-use std::rc::Rc;
 
 use crate::timing::{ROWS_PER_BEAT, TimingData, beat_to_note_row_f32};
 
@@ -503,12 +502,6 @@ impl State {
         let mask = FOOT_MASKS[pair.heel.as_index()] | FOOT_MASKS[pair.toe.as_index()];
         (self.moved_mask & mask) != 0
     }
-
-    #[inline(always)]
-    fn foot_moved_not_holding(&self, pair: &FootPair) -> bool {
-        let mask = FOOT_MASKS[pair.heel.as_index()] | FOOT_MASKS[pair.toe.as_index()];
-        ((self.moved_mask & !self.holding_mask) & mask) != 0
-    }
 }
 
 impl PartialEq for State {
@@ -995,7 +988,7 @@ fn did_double_step(
 struct StepParityGenerator {
     layout: StageLayout,
     column_count: usize,
-    permute_cache: [Option<Rc<[PackedCols]>>; 256],
+    permute_cache: [Option<Box<[PackedCols]>>; 256],
     nodes: Vec<StepParityNode>,
     edges: Vec<Edge>,
     rows: Vec<Row>,
@@ -1135,11 +1128,17 @@ impl StepParityGenerator {
     }
 
     fn build_graph(&mut self) {
-        let start_id = self.add_node(State::new(self.column_count));
+        let start_id = self.nodes.len() as u32;
+        self.nodes.push(StepParityNode {
+            state: State::new(self.column_count),
+            first_edge: 0,
+            edge_count: 0,
+        });
 
         let mut prev_ids = vec![start_id];
         let mut next_ids: Vec<u32> = Vec::new();
         let mut state_map: FastMap<u64, u32> = FastMap::default();
+        let mut perm_buf: Vec<PackedCols> = Vec::new();
 
         let mut prev_second = self.rows.first().map(|r| r.second - 1.0).unwrap_or(-1.0);
 
@@ -1149,6 +1148,9 @@ impl StepParityGenerator {
             prev_second = row_second;
 
             let perms = self.perms_for_row(i);
+            perm_buf.clear();
+            perm_buf.extend_from_slice(perms);
+            let perms = perm_buf.as_slice();
             let edge_count = perms.len() as u16;
             let layer_edges = prev_ids.len().saturating_mul(perms.len());
             next_ids.clear();
@@ -1161,7 +1163,7 @@ impl StepParityGenerator {
                 let node_edge_start = self.edges.len() as u32;
                 let init_state = self.nodes[init_id as usize].state;
 
-                for &perm in perms.iter() {
+                for &perm in perms {
                     let (result, key) = self.result_state(&init_state, i, perm);
                     let cost = calc_action_cost(
                         &self.layout,
@@ -1176,7 +1178,12 @@ impl StepParityGenerator {
                     let res_id = if let Some(&id) = state_map.get(&key) {
                         id
                     } else {
-                        let id = self.add_node(result);
+                        let id = self.nodes.len() as u32;
+                        self.nodes.push(StepParityNode {
+                            state: result,
+                            first_edge: 0,
+                            edge_count: 0,
+                        });
                         next_ids.push(id);
                         state_map.insert(key, id);
                         id
@@ -1193,7 +1200,12 @@ impl StepParityGenerator {
             std::mem::swap(&mut prev_ids, &mut next_ids);
         }
 
-        let end_id = self.add_node(State::new(self.column_count));
+        let end_id = self.nodes.len() as u32;
+        self.nodes.push(StepParityNode {
+            state: State::new(self.column_count),
+            first_edge: 0,
+            edge_count: 0,
+        });
 
         for &id in &prev_ids {
             let edge_start = self.edges.len() as u32;
@@ -1211,40 +1223,13 @@ impl StepParityGenerator {
         end.edge_count = 0;
     }
 
-    fn add_node(&mut self, state: State) -> u32 {
-        let idx = self.nodes.len();
-        self.nodes.push(StepParityNode {
-            state,
-            first_edge: 0,
-            edge_count: 0,
-        });
-        idx as u32
-    }
-
-    fn perms_for_row(&mut self, row_idx: usize) -> Rc<[PackedCols]> {
+    fn perms_for_row(&mut self, row_idx: usize) -> &[PackedCols] {
         let row = &self.rows[row_idx];
         let key = (row.note_mask | row.hold_mask) as usize;
-        if let Some(p) = &self.permute_cache[key] {
-            return Rc::clone(p);
-        }
+        if self.permute_cache[key].is_none() {
+            let mut perms = Vec::new();
 
-        let mask = row.note_mask | row.hold_mask;
-        let mut perms = Vec::new();
-        let bits = mask.count_ones() as usize;
-        if bits <= 4 {
-            perms = Vec::with_capacity(PERM_CAP[bits]);
-            permute_row(
-                &self.layout,
-                mask,
-                self.column_count,
-                0,
-                PackedCols::new(),
-                0,
-                &mut perms,
-            );
-        }
-        if perms.is_empty() {
-            let mask = row.note_mask;
+            let mask = row.note_mask | row.hold_mask;
             let bits = mask.count_ones() as usize;
             if bits <= 4 {
                 perms = Vec::with_capacity(PERM_CAP[bits]);
@@ -1258,14 +1243,29 @@ impl StepParityGenerator {
                     &mut perms,
                 );
             }
-        }
-        if perms.is_empty() {
-            perms.push(PackedCols::new());
-        }
+            if perms.is_empty() {
+                let mask = row.note_mask;
+                let bits = mask.count_ones() as usize;
+                if bits <= 4 {
+                    perms = Vec::with_capacity(PERM_CAP[bits]);
+                    permute_row(
+                        &self.layout,
+                        mask,
+                        self.column_count,
+                        0,
+                        PackedCols::new(),
+                        0,
+                        &mut perms,
+                    );
+                }
+            }
+            if perms.is_empty() {
+                perms.push(PackedCols::new());
+            }
 
-        let rc = Rc::from(perms.into_boxed_slice());
-        self.permute_cache[key] = Some(Rc::clone(&rc));
-        rc
+            self.permute_cache[key] = Some(perms.into_boxed_slice());
+        }
+        self.permute_cache[key].as_deref().unwrap()
     }
 
     fn result_state(&self, initial: &State, row_idx: usize, cols: PackedCols) -> (State, u64) {
