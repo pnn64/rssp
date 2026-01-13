@@ -6,6 +6,7 @@ use crate::timing::{ROWS_PER_BEAT, TimingData, beat_to_note_row_f32};
 
 const INVALID_COLUMN: isize = -1;
 const CLM_SECOND_INVALID: f32 = -1.0;
+const HOLD_END_NONE: f32 = -1.0;
 const MAX_NOTE_ROW: i32 = 1 << 30;
 const MISSING_HOLD_LENGTH_BEATS: f32 = MAX_NOTE_ROW as f32 / ROWS_PER_BEAT as f32;
 
@@ -363,15 +364,10 @@ struct IntermediateNoteData {
     hold_length: f32,
     fake: bool,
     second: f32,
-    parity: Foot,
 }
 
 #[derive(Debug, Clone)]
 struct Row {
-    notes: [IntermediateNoteData; MAX_COLUMNS],
-    holds: [IntermediateNoteData; MAX_COLUMNS],
-    mines: [f32; MAX_COLUMNS],
-    fake_mines: [f32; MAX_COLUMNS],
     columns: [Foot; MAX_COLUMNS],
     where_the_feet_are: [isize; NUM_FEET],
     second: f32,
@@ -381,6 +377,7 @@ struct Row {
     note_count: usize,
     note_mask: u8,
     hold_mask: u8,
+    hold_ends: [f32; MAX_COLUMNS],
     mine_mask: u8,
     mine_i32_mask: u8,
     fake_mine_mask: u8,
@@ -389,10 +386,6 @@ struct Row {
 impl Row {
     fn new(cols: usize) -> Self {
         Self {
-            notes: [IntermediateNoteData::default(); MAX_COLUMNS],
-            holds: [IntermediateNoteData::default(); MAX_COLUMNS],
-            mines: [0.0; MAX_COLUMNS],
-            fake_mines: [0.0; MAX_COLUMNS],
             columns: [Foot::None; MAX_COLUMNS],
             where_the_feet_are: [INVALID_COLUMN; NUM_FEET],
             second: 0.0,
@@ -402,6 +395,7 @@ impl Row {
             note_count: 0,
             note_mask: 0,
             hold_mask: 0,
+            hold_ends: [HOLD_END_NONE; MAX_COLUMNS],
             mine_mask: 0,
             mine_i32_mask: 0,
             fake_mine_mask: 0,
@@ -414,7 +408,6 @@ impl Row {
         for c in 0..self.column_count.min(MAX_COLUMNS) {
             if (self.note_mask & (1u8 << c)) != 0 {
                 let foot = placement[c];
-                self.notes[c].parity = foot;
                 self.columns[c] = foot;
                 if foot != Foot::None {
                     self.where_the_feet_are[foot.as_index()] = c as isize;
@@ -426,7 +419,7 @@ impl Row {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct State {
     columns: [Foot; MAX_COLUMNS],
     combined_columns: [Foot; MAX_COLUMNS],
@@ -480,7 +473,7 @@ type FootPlacement = [Foot; MAX_COLUMNS];
 
 #[derive(Debug, Clone)]
 struct StepParityNode {
-    state: Rc<State>,
+    state: State,
     second: f32,
     first_edge: u32,
     edge_count: u16,
@@ -909,28 +902,13 @@ fn did_double_step(
         let last = &rows[row_idx - 1];
         let start = last.beat;
 
-        if last.column_count <= MAX_COLUMNS {
-            let mut mask = last.hold_mask;
-            while mask != 0 {
-                let idx = mask.trailing_zeros() as usize;
-                mask &= mask - 1;
-                let hold = &last.holds[idx];
-                let hold_end = hold.beat + hold.hold_length;
-                if hold_end > start {
-                    ds = false;
-                    break;
-                }
-            }
-        } else {
-            for hold in &last.holds {
-                if hold.note_type == TapNoteType::Empty {
-                    continue;
-                }
-                let hold_end = hold.beat + hold.hold_length;
-                if hold_end > start {
-                    ds = false;
-                    break;
-                }
+        let mut mask = last.hold_mask;
+        while mask != 0 {
+            let idx = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
+            if last.hold_ends[idx] > start {
+                ds = false;
+                break;
             }
         }
     }
@@ -943,7 +921,6 @@ struct StepParityGenerator {
     layout: StageLayout,
     column_count: usize,
     permute_cache: [Option<Rc<[FootPlacement]>>; 256],
-    state_cache: FastMap<u64, Rc<State>>,
     nodes: Vec<StepParityNode>,
     edges: Vec<Edge>,
     rows: Vec<Row>,
@@ -955,7 +932,6 @@ impl StepParityGenerator {
             column_count: layout.column_count(),
             layout,
             permute_cache: std::array::from_fn(|_| None),
-            state_cache: FastMap::default(),
             nodes: Vec::new(),
             edges: Vec::new(),
             rows: Vec::new(),
@@ -965,7 +941,6 @@ impl StepParityGenerator {
     fn analyze(&mut self, notes: Vec<IntermediateNoteData>, cols: usize) -> bool {
         self.column_count = cols;
         self.permute_cache.fill(None);
-        self.state_cache.clear();
         self.nodes.clear();
         self.edges.clear();
         self.rows.clear();
@@ -978,8 +953,7 @@ impl StepParityGenerator {
     }
 
     fn create_rows(&mut self, notes: Vec<IntermediateNoteData>) {
-        let cols = self.column_count;
-        let mut counter = RowCounter::new(cols);
+        let mut counter = RowCounter::new();
 
         for note in notes {
             if note.note_type == TapNoteType::Empty {
@@ -987,18 +961,47 @@ impl StepParityGenerator {
             }
 
             if note.note_type == TapNoteType::Mine {
-                let target = if note.second == counter.last_second && !self.rows.is_empty() {
+                let bit = 1u8 << note.col;
+                let mine_on = note.second != 0.0;
+                let mine_i32_on = (note.second as i32) != 0;
+
+                if note.second == counter.last_second && !self.rows.is_empty() {
                     if note.fake {
-                        &mut counter.next_fake_mines
+                        if mine_i32_on {
+                            counter.next_fake_mine_mask |= bit;
+                        } else {
+                            counter.next_fake_mine_mask &= !bit;
+                        }
                     } else {
-                        &mut counter.next_mines
+                        if mine_on {
+                            counter.next_mine_mask |= bit;
+                        } else {
+                            counter.next_mine_mask &= !bit;
+                        }
+                        if mine_i32_on {
+                            counter.next_mine_i32_mask |= bit;
+                        } else {
+                            counter.next_mine_i32_mask &= !bit;
+                        }
                     }
                 } else if note.fake {
-                    &mut counter.fake_mines
+                    if mine_i32_on {
+                        counter.fake_mine_mask |= bit;
+                    } else {
+                        counter.fake_mine_mask &= !bit;
+                    }
                 } else {
-                    &mut counter.mines
-                };
-                target[note.col] = note.second;
+                    if mine_on {
+                        counter.mine_mask |= bit;
+                    } else {
+                        counter.mine_mask &= !bit;
+                    }
+                    if mine_i32_on {
+                        counter.mine_i32_mask |= bit;
+                    } else {
+                        counter.mine_i32_mask &= !bit;
+                    }
+                }
                 continue;
             }
 
@@ -1010,14 +1013,14 @@ impl StepParityGenerator {
                 if counter.last_second != CLM_SECOND_INVALID {
                     self.flush_row(&mut counter);
                 }
-                counter.reset_for_row(note.second, note.beat, cols);
+                counter.reset_for_row(note.second, note.beat);
             }
 
             let col = note.col;
             let is_hold = note.note_type == TapNoteType::HoldHead;
-            counter.notes[col] = note;
+            counter.note_mask |= 1u8 << col;
             if is_hold {
-                counter.active_holds[col] = note;
+                counter.hold_ends[col] = note.beat + note.hold_length;
             }
         }
         self.flush_row(&mut counter);
@@ -1034,69 +1037,53 @@ impl StepParityGenerator {
 
     fn build_row(&self, counter: &RowCounter) -> Row {
         let mut row = Row::new(self.column_count);
-        row.notes = counter.notes;
-        row.mines = counter.next_mines;
-        row.fake_mines = counter.next_fake_mines;
         row.second = counter.last_second;
         row.beat = counter.last_beat;
+        row.note_mask = counter.note_mask;
+        row.note_count = row.note_mask.count_ones() as usize;
+        row.mine_mask = counter.next_mine_mask;
+        row.mine_i32_mask = counter.next_mine_i32_mask;
+        row.fake_mine_mask = counter.next_fake_mine_mask;
+        row.hold_ends = counter.hold_ends;
 
-        for c in 0..self.column_count.min(MAX_COLUMNS) {
-            if row.notes[c].note_type != TapNoteType::Empty {
-                row.note_count += 1;
-                row.note_mask |= 1u8 << c;
-            }
-
-            row.holds[c] = if counter.active_holds[c].note_type == TapNoteType::Empty
-                || counter.active_holds[c].second >= counter.last_second
-            {
-                IntermediateNoteData::default()
-            } else {
-                counter.active_holds[c]
-            };
-
-            if row.holds[c].note_type != TapNoteType::Empty {
-                row.hold_mask |= 1u8 << c;
-            }
-            if row.mines[c] != 0.0 {
-                row.mine_mask |= 1u8 << c;
-            }
-            if (row.mines[c] as i32) != 0 {
-                row.mine_i32_mask |= 1u8 << c;
-            }
-            if (row.fake_mines[c] as i32) != 0 {
-                row.fake_mine_mask |= 1u8 << c;
+        if let Some(prev) = self.rows.last() {
+            for c in 0..self.column_count.min(MAX_COLUMNS) {
+                let end = prev.hold_ends[c];
+                if end >= row.beat && row.hold_ends[c] < 0.0 {
+                    row.hold_mask |= 1u8 << c;
+                    row.hold_ends[c] = end;
+                }
             }
         }
         row
     }
 
     fn build_graph(&mut self) {
-        let start = Rc::new(State::new(self.column_count));
         let start_sec = self.rows.first().map(|r| r.second - 1.0).unwrap_or(-1.0);
-        let start_id = self.add_node(start, start_sec);
+        let start_id = self.add_node(State::new(self.column_count), start_sec);
 
         let mut prev_ids = vec![start_id];
         let mut next_ids: Vec<usize> = Vec::new();
-        let mut result_map: FastMap<usize, usize> = FastMap::default();
+        let mut state_map: FastMap<u64, usize> = FastMap::default();
 
         for i in 0..self.rows.len() {
             let perms = self.perms_for_row(i);
             next_ids.clear();
-            result_map.clear();
-            result_map.reserve(perms.len());
+            state_map.clear();
+            state_map.reserve(perms.len());
 
             for &init_id in &prev_ids {
                 let node_edge_start = self.edges.len() as u32;
                 self.edges.reserve(perms.len());
                 let (init_state, init_sec) = {
                     let n = &self.nodes[init_id];
-                    (Rc::clone(&n.state), n.second)
+                    (n.state, n.second)
                 };
                 let row_second = self.rows[i].second;
                 let elapsed = row_second - init_sec;
 
                 for perm in perms.iter() {
-                    let result = self.init_result_state(&init_state, i, perm);
+                    let (result, key) = self.result_state(&init_state, i, perm);
                     let cost = calc_action_cost(
                         &self.layout,
                         &init_state,
@@ -1106,13 +1093,12 @@ impl StepParityGenerator {
                         elapsed,
                     );
 
-                    let key = Rc::as_ptr(&result) as usize;
-                    let res_id = if let Some(&id) = result_map.get(&key) {
+                    let res_id = if let Some(&id) = state_map.get(&key) {
                         id
                     } else {
-                        let id = self.add_node(Rc::clone(&result), row_second);
+                        let id = self.add_node(result, row_second);
                         next_ids.push(id);
-                        result_map.insert(key, id);
+                        state_map.insert(key, id);
                         id
                     };
                     self.edges.push(Edge {
@@ -1128,9 +1114,8 @@ impl StepParityGenerator {
             std::mem::swap(&mut prev_ids, &mut next_ids);
         }
 
-        let end = Rc::new(State::new(self.column_count));
         let end_sec = self.rows.last().map(|r| r.second + 1.0).unwrap_or(1.0);
-        let end_id = self.add_node(end, end_sec);
+        let end_id = self.add_node(State::new(self.column_count), end_sec);
 
         for &id in &prev_ids {
             let edge_start = self.edges.len() as u32;
@@ -1144,7 +1129,7 @@ impl StepParityGenerator {
         }
     }
 
-    fn add_node(&mut self, state: Rc<State>, second: f32) -> usize {
+    fn add_node(&mut self, state: State, second: f32) -> usize {
         let idx = self.nodes.len();
         self.nodes.push(StepParityNode {
             state,
@@ -1195,38 +1180,48 @@ impl StepParityGenerator {
         rc
     }
 
-    fn init_result_state(
-        &mut self,
-        initial: &State,
-        row_idx: usize,
-        cols: &FootPlacement,
-    ) -> Rc<State> {
+    fn result_state(&self, initial: &State, row_idx: usize, cols: &FootPlacement) -> (State, u64) {
         let row = &self.rows[row_idx];
         let n = self.column_count;
         let hold_mask = row.hold_mask;
 
-        // Compute hash inline
+        let mut state = State::new(n);
         let mut moved_mask = 0u8;
         let mut hash = 0u64;
 
         for i in 0..n {
             let foot = cols[i];
+            state.columns[i] = foot;
             hash = hash
                 .wrapping_mul(STATE_HASH_PRIME)
                 .wrapping_add(foot as u64);
-            if foot != Foot::None
-                && ((hold_mask & (1u8 << i)) == 0 || initial.combined_columns[i] != foot)
-            {
-                moved_mask |= FOOT_MASKS[foot.as_index()];
+            let hold_empty = (hold_mask & (1u8 << i)) == 0;
+            let moved = foot != Foot::None && (hold_empty || initial.combined_columns[i] != foot);
+
+            if foot != Foot::None {
+                let fi = foot.as_index();
+                state.what_note_the_foot_is_hitting[fi] = i as isize;
+
+                if moved {
+                    moved_mask |= FOOT_MASKS[fi];
+                }
+                if moved {
+                    state.moved_feet[i] = foot;
+                    state.did_the_foot_move[fi] = true;
+                }
+                if !hold_empty {
+                    state.hold_feet[i] = foot;
+                    state.is_the_foot_holding[fi] = true;
+                }
             }
         }
 
-        // combined_columns hash
         let moved_left = (moved_mask & LEFT_FOOT_MASK) != 0;
         let moved_right = (moved_mask & RIGHT_FOOT_MASK) != 0;
+
         for i in 0..n {
-            let combined = if cols[i] != Foot::None {
-                cols[i]
+            let combined = if state.columns[i] != Foot::None {
+                state.columns[i]
             } else {
                 let prev = initial.combined_columns[i];
                 match prev {
@@ -1243,85 +1238,24 @@ impl StepParityGenerator {
             hash = hash
                 .wrapping_mul(STATE_HASH_PRIME)
                 .wrapping_add(combined as u64);
-        }
-
-        // moved and hold hashes
-        for i in 0..n {
-            let foot = cols[i];
-            let moved = if foot != Foot::None
-                && ((hold_mask & (1u8 << i)) == 0 || initial.combined_columns[i] != foot)
-            {
-                foot
-            } else {
-                Foot::None
-            };
-            hash = hash
-                .wrapping_mul(STATE_HASH_PRIME)
-                .wrapping_add(moved as u64);
-        }
-        for i in 0..n {
-            let hold = if cols[i] != Foot::None && (hold_mask & (1u8 << i)) != 0 {
-                cols[i]
-            } else {
-                Foot::None
-            };
-            hash = hash
-                .wrapping_mul(STATE_HASH_PRIME)
-                .wrapping_add(hold as u64);
-        }
-
-        if let Some(existing) = self.state_cache.get(&hash) {
-            return Rc::clone(existing);
-        }
-
-        let mut state = State::new(n);
-        for i in 0..n {
-            let foot = cols[i];
-            state.columns[i] = foot;
-            if foot == Foot::None {
-                continue;
-            }
-
-            let fi = foot.as_index();
-            state.what_note_the_foot_is_hitting[fi] = i as isize;
-
-            let hold_empty = (hold_mask & (1u8 << i)) == 0;
-            if hold_empty || initial.combined_columns[i] != foot {
-                state.moved_feet[i] = foot;
-                state.did_the_foot_move[fi] = true;
-            }
-            if !hold_empty {
-                state.hold_feet[i] = foot;
-                state.is_the_foot_holding[fi] = true;
-            }
-        }
-
-        // Merge combined_columns
-        for i in 0..n {
-            let combined = if cols[i] != Foot::None {
-                cols[i]
-            } else {
-                let prev = initial.combined_columns[i];
-                match prev {
-                    Foot::LeftHeel | Foot::RightHeel
-                        if (moved_mask & FOOT_MASKS[prev.as_index()]) == 0 =>
-                    {
-                        prev
-                    }
-                    Foot::LeftToe if !moved_left => prev,
-                    Foot::RightToe if !moved_right => prev,
-                    _ => Foot::None,
-                }
-            };
             if combined != Foot::None {
                 state.combined_columns[i] = combined;
                 state.where_the_feet_are[combined.as_index()] = i as isize;
             }
         }
 
-        let rc = Rc::new(state);
-        self.state_cache.insert(hash, Rc::clone(&rc));
-        rc
+        for i in 0..n {
+            hash = hash
+                .wrapping_mul(STATE_HASH_PRIME)
+                .wrapping_add(state.moved_feet[i] as u64);
+        }
+        for i in 0..n {
+            hash = hash
+                .wrapping_mul(STATE_HASH_PRIME)
+                .wrapping_add(state.hold_feet[i] as u64);
+        }
+
+        (state, hash)
     }
 
     fn trace_path(&mut self) -> bool {
@@ -1383,46 +1317,45 @@ impl StepParityGenerator {
 // --- RowCounter ---
 
 struct RowCounter {
-    notes: [IntermediateNoteData; MAX_COLUMNS],
-    active_holds: [IntermediateNoteData; MAX_COLUMNS],
-    mines: [f32; MAX_COLUMNS],
-    fake_mines: [f32; MAX_COLUMNS],
-    next_mines: [f32; MAX_COLUMNS],
-    next_fake_mines: [f32; MAX_COLUMNS],
+    note_mask: u8,
+    hold_ends: [f32; MAX_COLUMNS],
+    mine_mask: u8,
+    mine_i32_mask: u8,
+    fake_mine_mask: u8,
+    next_mine_mask: u8,
+    next_mine_i32_mask: u8,
+    next_fake_mine_mask: u8,
     last_second: f32,
     last_beat: f32,
 }
 
 impl RowCounter {
-    fn new(_cols: usize) -> Self {
+    fn new() -> Self {
         Self {
-            notes: [IntermediateNoteData::default(); MAX_COLUMNS],
-            active_holds: [IntermediateNoteData::default(); MAX_COLUMNS],
-            mines: [0.0; MAX_COLUMNS],
-            fake_mines: [0.0; MAX_COLUMNS],
-            next_mines: [0.0; MAX_COLUMNS],
-            next_fake_mines: [0.0; MAX_COLUMNS],
+            note_mask: 0,
+            hold_ends: [HOLD_END_NONE; MAX_COLUMNS],
+            mine_mask: 0,
+            mine_i32_mask: 0,
+            fake_mine_mask: 0,
+            next_mine_mask: 0,
+            next_mine_i32_mask: 0,
+            next_fake_mine_mask: 0,
             last_second: CLM_SECOND_INVALID,
             last_beat: CLM_SECOND_INVALID,
         }
     }
 
-    fn reset_for_row(&mut self, second: f32, beat: f32, cols: usize) {
+    fn reset_for_row(&mut self, second: f32, beat: f32) {
         self.last_second = second;
         self.last_beat = beat;
-        self.next_mines = self.mines;
-        self.next_fake_mines = self.fake_mines;
-        self.notes.fill(IntermediateNoteData::default());
-        self.mines.fill(0.0);
-        self.fake_mines.fill(0.0);
-
-        for c in 0..cols {
-            if self.active_holds[c].note_type == TapNoteType::Empty
-                || beat > self.active_holds[c].beat + self.active_holds[c].hold_length
-            {
-                self.active_holds[c] = IntermediateNoteData::default();
-            }
-        }
+        self.next_mine_mask = self.mine_mask;
+        self.next_mine_i32_mask = self.mine_i32_mask;
+        self.next_fake_mine_mask = self.fake_mine_mask;
+        self.note_mask = 0;
+        self.hold_ends.fill(HOLD_END_NONE);
+        self.mine_mask = 0;
+        self.mine_i32_mask = 0;
+        self.fake_mine_mask = 0;
     }
 }
 
