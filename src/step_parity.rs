@@ -73,6 +73,16 @@ const FEET: [Foot; 4] = [
     Foot::RightHeel,
     Foot::RightToe,
 ];
+const FOOT_FROM_BITS: [Foot; 8] = [
+    Foot::None,
+    Foot::LeftHeel,
+    Foot::LeftToe,
+    Foot::RightHeel,
+    Foot::RightToe,
+    Foot::None,
+    Foot::None,
+    Foot::None,
+];
 const FOOT_MASKS: [u8; NUM_FEET] = [0, 1, 2, 4, 8];
 const LEFT_FOOT_MASK: u8 = FOOT_MASKS[1] | FOOT_MASKS[2];
 const RIGHT_FOOT_MASK: u8 = FOOT_MASKS[3] | FOOT_MASKS[4];
@@ -414,14 +424,7 @@ impl PackedCols {
     #[inline(always)]
     fn get(self, col: usize) -> Foot {
         debug_assert!(col < MAX_COLUMNS);
-        match ((self.0 >> (col * Self::SHIFT)) & Self::MASK) as u8 {
-            0 => Foot::None,
-            1 => Foot::LeftHeel,
-            2 => Foot::LeftToe,
-            3 => Foot::RightHeel,
-            4 => Foot::RightToe,
-            _ => Foot::None,
-        }
+        FOOT_FROM_BITS[((self.0 >> (col * Self::SHIFT)) & Self::MASK) as usize]
     }
 
     #[inline(always)]
@@ -1147,11 +1150,12 @@ impl StepParityGenerator {
 
             let perms = self.perms_for_row(i);
             let edge_count = perms.len() as u16;
+            let layer_edges = prev_ids.len().saturating_mul(perms.len());
             next_ids.clear();
             state_map.clear();
-            state_map.reserve(perms.len());
+            state_map.reserve(layer_edges);
             self.edges
-                .reserve(prev_ids.len().saturating_mul(perms.len()));
+                .reserve(layer_edges);
 
             for &init_id in &prev_ids {
                 let node_edge_start = self.edges.len() as u32;
