@@ -35,7 +35,7 @@ const FOOTSWITCH_CUTOFF: f32 = 0.3;
 const DOUBLESTEP_CUTOFF: f32 = 0.235;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, Default)]
-#[repr(usize)]
+#[repr(u8)]
 pub enum Foot {
     #[default]
     None = 0,
@@ -47,17 +47,17 @@ pub enum Foot {
 
 impl Foot {
     #[inline(always)]
-    fn as_index(self) -> usize {
+    const fn as_index(self) -> usize {
         self as usize
     }
 
     #[inline(always)]
-    fn is_left(self) -> bool {
+    const fn is_left(self) -> bool {
         matches!(self, Foot::LeftHeel | Foot::LeftToe)
     }
 
     #[inline(always)]
-    fn is_right(self) -> bool {
+    const fn is_right(self) -> bool {
         matches!(self, Foot::RightHeel | Foot::RightToe)
     }
 }
@@ -483,7 +483,7 @@ enum TapNoteType {
     Fake,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 struct IntermediateNoteData {
     note_type: TapNoteType,
     col: usize,
@@ -496,12 +496,12 @@ struct IntermediateNoteData {
 
 #[derive(Debug, Clone)]
 struct Row {
-    notes: Vec<IntermediateNoteData>,
-    holds: Vec<IntermediateNoteData>,
-    mines: Vec<f32>,
-    fake_mines: Vec<f32>,
-    columns: Vec<Foot>,
-    where_the_feet_are: Vec<isize>,
+    notes: [IntermediateNoteData; MAX_COLUMNS],
+    holds: [IntermediateNoteData; MAX_COLUMNS],
+    mines: [f32; MAX_COLUMNS],
+    fake_mines: [f32; MAX_COLUMNS],
+    columns: [Foot; MAX_COLUMNS],
+    where_the_feet_are: [isize; NUM_FEET],
     second: f32,
     beat: f32,
     row_index: usize,
@@ -517,12 +517,12 @@ struct Row {
 impl Row {
     fn new(cols: usize) -> Self {
         Self {
-            notes: vec![IntermediateNoteData::default(); cols],
-            holds: vec![IntermediateNoteData::default(); cols],
-            mines: vec![0.0; cols],
-            fake_mines: vec![0.0; cols],
-            columns: vec![Foot::None; cols],
-            where_the_feet_are: vec![INVALID_COLUMN; NUM_FEET],
+            notes: [IntermediateNoteData::default(); MAX_COLUMNS],
+            holds: [IntermediateNoteData::default(); MAX_COLUMNS],
+            mines: [0.0; MAX_COLUMNS],
+            fake_mines: [0.0; MAX_COLUMNS],
+            columns: [Foot::None; MAX_COLUMNS],
+            where_the_feet_are: [INVALID_COLUMN; NUM_FEET],
             second: 0.0,
             beat: 0.0,
             row_index: 0,
@@ -538,6 +538,7 @@ impl Row {
 
     fn set_foot_placement(&mut self, placement: &[Foot]) {
         self.note_count = self.note_mask.count_ones() as usize;
+        self.where_the_feet_are = [INVALID_COLUMN; NUM_FEET];
         for c in 0..self.column_count.min(MAX_COLUMNS) {
             if (self.note_mask & (1u8 << c)) != 0 {
                 let foot = placement[c];
@@ -555,10 +556,10 @@ impl Row {
 
 #[derive(Debug, Clone)]
 struct State {
-    columns: Vec<Foot>,
-    combined_columns: Vec<Foot>,
-    moved_feet: Vec<Foot>,
-    hold_feet: Vec<Foot>,
+    columns: [Foot; MAX_COLUMNS],
+    combined_columns: [Foot; MAX_COLUMNS],
+    moved_feet: [Foot; MAX_COLUMNS],
+    hold_feet: [Foot; MAX_COLUMNS],
     where_the_feet_are: [isize; NUM_FEET],
     what_note_the_foot_is_hitting: [isize; NUM_FEET],
     did_the_foot_move: [bool; NUM_FEET],
@@ -566,12 +567,12 @@ struct State {
 }
 
 impl State {
-    fn new(cols: usize) -> Self {
+    fn new(_cols: usize) -> Self {
         Self {
-            columns: vec![Foot::None; cols],
-            combined_columns: vec![Foot::None; cols],
-            moved_feet: vec![Foot::None; cols],
-            hold_feet: vec![Foot::None; cols],
+            columns: [Foot::None; MAX_COLUMNS],
+            combined_columns: [Foot::None; MAX_COLUMNS],
+            moved_feet: [Foot::None; MAX_COLUMNS],
+            hold_feet: [Foot::None; MAX_COLUMNS],
             where_the_feet_are: [INVALID_COLUMN; NUM_FEET],
             what_note_the_foot_is_hitting: [INVALID_COLUMN; NUM_FEET],
             did_the_foot_move: [false; NUM_FEET],
@@ -1150,7 +1151,7 @@ fn did_double_step(
 struct StepParityGenerator {
     layout: StageLayout,
     column_count: usize,
-    permute_cache: FastMap<u32, Rc<[FootPlacement]>>,
+    permute_cache: [Option<Rc<[FootPlacement]>>; 256],
     state_cache: FastMap<u64, Rc<State>>,
     nodes: NodeArena,
     rows: Vec<Row>,
@@ -1161,7 +1162,7 @@ impl StepParityGenerator {
         Self {
             column_count: layout.column_count(),
             layout,
-            permute_cache: FastMap::default(),
+            permute_cache: std::array::from_fn(|_| None),
             state_cache: FastMap::default(),
             nodes: NodeArena::new(),
             rows: Vec::new(),
@@ -1170,7 +1171,7 @@ impl StepParityGenerator {
 
     fn analyze(&mut self, notes: Vec<IntermediateNoteData>, cols: usize) -> bool {
         self.column_count = cols;
-        self.permute_cache.clear();
+        self.permute_cache.fill(None);
         self.state_cache.clear();
         self.nodes.clear();
         self.rows.clear();
@@ -1220,7 +1221,7 @@ impl StepParityGenerator {
 
             let col = note.col;
             let is_hold = note.note_type == TapNoteType::HoldHead;
-            counter.notes[col] = note.clone();
+            counter.notes[col] = note;
             if is_hold {
                 counter.active_holds[col] = note;
             }
@@ -1239,9 +1240,9 @@ impl StepParityGenerator {
 
     fn build_row(&self, counter: &RowCounter) -> Row {
         let mut row = Row::new(self.column_count);
-        row.notes.clone_from(&counter.notes);
-        row.mines.clone_from(&counter.next_mines);
-        row.fake_mines.clone_from(&counter.next_fake_mines);
+        row.notes = counter.notes;
+        row.mines = counter.next_mines;
+        row.fake_mines = counter.next_fake_mines;
         row.second = counter.last_second;
         row.beat = counter.last_beat;
 
@@ -1256,7 +1257,7 @@ impl StepParityGenerator {
             {
                 IntermediateNoteData::default()
             } else {
-                counter.active_holds[c].clone()
+                counter.active_holds[c]
             };
 
             if row.holds[c].note_type != TapNoteType::Empty {
@@ -1350,8 +1351,8 @@ impl StepParityGenerator {
 
     fn perms_for_row(&mut self, row_idx: usize) -> Rc<[FootPlacement]> {
         let row = &self.rows[row_idx];
-        let key = (row.note_mask | row.hold_mask) as u32;
-        if let Some(p) = self.permute_cache.get(&key) {
+        let key = (row.note_mask | row.hold_mask) as usize;
+        if let Some(p) = &self.permute_cache[key] {
             return Rc::clone(p);
         }
 
@@ -1384,7 +1385,7 @@ impl StepParityGenerator {
         }
 
         let rc = Rc::from(perms.into_boxed_slice());
-        self.permute_cache.insert(key, Rc::clone(&rc));
+        self.permute_cache[key] = Some(Rc::clone(&rc));
         rc
     }
 
@@ -1584,25 +1585,25 @@ impl StepParityGenerator {
 // --- RowCounter ---
 
 struct RowCounter {
-    notes: Vec<IntermediateNoteData>,
-    active_holds: Vec<IntermediateNoteData>,
-    mines: Vec<f32>,
-    fake_mines: Vec<f32>,
-    next_mines: Vec<f32>,
-    next_fake_mines: Vec<f32>,
+    notes: [IntermediateNoteData; MAX_COLUMNS],
+    active_holds: [IntermediateNoteData; MAX_COLUMNS],
+    mines: [f32; MAX_COLUMNS],
+    fake_mines: [f32; MAX_COLUMNS],
+    next_mines: [f32; MAX_COLUMNS],
+    next_fake_mines: [f32; MAX_COLUMNS],
     last_second: f32,
     last_beat: f32,
 }
 
 impl RowCounter {
-    fn new(cols: usize) -> Self {
+    fn new(_cols: usize) -> Self {
         Self {
-            notes: vec![IntermediateNoteData::default(); cols],
-            active_holds: vec![IntermediateNoteData::default(); cols],
-            mines: vec![0.0; cols],
-            fake_mines: vec![0.0; cols],
-            next_mines: vec![0.0; cols],
-            next_fake_mines: vec![0.0; cols],
+            notes: [IntermediateNoteData::default(); MAX_COLUMNS],
+            active_holds: [IntermediateNoteData::default(); MAX_COLUMNS],
+            mines: [0.0; MAX_COLUMNS],
+            fake_mines: [0.0; MAX_COLUMNS],
+            next_mines: [0.0; MAX_COLUMNS],
+            next_fake_mines: [0.0; MAX_COLUMNS],
             last_second: CLM_SECOND_INVALID,
             last_beat: CLM_SECOND_INVALID,
         }
@@ -1611,8 +1612,8 @@ impl RowCounter {
     fn reset_for_row(&mut self, second: f32, beat: f32, cols: usize) {
         self.last_second = second;
         self.last_beat = beat;
-        self.next_mines.clone_from(&self.mines);
-        self.next_fake_mines.clone_from(&self.fake_mines);
+        self.next_mines = self.mines;
+        self.next_fake_mines = self.fake_mines;
         self.notes.fill(IntermediateNoteData::default());
         self.mines.fill(0.0);
         self.fake_mines.fill(0.0);
