@@ -537,12 +537,9 @@ fn did_jack(
     toe_col: i8,
     moved: bool,
     did_jump: bool,
+    pair_moved_not_holding: bool,
 ) -> bool {
-    if did_jump || !moved {
-        return false;
-    }
-
-    if !initial.foot_moved_not_holding(pair) {
+    if did_jump || !moved || !pair_moved_not_holding {
         return false;
     }
 
@@ -576,11 +573,30 @@ fn calc_action_cost(
     let moved_right = (result.moved_mask & RIGHT_FOOT_MASK) != 0;
 
     let moved_not_holding = initial.moved_mask & !initial.holding_mask;
-    let did_jump =
-        (moved_not_holding & LEFT_FOOT_MASK) != 0 && (moved_not_holding & RIGHT_FOOT_MASK) != 0;
+    let left_moved_not_holding = (moved_not_holding & LEFT_FOOT_MASK) != 0;
+    let right_moved_not_holding = (moved_not_holding & RIGHT_FOOT_MASK) != 0;
+    let did_jump = left_moved_not_holding && right_moved_not_holding;
 
-    let jacked_left = did_jack(initial, result, &LEFT_PAIR, lh, lt, moved_left, did_jump);
-    let jacked_right = did_jack(initial, result, &RIGHT_PAIR, rh, rt, moved_right, did_jump);
+    let jacked_left = did_jack(
+        initial,
+        result,
+        &LEFT_PAIR,
+        lh,
+        lt,
+        moved_left,
+        did_jump,
+        left_moved_not_holding,
+    );
+    let jacked_right = did_jack(
+        initial,
+        result,
+        &RIGHT_PAIR,
+        rh,
+        rt,
+        moved_right,
+        did_jump,
+        right_moved_not_holding,
+    );
 
     let mut cost = 0.0;
     cost += calc_mine_cost(result, row, cols);
@@ -595,7 +611,7 @@ fn calc_action_cost(
         did_jump,
     );
     cost += calc_doublestep_cost(
-        initial,
+        moved_not_holding,
         result,
         rows,
         row_idx,
@@ -724,7 +740,7 @@ fn calc_bracket_jack_cost(
 }
 
 fn calc_doublestep_cost(
-    initial: &State,
+    moved_not_holding: u8,
     result: &State,
     rows: &[Row],
     row_idx: usize,
@@ -739,7 +755,7 @@ fn calc_doublestep_cost(
     }
 
     if did_double_step(
-        initial,
+        moved_not_holding,
         rows,
         row_idx,
         moved_left,
@@ -938,7 +954,7 @@ fn calc_big_movements_cost(
 }
 
 fn did_double_step(
-    initial: &State,
+    moved_not_holding: u8,
     rows: &[Row],
     row_idx: usize,
     moved_left: bool,
@@ -947,10 +963,10 @@ fn did_double_step(
     jacked_right: bool,
 ) -> bool {
     let mut ds = false;
-    if moved_left && !jacked_left && initial.foot_moved_not_holding(&LEFT_PAIR) {
+    if moved_left && !jacked_left && (moved_not_holding & LEFT_FOOT_MASK) != 0 {
         ds = true;
     }
-    if moved_right && !jacked_right && initial.foot_moved_not_holding(&RIGHT_PAIR) {
+    if moved_right && !jacked_right && (moved_not_holding & RIGHT_FOOT_MASK) != 0 {
         ds = true;
     }
 
