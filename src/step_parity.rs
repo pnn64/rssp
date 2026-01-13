@@ -477,8 +477,6 @@ impl PartialEq for State {
 }
 impl Eq for State {}
 
-type FootPlacement = [Foot; MAX_COLUMNS];
-
 #[derive(Debug, Clone)]
 struct StepParityNode {
     state: State,
@@ -930,7 +928,7 @@ fn did_double_step(
 struct StepParityGenerator {
     layout: StageLayout,
     column_count: usize,
-    permute_cache: [Option<Rc<[FootPlacement]>>; 256],
+    permute_cache: [Option<Rc<[PackedCols]>>; 256],
     nodes: Vec<StepParityNode>,
     edges: Vec<Edge>,
     rows: Vec<Row>,
@@ -1094,7 +1092,7 @@ impl StepParityGenerator {
                 let node_edge_start = self.edges.len() as u32;
                 let init_state = self.nodes[init_id as usize].state;
 
-                for perm in perms.iter() {
+                for &perm in perms.iter() {
                     let (result, key) = self.result_state(&init_state, i, perm);
                     let cost = calc_action_cost(
                         &self.layout,
@@ -1151,23 +1149,29 @@ impl StepParityGenerator {
         idx as u32
     }
 
-    fn perms_for_row(&mut self, row_idx: usize) -> Rc<[FootPlacement]> {
+    fn perms_for_row(&mut self, row_idx: usize) -> Rc<[PackedCols]> {
         let row = &self.rows[row_idx];
         let key = (row.note_mask | row.hold_mask) as usize;
         if let Some(p) = &self.permute_cache[key] {
             return Rc::clone(p);
         }
 
-        let mut cols = [Foot::None; MAX_COLUMNS];
         let mask = row.note_mask | row.hold_mask;
         let mut perms = Vec::new();
         let bits = mask.count_ones() as usize;
         if bits <= 4 {
             perms = Vec::with_capacity(PERM_CAP[bits]);
-            permute_row(&self.layout, mask, &mut cols, 0, self.column_count, 0, &mut perms);
+            permute_row(
+                &self.layout,
+                mask,
+                self.column_count,
+                0,
+                PackedCols::new(),
+                0,
+                &mut perms,
+            );
         }
         if perms.is_empty() {
-            cols.fill(Foot::None);
             let mask = row.note_mask;
             let bits = mask.count_ones() as usize;
             if bits <= 4 {
@@ -1175,16 +1179,16 @@ impl StepParityGenerator {
                 permute_row(
                     &self.layout,
                     mask,
-                    &mut cols,
-                    0,
                     self.column_count,
+                    0,
+                    PackedCols::new(),
                     0,
                     &mut perms,
                 );
             }
         }
         if perms.is_empty() {
-            perms.push([Foot::None; MAX_COLUMNS]);
+            perms.push(PackedCols::new());
         }
 
         let rc = Rc::from(perms.into_boxed_slice());
@@ -1192,17 +1196,17 @@ impl StepParityGenerator {
         rc
     }
 
-    fn result_state(&self, initial: &State, row_idx: usize, cols: &FootPlacement) -> (State, u64) {
+    fn result_state(&self, initial: &State, row_idx: usize, cols: PackedCols) -> (State, u64) {
         let row = &self.rows[row_idx];
         let n = self.column_count;
         let hold_mask = row.hold_mask;
 
         let mut state = State::new(n);
+        state.columns = cols;
         let mut moved_mask = 0u8;
 
         for i in 0..n {
-            let foot = cols[i];
-            state.columns.set(i, foot);
+            let foot = cols.get(i);
             let hold_empty = (hold_mask & (1u8 << i)) == 0;
             let moved =
                 foot != Foot::None && (hold_empty || initial.combined_columns.get(i) != foot);
@@ -1364,11 +1368,11 @@ impl RowCounter {
 fn permute_row(
     layout: &StageLayout,
     mask: u8,
-    cols: &mut FootPlacement,
-    col: usize,
     col_count: usize,
+    col: usize,
+    cur: PackedCols,
     used: u8,
-    out: &mut Vec<FootPlacement>,
+    out: &mut Vec<PackedCols>,
 ) {
     if col >= col_count {
         let (mut lh, mut lt, mut rh, mut rt) = (
@@ -1377,8 +1381,8 @@ fn permute_row(
             INVALID_COLUMN,
             INVALID_COLUMN,
         );
-        for (i, &f) in cols.iter().enumerate().take(col_count) {
-            match f {
+        for i in 0..col_count {
+            match cur.get(i) {
                 Foot::LeftHeel => lh = i as i8,
                 Foot::LeftToe => lt = i as i8,
                 Foot::RightHeel => rh = i as i8,
@@ -1408,7 +1412,7 @@ fn permute_row(
             return;
         }
 
-        out.push(*cols);
+        out.push(cur);
         return;
     }
 
@@ -1420,25 +1424,25 @@ fn permute_row(
             if used & fm != 0 {
                 continue;
             }
-            cols[col] = foot;
+            let mut next = cur;
+            next.set(col, foot);
             permute_row(
                 layout,
                 mask,
-                cols,
-                col + 1,
                 col_count,
+                col + 1,
+                next,
                 used | fm,
                 out,
             );
-            cols[col] = Foot::None;
         }
     } else {
         permute_row(
             layout,
             mask,
-            cols,
-            col + 1,
             col_count,
+            col + 1,
+            cur,
             used,
             out,
         );
