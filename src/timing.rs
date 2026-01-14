@@ -286,45 +286,19 @@ fn tidy_row_segments(segments: Vec<Segment>) -> Vec<Segment> {
     out.into_iter().map(|(_, seg)| seg).collect()
 }
 
-trait RowSegment: Clone {
-    fn beat(&self) -> f64;
-    fn set_beat(&mut self, beat: f64);
-    fn eq_value(&self, other: &Self) -> bool;
+#[inline]
+fn segment_row(seg: &Segment) -> i32 {
+    beat_to_note_row(seg.beat)
 }
 
-impl RowSegment for Segment {
-    fn beat(&self) -> f64 {
-        self.beat
-    }
-    fn set_beat(&mut self, beat: f64) {
-        self.beat = beat;
-    }
-    fn eq_value(&self, other: &Self) -> bool {
-        float_eq(self.value, other.value)
-    }
+#[inline]
+fn eq_segment(a: &Segment, b: &Segment) -> bool {
+    float_eq(a.value, b.value)
 }
 
-impl RowSegment for SpeedSegment {
-    fn beat(&self) -> f64 {
-        self.beat
-    }
-    fn set_beat(&mut self, beat: f64) {
-        self.beat = beat;
-    }
-    fn eq_value(&self, other: &Self) -> bool {
-        float_eq(self.ratio, other.ratio)
-            && float_eq(self.delay, other.delay)
-            && self.unit == other.unit
-    }
-}
-
-fn segment_row<T: RowSegment>(seg: &T) -> i32 {
-    beat_to_note_row(seg.beat())
-}
-
-fn add_segment<T: RowSegment>(out: &mut Vec<T>, mut seg: T) {
-    let row = beat_to_note_row(seg.beat());
-    seg.set_beat(note_row_to_beat(row));
+fn add_scroll_segment(out: &mut Vec<Segment>, mut seg: Segment) {
+    let row = beat_to_note_row(seg.beat);
+    seg.beat = note_row_to_beat(row);
 
     if out.is_empty() {
         out.push(seg);
@@ -340,27 +314,27 @@ fn add_segment<T: RowSegment>(out: &mut Vec<T>, mut seg: T) {
 
     if idx + 1 < out.len() {
         let next_idx = idx + 1;
-        if seg.eq_value(&out[next_idx]) {
-            if seg.eq_value(&out[prev_idx]) {
+        if eq_segment(&seg, &out[next_idx]) {
+            if eq_segment(&seg, &out[prev_idx]) {
                 out.remove(next_idx);
                 if prev_idx != idx {
                     out.remove(idx);
                 }
                 return;
             }
-            out[next_idx].set_beat(seg.beat());
+            out[next_idx].beat = seg.beat;
             if prev_idx != idx {
                 out.remove(idx);
             }
             return;
         }
-        if seg.eq_value(&out[prev_idx]) {
+        if eq_segment(&seg, &out[prev_idx]) {
             if prev_idx != idx {
                 out.remove(idx);
             }
             return;
         }
-    } else if seg.eq_value(&out[prev_idx]) {
+    } else if eq_segment(&seg, &out[prev_idx]) {
         if prev_idx != idx {
             out.remove(idx);
         }
@@ -368,7 +342,7 @@ fn add_segment<T: RowSegment>(out: &mut Vec<T>, mut seg: T) {
     }
 
     if on_same_row {
-        if !seg.eq_value(&out[idx]) {
+        if !eq_segment(&seg, &out[idx]) {
             out[idx] = seg;
         }
     } else {
@@ -377,10 +351,83 @@ fn add_segment<T: RowSegment>(out: &mut Vec<T>, mut seg: T) {
     }
 }
 
-fn tidy_segments<T: RowSegment>(segments: Vec<T>) -> Vec<T> {
+fn tidy_scroll_segments(segments: Vec<Segment>) -> Vec<Segment> {
     let mut out = Vec::with_capacity(segments.len());
     for seg in segments {
-        add_segment(&mut out, seg);
+        add_scroll_segment(&mut out, seg);
+    }
+    out
+}
+
+#[inline]
+fn speed_row(seg: &SpeedSegment) -> i32 {
+    beat_to_note_row(seg.beat)
+}
+
+#[inline]
+fn eq_speed(a: &SpeedSegment, b: &SpeedSegment) -> bool {
+    float_eq(a.ratio, b.ratio) && float_eq(a.delay, b.delay) && a.unit == b.unit
+}
+
+fn add_speed_segment(out: &mut Vec<SpeedSegment>, mut seg: SpeedSegment) {
+    let row = beat_to_note_row(seg.beat);
+    seg.beat = note_row_to_beat(row);
+
+    if out.is_empty() {
+        out.push(seg);
+        return;
+    }
+
+    let idx = {
+        let pos = out.partition_point(|s| speed_row(s) <= row);
+        if pos == 0 { 0 } else { pos - 1 }
+    };
+    let on_same_row = speed_row(&out[idx]) == row;
+    let prev_idx = if on_same_row && idx > 0 { idx - 1 } else { idx };
+
+    if idx + 1 < out.len() {
+        let next_idx = idx + 1;
+        if eq_speed(&seg, &out[next_idx]) {
+            if eq_speed(&seg, &out[prev_idx]) {
+                out.remove(next_idx);
+                if prev_idx != idx {
+                    out.remove(idx);
+                }
+                return;
+            }
+            out[next_idx].beat = seg.beat;
+            if prev_idx != idx {
+                out.remove(idx);
+            }
+            return;
+        }
+        if eq_speed(&seg, &out[prev_idx]) {
+            if prev_idx != idx {
+                out.remove(idx);
+            }
+            return;
+        }
+    } else if eq_speed(&seg, &out[prev_idx]) {
+        if prev_idx != idx {
+            out.remove(idx);
+        }
+        return;
+    }
+
+    if on_same_row {
+        if !eq_speed(&seg, &out[idx]) {
+            out[idx] = seg;
+        }
+    } else {
+        let insert_pos = out.partition_point(|s| speed_row(s) <= row);
+        out.insert(insert_pos, seg);
+    }
+}
+
+fn tidy_speed_segments(segments: Vec<SpeedSegment>) -> Vec<SpeedSegment> {
+    let mut out = Vec::with_capacity(segments.len());
+    for seg in segments {
+        add_speed_segment(&mut out, seg);
     }
     out
 }
@@ -483,14 +530,14 @@ pub fn compute_timing_segments(
             ..s
         })
         .collect();
-    let speeds = tidy_segments(speeds);
+    let speeds = tidy_speed_segments(speeds);
 
     let scrolls: Vec<_> =
         parse_optional_timing(chart_scrolls, global_scrolls, parse_segments, cleaned)
             .into_iter()
             .map(quantize_seg)
             .collect();
-    let scrolls = tidy_segments(scrolls);
+    let scrolls = tidy_scroll_segments(scrolls);
 
     let fakes: Vec<_> =
         parse_optional_timing(chart_fakes, global_fakes, parse_segments_positive, cleaned)
@@ -1006,7 +1053,7 @@ impl TimingData {
         let mut warps = parse_optional_timing(chart_warps, global_warps, parse_segments, cleaned);
         warps.extend(extra_warps);
         let warps = tidy_row_segments(warps.into_iter().map(qv).collect());
-        let speeds = tidy_segments(
+        let speeds = tidy_speed_segments(
             parse_optional_timing(chart_speeds, global_speeds, parse_speeds, cleaned)
                 .into_iter()
                 .map(|s| SpeedSegment {
@@ -1015,7 +1062,7 @@ impl TimingData {
                 })
                 .collect(),
         );
-        let scrolls = tidy_segments(
+        let scrolls = tidy_scroll_segments(
             parse_optional_timing(chart_scrolls, global_scrolls, parse_segments, cleaned)
                 .into_iter()
                 .map(q)

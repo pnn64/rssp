@@ -267,17 +267,15 @@ struct TimingTags {
     fakes: String,
 }
 
-impl TimingTags {
-    fn from_global(p: &ParsedSimfileData<'_>) -> Self {
-        Self {
-            bpms: map_tag(p.bpms, clean_timing_map),
-            stops: map_tag(p.stops, clean_timing_map),
-            delays: map_tag(p.delays, clean_timing_map),
-            warps: map_tag(p.warps, clean_timing_map),
-            speeds: map_tag(p.speeds, clean_timing_map),
-            scrolls: map_tag(p.scrolls, clean_timing_map),
-            fakes: map_tag(p.fakes, clean_timing_map),
-        }
+fn timing_tags_from_global(p: &ParsedSimfileData<'_>) -> TimingTags {
+    TimingTags {
+        bpms: map_tag(p.bpms, clean_timing_map),
+        stops: map_tag(p.stops, clean_timing_map),
+        delays: map_tag(p.delays, clean_timing_map),
+        warps: map_tag(p.warps, clean_timing_map),
+        speeds: map_tag(p.speeds, clean_timing_map),
+        scrolls: map_tag(p.scrolls, clean_timing_map),
+        fakes: map_tag(p.fakes, clean_timing_map),
     }
 }
 
@@ -292,39 +290,40 @@ struct ChartTags {
     fakes: Option<String>,
 }
 
-impl ChartTags {
-    fn from_entry(e: &ParsedChartEntry<'_>) -> Self {
-        Self {
-            bpms: map_tag_opt(e.chart_bpms.as_deref(), clean_timing_map),
-            stops: map_tag_opt(e.chart_stops.as_deref(), clean_timing_map),
-            delays: map_tag_opt(e.chart_delays.as_deref(), clean_timing_map),
-            warps: map_tag_opt(e.chart_warps.as_deref(), clean_timing_map),
-            speeds: map_tag_opt(e.chart_speeds.as_deref(), clean_timing_map),
-            scrolls: map_tag_opt(e.chart_scrolls.as_deref(), clean_timing_map),
-            fakes: map_tag_opt(e.chart_fakes.as_deref(), clean_timing_map),
-        }
+fn chart_tags_from_entry(e: &ParsedChartEntry<'_>) -> ChartTags {
+    ChartTags {
+        bpms: map_tag_opt(e.chart_bpms.as_deref(), clean_timing_map),
+        stops: map_tag_opt(e.chart_stops.as_deref(), clean_timing_map),
+        delays: map_tag_opt(e.chart_delays.as_deref(), clean_timing_map),
+        warps: map_tag_opt(e.chart_warps.as_deref(), clean_timing_map),
+        speeds: map_tag_opt(e.chart_speeds.as_deref(), clean_timing_map),
+        scrolls: map_tag_opt(e.chart_scrolls.as_deref(), clean_timing_map),
+        fakes: map_tag_opt(e.chart_fakes.as_deref(), clean_timing_map),
     }
+}
 
-    fn resolve<'a>(
-        &'a self,
-        g: &'a TimingTags,
-        use_chart: bool,
-    ) -> [(&'a str, Option<&'a str>); 7] {
-        macro_rules! pair {
-            ($f:ident) => {
-                (&g.$f, if use_chart { self.$f.as_deref() } else { None })
-            };
-        }
-        [
-            pair!(bpms),
-            pair!(stops),
-            pair!(delays),
-            pair!(warps),
-            pair!(speeds),
-            pair!(scrolls),
-            pair!(fakes),
-        ]
+fn resolve_chart_tags<'a>(
+    chart: &'a ChartTags,
+    global: &'a TimingTags,
+    use_chart: bool,
+) -> [(&'a str, Option<&'a str>); 7] {
+    macro_rules! pair {
+        ($f:ident) => {
+            (
+                &global.$f,
+                if use_chart { chart.$f.as_deref() } else { None },
+            )
+        };
     }
+    [
+        pair!(bpms),
+        pair!(stops),
+        pair!(delays),
+        pair!(warps),
+        pair!(speeds),
+        pair!(scrolls),
+        pair!(fakes),
+    ]
 }
 
 fn chart_metadata(fields: &[&[u8]], fmt: TimingFormat) -> Option<(String, String)> {
@@ -354,7 +353,7 @@ fn chart_bpm_snapshot(
         return None;
     }
     let (step_type, difficulty) = chart_metadata(&entry.fields, fmt)?;
-    let chart = ChartTags::from_entry(entry);
+    let chart = chart_tags_from_entry(entry);
     let hash_bpms = chart
         .bpms
         .as_ref()
@@ -362,7 +361,7 @@ fn chart_bpm_snapshot(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| bpms_norm.to_string());
 
-    let r = chart.resolve(global, use_chart);
+    let r = resolve_chart_tags(&chart, global, use_chart);
     let segments = compute_timing_segments(
         r[0].1, r[0].0, r[1].1, r[1].0, r[2].1, r[2].0, r[3].1, r[3].0, r[4].1, r[4].0, r[5].1,
         r[5].0, r[6].1, r[6].0, fmt, true,
@@ -396,7 +395,7 @@ pub fn chart_bpm_snapshots(data: &[u8], ext: &str) -> Result<Vec<ChartBpmSnapsho
     let parsed = extract_sections(data, ext).map_err(|e| e.to_string())?;
     let fmt = TimingFormat::from_extension(ext);
     let use_chart = steps_timing_allowed(parse_version(parsed.version, fmt), fmt);
-    let global = TimingTags::from_global(&parsed);
+    let global = timing_tags_from_global(&parsed);
     let bpms_norm = map_tag(parsed.bpms, normalize_float_digits);
     Ok(parsed
         .notes_list
