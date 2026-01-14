@@ -15,23 +15,6 @@ For the fields that `rssp` parses and computes, the goal is **100% parity** with
 
 Golden outputs are generated with [itgmania-reference-harness](https://github.com/pnn64/itgmania-reference-harness), and the test corpus is stored in [rssp-tests](https://github.com/pnn64/rssp-tests) (included here as the `tests/data` submodule).
 
-## Test Status
-
-The parity suite runs across a large pinned corpus (the `tests/data` submodule) and compares `rssp` output to golden data. The badge at the top of this README reflects the last recorded parity run.
-
-Current corpus stats (as pinned by this repo):
-
-* Packs: **422**
-* Compressed simfiles under test: **28,284** (`*.sm.zst` / `*.ssc.zst`)
-* Baselined simfiles (MD5-keyed): **28,034** (duplicate files collapse to the same MD5)
-* Baseline pairs: **28,034** ITGmania + **28,034** `rssp` (zstd-compressed JSON in `tests/data/baseline/`)
-
-Parity suites (see `tests/`):
-
-* ITGmania parity: `hash_parity`, `bpm_parity`, `metadata_parity`, `step_counts_parity`, `duration_parity`, `nps_parity`, `breakdown_parity`, `timing_parity`, `tech_counts_parity`
-* Aggregates: `all_parity`, `fast_all_parity`
-* RSSP-only regression: `rssp_unique_parity`
-
 ## Inspiration
 
 This project is inspired by Breakdown Buddy and builds upon ideas from [simfile-sidekick](https://gitlab.com/artimst/simfile-sidekick) by Steven Artim (artimst).
