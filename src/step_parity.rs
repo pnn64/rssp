@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
-use std::rc::Rc;
 
 use crate::timing::{ROWS_PER_BEAT, TimingData, beat_to_note_row_f32};
 
@@ -903,7 +902,7 @@ fn did_double_step(
 struct StepParityGenerator {
     layout: StageLayout,
     column_count: usize,
-    permute_cache: [Option<Rc<[FootPlacement]>>; 256],
+    permute_cache: [Option<Box<[FootPlacement]>>; 256],
     nodes: Vec<StepParityNode>,
     edges: Vec<Edge>,
     rows: Vec<Row>,
@@ -1056,7 +1055,8 @@ impl StepParityGenerator {
             let elapsed = row_second - prev_second;
             prev_second = row_second;
 
-            let perms = self.perms_for_row(i);
+            let (perm_key, perms_box) = self.take_perms_for_row(i);
+            let perms = perms_box.as_ref();
             next_ids.clear();
             state_map.clear();
             state_map.reserve(perms.len());
@@ -1097,6 +1097,8 @@ impl StepParityGenerator {
                 node.first_edge = node_edge_start;
                 node.edge_count = edge_count;
             }
+
+            self.permute_cache[perm_key] = Some(perms_box);
             std::mem::swap(&mut prev_ids, &mut next_ids);
         }
 
@@ -1124,15 +1126,18 @@ impl StepParityGenerator {
         idx
     }
 
-    fn perms_for_row(&mut self, row_idx: usize) -> Rc<[FootPlacement]> {
-        let row = &self.rows[row_idx];
-        let key = (row.note_mask | row.hold_mask) as usize;
-        if let Some(p) = &self.permute_cache[key] {
-            return Rc::clone(p);
+    fn take_perms_for_row(&mut self, row_idx: usize) -> (usize, Box<[FootPlacement]>) {
+        let (note_mask, hold_mask) = {
+            let row = &self.rows[row_idx];
+            (row.note_mask, row.hold_mask)
+        };
+        let key = (note_mask | hold_mask) as usize;
+        if let Some(perms) = self.permute_cache[key].take() {
+            return (key, perms);
         }
 
         let mut cols = [Foot::None; MAX_COLUMNS];
-        let mask = row.note_mask | row.hold_mask;
+        let mask = note_mask | hold_mask;
         let mut perms = Vec::new();
         let bits = mask.count_ones() as usize;
         if bits <= 4 {
@@ -1141,7 +1146,7 @@ impl StepParityGenerator {
         }
         if perms.is_empty() {
             cols.fill(Foot::None);
-            let mask = row.note_mask;
+            let mask = note_mask;
             let bits = mask.count_ones() as usize;
             if bits <= 4 {
                 perms = Vec::with_capacity(PERM_CAP[bits]);
@@ -1160,9 +1165,7 @@ impl StepParityGenerator {
             perms.push([Foot::None; MAX_COLUMNS]);
         }
 
-        let rc = Rc::from(perms.into_boxed_slice());
-        self.permute_cache[key] = Some(Rc::clone(&rc));
-        rc
+        (key, perms.into_boxed_slice())
     }
 
     fn result_state(&self, initial: &State, row_idx: usize, cols: &FootPlacement) -> (State, u64) {
@@ -1661,12 +1664,15 @@ where
     }
 
     let mut measure_idx = 0usize;
+    let mut lines: Vec<&[u8]> = Vec::new();
     for measure in data.split(|&b| b == b',') {
-        let lines: Vec<_> = measure
-            .split(|&b| b == b'\n')
-            .map(trim_ws)
-            .filter(|l| !l.is_empty())
-            .collect();
+        lines.clear();
+        for line in measure.split(|&b| b == b'\n') {
+            let line = trim_ws(line);
+            if !line.is_empty() {
+                lines.push(line);
+            }
+        }
         if lines.is_empty() {
             measure_idx += 1;
             continue;
@@ -1676,7 +1682,7 @@ where
         let start = measure_idx as f32 * 4.0;
         let step = 4.0 / num as f32;
 
-        for (j, line) in lines.into_iter().enumerate() {
+        for (j, &line) in lines.iter().enumerate() {
             let copy = line.len().min(cols);
             if !has_obj(&line[..copy]) {
                 continue;
