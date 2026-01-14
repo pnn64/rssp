@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
+use std::rc::Rc;
 
 use crate::timing::{ROWS_PER_BEAT, TimingData, beat_to_note_row_f32};
 
@@ -902,7 +903,7 @@ fn did_double_step(
 struct StepParityGenerator {
     layout: StageLayout,
     column_count: usize,
-    permute_cache: [Option<Box<[FootPlacement]>>; 256],
+    permute_cache: [Option<Rc<[FootPlacement]>>; 256],
     nodes: Vec<StepParityNode>,
     edges: Vec<Edge>,
     rows: Vec<Row>,
@@ -1045,8 +1046,8 @@ impl StepParityGenerator {
         let start_id = self.add_node(State::new(self.column_count));
 
         let mut prev_ids = vec![start_id];
-        let mut next_ids: Vec<u32> = Vec::new();
-        let mut state_map: FastMap<u64, u32> = FastMap::default();
+        let mut next_ids: Vec<usize> = Vec::new();
+        let mut state_map: FastMap<u64, usize> = FastMap::default();
 
         let mut prev_second = self.rows.first().map(|r| r.second - 1.0).unwrap_or(-1.0);
 
@@ -1055,7 +1056,7 @@ impl StepParityGenerator {
             let elapsed = row_second - prev_second;
             prev_second = row_second;
 
-            let (perm_key, perms) = self.perms_for_row(i);
+            let perms = self.perms_for_row(i);
             next_ids.clear();
             state_map.clear();
             state_map.reserve(perms.len());
@@ -1064,7 +1065,7 @@ impl StepParityGenerator {
 
             for &init_id in &prev_ids {
                 let node_edge_start = self.edges.len() as u32;
-                let init_state = self.nodes[init_id as usize].state;
+                let init_state = self.nodes[init_id].state;
 
                 for perm in perms.iter() {
                     let (result, key) = self.result_state(&init_state, i, perm);
@@ -1087,16 +1088,15 @@ impl StepParityGenerator {
                         id
                     };
                     self.edges.push(Edge {
-                        to: res_id,
+                        to: res_id as u32,
                         cost,
                     });
                 }
                 let edge_count = (self.edges.len() as u32 - node_edge_start) as u16;
-                let node = &mut self.nodes[init_id as usize];
+                let node = &mut self.nodes[init_id];
                 node.first_edge = node_edge_start;
                 node.edge_count = edge_count;
             }
-            self.permute_cache[perm_key] = Some(perms);
             std::mem::swap(&mut prev_ids, &mut next_ids);
         }
 
@@ -1105,30 +1105,30 @@ impl StepParityGenerator {
         for &id in &prev_ids {
             let edge_start = self.edges.len() as u32;
             self.edges.push(Edge {
-                to: end_id,
+                to: end_id as u32,
                 cost: 0.0,
             });
-            let node = &mut self.nodes[id as usize];
+            let node = &mut self.nodes[id];
             node.first_edge = edge_start;
             node.edge_count = 1;
         }
     }
 
-    fn add_node(&mut self, state: State) -> u32 {
+    fn add_node(&mut self, state: State) -> usize {
         let idx = self.nodes.len();
         self.nodes.push(StepParityNode {
             state,
             first_edge: 0,
             edge_count: 0,
         });
-        idx as u32
+        idx
     }
 
-    fn perms_for_row(&mut self, row_idx: usize) -> (usize, Box<[FootPlacement]>) {
+    fn perms_for_row(&mut self, row_idx: usize) -> Rc<[FootPlacement]> {
         let row = &self.rows[row_idx];
         let key = (row.note_mask | row.hold_mask) as usize;
-        if let Some(p) = self.permute_cache[key].take() {
-            return (key, p);
+        if let Some(p) = &self.permute_cache[key] {
+            return Rc::clone(p);
         }
 
         let mut cols = [Foot::None; MAX_COLUMNS];
@@ -1160,7 +1160,9 @@ impl StepParityGenerator {
             perms.push([Foot::None; MAX_COLUMNS]);
         }
 
-        (key, perms.into_boxed_slice())
+        let rc = Rc::from(perms.into_boxed_slice());
+        self.permute_cache[key] = Some(Rc::clone(&rc));
+        rc
     }
 
     fn result_state(&self, initial: &State, row_idx: usize, cols: &FootPlacement) -> (State, u64) {
@@ -1232,7 +1234,7 @@ impl StepParityGenerator {
 
         let n = self.nodes.len();
         let mut cost = vec![f32::MAX; n];
-        let mut pred = vec![u32::MAX; n];
+        let mut pred = vec![usize::MAX; n];
         cost[0] = 0.0;
 
         for i in 0..n {
@@ -1247,27 +1249,27 @@ impl StepParityGenerator {
                 let nc = cost[i] + e.cost;
                 if nc < cost[to] {
                     cost[to] = nc;
-                    pred[to] = i as u32;
+                    pred[to] = i;
                 }
             }
         }
 
-        if pred[n - 1] == u32::MAX {
+        if pred[n - 1] == usize::MAX {
             return false;
         }
 
         let nodes = &self.nodes;
         let rows = &self.rows;
 
-        let mut cur = (n - 1) as u32;
+        let mut cur = n - 1;
         self.result_columns.clear();
         self.result_columns
             .resize(rows.len(), [Foot::None; MAX_COLUMNS]);
 
         let mut write = self.result_columns.len();
         while cur != 0 {
-            let prev = pred[cur as usize];
-            if prev == u32::MAX {
+            let prev = pred[cur];
+            if prev == usize::MAX {
                 return false;
             }
             cur = prev;
@@ -1278,7 +1280,7 @@ impl StepParityGenerator {
                 return false;
             }
             write -= 1;
-            self.result_columns[write] = nodes[cur as usize].state.combined_columns;
+            self.result_columns[write] = nodes[cur].state.combined_columns;
         }
 
         write == 0
@@ -1659,15 +1661,12 @@ where
     }
 
     let mut measure_idx = 0usize;
-    let mut lines: Vec<&[u8]> = Vec::new();
     for measure in data.split(|&b| b == b',') {
-        lines.clear();
-        for line in measure.split(|&b| b == b'\n') {
-            let line = trim_ws(line);
-            if !line.is_empty() {
-                lines.push(line);
-            }
-        }
+        let lines: Vec<_> = measure
+            .split(|&b| b == b'\n')
+            .map(trim_ws)
+            .filter(|l| !l.is_empty())
+            .collect();
         if lines.is_empty() {
             measure_idx += 1;
             continue;
@@ -1677,7 +1676,7 @@ where
         let start = measure_idx as f32 * 4.0;
         let step = 4.0 / num as f32;
 
-        for (j, &line) in lines.iter().enumerate() {
+        for (j, line) in lines.into_iter().enumerate() {
             let copy = line.len().min(cols);
             if !has_obj(&line[..copy]) {
                 continue;
