@@ -350,11 +350,11 @@ const HEX_TABLE: [[u8; 2]; 256] = {
 
 pub fn compute_chart_hash(chart_data: &[u8], normalized_bpms: &str) -> String {
     let digest = sha1_digest(chart_data, normalized_bpms.as_bytes());
-    let mut out = [0u8; 16];
-    for (i, &byte) in digest[..8].iter().enumerate() {
+    let mut out = String::with_capacity(16);
+    for &byte in digest[..8].iter() {
         let hex = HEX_TABLE[byte as usize];
-        out[i * 2] = hex[0];
-        out[i * 2 + 1] = hex[1];
+        out.push(hex[0] as char);
+        out.push(hex[1] as char);
     }
-    String::from_utf8(out.to_vec()).expect("hex is always valid utf8")
+    out
 }
