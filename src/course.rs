@@ -7,6 +7,7 @@ use crate::assets;
 use crate::math::{round_dp, round_sig_figs_6};
 use crate::nps::get_nps_stats;
 use crate::pack;
+use crate::patterns::PATTERN_COUNT;
 use crate::parse::{clean_tag, decode_bytes, extract_sections, unescape_tag};
 use crate::report::{ChartSummary, CourseEntrySummary, CourseSummary, SimfileSummary};
 use crate::simfile;
@@ -433,7 +434,7 @@ fn empty_course_chart(step_type: &str, course_difficulty: Difficulty, meter: i32
         max_nps: 0.0,
         median_nps: 0.0,
         duration_seconds: 0.0,
-        detected_patterns: HashMap::new(),
+        detected_patterns: [0; PATTERN_COUNT],
         anchor_left: 0,
         anchor_down: 0,
         anchor_up: 0,
@@ -518,8 +519,8 @@ fn add_course_chart(total: &mut ChartSummary, chart: &ChartSummary) {
     total.tech_counts.brackets += chart.tech_counts.brackets;
     total.tech_counts.doublesteps += chart.tech_counts.doublesteps;
 
-    for (variant, count) in &chart.detected_patterns {
-        *total.detected_patterns.entry(*variant).or_insert(0) += *count;
+    for i in 0..PATTERN_COUNT {
+        total.detected_patterns[i] += chart.detected_patterns[i];
     }
 
     if !chart.custom_patterns.is_empty() {

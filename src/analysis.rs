@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::duration::{self, TimingOffsets};
@@ -21,7 +20,7 @@ use crate::timing::{
 use crate::patterns::{
     compile_custom_patterns, compiled_custom_empty, compiled_custom_is_empty,
     detect_custom_patterns_compiled, detect_default_patterns, count_anchors,
-    count_facing_steps, PatternVariant, CompiledCustomPatterns,
+    count_facing_steps, PatternVariant, CompiledCustomPatterns, PatternCounts, PATTERN_COUNT,
 };
 
 /// Options for controlling simfile analysis.
@@ -325,7 +324,7 @@ fn parse_radar_values_str(raw: &str, split_players: bool) -> Option<[f32; RADAR_
 /// Detects predefined patterns and counts anchors from note bitmasks.
 fn compute_pattern_and_anchor_stats(
     bitmasks: &[u8],
-) -> (HashMap<PatternVariant, u32>, (u32, u32, u32, u32)) {
+) -> (PatternCounts, (u32, u32, u32, u32)) {
     let detected_patterns = detect_default_patterns(bitmasks);
     let anchors = count_anchors(bitmasks);
     (detected_patterns, anchors)
@@ -335,7 +334,7 @@ fn compute_pattern_and_anchor_stats(
 fn compute_mono_and_candle_stats(
     bitmasks: &[u8],
     stats: &stats::ArrowStats,
-    detected_patterns: &HashMap<PatternVariant, u32>,
+    detected_patterns: &PatternCounts,
     options: &AnalysisOptions,
 ) -> (u32, u32, u32, f64, u32, f64) {
     if stats.total_steps <= 1 {
@@ -350,12 +349,8 @@ fn compute_mono_and_candle_stats(
         0.0
     };
 
-    let candle_left = *detected_patterns
-        .get(&PatternVariant::CandleLeft)
-        .unwrap_or(&0);
-    let candle_right = *detected_patterns
-        .get(&PatternVariant::CandleRight)
-        .unwrap_or(&0);
+    let candle_left = detected_patterns[PatternVariant::CandleLeft as usize];
+    let candle_right = detected_patterns[PatternVariant::CandleRight as usize];
     let candle_total = candle_left + candle_right;
 
     let max_candles = (stats.total_steps.saturating_sub(1)) / 2;
@@ -663,7 +658,7 @@ fn build_chart_summary(
         if let Some(bitmasks) = bitmasks.as_ref() {
             compute_pattern_and_anchor_stats(bitmasks)
         } else {
-            (HashMap::new(), (0, 0, 0, 0))
+            ([0u32; PATTERN_COUNT], (0, 0, 0, 0))
         };
 
     let (facing_left, facing_right, mono_total, mono_percent_raw, candle_total, candle_percent_raw) =

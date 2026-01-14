@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::io::{self, Write};
 use std::time::Duration;
 
@@ -6,7 +5,7 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use crate::bpm::{actual_bpm_range_raw, normalize_float_digits, resolve_display_bpm};
 use crate::math::{round_dp, round_sig_figs_6, round_sig_figs_itg, roundtrip_bpm_itg};
-use crate::patterns::{CustomPatternSummary, PatternVariant};
+use crate::patterns::{CustomPatternSummary, PatternVariant, PatternCounts};
 use crate::stats::{
     ArrowStats, RADAR_CATEGORY_COUNT, StreamCounts, measure_equally_spaced, stream_sequences,
 };
@@ -54,14 +53,14 @@ struct BoxParts {
 }
 
 #[inline(always)]
-fn compute_box_parts(patterns: &HashMap<PatternVariant, u32>) -> BoxParts {
+fn compute_box_parts(patterns: &PatternCounts) -> BoxParts {
     BoxParts {
-        lr: *patterns.get(&PatternVariant::BoxLR).unwrap_or(&0),
-        ud: *patterns.get(&PatternVariant::BoxUD).unwrap_or(&0),
-        ld: *patterns.get(&PatternVariant::BoxCornerLD).unwrap_or(&0),
-        lu: *patterns.get(&PatternVariant::BoxCornerLU).unwrap_or(&0),
-        rd: *patterns.get(&PatternVariant::BoxCornerRD).unwrap_or(&0),
-        ru: *patterns.get(&PatternVariant::BoxCornerRU).unwrap_or(&0),
+        lr: patterns[PatternVariant::BoxLR as usize],
+        ud: patterns[PatternVariant::BoxUD as usize],
+        ld: patterns[PatternVariant::BoxCornerLD as usize],
+        lu: patterns[PatternVariant::BoxCornerLU as usize],
+        rd: patterns[PatternVariant::BoxCornerRD as usize],
+        ru: patterns[PatternVariant::BoxCornerRU as usize],
     }
 }
 
@@ -75,17 +74,17 @@ struct StairParts {
 
 #[inline(always)]
 fn compute_stair_parts(
-    patterns: &HashMap<PatternVariant, u32>,
+    patterns: &PatternCounts,
     left: PatternVariant,
     right: PatternVariant,
     left_inv: PatternVariant,
     right_inv: PatternVariant,
 ) -> StairParts {
     StairParts {
-        left: *patterns.get(&left).unwrap_or(&0),
-        right: *patterns.get(&right).unwrap_or(&0),
-        left_inv: *patterns.get(&left_inv).unwrap_or(&0),
-        right_inv: *patterns.get(&right_inv).unwrap_or(&0),
+        left: patterns[left as usize],
+        right: patterns[right as usize],
+        left_inv: patterns[left_inv as usize],
+        right_inv: patterns[right_inv as usize],
     }
 }
 
@@ -99,17 +98,17 @@ struct SweepParts {
 
 #[inline(always)]
 fn compute_sweep_parts(
-    patterns: &HashMap<PatternVariant, u32>,
+    patterns: &PatternCounts,
     left: PatternVariant,
     right: PatternVariant,
     left_inv: PatternVariant,
     right_inv: PatternVariant,
 ) -> SweepParts {
     SweepParts {
-        left: *patterns.get(&left).unwrap_or(&0),
-        right: *patterns.get(&right).unwrap_or(&0),
-        left_inv: *patterns.get(&left_inv).unwrap_or(&0),
-        right_inv: *patterns.get(&right_inv).unwrap_or(&0),
+        left: patterns[left as usize],
+        right: patterns[right as usize],
+        left_inv: patterns[left_inv as usize],
+        right_inv: patterns[right_inv as usize],
     }
 }
 
@@ -124,14 +123,14 @@ struct TowerParts {
 }
 
 #[inline(always)]
-fn compute_tower_parts(patterns: &HashMap<PatternVariant, u32>) -> TowerParts {
+fn compute_tower_parts(patterns: &PatternCounts) -> TowerParts {
     TowerParts {
-        lr: *patterns.get(&PatternVariant::TowerLR).unwrap_or(&0),
-        ud: *patterns.get(&PatternVariant::TowerUD).unwrap_or(&0),
-        ld: *patterns.get(&PatternVariant::TowerCornerLD).unwrap_or(&0),
-        lu: *patterns.get(&PatternVariant::TowerCornerLU).unwrap_or(&0),
-        rd: *patterns.get(&PatternVariant::TowerCornerRD).unwrap_or(&0),
-        ru: *patterns.get(&PatternVariant::TowerCornerRU).unwrap_or(&0),
+        lr: patterns[PatternVariant::TowerLR as usize],
+        ud: patterns[PatternVariant::TowerUD as usize],
+        ld: patterns[PatternVariant::TowerCornerLD as usize],
+        lu: patterns[PatternVariant::TowerCornerLU as usize],
+        rd: patterns[PatternVariant::TowerCornerRD as usize],
+        ru: patterns[PatternVariant::TowerCornerRU as usize],
     }
 }
 
@@ -144,12 +143,12 @@ struct TriangleParts {
 }
 
 #[inline(always)]
-fn compute_triangle_parts(patterns: &HashMap<PatternVariant, u32>) -> TriangleParts {
+fn compute_triangle_parts(patterns: &PatternCounts) -> TriangleParts {
     TriangleParts {
-        ldl: *patterns.get(&PatternVariant::TriangleLDL).unwrap_or(&0),
-        lul: *patterns.get(&PatternVariant::TriangleLUL).unwrap_or(&0),
-        rdr: *patterns.get(&PatternVariant::TriangleRDR).unwrap_or(&0),
-        rur: *patterns.get(&PatternVariant::TriangleRUR).unwrap_or(&0),
+        ldl: patterns[PatternVariant::TriangleLDL as usize],
+        lul: patterns[PatternVariant::TriangleLUL as usize],
+        rdr: patterns[PatternVariant::TriangleRDR as usize],
+        rur: patterns[PatternVariant::TriangleRUR as usize],
     }
 }
 
@@ -163,17 +162,17 @@ struct SimpleQuadParts {
 
 #[inline(always)]
 fn compute_simple_quad_parts(
-    patterns: &HashMap<PatternVariant, u32>,
+    patterns: &PatternCounts,
     a: PatternVariant,
     b: PatternVariant,
     c: PatternVariant,
     d: PatternVariant,
 ) -> SimpleQuadParts {
     SimpleQuadParts {
-        a: *patterns.get(&a).unwrap_or(&0),
-        b: *patterns.get(&b).unwrap_or(&0),
-        c: *patterns.get(&c).unwrap_or(&0),
-        d: *patterns.get(&d).unwrap_or(&0),
+        a: patterns[a as usize],
+        b: patterns[b as usize],
+        c: patterns[c as usize],
+        d: patterns[d as usize],
     }
 }
 
@@ -203,7 +202,7 @@ pub struct ChartSummary {
     pub max_nps: f64,
     pub median_nps: f64,
     pub duration_seconds: f64,
-    pub detected_patterns: HashMap<PatternVariant, u32>,
+    pub detected_patterns: PatternCounts,
     pub anchor_left: u32,
     pub anchor_down: u32,
     pub anchor_up: u32,
@@ -614,8 +613,8 @@ fn write_csv_course<W: Write>(writer: &mut W, course: &CourseSummary) -> io::Res
     Ok(())
 }
 
-fn count(map: &HashMap<PatternVariant, u32>, variant: PatternVariant) -> u32 {
-    *map.get(&variant).unwrap_or(&0)
+fn count(counts: &PatternCounts, variant: PatternVariant) -> u32 {
+    counts[variant as usize]
 }
 
 fn chart_or_global<'a>(
@@ -1224,14 +1223,8 @@ fn write_pretty_chart<W: Write>(
     write_gimmicks(writer, chart, simfile)?;
     if simfile.pattern_counts_enabled {
         writeln!(writer, "\n--- Pattern Analysis ---")?;
-        let candle_left = chart
-            .detected_patterns
-            .get(&PatternVariant::CandleLeft)
-            .unwrap_or(&0);
-        let candle_right = chart
-            .detected_patterns
-            .get(&PatternVariant::CandleRight)
-            .unwrap_or(&0);
+        let candle_left = chart.detected_patterns[PatternVariant::CandleLeft as usize];
+        let candle_right = chart.detected_patterns[PatternVariant::CandleRight as usize];
         writeln!(
             writer,
             "Candles: {} ({} left, {} right)",
@@ -1440,14 +1433,8 @@ fn write_full_chart<W: Write>(
 
     if simfile.pattern_counts_enabled {
         writeln!(writer, "\n--- Pattern Analysis ---")?;
-        let candle_left = chart
-            .detected_patterns
-            .get(&PatternVariant::CandleLeft)
-            .unwrap_or(&0);
-        let candle_right = chart
-            .detected_patterns
-            .get(&PatternVariant::CandleRight)
-            .unwrap_or(&0);
+        let candle_left = chart.detected_patterns[PatternVariant::CandleLeft as usize];
+        let candle_right = chart.detected_patterns[PatternVariant::CandleRight as usize];
         writeln!(
             writer,
             "Candles: {} ({} left, {} right)",

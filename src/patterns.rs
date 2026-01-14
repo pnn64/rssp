@@ -6,8 +6,9 @@ use std::sync::LazyLock;
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(usize)]
 pub enum PatternVariant {
-    AltStaircasesLeft,
+    AltStaircasesLeft = 0,
     AltStaircasesRight,
     AltStaircasesInvLeft,
     AltStaircasesInvRight,
@@ -70,6 +71,9 @@ pub enum PatternVariant {
     TurboCandleInvLeft,
     TurboCandleInvRight,
 }
+
+pub const PATTERN_COUNT: usize = 62;
+pub type PatternCounts = [u32; PATTERN_COUNT];
 
 // ============================================================================
 // Summary Types
@@ -205,8 +209,9 @@ fn ac_build<T: Copy>(patterns: &[(T, &[u8])]) -> AcDfa<T> {
     }
 }
 
+/// Generic search returning a HashMap (for custom patterns or non-contiguous IDs)
 #[inline]
-fn ac_search<T: Copy + Eq + std::hash::Hash>(text: &[u8], dfa: &AcDfa<T>) -> HashMap<T, u32> {
+fn ac_search_map<T: Copy + Eq + std::hash::Hash>(text: &[u8], dfa: &AcDfa<T>) -> HashMap<T, u32> {
     let mut counts = HashMap::new();
     let mut state = 0u32;
 
@@ -215,6 +220,24 @@ fn ac_search<T: Copy + Eq + std::hash::Hash>(text: &[u8], dfa: &AcDfa<T>) -> Has
         state = dfa.goto[state as usize * AC_ALPHA + sym];
         for &id in &dfa.output[state as usize] {
             *counts.entry(id).or_insert(0) += 1;
+        }
+    }
+
+    counts
+}
+
+/// Specialized search returning a fixed-size array for PatternVariant
+#[inline]
+fn ac_search_array(text: &[u8], dfa: &AcDfa<PatternVariant>) -> PatternCounts {
+    let mut counts = [0u32; PATTERN_COUNT];
+    let mut state = 0u32;
+
+    for &b in text {
+        let sym = (b & 0x0F) as usize;
+        state = dfa.goto[state as usize * AC_ALPHA + sym];
+
+        for &id in &dfa.output[state as usize] {
+            counts[id as usize] += 1;
         }
     }
 
@@ -371,17 +394,17 @@ static PATTERN_DFA: LazyLock<AcDfa<PatternVariant>> = LazyLock::new(|| {
 pub fn detect_patterns(
     bitmasks: &[u8],
     patterns: &[(PatternVariant, Vec<u8>)],
-) -> HashMap<PatternVariant, u32> {
+) -> PatternCounts {
     let pat_refs: Vec<(PatternVariant, &[u8])> = patterns
         .iter()
         .map(|(v, bits)| (*v, bits.as_slice()))
         .collect();
     let dfa = ac_build(&pat_refs);
-    ac_search(bitmasks, &dfa)
+    ac_search_array(bitmasks, &dfa)
 }
 
-pub(crate) fn detect_default_patterns(bitmasks: &[u8]) -> HashMap<PatternVariant, u32> {
-    ac_search(bitmasks, &PATTERN_DFA)
+pub(crate) fn detect_default_patterns(bitmasks: &[u8]) -> PatternCounts {
+    ac_search_array(bitmasks, &PATTERN_DFA)
 }
 
 // ============================================================================
@@ -441,7 +464,7 @@ pub(crate) fn detect_custom_patterns_compiled(
     bitmasks: &[u8],
     compiled: &CompiledCustomPatterns,
 ) -> Vec<CustomPatternSummary> {
-    let counts = ac_search(bitmasks, &compiled.dfa);
+    let counts = ac_search_map(bitmasks, &compiled.dfa);
 
     compiled
         .patterns
@@ -690,17 +713,17 @@ pub fn count_facing_steps(bitmasks: &[u8], mono_threshold: usize) -> (u32, u32) 
 // ============================================================================
 
 #[inline(always)]
-pub fn count_pattern(map: &HashMap<PatternVariant, u32>, variant: PatternVariant) -> u32 {
-    *map.get(&variant).unwrap_or(&0)
+pub fn count_pattern(counts: &PatternCounts, variant: PatternVariant) -> u32 {
+    counts[variant as usize]
 }
 
-pub fn compute_box_counts(map: &HashMap<PatternVariant, u32>) -> BoxCounts {
-    let lr = count_pattern(map, PatternVariant::BoxLR);
-    let ud = count_pattern(map, PatternVariant::BoxUD);
-    let ld = count_pattern(map, PatternVariant::BoxCornerLD);
-    let lu = count_pattern(map, PatternVariant::BoxCornerLU);
-    let rd = count_pattern(map, PatternVariant::BoxCornerRD);
-    let ru = count_pattern(map, PatternVariant::BoxCornerRU);
+pub fn compute_box_counts(counts: &PatternCounts) -> BoxCounts {
+    let lr = count_pattern(counts, PatternVariant::BoxLR);
+    let ud = count_pattern(counts, PatternVariant::BoxUD);
+    let ld = count_pattern(counts, PatternVariant::BoxCornerLD);
+    let lu = count_pattern(counts, PatternVariant::BoxCornerLU);
+    let rd = count_pattern(counts, PatternVariant::BoxCornerRD);
+    let ru = count_pattern(counts, PatternVariant::BoxCornerRU);
     let corner = ld + lu + rd + ru;
     let total = lr + ud + corner;
 
