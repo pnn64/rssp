@@ -1659,12 +1659,15 @@ where
     }
 
     let mut measure_idx = 0usize;
+    let mut lines: Vec<&[u8]> = Vec::new();
     for measure in data.split(|&b| b == b',') {
-        let lines: Vec<_> = measure
-            .split(|&b| b == b'\n')
-            .map(trim_ws)
-            .filter(|l| !l.is_empty())
-            .collect();
+        lines.clear();
+        for line in measure.split(|&b| b == b'\n') {
+            let line = trim_ws(line);
+            if !line.is_empty() {
+                lines.push(line);
+            }
+        }
         if lines.is_empty() {
             measure_idx += 1;
             continue;
@@ -1674,7 +1677,7 @@ where
         let start = measure_idx as f32 * 4.0;
         let step = 4.0 / num as f32;
 
-        for (j, line) in lines.into_iter().enumerate() {
+        for (j, &line) in lines.iter().enumerate() {
             let copy = line.len().min(cols);
             if !has_obj(&line[..copy]) {
                 continue;
