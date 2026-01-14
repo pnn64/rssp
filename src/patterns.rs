@@ -194,8 +194,13 @@ fn ac_build<T: Copy>(patterns: &[(T, &[u8])]) -> AcDfa<T> {
         }
     }
 
+    let mut flat_goto = Vec::with_capacity(goto.len() * AC_ALPHA);
+    for row in &goto {
+        flat_goto.extend_from_slice(row);
+    }
+
     AcDfa {
-        goto: goto.into_iter().flatten().collect(),
+        goto: flat_goto,
         output,
     }
 }
