@@ -169,8 +169,11 @@ fn ac_build<T: Copy>(patterns: &[(T, &[u8])]) -> AcDfa<T> {
             fail[child_idx] = fail_target;
 
             if fail_target != 0 {
-                let suffix_matches: Vec<T> = output[fail_target as usize].clone();
-                output[child_idx].extend(suffix_matches);
+                let ft = fail_target as usize;
+                for j in 0..output[ft].len() {
+                    let val = output[ft][j];
+                    output[child_idx].push(val);
+                }
             }
         }
     }
