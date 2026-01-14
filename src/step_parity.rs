@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
+use std::sync::OnceLock;
 
 use crate::timing::{ROWS_PER_BEAT, TimingData, beat_to_note_row_f32};
 
@@ -443,6 +444,8 @@ impl PartialEq for State {
 impl Eq for State {}
 
 type FootPlacement = [Foot; MAX_COLUMNS];
+
+const NO_PERMS: [FootPlacement; 1] = [[Foot::None; MAX_COLUMNS]];
 
 #[inline(always)]
 fn pack_cols(cols: &[Foot; MAX_COLUMNS]) -> u32 {
@@ -900,9 +903,10 @@ fn did_double_step(
 // --- Generator ---
 
 struct StepParityGenerator {
-    layout: StageLayout,
+    layout: &'static StageLayout,
+    perm_table: &'static [Box<[FootPlacement]>; 256],
+    perm_cache: [Option<&'static [FootPlacement]>; 256],
     column_count: usize,
-    permute_cache: [Option<Box<[FootPlacement]>>; 256],
     nodes: Vec<StepParityNode>,
     edges: Vec<Edge>,
     rows: Vec<Row>,
@@ -910,11 +914,12 @@ struct StepParityGenerator {
 }
 
 impl StepParityGenerator {
-    fn new(layout: StageLayout) -> Self {
+    fn new(cache: &'static LayoutCache) -> Self {
         Self {
-            column_count: layout.column_count(),
-            layout,
-            permute_cache: std::array::from_fn(|_| None),
+            column_count: cache.layout.column_count(),
+            layout: &cache.layout,
+            perm_table: &cache.perm_table,
+            perm_cache: [None; 256],
             nodes: Vec::new(),
             edges: Vec::new(),
             rows: Vec::new(),
@@ -924,7 +929,7 @@ impl StepParityGenerator {
 
     fn analyze(&mut self, notes: Vec<IntermediateNoteData>, cols: usize) -> bool {
         self.column_count = cols;
-        self.permute_cache.fill(None);
+        self.perm_cache.fill(None);
         self.nodes.clear();
         self.edges.clear();
         self.rows.clear();
@@ -1055,8 +1060,7 @@ impl StepParityGenerator {
             let elapsed = row_second - prev_second;
             prev_second = row_second;
 
-            let (perm_key, perms_box) = self.take_perms_for_row(i);
-            let perms = perms_box.as_ref();
+            let perms = self.perms_for_row(i);
             next_ids.clear();
             state_map.clear();
             state_map.reserve(perms.len());
@@ -1070,7 +1074,7 @@ impl StepParityGenerator {
                 for perm in perms.iter() {
                     let (result, key) = self.result_state(&init_state, i, perm);
                     let cost = calc_action_cost(
-                        &self.layout,
+                        self.layout,
                         &init_state,
                         &result,
                         &self.rows,
@@ -1098,7 +1102,6 @@ impl StepParityGenerator {
                 node.edge_count = edge_count;
             }
 
-            self.permute_cache[perm_key] = Some(perms_box);
             std::mem::swap(&mut prev_ids, &mut next_ids);
         }
 
@@ -1126,46 +1129,23 @@ impl StepParityGenerator {
         idx
     }
 
-    fn take_perms_for_row(&mut self, row_idx: usize) -> (usize, Box<[FootPlacement]>) {
-        let (note_mask, hold_mask) = {
-            let row = &self.rows[row_idx];
-            (row.note_mask, row.hold_mask)
+    fn perms_for_row(&mut self, row_idx: usize) -> &'static [FootPlacement] {
+        let row = &self.rows[row_idx];
+        let key = (row.note_mask | row.hold_mask) as usize;
+        if let Some(perms) = self.perm_cache[key] {
+            return perms;
+        }
+
+        let union = self.perm_table[key].as_ref();
+        let perms = if !union.is_empty() {
+            union
+        } else {
+            let note = self.perm_table[row.note_mask as usize].as_ref();
+            if !note.is_empty() { note } else { &NO_PERMS }
         };
-        let key = (note_mask | hold_mask) as usize;
-        if let Some(perms) = self.permute_cache[key].take() {
-            return (key, perms);
-        }
 
-        let mut cols = [Foot::None; MAX_COLUMNS];
-        let mask = note_mask | hold_mask;
-        let mut perms = Vec::new();
-        let bits = mask.count_ones() as usize;
-        if bits <= 4 {
-            perms = Vec::with_capacity(PERM_CAP[bits]);
-            permute_row(&self.layout, mask, &mut cols, 0, self.column_count, 0, &mut perms);
-        }
-        if perms.is_empty() {
-            cols.fill(Foot::None);
-            let mask = note_mask;
-            let bits = mask.count_ones() as usize;
-            if bits <= 4 {
-                perms = Vec::with_capacity(PERM_CAP[bits]);
-                permute_row(
-                    &self.layout,
-                    mask,
-                    &mut cols,
-                    0,
-                    self.column_count,
-                    0,
-                    &mut perms,
-                );
-            }
-        }
-        if perms.is_empty() {
-            perms.push([Foot::None; MAX_COLUMNS]);
-        }
-
-        (key, perms.into_boxed_slice())
+        self.perm_cache[key] = Some(perms);
+        perms
     }
 
     fn result_state(&self, initial: &State, row_idx: usize, cols: &FootPlacement) -> (State, u64) {
@@ -1622,10 +1602,48 @@ struct ParsedRow {
     second: f32,
 }
 
-fn layout_for_lanes(lanes: usize) -> Option<StageLayout> {
+struct LayoutCache {
+    layout: StageLayout,
+    perm_table: [Box<[FootPlacement]>; 256],
+}
+
+impl LayoutCache {
+    fn new(layout: StageLayout) -> Self {
+        let perm_table = build_perm_table(&layout);
+        Self { layout, perm_table }
+    }
+}
+
+fn build_perm_table(layout: &StageLayout) -> [Box<[FootPlacement]>; 256] {
+    let col_count = layout.column_count();
+    std::array::from_fn(|mask| {
+        let mask = mask as u8;
+        let bits = mask.count_ones() as usize;
+        if bits > 4 {
+            return Vec::new().into_boxed_slice();
+        }
+
+        let mut cols = [Foot::None; MAX_COLUMNS];
+        let mut perms = Vec::with_capacity(PERM_CAP[bits]);
+        permute_row(layout, mask, &mut cols, 0, col_count, 0, &mut perms);
+        perms.into_boxed_slice()
+    })
+}
+
+fn dance_single_cache() -> &'static LayoutCache {
+    static CACHE: OnceLock<LayoutCache> = OnceLock::new();
+    CACHE.get_or_init(|| LayoutCache::new(StageLayout::new_dance_single()))
+}
+
+fn dance_double_cache() -> &'static LayoutCache {
+    static CACHE: OnceLock<LayoutCache> = OnceLock::new();
+    CACHE.get_or_init(|| LayoutCache::new(StageLayout::new_dance_double()))
+}
+
+fn layout_for_lanes(lanes: usize) -> Option<&'static LayoutCache> {
     match lanes {
-        4 => Some(StageLayout::new_dance_single()),
-        8 => Some(StageLayout::new_dance_double()),
+        4 => Some(dance_single_cache()),
+        8 => Some(dance_double_cache()),
         _ => None,
     }
 }
@@ -1808,39 +1826,41 @@ fn build_notes(rows: &[ParsedRow], timing: Option<&TimingData>) -> Vec<Intermedi
 // --- Public API ---
 
 pub fn analyze_lanes(data: &[u8], bpm_map: &[(f64, f64)], offset: f64, lanes: usize) -> TechCounts {
-    let Some(layout) = layout_for_lanes(lanes) else {
+    let Some(cache) = layout_for_lanes(lanes) else {
         return TechCounts::default();
     };
 
-    let minimized = crate::stats::minimize_chart_for_hash(data, layout.column_count());
-    let rows = parse_rows(&minimized, layout.column_count(), |beat| {
+    let cols = cache.layout.column_count();
+    let minimized = crate::stats::minimize_chart_for_hash(data, cols);
+    let rows = parse_rows(&minimized, cols, |beat| {
         time_between_beats(0.0, beat, bpm_map) as f32 - offset as f32
     });
     let notes = build_notes(&rows, None);
 
-    let mut generator = StepParityGenerator::new(layout.clone());
-    if !generator.analyze(notes, layout.column_count()) {
+    let mut generator = StepParityGenerator::new(cache);
+    if !generator.analyze(notes, cols) {
         return TechCounts::default();
     }
-    calculate_tech_counts(&generator.rows, &generator.result_columns, &generator.layout)
+    calculate_tech_counts(&generator.rows, &generator.result_columns, generator.layout)
 }
 
 pub fn analyze_timing_lanes(data: &[u8], timing: &TimingData, lanes: usize) -> TechCounts {
-    let Some(layout) = layout_for_lanes(lanes) else {
+    let Some(cache) = layout_for_lanes(lanes) else {
         return TechCounts::default();
     };
 
-    let minimized = crate::stats::minimize_chart_for_hash(data, layout.column_count());
-    let rows = parse_rows(&minimized, layout.column_count(), |beat| {
+    let cols = cache.layout.column_count();
+    let minimized = crate::stats::minimize_chart_for_hash(data, cols);
+    let rows = parse_rows(&minimized, cols, |beat| {
         timing.get_time_for_beat_f32(beat as f64) as f32
     });
     let notes = build_notes(&rows, Some(timing));
 
-    let mut generator = StepParityGenerator::new(layout.clone());
-    if !generator.analyze(notes, layout.column_count()) {
+    let mut generator = StepParityGenerator::new(cache);
+    if !generator.analyze(notes, cols) {
         return TechCounts::default();
     }
-    calculate_tech_counts(&generator.rows, &generator.result_columns, &generator.layout)
+    calculate_tech_counts(&generator.rows, &generator.result_columns, generator.layout)
 }
 
 pub(crate) fn analyze_timing_rows<const LANES: usize>(
@@ -1849,18 +1869,19 @@ pub(crate) fn analyze_timing_rows<const LANES: usize>(
     timing: &TimingData,
     _minimized_note_data: &[u8],
 ) -> TechCounts {
-    let Some(layout) = layout_for_lanes(LANES) else {
+    let Some(cache) = layout_for_lanes(LANES) else {
         return TechCounts::default();
     };
 
-    let parsed = parse_rows_from_arrays(rows, row_to_beat, timing, layout.column_count());
+    let cols = cache.layout.column_count();
+    let parsed = parse_rows_from_arrays(rows, row_to_beat, timing, cols);
     let notes = build_notes(&parsed, Some(timing));
 
-    let mut generator = StepParityGenerator::new(layout.clone());
-    if !generator.analyze(notes, layout.column_count()) {
+    let mut generator = StepParityGenerator::new(cache);
+    if !generator.analyze(notes, cols) {
         return TechCounts::default();
     }
-    calculate_tech_counts(&generator.rows, &generator.result_columns, &generator.layout)
+    calculate_tech_counts(&generator.rows, &generator.result_columns, generator.layout)
 }
 
 fn time_between_beats(start: f32, end: f32, bpm_map: &[(f64, f64)]) -> f64 {
