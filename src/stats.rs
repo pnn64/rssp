@@ -254,25 +254,70 @@ fn recalc_without_phantoms<const L: usize>(
     rows: &[[u8; L]],
     ends: &[[Option<usize>; L]],
 ) -> ArrowStats {
-    let fixed: Vec<_> = rows
-        .iter()
-        .enumerate()
-        .map(|(i, row)| {
-            let mut new = *row;
-            for (c, b) in new.iter_mut().enumerate() {
-                if ends[i][c].is_none() && matches!(*b, b'2' | b'4') {
-                    *b = b'0';
-                }
-            }
-            new
-        })
-        .collect();
-
-    let (mut stats, mut h, mut e) = (ArrowStats::default(), 0, 0);
-    for line in &fixed {
-        count_line(line, &mut stats, &mut h, &mut e);
+    let mut stats = ArrowStats::default();
+    for (i, line) in rows.iter().enumerate() {
+        let phantom_mask = ends[i]
+            .iter()
+            .enumerate()
+            .fold(0u8, |m, (c, e)| if e.is_none() { m | (1 << c) } else { m });
+        count_line_masked(line, &mut stats, phantom_mask);
     }
     stats
+}
+
+#[inline(always)]
+fn count_line_masked<const L: usize>(
+    line: &[u8; L],
+    stats: &mut ArrowStats,
+    phantom_mask: u8,
+) {
+    let (mut note_mask, mut hold_mask, mut end_mask) = (0u8, 0u8, 0u8);
+
+    for (i, &ch) in line.iter().enumerate() {
+        let bit = 1u8 << i;
+        let is_phantom = (phantom_mask & bit) != 0;
+        match ch {
+            b'1' => {
+                note_mask |= bit;
+                stats.total_arrows += 1;
+                bump_dir(stats, i);
+            }
+            b'2' | b'4' if !is_phantom => {
+                note_mask |= bit;
+                hold_mask |= bit;
+                stats.total_arrows += 1;
+                bump_dir(stats, i);
+                if ch == b'2' {
+                    stats.holds += 1;
+                } else {
+                    stats.rolls += 1;
+                }
+            }
+            b'3' => end_mask |= 1 << i,
+            b'M' => stats.mines += 1,
+            b'L' => stats.lifts += 1,
+            b'F' => stats.fakes += 1,
+            _ => {}
+        }
+    }
+
+    let notes = note_mask.count_ones();
+    let active = stats.holding;
+
+    if notes == 0 {
+        stats.holding = (stats.holding - end_mask.count_ones() as i32).max(0);
+        return;
+    }
+
+    stats.total_steps += 1;
+    if notes >= 2 {
+        stats.jumps += 1;
+    }
+    if notes as i32 + active >= 3 {
+        stats.hands += 1;
+    }
+    stats.holding =
+        (stats.holding + hold_mask.count_ones() as i32 - end_mask.count_ones() as i32).max(0);
 }
 
 // ============================================================================
