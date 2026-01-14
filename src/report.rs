@@ -2434,7 +2434,26 @@ fn write_json_value_with_key<W: Write>(
     }
 }
 
-fn write_json_array<W: Write>(writer: &mut W, arr: &[JsonValue], indent: usize) -> io::Result<()> {
+fn write_json_scalar_array<W: Write>(
+    writer: &mut W,
+    arr: &[JsonValue],
+    indent: usize,
+) -> io::Result<()> {
+    writer.write_all(b"[")?;
+    for (i, value) in arr.iter().enumerate() {
+        if i != 0 {
+            writer.write_all(b", ")?;
+        }
+        write_json_value_with_key(writer, None, value, indent)?;
+    }
+    writer.write_all(b"]")
+}
+
+fn write_json_array_multiline<W: Write>(
+    writer: &mut W,
+    arr: &[JsonValue],
+    indent: usize,
+) -> io::Result<()> {
     writer.write_all(b"[\n")?;
     let mut first = true;
     for value in arr {
@@ -2448,6 +2467,23 @@ fn write_json_array<W: Write>(writer: &mut W, arr: &[JsonValue], indent: usize) 
     writer.write_all(b"\n")?;
     write_indent(writer, indent)?;
     writer.write_all(b"]")
+}
+
+fn write_json_array<W: Write>(writer: &mut W, arr: &[JsonValue], indent: usize) -> io::Result<()> {
+    if arr.is_empty() {
+        return writer.write_all(b"[]");
+    }
+
+    if arr.iter().all(|v| {
+        matches!(
+            v,
+            JsonValue::Null | JsonValue::Bool(_) | JsonValue::Number(_) | JsonValue::String(_)
+        )
+    }) {
+        return write_json_scalar_array(writer, arr, indent);
+    }
+
+    write_json_array_multiline(writer, arr, indent)
 }
 
 fn write_json_object<W: Write>(
