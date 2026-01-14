@@ -1730,17 +1730,18 @@ fn build_notes(rows: &[ParsedRow], timing: Option<&TimingData>) -> Vec<Intermedi
 
 // --- Public API ---
 
-pub fn analyze_lanes(data: &[u8], bpm_map: &[(f64, f64)], offset: f64, lanes: usize) -> TechCounts {
-    let Some(cache) = layout_for_lanes(lanes) else {
-        return TechCounts::default();
-    };
-
-    let cols = cache.layout.column_count();
-    let minimized = crate::stats::minimize_chart_for_hash(data, cols);
-    let rows = parse_rows(&minimized, cols, |beat| {
-        time_between_beats(0.0, beat, bpm_map) as f32 - offset as f32
-    });
-    let notes = build_notes(&rows, None);
+fn analyze_core<F>(
+    cache: &'static LayoutCache,
+    data: &[u8],
+    cols: usize,
+    timing: Option<&TimingData>,
+    get_second: F,
+) -> TechCounts
+where
+    F: FnMut(f32) -> f32,
+{
+    let rows = parse_rows(data, cols, get_second);
+    let notes = build_notes(&rows, timing);
 
     let mut generator = StepParityGenerator::new(cache);
     if !generator.analyze(notes, cols) {
@@ -1749,23 +1750,33 @@ pub fn analyze_lanes(data: &[u8], bpm_map: &[(f64, f64)], offset: f64, lanes: us
     calculate_tech_counts(&generator.rows, &generator.result_columns, generator.layout)
 }
 
-pub fn analyze_timing_lanes(data: &[u8], timing: &TimingData, lanes: usize) -> TechCounts {
+pub fn analyze_lanes(
+    minimized_note_data: &[u8],
+    bpm_map: &[(f64, f64)],
+    offset: f64,
+    lanes: usize,
+) -> TechCounts {
     let Some(cache) = layout_for_lanes(lanes) else {
         return TechCounts::default();
     };
 
     let cols = cache.layout.column_count();
-    let minimized = crate::stats::minimize_chart_for_hash(data, cols);
-    let rows = parse_rows(&minimized, cols, |beat| {
-        timing.get_time_for_beat_f32(beat as f64) as f32
-    });
-    let notes = build_notes(&rows, Some(timing));
+    debug_assert!(!minimized_note_data.contains(&b';'));
+    analyze_core(cache, minimized_note_data, cols, None, |beat| {
+        time_between_beats(0.0, beat, bpm_map) as f32 - offset as f32
+    })
+}
 
-    let mut generator = StepParityGenerator::new(cache);
-    if !generator.analyze(notes, cols) {
+pub fn analyze_timing_lanes(minimized_note_data: &[u8], timing: &TimingData, lanes: usize) -> TechCounts {
+    let Some(cache) = layout_for_lanes(lanes) else {
         return TechCounts::default();
-    }
-    calculate_tech_counts(&generator.rows, &generator.result_columns, generator.layout)
+    };
+
+    let cols = cache.layout.column_count();
+    debug_assert!(!minimized_note_data.contains(&b';'));
+    analyze_core(cache, minimized_note_data, cols, Some(timing), |beat| {
+        timing.get_time_for_beat_f32(beat as f64) as f32
+    })
 }
 
 pub(crate) fn analyze_timing_rows<const LANES: usize>(
