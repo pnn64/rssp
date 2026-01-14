@@ -223,14 +223,11 @@ fn parse_speeds(s: &str) -> Vec<SpeedSegment> {
     }
     s.split(',')
         .filter_map(|chunk| {
-            let parts: Vec<_> = chunk.split('=').map(str::trim).collect();
-            if parts.len() < 3 {
-                return None;
-            }
-            let beat = parse_beat_or_row(parts[0])?;
-            let ratio = parts[1].parse::<f64>().ok()? as f32 as f64;
-            let delay = parts[2].parse::<f64>().ok()? as f32 as f64;
-            let unit = if parts.get(3) == Some(&"1") {
+            let mut parts = chunk.split('=').map(str::trim);
+            let beat = parse_beat_or_row(parts.next()?)?;
+            let ratio = parts.next()?.parse::<f64>().ok()? as f32 as f64;
+            let delay = parts.next()?.parse::<f64>().ok()? as f32 as f64;
+            let unit = if parts.next() == Some("1") {
                 SpeedUnit::Seconds
             } else {
                 SpeedUnit::Beats
