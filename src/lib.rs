@@ -4,7 +4,7 @@ pub mod bpm;
 pub mod course;
 pub mod duration;
 pub mod graph;
-pub mod hashing;
+pub mod hash;
 pub mod math;
 pub mod matrix;
 pub mod nps;

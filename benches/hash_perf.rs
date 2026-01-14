@@ -88,7 +88,7 @@ fn bench_hash_inner(c: &mut Criterion) {
                 };
 
                 let hash =
-                    rssp::hashing::compute_chart_hash(&minimized_chart, bpms_to_use.as_ref());
+                    rssp::hash::compute_chart_hash(&minimized_chart, bpms_to_use.as_ref());
                 hashes.push(hash);
             }
             black_box(hashes);

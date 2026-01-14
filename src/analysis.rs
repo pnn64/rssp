@@ -7,7 +7,7 @@ use crate::stats;
 use crate::step_parity;
 
 use crate::bpm::*;
-use crate::hashing::*;
+use crate::hash::*;
 use crate::math::{round_dp, round_sig_figs_6};
 use crate::matrix::compute_matrix_rating;
 use crate::parse::*;
