@@ -874,6 +874,9 @@ struct StepParityGenerator {
     nodes: Vec<StepParityNode>,
     rows: Vec<Row>,
     result_columns: Vec<FootPlacement>,
+    prev_ids: Vec<usize>,
+    next_ids: Vec<usize>,
+    state_map: FastMap<u32, usize>,
 }
 
 impl StepParityGenerator {
@@ -886,6 +889,9 @@ impl StepParityGenerator {
             nodes: Vec::new(),
             rows: Vec::new(),
             result_columns: Vec::new(),
+            prev_ids: Vec::new(),
+            next_ids: Vec::new(),
+            state_map: FastMap::default(),
         }
     }
 
@@ -1042,9 +1048,10 @@ impl StepParityGenerator {
         let start_id = self.add_node(State::new());
         self.nodes[start_id].cost = 0.0;
 
-        let mut prev_ids = vec![start_id];
-        let mut next_ids = Vec::new();
-        let mut state_map: FastMap<u32, usize> = FastMap::default();
+        self.prev_ids.clear();
+        self.prev_ids.push(start_id);
+        self.next_ids.clear();
+        self.state_map.clear();
 
         let mut prev_second = self.rows.first().map(|r| r.second - 1.0).unwrap_or(-1.0);
 
@@ -1054,11 +1061,12 @@ impl StepParityGenerator {
             prev_second = row_second;
 
             let perms = self.perms_for_row(i);
-            next_ids.clear();
-            state_map.clear();
-            state_map.reserve(perms.len());
+            self.next_ids.clear();
+            self.state_map.clear();
+            self.state_map.reserve(perms.len());
 
-            for &init_id in &prev_ids {
+            for j in 0..self.prev_ids.len() {
+                let init_id = self.prev_ids[j];
                 let init_state = self.nodes[init_id].state;
                 let init_cost = self.nodes[init_id].cost;
                 for perm in perms.iter() {
@@ -1075,11 +1083,15 @@ impl StepParityGenerator {
                             elapsed,
                             self.column_count,
                         );
-                    let res_id = *state_map.entry(key).or_insert_with(|| {
-                        let id = self.add_node(result);
-                        next_ids.push(id);
-                        id
-                    });
+                    let res_id = match self.state_map.get(&key) {
+                        Some(&id) => id,
+                        None => {
+                            let id = self.add_node(result);
+                            self.next_ids.push(id);
+                            self.state_map.insert(key, id);
+                            id
+                        }
+                    };
 
                     let node = &mut self.nodes[res_id];
                     if nc < node.cost {
@@ -1089,11 +1101,12 @@ impl StepParityGenerator {
                 }
             }
 
-            std::mem::swap(&mut prev_ids, &mut next_ids);
+            std::mem::swap(&mut self.prev_ids, &mut self.next_ids);
         }
 
-        prev_ids
-            .into_iter()
+        self.prev_ids
+            .iter()
+            .copied()
             .min_by(|&a, &b| self.nodes[a].cost.total_cmp(&self.nodes[b].cost))
     }
 
