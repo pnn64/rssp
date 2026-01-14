@@ -266,21 +266,6 @@ Luchis: 187 (51 Left DU, 44 Left UD, 54 Right DU, 38 Right UD)
 Elapsed Time: 68.9951ms
 ```
 
-## TODO
-- [x] Count Fakes and Lifts
-- [x] Properly parse Ivaltek (indented NOTES) from SHARPNELSTREAMZ v2
-- [ ] Properly handle empty charts
-- [x] Basic `.crs` parsing (fixed `#SONG` entries)
-- [ ] Full `.crs` spec support (RANDOM/BEST/WORST/SONGSELECT, meter ranges, etc.)
-- [x] Fix parsing of multiple simfile authors with '&' (for instance Maxx & Zaia)
-- [x] Check that some special characters are parsed correctly (CODE:Ø as opposed to CODE\:Ø)
-- [x] Fix parsing for "No Tech" in artist name
-- [x] Doubles (8-panel) parsing
-- [x] Custom patterns flag --custom-pattern DULDUDLR
-- [x] Proper parsing for Tech (port Step Parity from ITGmania)
-- [x] Add many tests for edge case simfiles
-- [x] Add "matrix rating" (calculate estimated rating based on rating matrix sheet)
-
 ## Contributing
 
 Contributions are welcome! Please feel free to open an issue to report bugs or suggest features, especially if you have a simfile that does not parse properly/accurately.
