@@ -204,7 +204,7 @@ perfecttaste@LAPTOP ~ $ ./rssp timelessbeatz.sm --full
 Title: [18] [170] TIMELESS BEATZ
 Subtitle: ~Breakbeats To Chill To~
 Artist: Various Artists (mixed by Rems)
-Length: 59m 43s
+Length: 59m 41s
 BPM: 170
 Average BPM: 170.00
 Median BPM: 170.00
@@ -214,18 +214,18 @@ Offset: 0.009
 Challenge 18 : CSktls Rems mang Janus5k Mango
 ---------------------------------------------
 Step Type: dance-single
-Matrix Rating: 18.6493
+Matrix Rating: 18.6500
 Tier BPM: 170
 SHA1 Hash: da8bc528eb55ea86
 BPM Neutral SHA1 Hash: 9b60cf786177ffc5
 
-NPS: 11.33 Median/Peak
-Total Stream: 1998 (78.72%/80.60% Adj.)
+NPS: 11.33 Peak
+Total Stream: 1998 (78.72%/80.02% Adj.)
     16th_streams: 1998
     20th_streams: 0
     24th_streams: 0
     32nd_streams: 0
-Total Break: 481 (19.40%)
+Total Break: 499 (19.98%)
 
 --- Chart Info ---
 Steps: 33004 (33022 arrows) [8320 left, 8164 down, 8235 up, 8303 right]
@@ -234,8 +234,6 @@ Hands: 0
 Holds: 58
 Rolls: 11
 Mines: 0
-Lifts: 0
-Fakes: 0
 
 --- Pattern Analysis ---
 Candles: 2532 (1264 left, 1268 right)
@@ -244,6 +242,21 @@ Mono: 6677 (3347 left-facing, 3330 right-facing)
 Mono%: 20.23%
 Boxes: 252 (45 LRLR, 24 UDUD, 26 LDLD, 28 LULU, 28 RDRD, 32 RURU)
 Anchors: 605 (276 left, 19 down, 34 up, 276 right)
+
+--- Step Parity Analysis ---
+Crossovers: 0
+Footswitches: 0 (0 up, 0 down)
+Sideswitches: 0
+Jacks: 0
+Brackets: 0
+Doublesteps: 0
+
+--- Detailed Breakdown ---
+32 (16) 31 (3) 29 (17) 15-14 (2) 15-30 (2) 15-14 (2) 15-14 (34) 79-31 (3) 45-79-31-15 (17) 16 (24) 23-47-31-31-30 (2) 14 (2) 63-15-15-15-16 (16) 15-15-15-31 (33) 30 (2) 31-15-15-15-15-31 (17) 103-54 (26) 30 (2) 48 (16) 14 (2) 62 (2) 30 (2) 47-32 (40) 31-32 (32) 31-15-7-7-7-7-7-3-5-1-3 (33) 9-1-84 (16) 46 (2) 31 (25) 14 (2) 16 (48) 15-95-63
+--- Partial Breakdown ---
+32/31-29/15-14-15-30-15-14-15-14 | 79-31-45-79-31-15/16/23-47-31-31-30-14-63-15-15-15-16/15-15-15-31 | 30-31-15-15-15-15-31/103-54/30-48/14-62-30-47-32 | 31-32 | 31-15-7-7-7-7-7-3-5-1-3 | 9-1-84/46-31/14-16 | 15-95-63
+--- Simple Breakdown ---
+32/31-29/30*-46*-30*-30* | 111*-173*/16/166*-14-128*/79* | 30-127*/158*/30-48/14-62-30-80* | 64* | 103* | 96*/46-31/14-16 | 175*
 
 --- SN Detailed Breakdown ---
 32 (16) 31 (3) 29 (17) 15 14 (2) 15 30 (2) 15 14 (2) 15 14 (34) 79 31 (3) 45 79 31 15 (17) 16 (24) 23 47 31 31 30 (2) 14 (2) 63 15 15 15 16 (16) 15 15 15 31 (33) 30 (2) 31 15 15 15 15 31 (17) 103 54 (26) 30 (2) 48 (16) 14 (2) 62 (2) 30 (2) 47 32 (40) 31 32 (32) 31 15 7 7 7 7 7 3 5 1 3 (33) 9 1 84 (16) 46 (2) 31 (25) 14 (2) 16 (48) 15 95 63
@@ -256,8 +269,8 @@ Anchors: 605 (276 left, 19 down, 34 up, 276 right)
 Total Towers: 5 (1 LR, 0 UD, 2 LD, 1 LU, 1 RD, 0 RU)
 Total Triangles: 2893 (727 LDL, 716 LUL, 701 RDR, 749 RUR)
 Staircases: 5275 (1280 Left, 1341 Right, 1322 Left Inv, 1332 Right Inv)
-Alt Staircases: 1153 (301 Left, 283 Right, 299 Left Inv, 270 Right Inv)
-Double Staircases: 30 (7 Left, 8 Right, 7 Left Inv, 8 Right Inv)
+Alt Staircases: 1153 (283 Left, 301 Right, 270 Left Inv, 299 Right Inv)
+Double Staircases: 30 (8 Left, 7 Right, 8 Left Inv, 7 Right Inv)
 Sweeps: 212 (46 Left, 51 Right, 49 Left Inv, 66 Right Inv)
 Candle Sweeps: 29 (9 Left, 4 Right, 6 Left Inv, 10 Right Inv)
 Copters: 61 (10 Left, 12 Right, 22 Left Inv, 17 Right Inv)
@@ -267,7 +280,7 @@ Hip Breakers: 13 (4 Left, 3 Right, 3 Left Inv, 3 Right Inv)
 Doritos: 896 (215 Left, 220 Right, 243 Left Inv, 218 Right Inv)
 Luchis: 187 (51 Left DU, 44 Left UD, 54 Right DU, 38 Right UD)
 
-Elapsed Time: 18.667896ms
+Elapsed Time: 68.9951ms
 ```
 
 ## TODO
