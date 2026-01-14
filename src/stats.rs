@@ -100,11 +100,14 @@ fn has_step<const L: usize>(line: &[u8]) -> bool {
 // Unified Hold Tracking
 // ============================================================================
 
+const HOLD_STACK_CAP: usize = 8;
+
 fn track_holds_core<const L: usize>(
     rows: impl Iterator<Item = impl AsRef<[u8]>>,
     row_count: usize,
 ) -> Vec<[usize; L]> {
-    let mut stacks: [Vec<usize>; L] = std::array::from_fn(|_| Vec::new());
+    let mut stacks: [[usize; HOLD_STACK_CAP]; L] = [[0; HOLD_STACK_CAP]; L];
+    let mut depths: [usize; L] = [0; L];
     let mut ends = Vec::with_capacity(row_count);
 
     for (i, row) in rows.enumerate() {
@@ -112,10 +115,18 @@ fn track_holds_core<const L: usize>(
         ends.push([HOLD_END_NONE; L]);
         for c in 0..L.min(r.len()) {
             match r[c] {
-                ch if is_hold_blocker(ch) => stacks[c].clear(),
-                b'2' | b'4' => stacks[c].push(i),
+                ch if is_hold_blocker(ch) => depths[c] = 0,
+                b'2' | b'4' => {
+                    let d = depths[c];
+                    if d < HOLD_STACK_CAP {
+                        stacks[c][d] = i;
+                        depths[c] = d + 1;
+                    }
+                }
                 b'3' => {
-                    if let Some(start) = stacks[c].pop() {
+                    if depths[c] > 0 {
+                        depths[c] -= 1;
+                        let start = stacks[c][depths[c]];
                         ends[start][c] = i;
                     }
                 }
