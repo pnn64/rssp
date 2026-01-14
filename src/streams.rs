@@ -120,21 +120,14 @@ pub fn stream_sequences(measures: &[usize]) -> Vec<StreamSegment> {
 }
 
 pub fn compute_stream_counts(measures: &[usize]) -> StreamCounts {
-    let cats: Vec<_> = measures
-        .iter()
-        .map(|&d| categorize_measure_density(d))
-        .collect();
-    let (start, end) = match (
-        cats.iter().position(|&c| c != RunDensity::Break),
-        cats.iter().rposition(|&c| c != RunDensity::Break),
-    ) {
-        (Some(s), Some(e)) => (s, e),
+    let (start, end) = match active_range(measures) {
+        Some(r) => r,
         _ => return StreamCounts::default(),
     };
 
     let mut sc = StreamCounts::default();
-    for &cat in &cats[start..=end] {
-        match cat {
+    for &d in &measures[start..=end] {
+        match categorize_measure_density(d) {
             RunDensity::Run16 => sc.run16_streams += 1,
             RunDensity::Run20 => sc.run20_streams += 1,
             RunDensity::Run24 => sc.run24_streams += 1,
