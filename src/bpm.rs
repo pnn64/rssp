@@ -331,10 +331,8 @@ fn chart_metadata(fields: &[&[u8]], fmt: TimingFormat) -> Option<(String, String
     if fields.len() < 4 {
         return None;
     }
+    let _lanes = crate::analysis::supported_stepstype_lanes_bytes(fields[0])?;
     let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());
-    if step_type == "lights-cabinet" {
-        return None;
-    }
     let desc = unescape_trim(decode_bytes(fields[1]).as_ref());
     let diff_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
     let meter = unescape_trim(decode_bytes(fields[3]).as_ref());

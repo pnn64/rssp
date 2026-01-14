@@ -61,10 +61,10 @@ pub fn compute_chart_peak_nps(
         let fields = entry.fields;
         let chart_data = entry.note_data;
 
-        let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());
-        if step_type == "lights-cabinet" {
+        let Some(lanes) = crate::analysis::supported_stepstype_lanes_bytes(fields[0]) else {
             continue;
-        }
+        };
+        let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());
         let description_raw = unescape_trim(decode_bytes(fields[1]).as_ref());
         let description = normalize_chart_desc(description_raw, timing_format, ssc_version);
         let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
@@ -72,7 +72,6 @@ pub fn compute_chart_peak_nps(
         let difficulty =
             crate::resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
 
-        let lanes = crate::step_type_lanes(&step_type);
         let measure_densities = crate::stats::measure_densities(chart_data, lanes);
 
         let timing_src = crate::timing::resolve_chart_timing(

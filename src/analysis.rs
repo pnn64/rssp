@@ -148,6 +148,37 @@ pub fn step_type_lanes(step_type: &str) -> usize {
     }
 }
 
+#[inline(always)]
+fn trim_ascii_ws(mut s: &[u8]) -> &[u8] {
+    while let Some((&b, rest)) = s.split_first() {
+        if b.is_ascii_whitespace() {
+            s = rest;
+        } else {
+            break;
+        }
+    }
+    while let Some((&b, rest)) = s.split_last() {
+        if b.is_ascii_whitespace() {
+            s = rest;
+        } else {
+            break;
+        }
+    }
+    s
+}
+
+#[inline(always)]
+pub(crate) fn supported_stepstype_lanes_bytes(raw: &[u8]) -> Option<usize> {
+    let s = trim_ascii_ws(raw);
+    if s.eq_ignore_ascii_case(b"dance-single") || s.eq_ignore_ascii_case(b"dance_single") {
+        Some(4)
+    } else if s.eq_ignore_ascii_case(b"dance-double") || s.eq_ignore_ascii_case(b"dance_double") {
+        Some(8)
+    } else {
+        None
+    }
+}
+
 pub fn display_metadata(
     title: &str,
     subtitle: &str,
@@ -425,6 +456,7 @@ fn build_chart_summary(
     }
     let fields = entry.fields;
     let chart_data = entry.note_data;
+    let lanes = supported_stepstype_lanes_bytes(fields[0])?;
 
     let chart_bpms_opt = entry.chart_bpms.as_deref();
     let chart_delays_opt = entry.chart_delays.as_deref();
@@ -442,9 +474,6 @@ fn build_chart_summary(
     let chart_radar_values_opt = entry.chart_radar_values.as_deref();
 
     let step_type_str = unescape_trim(decode_bytes(fields[0]).as_ref());
-    if step_type_str == "lights-cabinet" {
-        return None;
-    }
 
     let description_raw = unescape_trim(decode_bytes(fields[1]).as_ref());
     let description = normalize_chart_desc(description_raw, timing_format, ssc_version);
@@ -466,7 +495,6 @@ fn build_chart_summary(
     };
     let tech_notation_str = parse_tech_notation(&credit, &description);
 
-    let lanes = step_type_lanes(&step_type_str);
     let compute_patterns = lanes == 4 && options.compute_pattern_counts;
     let (mut minimized_chart, mut stats, measure_densities, row_to_beat, last_beat, bitmasks) =
         if compute_patterns {
@@ -1098,6 +1126,9 @@ pub fn compute_all_hashes(
         }
         let fields = entry.fields;
         let chart_data = entry.note_data;
+        let Some(lanes) = supported_stepstype_lanes_bytes(fields[0]) else {
+            continue;
+        };
 
         let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());
         let description_raw = unescape_trim(decode_bytes(fields[1]).as_ref());
@@ -1107,14 +1138,8 @@ pub fn compute_all_hashes(
         let difficulty =
             resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
 
-        // Skip lights, etc.
-        if step_type == "lights-cabinet" {
-            continue;
-        }
-
         // 4. Minimize Chart (Required for Hash consistency)
         // This strips comments, whitespace, and empty measures.
-        let lanes = step_type_lanes(&step_type);
         let mut minimized_chart = minimize_chart_for_hash(chart_data, lanes);
         if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
             minimized_chart.truncate(pos + 1);
