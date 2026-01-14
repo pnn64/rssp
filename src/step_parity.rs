@@ -392,23 +392,19 @@ impl Row {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct State {
-    columns: [Foot; MAX_COLUMNS],
     combined_columns: [Foot; MAX_COLUMNS],
     where_the_feet_are: [i8; NUM_FEET],
-    what_note_the_foot_is_hitting: [i8; NUM_FEET],
     moved_mask: u8,
     holding_mask: u8,
 }
 
 impl State {
-    fn new(_cols: usize) -> Self {
+    fn new() -> Self {
         Self {
-            columns: [Foot::None; MAX_COLUMNS],
             combined_columns: [Foot::None; MAX_COLUMNS],
             where_the_feet_are: [INVALID_COLUMN; NUM_FEET],
-            what_note_the_foot_is_hitting: [INVALID_COLUMN; NUM_FEET],
             moved_mask: 0,
             holding_mask: 0,
         }
@@ -427,28 +423,9 @@ impl State {
     }
 }
 
-impl PartialEq for State {
-    fn eq(&self, other: &Self) -> bool {
-        self.columns == other.columns
-            && self.combined_columns == other.combined_columns
-            && self.moved_mask == other.moved_mask
-            && self.holding_mask == other.holding_mask
-    }
-}
-impl Eq for State {}
-
 type FootPlacement = [Foot; MAX_COLUMNS];
 
 const NO_PERMS: [FootPlacement; 1] = [[Foot::None; MAX_COLUMNS]];
-
-#[inline(always)]
-fn pack_cols(cols: &[Foot; MAX_COLUMNS]) -> u32 {
-    let mut out = 0u32;
-    for i in 0..MAX_COLUMNS {
-        out |= (cols[i] as u32) << (i * 3);
-    }
-    out
-}
 
 #[derive(Debug, Clone)]
 struct StepParityNode {
@@ -486,59 +463,46 @@ fn calc_action_cost(
     layout: &StageLayout,
     initial: &State,
     result: &State,
+    placement: &FootPlacement,
+    hit: &[i8; NUM_FEET],
     rows: &[Row],
     row_idx: usize,
     elapsed: f32,
     cols: usize,
 ) -> f32 {
     let row = &rows[row_idx];
-
-    let lh = result.what_note_the_foot_is_hitting[Foot::LeftHeel.as_index()];
-    let lt = result.what_note_the_foot_is_hitting[Foot::LeftToe.as_index()];
-    let rh = result.what_note_the_foot_is_hitting[Foot::RightHeel.as_index()];
-    let rt = result.what_note_the_foot_is_hitting[Foot::RightToe.as_index()];
-
-    let moved_left = result.foot_moved(&LEFT_PAIR);
-    let moved_right = result.foot_moved(&RIGHT_PAIR);
-
+    let (lh, lt, rh, rt) = (
+        hit[Foot::LeftHeel.as_index()],
+        hit[Foot::LeftToe.as_index()],
+        hit[Foot::RightHeel.as_index()],
+        hit[Foot::RightToe.as_index()],
+    );
+    let (moved_left, moved_right) = (result.foot_moved(&LEFT_PAIR), result.foot_moved(&RIGHT_PAIR));
     let did_jump =
         initial.foot_moved_not_holding(&LEFT_PAIR) && initial.foot_moved_not_holding(&RIGHT_PAIR);
-
-    let jacked_left = did_jack(initial, result, &LEFT_PAIR, lh, lt, moved_left, did_jump);
-    let jacked_right = did_jack(initial, result, &RIGHT_PAIR, rh, rt, moved_right, did_jump);
+    let (jacked_left, jacked_right) = (
+        did_jack(initial, result, &LEFT_PAIR, lh, lt, moved_left, did_jump),
+        did_jack(initial, result, &RIGHT_PAIR, rh, rt, moved_right, did_jump),
+    );
 
     let mut cost = 0.0;
     cost += calc_mine_cost(result, row, cols);
     cost += calc_hold_switch_cost(layout, initial, result, row);
     cost += calc_bracket_tap_cost(initial, row, lh, lt, rh, rt, elapsed);
-    cost += calc_bracket_jack_cost(
-        result,
-        moved_left,
-        moved_right,
-        jacked_left,
-        jacked_right,
-        did_jump,
-    );
+    cost +=
+        calc_bracket_jack_cost(result, moved_left, moved_right, jacked_left, jacked_right, did_jump);
     cost += calc_doublestep_cost(
-        initial,
-        result,
-        rows,
-        row_idx,
-        moved_left,
-        moved_right,
-        jacked_left,
-        jacked_right,
-        did_jump,
+        initial, result, rows, row_idx, moved_left, moved_right, jacked_left, jacked_right, did_jump,
     );
     cost += calc_slow_bracket_cost(row, moved_left, moved_right, elapsed);
-    cost += calc_twisted_foot_cost(layout, result);
+    cost += calc_twisted_foot_cost(layout, hit);
     cost += calc_facing_cost(layout, result);
     cost += calc_spin_cost(layout, initial, result);
-    cost += calc_footswitch_cost(initial, result, row, elapsed, cols);
-    cost += calc_sideswitch_cost(layout, initial, result);
+    cost += calc_footswitch_cost(initial, placement, row, elapsed, cols);
+    cost += calc_sideswitch_cost(layout, initial, result, placement);
     cost += calc_missed_footswitch_cost(row, jacked_left, jacked_right);
     cost += calc_jack_cost(moved_left, moved_right, jacked_left, jacked_right, elapsed);
-    cost += calc_big_movements_cost(layout, initial, result, elapsed);
+    cost += calc_big_movements_cost(layout, initial, result, hit, elapsed);
     cost
 }
 
@@ -686,11 +650,11 @@ fn calc_slow_bracket_cost(row: &Row, moved_left: bool, moved_right: bool, elapse
     }
 }
 
-fn calc_twisted_foot_cost(layout: &StageLayout, result: &State) -> f32 {
-    let lh = result.what_note_the_foot_is_hitting[1];
-    let lt = result.what_note_the_foot_is_hitting[2];
-    let rh = result.what_note_the_foot_is_hitting[3];
-    let rt = result.what_note_the_foot_is_hitting[4];
+fn calc_twisted_foot_cost(layout: &StageLayout, hit: &[i8; NUM_FEET]) -> f32 {
+    let lh = hit[1];
+    let lt = hit[2];
+    let rh = hit[3];
+    let rt = hit[4];
 
     let left_pos = layout.avg_point(lh, lt);
     let right_pos = layout.avg_point(rh, rt);
@@ -758,7 +722,7 @@ fn calc_spin_cost(layout: &StageLayout, initial: &State, result: &State) -> f32 
 
 fn calc_footswitch_cost(
     initial: &State,
-    result: &State,
+    placement: &FootPlacement,
     row: &Row,
     elapsed: f32,
     cols: usize,
@@ -772,7 +736,7 @@ fn calc_footswitch_cost(
 
     let time_scaled = elapsed - SLOW_FOOTSWITCH_THRESHOLD;
     for i in 0..cols {
-        let (init, res) = (initial.combined_columns[i], result.columns[i]);
+        let (init, res) = (initial.combined_columns[i], placement[i]);
         if init == Foot::None || res == Foot::None {
             continue;
         }
@@ -786,14 +750,19 @@ fn calc_footswitch_cost(
     0.0
 }
 
-fn calc_sideswitch_cost(layout: &StageLayout, initial: &State, result: &State) -> f32 {
+fn calc_sideswitch_cost(
+    layout: &StageLayout,
+    initial: &State,
+    result: &State,
+    placement: &FootPlacement,
+) -> f32 {
     let mut mask = layout.side_mask;
     let mut count = 0u32;
     while mask != 0 {
         let c = mask.trailing_zeros() as usize;
         mask &= mask - 1;
-        if initial.combined_columns[c] != result.columns[c]
-            && result.columns[c] != Foot::None
+        if initial.combined_columns[c] != placement[c]
+            && placement[c] != Foot::None
             && initial.combined_columns[c] != Foot::None
             && (result.moved_mask & FOOT_MASKS[initial.combined_columns[c].as_index()]) == 0
         {
@@ -831,6 +800,7 @@ fn calc_big_movements_cost(
     layout: &StageLayout,
     initial: &State,
     result: &State,
+    hit: &[i8; NUM_FEET],
     elapsed: f32,
 ) -> f32 {
     let mut cost = 0.0;
@@ -843,12 +813,12 @@ fn calc_big_movements_cost(
             continue;
         }
 
-        let res_pos = result.what_note_the_foot_is_hitting[foot.as_index()];
+        let res_pos = hit[foot.as_index()];
         let dist = layout.get_distance_weighted(init_pos as usize, res_pos as usize);
         let mut d = (dist / elapsed as f64) as f32;
 
         let other = OTHER_PART_OF_FOOT[foot.as_index()];
-        let other_pos = result.what_note_the_foot_is_hitting[other.as_index()];
+        let other_pos = hit[other.as_index()];
         if other_pos != INVALID_COLUMN {
             if other_pos == init_pos {
                 continue;
@@ -1069,12 +1039,12 @@ impl StepParityGenerator {
     }
 
     fn dp_rows(&mut self) -> Option<usize> {
-        let start_id = self.add_node(State::new(self.column_count));
+        let start_id = self.add_node(State::new());
         self.nodes[start_id].cost = 0.0;
 
         let mut prev_ids = vec![start_id];
         let mut next_ids = Vec::new();
-        let mut state_map: FastMap<u64, usize> = FastMap::default();
+        let mut state_map: FastMap<u32, usize> = FastMap::default();
 
         let mut prev_second = self.rows.first().map(|r| r.second - 1.0).unwrap_or(-1.0);
 
@@ -1092,12 +1062,14 @@ impl StepParityGenerator {
                 let init_state = self.nodes[init_id].state;
                 let init_cost = self.nodes[init_id].cost;
                 for perm in perms.iter() {
-                    let (result, key) = self.result_state(&init_state, i, perm);
+                    let (result, hit, key) = self.result_state(&init_state, i, perm);
                     let nc = init_cost
                         + calc_action_cost(
                             self.layout,
                             &init_state,
                             &result,
+                            perm,
+                            &hit,
                             &self.rows,
                             i,
                             elapsed,
@@ -1125,66 +1097,49 @@ impl StepParityGenerator {
             .min_by(|&a, &b| self.nodes[a].cost.total_cmp(&self.nodes[b].cost))
     }
 
-    fn result_state(&self, initial: &State, row_idx: usize, cols: &FootPlacement) -> (State, u64) {
-        let row = &self.rows[row_idx];
-        let n = self.column_count;
-        let hold_mask = row.hold_mask;
-
-        let mut state = State::new(n);
-        let mut moved_mask = 0u8;
-
+    fn result_state(&self, initial: &State, row_idx: usize, cols: &FootPlacement) -> (State, [i8; NUM_FEET], u32) {
+        let (n, hold_mask) = (self.column_count, self.rows[row_idx].hold_mask);
+        let (mut combined, mut hit) = ([Foot::None; MAX_COLUMNS], [INVALID_COLUMN; NUM_FEET]);
+        let (mut moved_mask, mut holding_mask) = (0u8, 0u8);
         for i in 0..n {
             let foot = cols[i];
-            state.columns[i] = foot;
-            let hold_empty = (hold_mask & (1u8 << i)) == 0;
-            let moved = foot != Foot::None && (hold_empty || initial.combined_columns[i] != foot);
-
-            if foot != Foot::None {
-                let fi = foot.as_index();
-                state.what_note_the_foot_is_hitting[fi] = i as i8;
-
-                if moved {
-                    moved_mask |= FOOT_MASKS[fi];
-                }
-                if !hold_empty {
-                    state.holding_mask |= FOOT_MASKS[fi];
-                }
-            }
+            if foot == Foot::None { continue; }
+            combined[i] = foot;
+            let fi = foot.as_index();
+            hit[fi] = i as i8;
+            let fm = FOOT_MASKS[fi];
+            let bit = 1u8 << i;
+            if (hold_mask & bit) != 0 { holding_mask |= fm; }
+            if (hold_mask & bit) == 0 || initial.combined_columns[i] != foot { moved_mask |= fm; }
         }
 
-        state.moved_mask = moved_mask;
-        let moved_left = (moved_mask & LEFT_FOOT_MASK) != 0;
-        let moved_right = (moved_mask & RIGHT_FOOT_MASK) != 0;
-
+        let (moved_left, moved_right) =
+            ((moved_mask & LEFT_FOOT_MASK) != 0, (moved_mask & RIGHT_FOOT_MASK) != 0);
+        let (mut where_the_feet_are, mut comb_p) = ([INVALID_COLUMN; NUM_FEET], 0u32);
         for i in 0..n {
-            let combined = if state.columns[i] != Foot::None {
-                state.columns[i]
+            let foot = if combined[i] != Foot::None {
+                combined[i]
             } else {
                 let prev = initial.combined_columns[i];
                 match prev {
                     Foot::LeftHeel | Foot::RightHeel
-                        if (moved_mask & FOOT_MASKS[prev.as_index()]) == 0 =>
-                    {
-                        prev
-                    }
+                        if (moved_mask & FOOT_MASKS[prev.as_index()]) == 0 => prev,
                     Foot::LeftToe if !moved_left => prev,
                     Foot::RightToe if !moved_right => prev,
                     _ => Foot::None,
                 }
             };
-            if combined != Foot::None {
-                state.combined_columns[i] = combined;
-                state.where_the_feet_are[combined.as_index()] = i as i8;
-            }
+            combined[i] = foot;
+            comb_p |= (foot as u32) << (i * 3);
+            if foot != Foot::None { where_the_feet_are[foot.as_index()] = i as i8; }
         }
 
-        let cols_p = pack_cols(&state.columns) as u64;
-        let comb_p = pack_cols(&state.combined_columns) as u64;
-        let key = cols_p
-            | (comb_p << 24)
-            | ((state.moved_mask as u64) << 48)
-            | ((state.holding_mask as u64) << 56);
-        (state, key)
+        let key = comb_p | ((moved_mask as u32) << 24) | ((holding_mask as u32) << 28);
+        (
+            State { combined_columns: combined, where_the_feet_are, moved_mask, holding_mask },
+            hit,
+            key,
+        )
     }
 
     fn backtrack(&mut self, mut cur: usize) -> bool {
