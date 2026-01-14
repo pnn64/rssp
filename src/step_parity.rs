@@ -127,12 +127,6 @@ impl Hasher for IdentityHasher {
 
 type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<IdentityHasher>>;
 
-#[derive(Debug, Clone, Copy)]
-struct Edge {
-    to: u32,
-    cost: f32,
-}
-
 #[derive(Debug, Clone, Copy, Default)]
 struct StagePoint {
     x: f32,
@@ -459,8 +453,8 @@ fn pack_cols(cols: &[Foot; MAX_COLUMNS]) -> u32 {
 #[derive(Debug, Clone)]
 struct StepParityNode {
     state: State,
-    first_edge: u32,
-    edge_count: u16,
+    pred: u32,
+    cost: f32,
 }
 
 // --- Cost Calculations (free functions to avoid borrow issues) ---
@@ -908,7 +902,6 @@ struct StepParityGenerator {
     perm_cache: [Option<&'static [FootPlacement]>; 256],
     column_count: usize,
     nodes: Vec<StepParityNode>,
-    edges: Vec<Edge>,
     rows: Vec<Row>,
     result_columns: Vec<FootPlacement>,
 }
@@ -921,7 +914,6 @@ impl StepParityGenerator {
             perm_table: &cache.perm_table,
             perm_cache: [None; 256],
             nodes: Vec::new(),
-            edges: Vec::new(),
             rows: Vec::new(),
             result_columns: Vec::new(),
         }
@@ -931,15 +923,16 @@ impl StepParityGenerator {
         self.column_count = cols;
         self.perm_cache.fill(None);
         self.nodes.clear();
-        self.edges.clear();
         self.rows.clear();
         self.result_columns.clear();
         self.create_rows(notes);
         if self.rows.is_empty() {
             return false;
         }
-        self.build_graph();
-        self.trace_path()
+        let Some(best) = self.dp_rows() else {
+            return false;
+        };
+        self.backtrack(best)
     }
 
     fn create_rows(&mut self, notes: Vec<IntermediateNoteData>) {
@@ -1046,85 +1039,12 @@ impl StepParityGenerator {
         row
     }
 
-    fn build_graph(&mut self) {
-        let start_id = self.add_node(State::new(self.column_count));
-
-        let mut prev_ids = vec![start_id];
-        let mut next_ids: Vec<usize> = Vec::new();
-        let mut state_map: FastMap<u64, usize> = FastMap::default();
-
-        let mut prev_second = self.rows.first().map(|r| r.second - 1.0).unwrap_or(-1.0);
-
-        for i in 0..self.rows.len() {
-            let row_second = self.rows[i].second;
-            let elapsed = row_second - prev_second;
-            prev_second = row_second;
-
-            let perms = self.perms_for_row(i);
-            next_ids.clear();
-            state_map.clear();
-            state_map.reserve(perms.len());
-            self.edges
-                .reserve(prev_ids.len().saturating_mul(perms.len()));
-
-            for &init_id in &prev_ids {
-                let node_edge_start = self.edges.len() as u32;
-                let init_state = self.nodes[init_id].state;
-
-                for perm in perms.iter() {
-                    let (result, key) = self.result_state(&init_state, i, perm);
-                    let cost = calc_action_cost(
-                        self.layout,
-                        &init_state,
-                        &result,
-                        &self.rows,
-                        i,
-                        elapsed,
-                        self.column_count,
-                    );
-
-                    let res_id = if let Some(&id) = state_map.get(&key) {
-                        id
-                    } else {
-                        let id = self.add_node(result);
-                        next_ids.push(id);
-                        state_map.insert(key, id);
-                        id
-                    };
-                    self.edges.push(Edge {
-                        to: res_id as u32,
-                        cost,
-                    });
-                }
-                let edge_count = (self.edges.len() as u32 - node_edge_start) as u16;
-                let node = &mut self.nodes[init_id];
-                node.first_edge = node_edge_start;
-                node.edge_count = edge_count;
-            }
-
-            std::mem::swap(&mut prev_ids, &mut next_ids);
-        }
-
-        let end_id = self.add_node(State::new(self.column_count));
-
-        for &id in &prev_ids {
-            let edge_start = self.edges.len() as u32;
-            self.edges.push(Edge {
-                to: end_id as u32,
-                cost: 0.0,
-            });
-            let node = &mut self.nodes[id];
-            node.first_edge = edge_start;
-            node.edge_count = 1;
-        }
-    }
-
     fn add_node(&mut self, state: State) -> usize {
         let idx = self.nodes.len();
         self.nodes.push(StepParityNode {
             state,
-            first_edge: 0,
-            edge_count: 0,
+            pred: u32::MAX,
+            cost: f32::MAX,
         });
         idx
     }
@@ -1146,6 +1066,63 @@ impl StepParityGenerator {
 
         self.perm_cache[key] = Some(perms);
         perms
+    }
+
+    fn dp_rows(&mut self) -> Option<usize> {
+        let start_id = self.add_node(State::new(self.column_count));
+        self.nodes[start_id].cost = 0.0;
+
+        let mut prev_ids = vec![start_id];
+        let mut next_ids = Vec::new();
+        let mut state_map: FastMap<u64, usize> = FastMap::default();
+
+        let mut prev_second = self.rows.first().map(|r| r.second - 1.0).unwrap_or(-1.0);
+
+        for i in 0..self.rows.len() {
+            let row_second = self.rows[i].second;
+            let elapsed = row_second - prev_second;
+            prev_second = row_second;
+
+            let perms = self.perms_for_row(i);
+            next_ids.clear();
+            state_map.clear();
+            state_map.reserve(perms.len());
+
+            for &init_id in &prev_ids {
+                let init_state = self.nodes[init_id].state;
+                let init_cost = self.nodes[init_id].cost;
+                for perm in perms.iter() {
+                    let (result, key) = self.result_state(&init_state, i, perm);
+                    let nc = init_cost
+                        + calc_action_cost(
+                            self.layout,
+                            &init_state,
+                            &result,
+                            &self.rows,
+                            i,
+                            elapsed,
+                            self.column_count,
+                        );
+                    let res_id = *state_map.entry(key).or_insert_with(|| {
+                        let id = self.add_node(result);
+                        next_ids.push(id);
+                        id
+                    });
+
+                    let node = &mut self.nodes[res_id];
+                    if nc < node.cost {
+                        node.cost = nc;
+                        node.pred = init_id as u32;
+                    }
+                }
+            }
+
+            std::mem::swap(&mut prev_ids, &mut next_ids);
+        }
+
+        prev_ids
+            .into_iter()
+            .min_by(|&a, &b| self.nodes[a].cost.total_cmp(&self.nodes[b].cost))
     }
 
     fn result_state(&self, initial: &State, row_idx: usize, cols: &FootPlacement) -> (State, u64) {
@@ -1210,63 +1187,23 @@ impl StepParityGenerator {
         (state, key)
     }
 
-    fn trace_path(&mut self) -> bool {
-        if self.nodes.is_empty() {
-            return false;
-        }
-
-        let n = self.nodes.len();
-        let mut cost = vec![f32::MAX; n];
-        let mut pred = vec![usize::MAX; n];
-        cost[0] = 0.0;
-
-        for i in 0..n {
-            if cost[i] == f32::MAX {
-                continue;
-            }
-            let node = &self.nodes[i];
-            let start = node.first_edge as usize;
-            let end = start + node.edge_count as usize;
-            for e in &self.edges[start..end] {
-                let to = e.to as usize;
-                let nc = cost[i] + e.cost;
-                if nc < cost[to] {
-                    cost[to] = nc;
-                    pred[to] = i;
-                }
-            }
-        }
-
-        if pred[n - 1] == usize::MAX {
-            return false;
-        }
-
-        let nodes = &self.nodes;
-        let rows = &self.rows;
-
-        let mut cur = n - 1;
+    fn backtrack(&mut self, mut cur: usize) -> bool {
+        let rows = self.rows.len();
         self.result_columns.clear();
-        self.result_columns
-            .resize(rows.len(), [Foot::None; MAX_COLUMNS]);
+        self.result_columns.resize(rows, [Foot::None; MAX_COLUMNS]);
 
-        let mut write = self.result_columns.len();
-        while cur != 0 {
-            let prev = pred[cur];
-            if prev == usize::MAX {
-                return false;
-            }
-            cur = prev;
-            if cur == 0 {
-                break;
-            }
-            if write == 0 {
-                return false;
-            }
+        let mut write = rows;
+        while write != 0 {
             write -= 1;
-            self.result_columns[write] = nodes[cur].state.combined_columns;
+            self.result_columns[write] = self.nodes[cur].state.combined_columns;
+            let prev = self.nodes[cur].pred;
+            if prev == u32::MAX {
+                return false;
+            }
+            cur = prev as usize;
         }
 
-        write == 0
+        cur == 0
     }
 }
 
