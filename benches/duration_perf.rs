@@ -72,7 +72,7 @@ fn chart_offset_seconds(tag: Option<&[u8]>) -> Option<f64> {
 fn build_duration_inputs() -> (Vec<DurationChartInput>, DurationGlobals) {
     let parsed =
         rssp::parse::extract_sections(FIXTURE.as_bytes(), EXTENSION).expect("fixture should parse");
-    let timing_format = rssp::timing::TimingFormat::from_extension(EXTENSION);
+    let timing_format = rssp::timing::timing_format_from_ext(EXTENSION);
     let ssc_version = rssp::parse::parse_version(parsed.version, timing_format);
     let allow_steps_timing = rssp::timing::steps_timing_allowed(ssc_version, timing_format);
 
@@ -249,7 +249,7 @@ fn bench_duration_inner(c: &mut Criterion) {
                     )
                 };
 
-                let timing = rssp::timing::TimingData::from_chart_data(
+                let timing = rssp::timing::timing_data_from_chart_data(
                     chart_offset,
                     0.0,
                     if globals.allow_steps_timing {
@@ -297,7 +297,7 @@ fn bench_duration_inner(c: &mut Criterion) {
                     globals.timing_format,
                     true,
                 );
-                let duration = timing.get_time_for_beat(target_beat);
+                let duration = rssp::timing::get_time_for_beat(&timing, target_beat);
                 let duration = rssp::math::round_sig_figs_itg(duration);
                 durations.push(duration);
             }
@@ -360,7 +360,7 @@ fn bench_duration_timing(c: &mut Criterion) {
                         globals.fakes_raw.as_str(),
                     )
                 };
-                let timing = rssp::timing::TimingData::from_chart_data(
+                let timing = rssp::timing::timing_data_from_chart_data(
                     entry.chart_offset,
                     0.0,
                     if globals.allow_steps_timing {
@@ -408,7 +408,7 @@ fn bench_duration_timing(c: &mut Criterion) {
                     globals.timing_format,
                     true,
                 );
-                let duration = timing.get_time_for_beat(entry.target_beat);
+                let duration = rssp::timing::get_time_for_beat(&timing, entry.target_beat);
                 durations.push(rssp::math::round_sig_figs_itg(duration));
             }
             black_box(durations);

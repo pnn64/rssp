@@ -6,7 +6,10 @@ use crate::parse::{
     decode_bytes, extract_sections, normalize_chart_desc, parse_offset_seconds, parse_version,
     unescape_trim,
 };
-use crate::timing::{TimingData, TimingFormat, compute_timing_segments, steps_timing_allowed};
+use crate::timing::{
+    TimingData, compute_timing_segments, get_time_for_beat_f32,
+    steps_timing_allowed, timing_data_from_segments, timing_format_from_ext,
+};
 
 pub fn compute_chart_peak_nps(
     simfile_data: &[u8],
@@ -14,7 +17,7 @@ pub fn compute_chart_peak_nps(
 ) -> Result<Vec<ChartNpsInfo>, String> {
     let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
 
-    let timing_format = TimingFormat::from_extension(extension);
+    let timing_format = timing_format_from_ext(extension);
     let ssc_version = parse_version(parsed_data.version, timing_format);
     let allow_steps_timing = steps_timing_allowed(ssc_version, timing_format);
     let song_offset = parse_offset_seconds(parsed_data.offset);
@@ -151,7 +154,7 @@ pub fn compute_chart_peak_nps(
             timing_format,
             true,
         );
-        let timing = TimingData::from_segments(chart_offset, 0.0, &timing_segments);
+        let timing = timing_data_from_segments(chart_offset, 0.0, &timing_segments);
 
         let measure_nps_vec = compute_measure_nps_vec_with_timing(&measure_densities, &timing);
         let (max_nps, _median_nps) = get_nps_stats(&measure_nps_vec);
@@ -181,8 +184,8 @@ pub fn compute_measure_nps_vec_with_timing(densities: &[usize], timing: &TimingD
         .map(|(i, &d)| {
             let beat = i as f64 * 4.0;
             let (start, end) = (
-                timing.get_time_for_beat_f32(beat),
-                timing.get_time_for_beat_f32(beat + 4.0),
+                get_time_for_beat_f32(timing, beat),
+                get_time_for_beat_f32(timing, beat + 4.0),
             );
             let dur = end - start;
             if d == 0 || dur <= 0.12 {

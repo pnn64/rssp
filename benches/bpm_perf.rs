@@ -84,7 +84,7 @@ fn chart_timing_tags(entry: &ChartTimingInput) -> ChartTimingTags {
 fn build_timing_inputs() -> (Vec<ChartTimingInput>, TimingGlobals) {
     let parsed =
         rssp::parse::extract_sections(FIXTURE.as_bytes(), "ssc").expect("fixture should parse");
-    let timing_format = rssp::timing::TimingFormat::from_extension("ssc");
+    let timing_format = rssp::timing::timing_format_from_ext("ssc");
     let ssc_version = rssp::parse::parse_version(parsed.version, timing_format);
     let allow_steps_timing = rssp::timing::steps_timing_allowed(ssc_version, timing_format);
 
@@ -160,7 +160,7 @@ fn bench_bpm_inner(c: &mut Criterion) {
                     .clone()
                     .unwrap_or_else(|| globals.bpms_norm.clone());
 
-                let timing = rssp::timing::TimingData::from_chart_data(
+                let timing = rssp::timing::timing_data_from_chart_data(
                     globals.song_offset,
                     0.0,
                     if globals.allow_steps_timing {
@@ -210,7 +210,7 @@ fn bench_bpm_inner(c: &mut Criterion) {
                 );
 
                 let bpms_formatted =
-                    rssp::timing::format_bpm_segments_like_itg(&timing.bpm_segments());
+                    rssp::timing::format_bpm_segments_like_itg(&rssp::timing::bpm_segments(&timing));
                 outputs.push((hash_bpms, bpms_formatted));
             }
             black_box(outputs);

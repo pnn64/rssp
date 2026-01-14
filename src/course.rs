@@ -62,16 +62,14 @@ pub enum Difficulty {
     Edit = 5,
 }
 
-impl Difficulty {
-    pub fn label(self) -> &'static str {
-        match self {
-            Difficulty::Beginner => "Beginner",
-            Difficulty::Easy => "Easy",
-            Difficulty::Medium => "Medium",
-            Difficulty::Hard => "Hard",
-            Difficulty::Challenge => "Challenge",
-            Difficulty::Edit => "Edit",
-        }
+pub fn difficulty_label(d: Difficulty) -> &'static str {
+    match d {
+        Difficulty::Beginner => "Beginner",
+        Difficulty::Easy => "Easy",
+        Difficulty::Medium => "Medium",
+        Difficulty::Hard => "Hard",
+        Difficulty::Challenge => "Challenge",
+        Difficulty::Edit => "Edit",
     }
 }
 
@@ -416,7 +414,7 @@ fn empty_course_chart(step_type: &str, course_difficulty: Difficulty, meter: i32
         step_type_str: step_type.to_string(),
         step_artist_str: "course total".to_string(),
         description_str: String::new(),
-        difficulty_str: course_difficulty.label().to_string(),
+        difficulty_str: difficulty_label(course_difficulty).to_string(),
         rating_str: meter.to_string(),
         matrix_rating: 0.0,
         tech_notation_str: String::new(),
@@ -664,7 +662,7 @@ fn select_chart<'a>(
 ) -> Option<&'a ChartSummary> {
     sim.charts.iter().find(|c| {
         normalize_stepstype(&c.step_type_str) == step_type
-            && c.difficulty_str.eq_ignore_ascii_case(difficulty.label())
+            && c.difficulty_str.eq_ignore_ascii_case(difficulty_label(difficulty))
     })
 }
 
@@ -748,7 +746,7 @@ pub fn analyze_crs_path(
         };
 
         let base_chart = select_chart(sim, &step_type, base_diff)
-            .ok_or_else(|| format!("Chart not found for {} {} {}", song, step_type, base_diff.label()))?;
+            .ok_or_else(|| format!("Chart not found for {} {} {}", song, step_type, difficulty_label(base_diff)))?;
         let chart = if course_diff != Difficulty::Medium && !entry.no_difficult {
             let shifted = shift_diff(base_diff, course_diff);
             select_chart(sim, &step_type, shifted).unwrap_or(base_chart)
@@ -805,7 +803,7 @@ pub fn analyze_crs_path(
 
     Ok(CourseSummary {
         course: course.name,
-        course_difficulty: course_diff.label().to_string(),
+        course_difficulty: difficulty_label(course_diff).to_string(),
         step_type,
         total_length,
         entries,

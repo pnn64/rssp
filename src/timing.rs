@@ -20,13 +20,12 @@ pub enum TimingFormat {
     Ssc,
 }
 
-impl TimingFormat {
-    pub fn from_extension(ext: &str) -> Self {
-        if ext.eq_ignore_ascii_case("sm") {
-            Self::Sm
-        } else {
-            Self::Ssc
-        }
+#[inline(always)]
+pub fn timing_format_from_ext(ext: &str) -> TimingFormat {
+    if ext.eq_ignore_ascii_case("sm") {
+        TimingFormat::Sm
+    } else {
+        TimingFormat::Ssc
     }
 }
 
@@ -951,8 +950,11 @@ pub struct BeatInfo {
     pub is_in_delay: bool,
 }
 
-impl TimingData {
-    pub fn from_segments(song_offset: f64, global_offset: f64, segments: &TimingSegments) -> Self {
+pub fn timing_data_from_segments(
+    song_offset: f64,
+    global_offset: f64,
+    segments: &TimingSegments,
+) -> TimingData {
         let to_seg = |(b, v): &(f32, f32)| Segment {
             beat: *b as f64,
             value: *v as f64,
@@ -983,7 +985,7 @@ impl TimingData {
             })
             .collect();
 
-        Self::build(
+        timing_data_build(
             song_offset + segments.beat0_offset_adjust as f64,
             global_offset,
             bpms,
@@ -994,10 +996,10 @@ impl TimingData {
             scrolls,
             fakes,
         )
-    }
+}
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_chart_data(
+#[allow(clippy::too_many_arguments)]
+pub fn timing_data_from_chart_data(
         song_offset: f64,
         global_offset: f64,
         chart_bpms: Option<&str>,
@@ -1016,7 +1018,7 @@ impl TimingData {
         global_fakes: &str,
         format: TimingFormat,
         cleaned: bool,
-    ) -> Self {
+    ) -> TimingData {
         let bpms_str = chart_bpms.filter(|s| !s.is_empty()).unwrap_or(global_bpms);
         let mut bpms: Vec<(f64, f64)> = if cleaned {
             parse_bpm_map(bpms_str)
@@ -1075,7 +1077,7 @@ impl TimingData {
                 .collect(),
         );
 
-        Self::build(
+        timing_data_build(
             song_offset + beat0_adj,
             global_offset,
             bpms,
@@ -1088,7 +1090,7 @@ impl TimingData {
         )
     }
 
-    fn build(
+fn timing_data_build(
         song_offset: f64,
         global_offset: f64,
         bpms: Vec<(f64, f64)>,
@@ -1098,7 +1100,7 @@ impl TimingData {
         speeds: Vec<SpeedSegment>,
         scrolls: Vec<Segment>,
         fakes: Vec<Segment>,
-    ) -> Self {
+    ) -> TimingData {
         let mut beat_to_time = Vec::with_capacity(bpms.len());
         let mut max_bpm = 0.0_f64;
 
@@ -1117,7 +1119,7 @@ impl TimingData {
         let warp_start_rows = build_segment_rows(&warps, false);
         let fake_start_rows = build_segment_rows(&fakes, false);
 
-        let mut timing = Self {
+        let mut timing = TimingData {
             beat_to_time,
             stops,
             stop_rows,
@@ -1142,13 +1144,13 @@ impl TimingData {
                 .speeds
                 .iter()
                 .map(|seg| {
-                    let start = timing.get_time_for_beat(seg.beat);
+                    let start = get_time_for_beat(&timing, seg.beat);
                     let end = if seg.delay <= 0.0 {
                         start
                     } else if seg.unit == SpeedUnit::Seconds {
                         start + seg.delay
                     } else {
-                        timing.get_time_for_beat(seg.beat + seg.delay)
+                        get_time_for_beat(&timing, seg.beat + seg.delay)
                     };
                     let rt = SpeedRuntime {
                         start_time: start,
@@ -1185,135 +1187,135 @@ impl TimingData {
         timing
     }
 
-    #[inline(always)]
-    pub fn beat0_offset_seconds(&self) -> f64 {
-        self.beat0_offset_sec
-    }
-    #[inline(always)]
-    pub fn beat0_group_offset_seconds(&self) -> f64 {
-        self.global_offset_sec
-    }
-    #[inline(always)]
-    pub fn warps(&self) -> &[Segment] {
-        &self.warps
-    }
-    #[inline(always)]
-    pub fn stops(&self) -> &[Segment] {
-        &self.stops
-    }
-    #[inline(always)]
-    pub fn delays(&self) -> &[Segment] {
-        &self.delays
-    }
-    #[inline(always)]
-    pub fn speeds(&self) -> &[SpeedSegment] {
-        &self.speeds
-    }
-    #[inline(always)]
-    pub fn scrolls(&self) -> &[Segment] {
-        &self.scrolls
-    }
-    #[inline(always)]
-    pub fn fakes(&self) -> &[Segment] {
-        &self.fakes
-    }
+#[inline(always)]
+pub fn beat0_offset_seconds(t: &TimingData) -> f64 {
+    t.beat0_offset_sec
+}
+#[inline(always)]
+pub fn beat0_group_offset_seconds(t: &TimingData) -> f64 {
+    t.global_offset_sec
+}
+#[inline(always)]
+pub fn warps(t: &TimingData) -> &[Segment] {
+    &t.warps
+}
+#[inline(always)]
+pub fn stops(t: &TimingData) -> &[Segment] {
+    &t.stops
+}
+#[inline(always)]
+pub fn delays(t: &TimingData) -> &[Segment] {
+    &t.delays
+}
+#[inline(always)]
+pub fn speeds(t: &TimingData) -> &[SpeedSegment] {
+    &t.speeds
+}
+#[inline(always)]
+pub fn scrolls(t: &TimingData) -> &[Segment] {
+    &t.scrolls
+}
+#[inline(always)]
+pub fn fakes(t: &TimingData) -> &[Segment] {
+    &t.fakes
+}
 
-    pub fn bpm_segments(&self) -> Vec<(f64, f64)> {
-        self.beat_to_time.iter().map(|p| (p.beat, p.bpm)).collect()
-    }
+pub fn bpm_segments(t: &TimingData) -> Vec<(f64, f64)> {
+    t.beat_to_time.iter().map(|p| (p.beat, p.bpm)).collect()
+}
 
-    #[inline(always)]
-    pub fn is_fake_at_beat(&self, beat: f64) -> bool {
-        self.is_in_range_segment(&self.fakes, &self.fake_start_rows, beat)
-    }
+#[inline(always)]
+pub fn is_fake_at_beat(t: &TimingData, beat: f64) -> bool {
+    is_in_range_segment(&t.fakes, &t.fake_start_rows, beat)
+}
 
-    #[inline(always)]
-    pub fn is_fake_at_row(&self, row: i32) -> bool {
-        self.is_in_range_segment(&self.fakes, &self.fake_start_rows, note_row_to_beat(row))
-    }
+#[inline(always)]
+pub fn is_fake_at_row(t: &TimingData, row: i32) -> bool {
+    is_in_range_segment(&t.fakes, &t.fake_start_rows, note_row_to_beat(row))
+}
 
-    #[inline(always)]
-    pub fn is_warp_at_beat(&self, beat: f64) -> bool {
-        self.is_warp_at_row(beat_to_note_row_f32(beat as f32))
-    }
+#[inline(always)]
+pub fn is_warp_at_beat(t: &TimingData, beat: f64) -> bool {
+    is_warp_at_row(t, beat_to_note_row_f32(beat as f32))
+}
 
-    #[inline(always)]
-    pub fn is_warp_at_row(&self, row: i32) -> bool {
-        let Some(idx) = segment_index_at_row(&self.warp_start_rows, row) else {
-            return false;
-        };
-        let seg = self.warps[idx];
-        if !(seg.value.is_finite() && seg.value > 0.0) {
-            return false;
-        }
-        let beat_row = note_row_to_beat(row) as f32;
-        let seg_beat = seg.beat as f32;
-        if !(seg_beat <= beat_row && beat_row < seg_beat + seg.value as f32) {
-            return false;
-        }
-        !(has_row(&self.stop_rows, row) || has_row(&self.delay_rows, row))
+#[inline(always)]
+pub fn is_warp_at_row(t: &TimingData, row: i32) -> bool {
+    let Some(idx) = segment_index_at_row(&t.warp_start_rows, row) else {
+        return false;
+    };
+    let seg = t.warps[idx];
+    if !(seg.value.is_finite() && seg.value > 0.0) {
+        return false;
     }
-
-    fn is_in_range_segment(&self, segs: &[Segment], rows: &[i32], beat: f64) -> bool {
-        let row = beat_to_note_row_f32(beat as f32);
-        let Some(idx) = segment_index_at_row(rows, row) else {
-            return false;
-        };
-        let seg = segs[idx];
-        if !seg.value.is_finite() {
-            return false;
-        }
-        let beat_f = note_row_to_beat(row) as f32;
-        beat_f >= seg.beat as f32 && beat_f < (seg.beat + seg.value) as f32
+    let beat_row = note_row_to_beat(row) as f32;
+    let seg_beat = seg.beat as f32;
+    if !(seg_beat <= beat_row && beat_row < seg_beat + seg.value as f32) {
+        return false;
     }
+    !(has_row(&t.stop_rows, row) || has_row(&t.delay_rows, row))
+}
 
-    #[inline(always)]
-    pub fn is_judgable_at_row(&self, row: i32) -> bool {
-        !self.is_warp_at_row(row) && !self.is_fake_at_row(row)
+fn is_in_range_segment(segs: &[Segment], rows: &[i32], beat: f64) -> bool {
+    let row = beat_to_note_row_f32(beat as f32);
+    let Some(idx) = segment_index_at_row(rows, row) else {
+        return false;
+    };
+    let seg = segs[idx];
+    if !seg.value.is_finite() {
+        return false;
     }
+    let beat_f = note_row_to_beat(row) as f32;
+    beat_f >= seg.beat as f32 && beat_f < (seg.beat + seg.value) as f32
+}
 
-    #[inline(always)]
-    pub fn is_judgable_at_beat(&self, beat: f64) -> bool {
-        self.is_judgable_at_row(beat_to_note_row_f32(beat as f32))
-    }
+#[inline(always)]
+pub fn is_judgable_at_row(t: &TimingData, row: i32) -> bool {
+    !is_warp_at_row(t, row) && !is_fake_at_row(t, row)
+}
 
-    pub fn get_beat_info_from_time(&self, time: f64) -> BeatInfo {
-        let elapsed = time + self.global_offset_sec;
-        let start_time = -self.beat0_offset_sec - self.global_offset_sec;
-        self.get_beat_internal(elapsed, start_time)
-    }
+#[inline(always)]
+pub fn is_judgable_at_beat(t: &TimingData, beat: f64) -> bool {
+    is_judgable_at_row(t, beat_to_note_row_f32(beat as f32))
+}
 
-    pub fn get_beat_for_time(&self, time: f64) -> f64 {
-        self.get_beat_info_from_time(time).beat
-    }
+pub fn get_beat_info_from_time(t: &TimingData, time: f64) -> BeatInfo {
+    let elapsed = time + t.global_offset_sec;
+    let start_time = -t.beat0_offset_sec - t.global_offset_sec;
+    get_beat_internal(t, elapsed, start_time)
+}
 
-    pub fn get_time_for_beat(&self, beat: f64) -> f64 {
-        self.get_time_internal(beat) - self.global_offset_sec
-    }
+pub fn get_beat_for_time(t: &TimingData, time: f64) -> f64 {
+    get_beat_info_from_time(t, time).beat
+}
 
-    pub(crate) fn get_time_for_beat_f32(&self, target_beat: f64) -> f64 {
-        let mut state = GetBeatStateF32::default();
-        state.last_time = (-self.beat0_offset_sec - self.global_offset_sec) as f32;
-        self.get_elapsed_time_f32(&mut state, target_beat as f32);
-        state.last_time as f64 - self.global_offset_sec
-    }
+pub fn get_time_for_beat(t: &TimingData, beat: f64) -> f64 {
+    get_time_internal(t, beat) - t.global_offset_sec
+}
 
-    fn get_time_internal(&self, target_beat: f64) -> f64 {
-        let mut state = GetBeatState::default();
-        state.last_time = -self.beat0_offset_sec - self.global_offset_sec;
-        self.get_elapsed_time(&mut state, target_beat);
-        state.last_time
-    }
+pub(crate) fn get_time_for_beat_f32(t: &TimingData, target_beat: f64) -> f64 {
+    let mut state = GetBeatStateF32::default();
+    state.last_time = (-t.beat0_offset_sec - t.global_offset_sec) as f32;
+    get_elapsed_time_f32(t, &mut state, target_beat as f32);
+    state.last_time as f64 - t.global_offset_sec
+}
 
-    fn get_beat_internal(&self, elapsed: f64, start_time: f64) -> BeatInfo {
+fn get_time_internal(t: &TimingData, target_beat: f64) -> f64 {
+    let mut state = GetBeatState::default();
+    state.last_time = -t.beat0_offset_sec - t.global_offset_sec;
+    get_elapsed_time(t, &mut state, target_beat);
+    state.last_time
+}
+
+fn get_beat_internal(t: &TimingData, elapsed: f64, start_time: f64) -> BeatInfo {
         let mut state = GetBeatState {
             last_time: start_time,
             ..Default::default()
         };
-        let mut bps = self.get_bpm_for_beat(0.0) / 60.0;
+        let mut bps = get_bpm_for_beat(t, 0.0) / 60.0;
 
         loop {
-            let (event_row, event_type) = self.find_next_event(&state, 0.0, false);
+            let (event_row, event_type) = find_next_event(t, &state, 0.0, false);
             if event_type == TimingEvent::NotFound {
                 break;
             }
@@ -1332,14 +1334,14 @@ impl TimingData {
             match event_type {
                 TimingEvent::WarpDest => state.is_warping = false,
                 TimingEvent::Bpm => {
-                    bps = self.beat_to_time[state.bpm_idx].bpm / 60.0;
+                    bps = t.beat_to_time[state.bpm_idx].bpm / 60.0;
                     state.bpm_idx += 1;
                 }
                 TimingEvent::Delay => {
-                    let d = self.delays[state.delay_idx].value;
+                    let d = t.delays[state.delay_idx].value;
                     if elapsed < state.last_time + d {
                         return BeatInfo {
-                            beat: self.delays[state.delay_idx].beat,
+                            beat: t.delays[state.delay_idx].beat,
                             is_in_delay: true,
                             is_in_freeze: false,
                         };
@@ -1348,10 +1350,10 @@ impl TimingData {
                     state.delay_idx += 1;
                 }
                 TimingEvent::Stop => {
-                    let d = self.stops[state.stop_idx].value;
+                    let d = t.stops[state.stop_idx].value;
                     if elapsed < state.last_time + d {
                         return BeatInfo {
-                            beat: self.stops[state.stop_idx].beat,
+                            beat: t.stops[state.stop_idx].beat,
                             is_in_freeze: true,
                             is_in_delay: false,
                         };
@@ -1361,7 +1363,7 @@ impl TimingData {
                 }
                 TimingEvent::Warp => {
                     state.is_warping = true;
-                    let w = &self.warps[state.warp_idx];
+                    let w = &t.warps[state.warp_idx];
                     state.warp_destination = state.warp_destination.max(w.beat + w.value);
                     state.warp_idx += 1;
                 }
@@ -1377,108 +1379,108 @@ impl TimingData {
         }
     }
 
-    fn get_elapsed_time(&self, state: &mut GetBeatState, target_beat: f64) {
-        let find_marker = target_beat < f64::MAX;
-        let mut bps = self.get_bpm_for_beat(note_row_to_beat(state.last_row)) / 60.0;
+fn get_elapsed_time(t: &TimingData, state: &mut GetBeatState, target_beat: f64) {
+    let find_marker = target_beat < f64::MAX;
+    let mut bps = get_bpm_for_beat(t, note_row_to_beat(state.last_row)) / 60.0;
 
-        loop {
-            let (event_row, event_type) = self.find_next_event(state, target_beat, find_marker);
-            if event_type == TimingEvent::NotFound {
-                break;
-            }
-
-            let dt = if state.is_warping {
-                0.0
-            } else {
-                note_row_to_beat(event_row - state.last_row) / bps
-            };
-            state.last_time += dt;
-
-            match event_type {
-                TimingEvent::WarpDest => state.is_warping = false,
-                TimingEvent::Bpm => {
-                    bps = self.beat_to_time[state.bpm_idx].bpm / 60.0;
-                    state.bpm_idx += 1;
-                }
-                TimingEvent::Stop => {
-                    state.last_time += self.stops[state.stop_idx].value;
-                    state.stop_idx += 1;
-                }
-                TimingEvent::Delay => {
-                    state.last_time += self.delays[state.delay_idx].value;
-                    state.delay_idx += 1;
-                }
-                TimingEvent::Marker => return,
-                TimingEvent::Warp => {
-                    state.is_warping = true;
-                    let w = &self.warps[state.warp_idx];
-                    state.warp_destination = state.warp_destination.max(w.beat + w.value);
-                    state.warp_idx += 1;
-                }
-                _ => {}
-            }
-            state.last_row = event_row;
+    loop {
+        let (event_row, event_type) = find_next_event(t, state, target_beat, find_marker);
+        if event_type == TimingEvent::NotFound {
+            break;
         }
-    }
 
-    fn get_elapsed_time_f32(&self, state: &mut GetBeatStateF32, target_beat: f32) {
-        let find_marker = target_beat < f32::MAX;
-        let mut bps = self.get_bpm_for_row_f32(state.last_row) / 60.0;
-        let mut curr_segment = state.bpm_idx + state.warp_idx + state.stop_idx + state.delay_idx;
+        let dt = if state.is_warping {
+            0.0
+        } else {
+            note_row_to_beat(event_row - state.last_row) / bps
+        };
+        state.last_time += dt;
 
-        while curr_segment < u32::MAX as usize {
-            let (event_row, event_type) = self.find_next_event_f32(state, target_beat, find_marker);
-            if event_type == TimingEvent::NotFound {
-                break;
+        match event_type {
+            TimingEvent::WarpDest => state.is_warping = false,
+            TimingEvent::Bpm => {
+                bps = t.beat_to_time[state.bpm_idx].bpm / 60.0;
+                state.bpm_idx += 1;
             }
-
-            let dt = if state.is_warping {
-                0.0
-            } else {
-                note_row_to_beat_f32(event_row - state.last_row) / bps
-            };
-            state.last_time += dt;
-
-            match event_type {
-                TimingEvent::WarpDest => state.is_warping = false,
-                TimingEvent::Bpm => {
-                    bps = self.beat_to_time[state.bpm_idx].bpm as f32 / 60.0;
-                    state.bpm_idx += 1;
-                    curr_segment += 1;
-                }
-                TimingEvent::Stop => {
-                    state.last_time += self.stops[state.stop_idx].value as f32;
-                    state.stop_idx += 1;
-                    curr_segment += 1;
-                }
-                TimingEvent::Delay => {
-                    state.last_time += self.delays[state.delay_idx].value as f32;
-                    state.delay_idx += 1;
-                    curr_segment += 1;
-                }
-                TimingEvent::Marker => return,
-                TimingEvent::Warp => {
-                    state.is_warping = true;
-                    let w = &self.warps[state.warp_idx];
-                    let warp_sum = w.value as f32 + w.beat as f32;
-                    if warp_sum > state.warp_destination {
-                        state.warp_destination = warp_sum;
-                    }
-                    state.warp_idx += 1;
-                    curr_segment += 1;
-                }
-                _ => {}
+            TimingEvent::Stop => {
+                state.last_time += t.stops[state.stop_idx].value;
+                state.stop_idx += 1;
             }
-            state.last_row = event_row;
+            TimingEvent::Delay => {
+                state.last_time += t.delays[state.delay_idx].value;
+                state.delay_idx += 1;
+            }
+            TimingEvent::Marker => return,
+            TimingEvent::Warp => {
+                state.is_warping = true;
+                let w = &t.warps[state.warp_idx];
+                state.warp_destination = state.warp_destination.max(w.beat + w.value);
+                state.warp_idx += 1;
+            }
+            _ => {}
         }
+        state.last_row = event_row;
     }
+}
 
-    fn find_next_event(
-        &self,
-        state: &GetBeatState,
-        beat: f64,
-        find_marker: bool,
-    ) -> (i32, TimingEvent) {
+fn get_elapsed_time_f32(t: &TimingData, state: &mut GetBeatStateF32, target_beat: f32) {
+    let find_marker = target_beat < f32::MAX;
+    let mut bps = get_bpm_for_row_f32(t, state.last_row) / 60.0;
+    let mut curr_segment = state.bpm_idx + state.warp_idx + state.stop_idx + state.delay_idx;
+
+    while curr_segment < u32::MAX as usize {
+        let (event_row, event_type) = find_next_event_f32(t, state, target_beat, find_marker);
+        if event_type == TimingEvent::NotFound {
+            break;
+        }
+
+        let dt = if state.is_warping {
+            0.0
+        } else {
+            note_row_to_beat_f32(event_row - state.last_row) / bps
+        };
+        state.last_time += dt;
+
+        match event_type {
+            TimingEvent::WarpDest => state.is_warping = false,
+            TimingEvent::Bpm => {
+                bps = t.beat_to_time[state.bpm_idx].bpm as f32 / 60.0;
+                state.bpm_idx += 1;
+                curr_segment += 1;
+            }
+            TimingEvent::Stop => {
+                state.last_time += t.stops[state.stop_idx].value as f32;
+                state.stop_idx += 1;
+                curr_segment += 1;
+            }
+            TimingEvent::Delay => {
+                state.last_time += t.delays[state.delay_idx].value as f32;
+                state.delay_idx += 1;
+                curr_segment += 1;
+            }
+            TimingEvent::Marker => return,
+            TimingEvent::Warp => {
+                state.is_warping = true;
+                let w = &t.warps[state.warp_idx];
+                let warp_sum = w.value as f32 + w.beat as f32;
+                if warp_sum > state.warp_destination {
+                    state.warp_destination = warp_sum;
+                }
+                state.warp_idx += 1;
+                curr_segment += 1;
+            }
+            _ => {}
+        }
+        state.last_row = event_row;
+    }
+}
+
+fn find_next_event(
+    t: &TimingData,
+    state: &GetBeatState,
+    beat: f64,
+    find_marker: bool,
+) -> (i32, TimingEvent) {
         let mut row = i32::MAX;
         let mut event = TimingEvent::NotFound;
 
@@ -1489,15 +1491,15 @@ impl TimingData {
                 event = TimingEvent::WarpDest;
             }
         }
-        if state.bpm_idx < self.beat_to_time.len() {
-            let r = beat_to_note_row(self.beat_to_time[state.bpm_idx].beat);
+        if state.bpm_idx < t.beat_to_time.len() {
+            let r = beat_to_note_row(t.beat_to_time[state.bpm_idx].beat);
             if r < row {
                 row = r;
                 event = TimingEvent::Bpm;
             }
         }
-        if state.delay_idx < self.delays.len() {
-            let r = beat_to_note_row(self.delays[state.delay_idx].beat);
+        if state.delay_idx < t.delays.len() {
+            let r = beat_to_note_row(t.delays[state.delay_idx].beat);
             if r < row {
                 row = r;
                 event = TimingEvent::Delay;
@@ -1510,15 +1512,15 @@ impl TimingData {
                 event = TimingEvent::Marker;
             }
         }
-        if state.stop_idx < self.stops.len() {
-            let r = beat_to_note_row(self.stops[state.stop_idx].beat);
+        if state.stop_idx < t.stops.len() {
+            let r = beat_to_note_row(t.stops[state.stop_idx].beat);
             if r < row {
                 row = r;
                 event = TimingEvent::Stop;
             }
         }
-        if state.warp_idx < self.warps.len() {
-            let r = beat_to_note_row(self.warps[state.warp_idx].beat);
+        if state.warp_idx < t.warps.len() {
+            let r = beat_to_note_row(t.warps[state.warp_idx].beat);
             if r < row {
                 row = r;
                 event = TimingEvent::Warp;
@@ -1528,12 +1530,12 @@ impl TimingData {
         (row, event)
     }
 
-    fn find_next_event_f32(
-        &self,
-        state: &GetBeatStateF32,
-        beat: f32,
-        find_marker: bool,
-    ) -> (i32, TimingEvent) {
+fn find_next_event_f32(
+    t: &TimingData,
+    state: &GetBeatStateF32,
+    beat: f32,
+    find_marker: bool,
+) -> (i32, TimingEvent) {
         let mut row = i32::MAX;
         let mut event = TimingEvent::NotFound;
 
@@ -1544,15 +1546,15 @@ impl TimingData {
                 event = TimingEvent::WarpDest;
             }
         }
-        if state.bpm_idx < self.beat_to_time.len() {
-            let r = beat_to_note_row_f32(self.beat_to_time[state.bpm_idx].beat as f32);
+        if state.bpm_idx < t.beat_to_time.len() {
+            let r = beat_to_note_row_f32(t.beat_to_time[state.bpm_idx].beat as f32);
             if r < row {
                 row = r;
                 event = TimingEvent::Bpm;
             }
         }
-        if state.delay_idx < self.delays.len() {
-            let r = beat_to_note_row_f32(self.delays[state.delay_idx].beat as f32);
+        if state.delay_idx < t.delays.len() {
+            let r = beat_to_note_row_f32(t.delays[state.delay_idx].beat as f32);
             if r < row {
                 row = r;
                 event = TimingEvent::Delay;
@@ -1565,15 +1567,15 @@ impl TimingData {
                 event = TimingEvent::Marker;
             }
         }
-        if state.stop_idx < self.stops.len() {
-            let r = beat_to_note_row_f32(self.stops[state.stop_idx].beat as f32);
+        if state.stop_idx < t.stops.len() {
+            let r = beat_to_note_row_f32(t.stops[state.stop_idx].beat as f32);
             if r < row {
                 row = r;
                 event = TimingEvent::Stop;
             }
         }
-        if state.warp_idx < self.warps.len() {
-            let r = beat_to_note_row_f32(self.warps[state.warp_idx].beat as f32);
+        if state.warp_idx < t.warps.len() {
+            let r = beat_to_note_row_f32(t.warps[state.warp_idx].beat as f32);
             if r < row {
                 row = r;
                 event = TimingEvent::Warp;
@@ -1583,75 +1585,74 @@ impl TimingData {
         (row, event)
     }
 
-    fn get_bpm_for_row_f32(&self, row: i32) -> f32 {
-        if self.beat_to_time.is_empty() {
-            return DEFAULT_BPM as f32;
-        }
-        let pos = self
-            .beat_to_time
-            .partition_point(|p| beat_to_note_row_f32(p.beat as f32) <= row);
-        if pos == 0 {
-            self.beat_to_time[0].bpm as f32
-        } else {
-            self.beat_to_time[pos - 1].bpm as f32
+fn get_bpm_for_row_f32(t: &TimingData, row: i32) -> f32 {
+    if t.beat_to_time.is_empty() {
+        return DEFAULT_BPM as f32;
+    }
+    let pos = t
+        .beat_to_time
+        .partition_point(|p| beat_to_note_row_f32(p.beat as f32) <= row);
+    if pos == 0 {
+        t.beat_to_time[0].bpm as f32
+    } else {
+        t.beat_to_time[pos - 1].bpm as f32
+    }
+}
+
+pub fn get_bpm_for_beat(t: &TimingData, beat: f64) -> f64 {
+    if t.beat_to_time.is_empty() {
+        return DEFAULT_BPM;
+    }
+    let idx = t.beat_to_time.partition_point(|p| p.beat <= beat);
+    t.beat_to_time[idx.saturating_sub(1).max(0)].bpm
+}
+
+pub fn get_capped_max_bpm(t: &TimingData, cap: Option<f64>) -> f64 {
+    let mut max = t.max_bpm.max(
+        t.beat_to_time
+            .iter()
+            .map(|p| p.bpm)
+            .filter(|b| b.is_finite() && *b > 0.0)
+            .fold(0.0, f64::max),
+    );
+    if let Some(c) = cap {
+        if c > 0.0 {
+            max = max.min(c);
         }
     }
+    if max > 0.0 { max } else { DEFAULT_BPM }
+}
 
-    pub fn get_bpm_for_beat(&self, beat: f64) -> f64 {
-        if self.beat_to_time.is_empty() {
-            return DEFAULT_BPM;
-        }
-        let idx = self.beat_to_time.partition_point(|p| p.beat <= beat);
-        self.beat_to_time[idx.saturating_sub(1).max(0)].bpm
+pub fn get_displayed_beat(t: &TimingData, beat: f64) -> f64 {
+    if t.scroll_prefix.is_empty() || beat < t.scroll_prefix[0].beat {
+        return beat;
     }
+    let idx = t
+        .scroll_prefix
+        .partition_point(|p| p.beat <= beat)
+        .saturating_sub(1);
+    let p = t.scroll_prefix[idx];
+    p.cum_displayed + (beat - p.beat) * p.ratio
+}
 
-    pub fn get_capped_max_bpm(&self, cap: Option<f64>) -> f64 {
-        let mut max = self.max_bpm.max(
-            self.beat_to_time
-                .iter()
-                .map(|p| p.bpm)
-                .filter(|b| b.is_finite() && *b > 0.0)
-                .fold(0.0, f64::max),
-        );
-        if let Some(c) = cap {
-            if c > 0.0 {
-                max = max.min(c);
-            }
-        }
-        if max > 0.0 { max } else { DEFAULT_BPM }
+pub fn get_speed_multiplier(t: &TimingData, beat: f64, time: f64) -> f64 {
+    if t.speeds.is_empty() {
+        return 1.0;
     }
-
-    pub fn get_displayed_beat(&self, beat: f64) -> f64 {
-        if self.scroll_prefix.is_empty() || beat < self.scroll_prefix[0].beat {
-            return beat;
-        }
-        let idx = self
-            .scroll_prefix
-            .partition_point(|p| p.beat <= beat)
-            .saturating_sub(1);
-        let p = self.scroll_prefix[idx];
-        p.cum_displayed + (beat - p.beat) * p.ratio
+    let idx = t.speeds.partition_point(|s| s.beat <= beat);
+    if idx == 0 {
+        return 1.0;
     }
+    let i = idx - 1;
+    let seg = &t.speeds[i];
+    let rt = &t.speed_runtime[i];
 
-    pub fn get_speed_multiplier(&self, beat: f64, time: f64) -> f64 {
-        if self.speeds.is_empty() {
-            return 1.0;
-        }
-        let idx = self.speeds.partition_point(|s| s.beat <= beat);
-        if idx == 0 {
-            return 1.0;
-        }
-        let i = idx - 1;
-        let seg = &self.speeds[i];
-        let rt = &self.speed_runtime[i];
-
-        if time >= rt.end_time || seg.delay <= 0.0 {
-            return seg.ratio;
-        }
-        if time < rt.start_time {
-            return rt.prev_ratio;
-        }
-        let progress = (time - rt.start_time) / (rt.end_time - rt.start_time);
-        rt.prev_ratio + (seg.ratio - rt.prev_ratio) * progress
+    if time >= rt.end_time || seg.delay <= 0.0 {
+        return seg.ratio;
     }
+    if time < rt.start_time {
+        return rt.prev_ratio;
+    }
+    let progress = (time - rt.start_time) / (rt.end_time - rt.start_time);
+    rt.prev_ratio + (seg.ratio - rt.prev_ratio) * progress
 }

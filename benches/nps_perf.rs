@@ -58,7 +58,7 @@ fn chart_offset_seconds(tag: Option<&[u8]>) -> Option<f64> {
 fn build_nps_inputs() -> (Vec<NpsChartInput>, NpsGlobals) {
     let parsed =
         rssp::parse::extract_sections(FIXTURE.as_bytes(), EXTENSION).expect("fixture should parse");
-    let timing_format = rssp::timing::TimingFormat::from_extension(EXTENSION);
+    let timing_format = rssp::timing::timing_format_from_ext(EXTENSION);
     let ssc_version = rssp::parse::parse_version(parsed.version, timing_format);
     let allow_steps_timing = rssp::timing::steps_timing_allowed(ssc_version, timing_format);
 
@@ -147,7 +147,7 @@ fn build_nps_timing_inputs(charts: &[NpsChartInput], globals: &NpsGlobals) -> Ve
             )
         };
 
-        let timing = rssp::timing::TimingData::from_chart_data(
+        let timing = rssp::timing::timing_data_from_chart_data(
             chart_offset,
             0.0,
             if globals.allow_steps_timing {
@@ -269,7 +269,7 @@ fn bench_nps_inner(c: &mut Criterion) {
                     )
                 };
 
-                let timing = rssp::timing::TimingData::from_chart_data(
+                let timing = rssp::timing::timing_data_from_chart_data(
                     chart_offset,
                     0.0,
                     if globals.allow_steps_timing {

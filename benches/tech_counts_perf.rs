@@ -54,7 +54,7 @@ fn clean_chart_tag(tag: Option<&[u8]>) -> Option<String> {
 fn build_tech_inputs() -> (Vec<TechChartInput>, TechGlobals) {
     let parsed =
         rssp::parse::extract_sections(FIXTURE.as_bytes(), EXTENSION).expect("fixture should parse");
-    let timing_format = rssp::timing::TimingFormat::from_extension(EXTENSION);
+    let timing_format = rssp::timing::timing_format_from_ext(EXTENSION);
     let ssc_version = rssp::parse::parse_version(parsed.version, timing_format);
     let allow_steps_timing = rssp::timing::steps_timing_allowed(ssc_version, timing_format);
 
@@ -141,7 +141,7 @@ fn timing_for_chart(chart: &TechChartInput, globals: &TechGlobals) -> rssp::timi
         )
     };
 
-    rssp::timing::TimingData::from_chart_data(
+    rssp::timing::timing_data_from_chart_data(
         globals.song_offset,
         0.0,
         if globals.allow_steps_timing {

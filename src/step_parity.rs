@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::OnceLock;
 
-use crate::timing::{ROWS_PER_BEAT, TimingData, beat_to_note_row_f32};
+use crate::timing::{ROWS_PER_BEAT, TimingData, beat_to_note_row_f32, get_time_for_beat_f32, is_fake_at_beat};
 
 const INVALID_COLUMN: i8 = -1;
 const CLM_SECOND_INVALID: f32 = -1.0;
@@ -1652,7 +1652,7 @@ fn parse_rows_from_arrays<const LANES: usize>(
         let beat_raw = row_to_beat[idx];
         let note_row = beat_to_note_row_f32(beat_raw);
         let beat = note_row as f32 / ROWS_PER_BEAT as f32;
-        let second = timing.get_time_for_beat_f32(beat as f64) as f32;
+        let second = get_time_for_beat_f32(timing, beat as f64) as f32;
 
         let mut chars = [b'0'; 8];
         chars[..copy_len].copy_from_slice(&row[..copy_len]);
@@ -1695,7 +1695,7 @@ fn build_notes(rows: &[ParsedRow], timing: Option<&TimingData>) -> Vec<Intermedi
 
     let mut notes = Vec::new();
     for (idx, row) in rows.iter().enumerate() {
-        let row_fake = timing.map_or(false, |t| t.is_fake_at_beat(row.row as f64));
+        let row_fake = timing.map_or(false, |t| is_fake_at_beat(t, row.row as f64));
 
         for c in 0..cols {
             let ch = row.chars[c];
@@ -1775,9 +1775,9 @@ pub fn analyze_timing_lanes(minimized_note_data: &[u8], timing: &TimingData, lan
 
     let cols = layout_cols(&cache.layout);
     debug_assert!(!minimized_note_data.contains(&b';'));
-    analyze_core(cache, minimized_note_data, cols, Some(timing), |beat| {
-        timing.get_time_for_beat_f32(beat as f64) as f32
-    })
+	    analyze_core(cache, minimized_note_data, cols, Some(timing), |beat| {
+	        get_time_for_beat_f32(timing, beat as f64) as f32
+	    })
 }
 
 pub(crate) fn analyze_timing_rows<const LANES: usize>(

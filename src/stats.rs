@@ -1,4 +1,4 @@
-use crate::timing::{TimingData, beat_to_note_row, note_row_to_beat};
+use crate::timing::{TimingData, beat_to_note_row, is_judgable_at_beat, note_row_to_beat};
 
 pub use crate::nps::measure_equally_spaced;
 pub use crate::streams::{
@@ -646,7 +646,7 @@ fn process_timing_rows<'a, const L: usize>(
         process_timing_row::<L>(
             line,
             &ends[ridx],
-            timing.is_judgable_at_beat(beats[ridx] as f64),
+            is_judgable_at_beat(timing, beats[ridx] as f64),
             &mut stats,
             &mut ends_per,
             &mut active,

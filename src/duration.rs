@@ -4,7 +4,10 @@ use crate::parse::{
     decode_bytes, extract_sections, normalize_chart_desc, parse_offset_seconds, parse_version,
     unescape_trim,
 };
-use crate::timing::{TimingData, TimingFormat, compute_timing_segments, steps_timing_allowed};
+use crate::timing::{
+    TimingData, compute_timing_segments, get_time_for_beat_f32,
+    steps_timing_allowed, timing_data_from_segments, timing_format_from_ext,
+};
 
 #[derive(Debug, Clone)]
 pub struct ChartDuration {
@@ -38,7 +41,7 @@ pub(crate) fn chart_duration_seconds(
         return 0.0;
     }
     round_sig_figs_itg(
-        timing.get_time_for_beat_f32(last_beat)
+        get_time_for_beat_f32(timing, last_beat)
             - offsets.global_offset_seconds
             - offsets.group_offset_seconds,
     )
@@ -51,7 +54,7 @@ pub fn compute_chart_durations(
 ) -> Result<Vec<ChartDuration>, String> {
     let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
 
-    let timing_format = TimingFormat::from_extension(extension);
+    let timing_format = timing_format_from_ext(extension);
     let ssc_version = parse_version(parsed_data.version, timing_format);
     let allow_steps_timing = steps_timing_allowed(ssc_version, timing_format);
     let song_offset = parse_offset_seconds(parsed_data.offset);
@@ -189,7 +192,7 @@ pub fn compute_chart_durations(
             true,
         );
 
-        let timing = TimingData::from_segments(chart_offset, 0.0, &timing_segments);
+        let timing = timing_data_from_segments(chart_offset, 0.0, &timing_segments);
         let duration_seconds = chart_duration_seconds(last_beat, &timing, offsets);
 
         results.push(ChartDuration {

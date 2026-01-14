@@ -7,7 +7,7 @@ const EXTENSION: &str = "ssc";
 
 fn bench_metadata_pipeline(c: &mut Criterion) {
     let fixture = FIXTURE.as_bytes();
-    let timing_format = rssp::timing::TimingFormat::from_extension(EXTENSION);
+    let timing_format = rssp::timing::timing_format_from_ext(EXTENSION);
     let mut group = c.benchmark_group("metadata");
     group.sample_size(200);
     group.measurement_time(Duration::from_secs(2));

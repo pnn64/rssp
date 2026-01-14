@@ -7,7 +7,7 @@ use crate::parse::{
 };
 use crate::timing::{
     ROWS_PER_BEAT, TimingFormat, compute_timing_segments, format_bpm_segments_like_itg,
-    steps_timing_allowed,
+    steps_timing_allowed, timing_format_from_ext,
 };
 
 const GIMMICK_BPM_THRESHOLD: f64 = 10000.0;
@@ -393,7 +393,7 @@ fn chart_bpm_snapshot(
 
 pub fn chart_bpm_snapshots(data: &[u8], ext: &str) -> Result<Vec<ChartBpmSnapshot>, String> {
     let parsed = extract_sections(data, ext).map_err(|e| e.to_string())?;
-    let fmt = TimingFormat::from_extension(ext);
+    let fmt = timing_format_from_ext(ext);
     let use_chart = steps_timing_allowed(parse_version(parsed.version, fmt), fmt);
     let global = timing_tags_from_global(&parsed);
     let bpms_norm = map_tag(parsed.bpms, normalize_float_digits);

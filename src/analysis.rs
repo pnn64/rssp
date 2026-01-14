@@ -14,7 +14,10 @@ use crate::matrix::compute_matrix_rating;
 use crate::parse::*;
 use crate::stats::*;
 use crate::tech::parse_tech_notation;
-use crate::timing::{TimingData, TimingFormat, compute_timing_segments, steps_timing_allowed};
+use crate::timing::{
+    TimingFormat, compute_timing_segments, get_time_for_beat, steps_timing_allowed,
+    timing_data_from_segments, timing_format_from_ext,
+};
 use crate::patterns::{
     compile_custom_patterns, compiled_custom_empty, compiled_custom_is_empty,
     detect_custom_patterns_compiled, detect_default_patterns, count_anchors,
@@ -678,14 +681,14 @@ fn build_chart_summary(
         Vec::new()
     };
 
-    let timing = TimingData::from_segments(chart_offset, 0.0, &timing_segments);
+    let timing = timing_data_from_segments(chart_offset, 0.0, &timing_segments);
 
     let duration_seconds =
         duration::chart_duration_seconds(last_beat, &timing, TimingOffsets::default());
     let chart_length = if last_beat <= 0.0 {
         0
     } else {
-        let time_chart_f64 = timing.get_time_for_beat(last_beat);
+        let time_chart_f64 = get_time_for_beat(&timing, last_beat);
         (time_chart_f64 + (song_offset - chart_offset)).floor() as i32
     };
 
@@ -887,7 +890,7 @@ pub fn analyze(
         .music
         .map(|b| unescape_tag(decode_bytes(b).as_ref()))
         .unwrap_or_default();
-    let timing_format = TimingFormat::from_extension(extension);
+    let timing_format = timing_format_from_ext(extension);
     let display_bpm_str = parsed_data
         .display_bpm
         .map(|b| unescape_tag(decode_bytes(b).as_ref()))
@@ -1110,7 +1113,7 @@ pub fn compute_all_hashes(
 ) -> Result<Vec<ChartHashInfo>, String> {
     // 1. Parse the file structure (fast, just byte slicing)
     let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
-    let timing_format = TimingFormat::from_extension(extension);
+    let timing_format = timing_format_from_ext(extension);
     let ssc_version = parse_version(parsed_data.version, timing_format);
 
     // 2. Prepare Global BPMs

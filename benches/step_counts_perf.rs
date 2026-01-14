@@ -46,7 +46,7 @@ fn clean_chart_tag(tag: Option<&[u8]>) -> Option<String> {
 fn build_count_inputs() -> (Vec<ChartCountInput>, CountGlobals) {
     let parsed =
         rssp::parse::extract_sections(FIXTURE.as_bytes(), "ssc").expect("fixture should parse");
-    let timing_format = rssp::timing::TimingFormat::from_extension("ssc");
+    let timing_format = rssp::timing::timing_format_from_ext("ssc");
     let ssc_version = rssp::parse::parse_version(parsed.version, timing_format);
     let allow_steps_timing = rssp::timing::steps_timing_allowed(ssc_version, timing_format);
 
@@ -178,7 +178,7 @@ fn bench_step_counts_inner(c: &mut Criterion) {
                     )
                 };
 
-                let timing = rssp::timing::TimingData::from_chart_data(
+                let timing = rssp::timing::timing_data_from_chart_data(
                     globals.song_offset,
                     0.0,
                     if globals.allow_steps_timing {
