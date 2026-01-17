@@ -1060,6 +1060,10 @@ pub fn analyze(
         }
     }
 
+    if chart_summaries.is_empty() {
+        return Err("No matching steps".to_string());
+    }
+
     let total_elapsed = total_start_time.elapsed();
 
     let offset_rounded = round_dp(offset, 3);

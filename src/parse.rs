@@ -239,8 +239,10 @@ fn parse_tag_val(data: &[u8], tag_len: usize, allow_nl: bool) -> Option<(&[u8], 
 
 #[inline(always)]
 fn try_tag<'a>(s: &'a [u8], tag: &[u8], out: &mut Option<&'a [u8]>, enabled: bool) -> bool {
-    if enabled && starts_with_ci(s, tag) && out.is_none() {
-        *out = parse_tag_val(s, tag.len(), true).map(|(v, _)| v);
+    if enabled && starts_with_ci(s, tag) {
+        if let Some((v, _)) = parse_tag_val(s, tag.len(), true) {
+            *out = Some(v);
+        }
         true
     } else {
         false
@@ -253,9 +255,7 @@ fn try_tag_adv<'a>(s: &'a [u8], tag: &[u8], nl: bool, out: &mut Option<&'a [u8]>
         return None;
     }
     let (val, adv) = parse_tag_val(s, tag.len(), nl)?;
-    if out.is_none() {
-        *out = Some(val);
-    }
+    *out = Some(val);
     Some(adv)
 }
 
@@ -265,13 +265,13 @@ macro_rules! try_tags {
     };
 }
 
-fn parse_notedata_entry<'a>(data: &'a [u8], start: usize) -> (ParsedChartEntry<'a>, usize) {
+fn parse_notedata_entry<'a>(data: &'a [u8], start: usize) -> (Option<ParsedChartEntry<'a>>, usize) {
     let mut out = NotedataFields::default();
     let mut i = start;
 
     while i < data.len() {
         let Some(pos) = data[i..].iter().position(|&b| b == b'#') else {
-            return (build_chart_entry(out), data.len());
+            return (finalize_notedata_entry(out), data.len());
         };
         i += pos;
         let s = &data[i..];
@@ -320,7 +320,7 @@ fn parse_notedata_entry<'a>(data: &'a [u8], start: usize) -> (ParsedChartEntry<'
         i += 1;
     }
 
-    (build_chart_entry(out), i)
+    (finalize_notedata_entry(out), i)
 }
 
 fn build_chart_entry(f: NotedataFields<'_>) -> ParsedChartEntry<'_> {
@@ -351,6 +351,11 @@ fn build_chart_entry(f: NotedataFields<'_>) -> ParsedChartEntry<'_> {
     }
 }
 
+#[inline(always)]
+fn finalize_notedata_entry(f: NotedataFields<'_>) -> Option<ParsedChartEntry<'_>> {
+    (f.notes.is_some() || f.notes2.is_some()).then(|| build_chart_entry(f))
+}
+
 pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfileData<'a>> {
     let ext_lower = ext.to_lowercase();
     if !matches!(ext_lower.as_str(), "sm" | "ssc") {
@@ -374,7 +379,9 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
         // SSC notedata block
         if ssc && starts_with_ci(s, b"#NOTEDATA:") {
             let (entry, next) = parse_notedata_entry(data, i);
-            r.notes_list.push(entry);
+            if let Some(entry) = entry {
+                r.notes_list.push(entry);
+            }
             i = next;
             continue;
         }
@@ -388,12 +395,14 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
                 .position(|&b| b == b';')
                 .map_or(data.len(), |e| start + e);
             let (field_count, fields, note_data) = split_notes6(&data[start..end]);
-            r.notes_list.push(ParsedChartEntry {
-                field_count,
-                fields,
-                note_data,
-                ..Default::default()
-            });
+            if field_count == 5 {
+                r.notes_list.push(ParsedChartEntry {
+                    field_count,
+                    fields,
+                    note_data,
+                    ..Default::default()
+                });
+            }
             i = end + 1;
             continue;
         }
