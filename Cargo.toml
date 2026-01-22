@@ -120,6 +120,12 @@ harness = false
 name = "breakdown_perf"
 harness = false
 
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
 [profile.bench]
 debug = true
 
