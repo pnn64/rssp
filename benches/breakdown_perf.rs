@@ -62,7 +62,7 @@ fn bench_breakdown_pipeline(c: &mut Criterion) {
                 total_len += chart.sn_simple_breakdown.len();
             }
             black_box(total_len);
-        })
+        });
     });
     group.finish();
 }
@@ -111,7 +111,7 @@ fn bench_breakdown_inner(c: &mut Criterion) {
                 );
             }
             black_box(totals);
-        })
+        });
     });
     group.finish();
 }
@@ -137,7 +137,7 @@ fn bench_breakdown_counts(c: &mut Criterion) {
                 total += dens.len();
             }
             black_box(total);
-        })
+        });
     });
     group.bench_function("compute_stream_counts", |b| {
         b.iter(|| {
@@ -152,7 +152,7 @@ fn bench_breakdown_counts(c: &mut Criterion) {
                     + counts.sn_breaks;
             }
             black_box(total);
-        })
+        });
     });
     group.finish();
 }

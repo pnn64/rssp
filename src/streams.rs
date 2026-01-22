@@ -19,14 +19,14 @@ pub enum RunDensity {
     Break,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BreakdownMode {
     Detailed,
     Partial,
     Simplified,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamBreakdownLevel {
     Detailed,
     Partial,
@@ -48,7 +48,8 @@ pub enum Token {
 }
 
 #[inline]
-pub fn categorize_measure_density(d: usize) -> RunDensity {
+#[must_use] 
+pub const fn categorize_measure_density(d: usize) -> RunDensity {
     match d {
         32.. => RunDensity::Run32,
         24..=31 => RunDensity::Run24,
@@ -60,6 +61,7 @@ pub fn categorize_measure_density(d: usize) -> RunDensity {
 
 const STREAM_THRESHOLD: usize = 16;
 
+#[must_use] 
 pub fn stream_sequences(measures: &[usize]) -> Vec<StreamSegment> {
     let streams: Vec<_> = measures
         .iter()
@@ -119,6 +121,7 @@ pub fn stream_sequences(measures: &[usize]) -> Vec<StreamSegment> {
     segs
 }
 
+#[must_use] 
 pub fn compute_stream_counts(measures: &[usize]) -> StreamCounts {
     let (start, end) = match active_range(measures) {
         Some(r) => r,
@@ -143,6 +146,7 @@ pub fn compute_stream_counts(measures: &[usize]) -> StreamCounts {
     sc
 }
 
+#[must_use] 
 pub fn generate_breakdown(measures: &[usize], mode: BreakdownMode) -> String {
     let (start, end) = match active_range(measures) {
         Some(r) => r,
@@ -263,7 +267,7 @@ fn write_run(out: &mut String, cat: RunDensity, len: usize, star: bool) {
         RunDensity::Run32 => ("=", "="),
         RunDensity::Break => unreachable!(),
     };
-    let _ = write!(out, "{}{}{}", pre, len, suf);
+    let _ = write!(out, "{pre}{len}{suf}");
     if star {
         out.push('*');
     }
@@ -275,7 +279,7 @@ fn format_break(out: &mut String, n: usize, mode: BreakdownMode) {
             if !out.is_empty() {
                 out.push(' ');
             }
-            let _ = write!(out, "({})", n);
+            let _ = write!(out, "({n})");
             return;
         }
         BreakdownMode::Partial => match n {
@@ -299,12 +303,14 @@ fn format_break(out: &mut String, n: usize, mode: BreakdownMode) {
     }
 }
 
+#[must_use] 
 pub fn format_run_symbol(cat: RunDensity, len: usize, star: bool) -> String {
     let mut out = String::new();
     write_run(&mut out, cat, len, star);
     out
 }
 
+#[must_use] 
 pub fn stream_breakdown(measures: &[usize], level: StreamBreakdownLevel) -> String {
     if measures.is_empty() {
         return "No Streams!".into();
@@ -339,7 +345,7 @@ pub fn stream_breakdown(measures: &[usize], level: StreamBreakdownLevel) -> Stri
                     if i > 0 && !segs[i - 1].is_break {
                         out.push('-');
                     }
-                    let _ = write!(out, "{}", size);
+                    let _ = write!(out, "{size}");
                 }
             }
         }
@@ -348,7 +354,7 @@ pub fn stream_breakdown(measures: &[usize], level: StreamBreakdownLevel) -> Stri
     if sum != 0 {
         match level {
             StreamBreakdownLevel::Simple => {
-                let _ = write!(out, "{}", sum);
+                let _ = write!(out, "{sum}");
                 if broken {
                     out.push('*');
                 }
@@ -359,7 +365,7 @@ pub fn stream_breakdown(measures: &[usize], level: StreamBreakdownLevel) -> Stri
     }
 
     if level == StreamBreakdownLevel::Total {
-        return format!("{} Total", total);
+        return format!("{total} Total");
     }
     if out.is_empty() {
         "No Streams!".into()
@@ -383,7 +389,7 @@ fn flush_stream(
     };
 
     if level == StreamBreakdownLevel::Detailed {
-        let _ = write!(out, " ({}) ", size);
+        let _ = write!(out, " ({size}) ");
         return;
     }
 

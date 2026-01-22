@@ -348,6 +348,7 @@ pub fn scan_songs_dir(dir: &Path, opt: ScanOpt) -> Result<Vec<PackScan>, ScanErr
     Ok(packs)
 }
 
+#[must_use] 
 pub fn find_simfiles(root: &Path, opt: ScanOpt) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];

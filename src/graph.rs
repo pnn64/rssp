@@ -7,7 +7,7 @@ pub enum ColorScheme {
     Alternative,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphImageData {
     pub width: u32,
     pub height: u32,
@@ -25,12 +25,12 @@ fn generate_graph_pixels(
 ) -> Vec<u8> {
     let color_gradient: Vec<[u8; 3]> = (0..height)
         .map(|y| {
-            let frac = (height - 1 - y) as f64 / (height as f64 - 1.0);
-            let r = (bottom_color[0] as f64 + (top_color[0] as f64 - bottom_color[0] as f64) * frac)
+            let frac = f64::from(height - 1 - y) / (f64::from(height) - 1.0);
+            let r = (f64::from(bottom_color[0]) + (f64::from(top_color[0]) - f64::from(bottom_color[0])) * frac)
                 .round() as u8;
-            let g = (bottom_color[1] as f64 + (top_color[1] as f64 - bottom_color[1] as f64) * frac)
+            let g = (f64::from(bottom_color[1]) + (f64::from(top_color[1]) - f64::from(bottom_color[1])) * frac)
                 .round() as u8;
-            let b = (bottom_color[2] as f64 + (top_color[2] as f64 - bottom_color[2] as f64) * frac)
+            let b = (f64::from(bottom_color[2]) + (f64::from(top_color[2]) - f64::from(bottom_color[2])) * frac)
                 .round() as u8;
             [r, g, b]
         })
@@ -43,21 +43,21 @@ fn generate_graph_pixels(
 
     if !measure_nps_vec.is_empty() && max_nps > 0.0 {
         let num_measures = measure_nps_vec.len();
-        let measure_width = width as f64 / num_measures as f64;
+        let measure_width = f64::from(width) / num_measures as f64;
 
         let h_vec: Vec<f64> = measure_nps_vec
             .iter()
-            .map(|&nps| (nps / max_nps).min(1.0) * height as f64)
+            .map(|&nps| (nps / max_nps).min(1.0) * f64::from(height))
             .collect();
 
         for x in 0..width {
-            let x_f = x as f64;
+            let x_f = f64::from(x);
             let i = (x_f / measure_width).floor() as usize;
             if i >= num_measures {
                 continue;
             }
 
-            let frac = (x_f - (i as f64 * measure_width)) / measure_width;
+            let frac = (i as f64).mul_add(-measure_width, x_f) / measure_width;
 
             let h_start = h_vec[i];
             let h_end = if i < num_measures - 1 {
@@ -65,7 +65,7 @@ fn generate_graph_pixels(
             } else {
                 h_start
             };
-            let h_x = h_start + frac * (h_end - h_start);
+            let h_x = frac.mul_add(h_end - h_start, h_start);
             let bar_height = h_x.round() as u32;
 
             if bar_height == 0 {
@@ -107,8 +107,8 @@ pub fn generate_density_graph_png(
     );
 
     let filename = match color_scheme {
-        ColorScheme::Default => format!("{}.png", short_hash),
-        ColorScheme::Alternative => format!("{}-alt.png", short_hash),
+        ColorScheme::Default => format!("{short_hash}.png"),
+        ColorScheme::Alternative => format!("{short_hash}-alt.png"),
     };
     let file = File::create(filename)?;
     let mut encoder = png::Encoder::new(file, IMAGE_WIDTH, GRAPH_HEIGHT);

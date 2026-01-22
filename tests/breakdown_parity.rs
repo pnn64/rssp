@@ -107,8 +107,7 @@ struct Failure {
 }
 
 fn format_len<T>(opt: Option<&[T]>) -> String {
-    opt.map(|v| v.len().to_string())
-        .unwrap_or_else(|| "-".to_string())
+    opt.map_or_else(|| "-".to_string(), |v| v.len().to_string())
 }
 
 fn compute_chart_breakdowns(
@@ -119,7 +118,7 @@ fn compute_chart_breakdowns(
         compute_tech_counts: false,
         ..AnalysisOptions::default()
     };
-    let summary = analyze(simfile_data, extension, options).map_err(|e| e.to_string())?;
+    let summary = analyze(simfile_data, extension, options).map_err(|e| e)?;
 
     let mut results = Vec::new();
     for chart in summary.charts {
@@ -156,17 +155,17 @@ fn compute_chart_breakdowns(
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
-    let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+    let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {e}"))?;
 
     let raw_bytes = zstd::decode_all(&compressed_bytes[..])
-        .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
+        .map_err(|e| format!("Failed to decompress simfile: {e}"))?;
 
     let file_hash = format!("{:x}", md5::compute(&raw_bytes));
     let subfolder = &file_hash[0..2];
 
     let harness_path = baseline_dir
         .join(subfolder)
-        .join(format!("{}.json.zst", file_hash));
+        .join(format!("{file_hash}.json.zst"));
 
     if !harness_path.exists() {
         return Err(format!(
@@ -179,7 +178,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
 
     let rssp_path = baseline_dir
         .join(subfolder)
-        .join(format!("{}.rssp.json.zst", file_hash));
+        .join(format!("{file_hash}.rssp.json.zst"));
 
     if !rssp_path.exists() {
         return Err(format!(
@@ -191,25 +190,25 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     }
 
     let compressed_harness =
-        fs::read(&harness_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
+        fs::read(&harness_path).map_err(|e| format!("Failed to read baseline file: {e}"))?;
 
     let harness_json = zstd::decode_all(&compressed_harness[..])
-        .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
+        .map_err(|e| format!("Failed to decompress baseline json: {e}"))?;
 
     let harness_charts: Vec<HarnessChart> = serde_json::from_slice(&harness_json)
-        .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
+        .map_err(|e| format!("Failed to parse baseline JSON: {e}"))?;
 
     let compressed_rssp =
-        fs::read(&rssp_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
+        fs::read(&rssp_path).map_err(|e| format!("Failed to read baseline file: {e}"))?;
 
     let rssp_json = zstd::decode_all(&compressed_rssp[..])
-        .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
+        .map_err(|e| format!("Failed to decompress baseline json: {e}"))?;
 
     let rssp_file: RsspGoldenFile = serde_json::from_slice(&rssp_json)
-        .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
+        .map_err(|e| format!("Failed to parse baseline JSON: {e}"))?;
 
     let rssp_charts = compute_chart_breakdowns(&raw_bytes, extension)
-        .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
+        .map_err(|e| format!("RSSP Parsing Error: {e}"))?;
 
     let mut harness_map: HashMap<(String, String), Vec<HarnessChart>> = HashMap::new();
     for chart in harness_charts {
@@ -260,8 +259,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     for ((step_type, difficulty), expected_entries) in harness_entries {
         let Some(actual_entries) = rssp_map.get(&(step_type.clone(), difficulty.clone())) else {
             println!(
-                "  {} {}: baseline present, RSSP missing chart",
-                step_type, difficulty
+                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
             );
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
@@ -276,22 +274,17 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             let expected = expected_entries.get(idx);
             let actual = actual_entries.get(idx);
             let meter_label = expected
-                .and_then(|entry| entry.meter)
-                .map(|meter| meter.to_string())
-                .unwrap_or_else(|| (idx + 1).to_string());
+                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
 
             let expected_detail = expected
-                .map(|v| v.streams_breakdown.as_str())
-                .unwrap_or("-");
-            let actual_detail = actual.map(|v| v.streams.detailed.as_str()).unwrap_or("-");
+                .map_or("-", |v| v.streams_breakdown.as_str());
+            let actual_detail = actual.map_or("-", |v| v.streams.detailed.as_str());
             let expected_partial = expected
-                .map(|v| v.streams_breakdown_level1.as_str())
-                .unwrap_or("-");
-            let actual_partial = actual.map(|v| v.streams.partial.as_str()).unwrap_or("-");
+                .map_or("-", |v| v.streams_breakdown_level1.as_str());
+            let actual_partial = actual.map_or("-", |v| v.streams.partial.as_str());
             let expected_simple = expected
-                .map(|v| v.streams_breakdown_level2.as_str())
-                .unwrap_or("-");
-            let actual_simple = actual.map(|v| v.streams.simple.as_str()).unwrap_or("-");
+                .map_or("-", |v| v.streams_breakdown_level2.as_str());
+            let actual_simple = actual.map_or("-", |v| v.streams.simple.as_str());
             let expected_total_streams = expected.map(|v| v.total_stream_measures);
             let actual_total_streams = actual.map(|v| v.total_streams);
             let expected_total_breaks = expected.map(|v| v.total_break_measures);
@@ -313,18 +306,10 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 && sequences_match;
             let status = if matches { "....ok" } else { "....MISMATCH" };
 
-            let expected_total_streams = expected_total_streams
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string());
-            let actual_total_streams = actual_total_streams
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string());
-            let expected_total_breaks = expected_total_breaks
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string());
-            let actual_total_breaks = actual_total_breaks
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string());
+            let expected_total_streams = expected_total_streams.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let actual_total_streams = actual_total_streams.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let expected_total_breaks = expected_total_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let actual_total_breaks = actual_total_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
 
             println!(
                 "  {} {} [{}]: detailed {} -> {} | partial {} -> {} | simple {} -> {} | total_streams {} -> {} | total_breaks {} -> {} | sequences len {} -> {} {}",
@@ -429,8 +414,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     for ((step_type, difficulty), expected_entries) in sn_entries {
         let Some(actual_entries) = rssp_map.get(&(step_type.clone(), difficulty.clone())) else {
             println!(
-                "  {} {}: baseline present, RSSP missing chart",
-                step_type, difficulty
+                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
             );
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
@@ -451,20 +435,16 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                     actual
                         .map(|entry| entry.rating.as_str())
                         .filter(|label| !label.is_empty())
-                })
-                .map(|label| label.to_string())
-                .unwrap_or_else(|| (idx + 1).to_string());
+                }).map_or_else(|| (idx + 1).to_string(), std::string::ToString::to_string);
 
             let expected_detail = expected
-                .map(|v| v.breakdown.detailed.as_str())
-                .unwrap_or("-");
-            let actual_detail = actual.map(|v| v.sn.detailed.as_str()).unwrap_or("-");
+                .map_or("-", |v| v.breakdown.detailed.as_str());
+            let actual_detail = actual.map_or("-", |v| v.sn.detailed.as_str());
             let expected_partial = expected
-                .map(|v| v.breakdown.partial.as_str())
-                .unwrap_or("-");
-            let actual_partial = actual.map(|v| v.sn.partial.as_str()).unwrap_or("-");
-            let expected_simple = expected.map(|v| v.breakdown.simple.as_str()).unwrap_or("-");
-            let actual_simple = actual.map(|v| v.sn.simple.as_str()).unwrap_or("-");
+                .map_or("-", |v| v.breakdown.partial.as_str());
+            let actual_partial = actual.map_or("-", |v| v.sn.partial.as_str());
+            let expected_simple = expected.map_or("-", |v| v.breakdown.simple.as_str());
+            let actual_simple = actual.map_or("-", |v| v.sn.simple.as_str());
             let expected_sn_breaks = expected.map(|v| v.sn_breaks);
             let actual_sn_breaks = actual.map(|v| v.sn_breaks);
 
@@ -476,27 +456,11 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 && expected_sn_breaks == actual_sn_breaks;
             let status = if matches { "....ok" } else { "....MISMATCH" };
 
-            let expected_sn_breaks = expected_sn_breaks
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string());
-            let actual_sn_breaks = actual_sn_breaks
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string());
+            let expected_sn_breaks = expected_sn_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let actual_sn_breaks = actual_sn_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
 
             println!(
-                "  {} {} [{}]: sn_detailed {} -> {} | sn_partial {} -> {} | sn_simple {} -> {} | sn_breaks {} -> {} {}",
-                step_type,
-                difficulty,
-                meter_label,
-                expected_detail,
-                actual_detail,
-                expected_partial,
-                actual_partial,
-                expected_simple,
-                actual_simple,
-                expected_sn_breaks,
-                actual_sn_breaks,
-                status
+                "  {step_type} {difficulty} [{meter_label}]: sn_detailed {expected_detail} -> {actual_detail} | sn_partial {expected_partial} -> {actual_partial} | sn_simple {expected_simple} -> {actual_simple} | sn_breaks {expected_sn_breaks} -> {actual_sn_breaks} {status}"
             );
         }
 
@@ -566,7 +530,7 @@ fn main() {
 
     let mut tests = Vec::new();
 
-    for entry in WalkDir::new(&packs_dir).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(&packs_dir).into_iter().filter_map(std::result::Result::ok) {
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -582,7 +546,7 @@ fn main() {
         let inner_extension = inner_path
             .extension()
             .and_then(|e| e.to_str())
-            .map(|s| s.to_lowercase())
+            .map(str::to_lowercase)
             .unwrap_or_default();
 
         if inner_extension != "sm" && inner_extension != "ssc" {
@@ -646,11 +610,11 @@ fn main() {
         let res = check_file(&path, &extension, &baseline_dir);
         match res {
             Ok(()) => {
-                println!("test {} ... ok", name);
+                println!("test {name} ... ok");
                 num_passed += 1;
             }
             Err(msg) => {
-                println!("test {} ... FAILED", name);
+                println!("test {name} ... FAILED");
                 failures.push(Failure {
                     name,
                     message: msg.trim().to_string(),
@@ -685,13 +649,12 @@ fn main() {
     }
 
     if num_failed == 0 {
-        println!("test result: ok. {} passed; 0 failed", num_passed);
+        println!("test result: ok. {num_passed} passed; 0 failed");
         return;
     }
 
     println!(
-        "test result: FAILED. {} passed; {} failed",
-        num_passed, num_failed
+        "test result: FAILED. {num_passed} passed; {num_failed} failed"
     );
     std::process::exit(101);
 }

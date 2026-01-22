@@ -32,7 +32,7 @@ fn build_chart_inputs() -> (Vec<ChartInput>, String) {
             field_count: entry.field_count,
             fields: entry.fields,
             note_data: entry.note_data,
-            chart_bpms: entry.chart_bpms.map(|v| v.into_owned()),
+            chart_bpms: entry.chart_bpms.map(std::borrow::Cow::into_owned),
         })
         .collect();
     (charts, normalized_global_bpms)
@@ -48,7 +48,7 @@ fn bench_hash_pipeline(c: &mut Criterion) {
             let hashes = rssp::compute_all_hashes(black_box(fixture), black_box("ssc"))
                 .expect("hashing should succeed");
             black_box(hashes);
-        })
+        });
     });
     group.finish();
 }
@@ -92,7 +92,7 @@ fn bench_hash_inner(c: &mut Criterion) {
                 hashes.push(hash);
             }
             black_box(hashes);
-        })
+        });
     });
     group.finish();
 }

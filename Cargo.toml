@@ -1,6 +1,6 @@
 [package]
 name = "rssp"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 authors = ["Patrik Nilsson <perfecttaste@pm.me>"]
 description = "A high-performance simfile parser for StepMania."
@@ -122,3 +122,12 @@ harness = false
 
 [profile.bench]
 debug = true
+
+[lints.clippy]
+correctness = "warn"
+complexity  = "warn"
+perf        = "warn"
+# Optional:
+all         = "warn"
+pedantic    = "warn"
+nursery     = "warn"

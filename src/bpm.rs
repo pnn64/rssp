@@ -42,19 +42,19 @@ pub(crate) fn parse_beat_or_row(raw: &str) -> Option<f64> {
     let mut s = raw.trim();
     let is_row = s
         .strip_suffix(['r', 'R'])
-        .map(|r| {
+        .is_some_and(|r| {
             s = r.trim_end();
             true
-        })
-        .unwrap_or(false);
+        });
     let v = s.parse::<f32>().ok().filter(|v| v.is_finite())?;
     Some(if is_row {
-        v as f64 / ROWS_PER_BEAT as f64
+        f64::from(v) / f64::from(ROWS_PER_BEAT)
     } else {
-        v as f64
+        f64::from(v)
     })
 }
 
+#[must_use] 
 pub fn normalize_float_digits(param: &str) -> String {
     let mut out = String::with_capacity(param.len());
     for entry in param.split(',') {
@@ -62,8 +62,8 @@ pub fn normalize_float_digits(param: &str) -> String {
         if t.is_empty() {
             continue;
         }
-        if let Some((b, v)) = t.split_once('=') {
-            if let (Some(b), Some(v)) = (normalize_decimal(b), normalize_decimal(v)) {
+        if let Some((b, v)) = t.split_once('=')
+            && let (Some(b), Some(v)) = (normalize_decimal(b), normalize_decimal(v)) {
                 if !out.is_empty() {
                     out.push(',');
                 }
@@ -71,11 +71,11 @@ pub fn normalize_float_digits(param: &str) -> String {
                 out.push('=');
                 out.push_str(&v);
             }
-        }
     }
     out
 }
 
+#[must_use] 
 pub fn clean_timing_map(param: &str) -> String {
     let mut out = String::with_capacity(param.len());
     for entry in param.split(',') {
@@ -95,6 +95,7 @@ pub fn clean_timing_map(param: &str) -> String {
     out
 }
 
+#[must_use] 
 pub fn clean_timing_map_cow(param: &str) -> Cow<'_, str> {
     if param.is_empty() {
         return Cow::Borrowed("");
@@ -153,7 +154,7 @@ fn split_display_bpm_params(tag: &str) -> (&str, Option<&str>) {
 
 fn parse_float_prefix(s: &str) -> Option<f64> {
     let b = s.trim_start().as_bytes();
-    let mut i = if b.first().map_or(false, |&c| c == b'+' || c == b'-') {
+    let mut i = if b.first().is_some_and(|&c| c == b'+' || c == b'-') {
         1
     } else {
         0
@@ -201,12 +202,11 @@ fn parse_display_bpm(tag: &str) -> Option<(f64, f64)> {
     if min_s.is_empty() {
         return None;
     }
-    let min = (parse_float_prefix(min_s).unwrap_or(0.0) as f32) as f64;
+    let min = f64::from(parse_float_prefix(min_s).unwrap_or(0.0) as f32);
     let max = max_s
         .filter(|s| !s.is_empty())
         .and_then(parse_float_prefix)
-        .map(|v| (v as f32) as f64)
-        .unwrap_or(min);
+        .map_or(min, |v| f64::from(v as f32));
     Some((min, max))
 }
 
@@ -228,10 +228,10 @@ pub(crate) fn resolve_display_bpm(
     let (smin, smax) = (min * rate, max * rate);
     let fmt = |v: f64| {
         if rate == 1.0 {
-            format!("{:.0}", v)
+            format!("{v:.0}")
         } else {
-            let s = format!("{:.1}", v);
-            s.strip_suffix(".0").map_or(s.clone(), |t| t.to_string())
+            let s = format!("{v:.1}");
+            s.strip_suffix(".0").map_or(s.clone(), std::string::ToString::to_string)
         }
     };
     let display = if smin == smax {
@@ -370,7 +370,7 @@ fn chart_bpm_snapshot(
     let bpms: Vec<_> = segments
         .bpms
         .iter()
-        .map(|&(b, v)| (b as f64, v as f64))
+        .map(|&(b, v)| (f64::from(b), f64::from(v)))
         .collect();
     let bpms_formatted = format_bpm_segments_like_itg(&bpms);
     let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw(&bpms);
@@ -405,6 +405,7 @@ pub fn chart_bpm_snapshots(data: &[u8], ext: &str) -> Result<Vec<ChartBpmSnapsho
 }
 
 // BPM parsing - consolidated
+#[must_use] 
 pub fn parse_bpm_map(s: &str) -> Vec<(f64, f64)> {
     let mut v: Vec<_> = s
         .split(',')
@@ -412,7 +413,7 @@ pub fn parse_bpm_map(s: &str) -> Vec<(f64, f64)> {
             let c = c.trim();
             let (l, r) = c.split_once('=')?;
             let beat = parse_beat_or_row(l)?;
-            let bpm = r.trim().parse::<f64>().ok().map(|v| v as f32 as f64)?;
+            let bpm = r.trim().parse::<f64>().ok().map(|v| f64::from(v as f32))?;
             Some((beat, bpm))
         })
         .collect();
@@ -420,6 +421,7 @@ pub fn parse_bpm_map(s: &str) -> Vec<(f64, f64)> {
     v
 }
 
+#[must_use] 
 pub fn get_current_bpm(beat: f64, map: &[(f64, f64)]) -> f64 {
     if map.is_empty() {
         return 0.0;
@@ -457,13 +459,14 @@ pub fn compute_bpm_range(map: &[(f64, f64)]) -> (i32, i32) {
     bpm_range_filtered(map, is_display_bpm, |v| v.round() as i32)
 }
 
+#[must_use] 
 pub fn compute_actual_bpm_range(map: &[(f64, f64)]) -> (f64, f64) {
     let (min, max) = actual_bpm_range_raw(map);
     (round_sig_figs_itg(min), round_sig_figs_itg(max))
 }
 
 pub(crate) fn actual_bpm_range_raw(map: &[(f64, f64)]) -> (f64, f64) {
-    bpm_range_filtered(map, |b| b.is_finite(), |v| roundtrip_bpm_itg(v))
+    bpm_range_filtered(map, f64::is_finite, roundtrip_bpm_itg)
 }
 
 fn bpm_range_filtered<T: PartialOrd + Default + Copy, F: Fn(f64) -> bool, M: Fn(f64) -> T>(
@@ -491,6 +494,7 @@ fn bpm_range_filtered<T: PartialOrd + Default + Copy, F: Fn(f64) -> bool, M: Fn(
     (transform(min.max(0.0)), transform(max.max(0.0)))
 }
 
+#[must_use] 
 pub fn get_elapsed_time(
     target: f64,
     bpms: &[(f64, f64)],
@@ -578,11 +582,13 @@ fn elapsed_with_events(
     time
 }
 
+#[must_use] 
 pub fn compute_last_beat(data: &[u8], lanes: usize) -> f64 {
     let (_, _, _, _, last_beat) = crate::stats::minimize_chart_count_rows(data, lanes);
     last_beat
 }
 
+#[must_use] 
 pub fn compute_total_chart_length(
     data: &[u8],
     lanes: usize,
@@ -599,6 +605,7 @@ pub fn compute_total_chart_length(
     }
 }
 
+#[must_use] 
 pub fn compute_mines_nonfake(
     data: &[u8],
     lanes: usize,
@@ -646,12 +653,13 @@ pub fn compute_mines_nonfake(
                 return false;
             }
             let t = per_measure.get(m).copied().unwrap_or(1).max(1) as f64;
-            let beat = m as f64 * 4.0 + 4.0 * (r as f64 / t);
+            let beat = (m as f64).mul_add(4.0, 4.0 * (r as f64 / t));
             !in_range(beat, warps) && !in_range(beat, fakes)
         })
         .count() as u32
 }
 
+#[must_use] 
 pub fn compute_bpm_stats(values: &[f64]) -> (f64, f64) {
     if values.is_empty() {
         return (0.0, 0.0);
@@ -666,7 +674,7 @@ pub fn compute_bpm_stats(values: &[f64]) -> (f64, f64) {
     }
     v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let med = if v.len() % 2 == 0 {
-        (v[v.len() / 2 - 1] + v[v.len() / 2]) / 2.0
+        f64::midpoint(v[v.len() / 2 - 1], v[v.len() / 2])
     } else {
         v[v.len() / 2]
     };
@@ -720,6 +728,7 @@ pub fn compute_tier_bpm(densities: &[usize], bpms: &[(f64, f64)], bpm: f64) -> f
     if max_e > 0.0 { max_e } else { max_bpm }
 }
 
+#[must_use] 
 pub fn normalize_and_tidy_bpms(param: &str) -> String {
     let mut entries: Vec<_> = param
         .split(',')
@@ -741,7 +750,7 @@ pub fn normalize_and_tidy_bpms(param: &str) -> String {
     for e in entries {
         if deduped
             .last()
-            .map_or(false, |l: &(i64, String, i64, String, usize)| l.0 == e.0)
+            .is_some_and(|l: &(i64, String, i64, String, usize)| l.0 == e.0)
         {
             *deduped.last_mut().unwrap() = e;
         } else {
@@ -749,12 +758,11 @@ pub fn normalize_and_tidy_bpms(param: &str) -> String {
         }
     }
 
-    if let Some(f) = deduped.first_mut() {
-        if f.0 != 0 {
+    if let Some(f) = deduped.first_mut()
+        && f.0 != 0 {
             f.0 = 0;
             f.1 = "0.000".into();
         }
-    }
 
     // Remove consecutive same values
     let mut out = String::new();

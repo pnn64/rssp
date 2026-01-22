@@ -189,10 +189,10 @@ fn ac_build<T: Copy>(patterns: &[(T, &[u8])]) -> AcDfa<T> {
                 while f != 0 && goto[f][sym] == u32::MAX {
                     f = fail[f] as usize;
                 }
-                goto[state][sym] = if goto[f][sym] != u32::MAX {
-                    goto[f][sym]
-                } else {
+                goto[state][sym] = if goto[f][sym] == u32::MAX {
                     0
+                } else {
+                    goto[f][sym]
                 };
             }
         }
@@ -209,7 +209,7 @@ fn ac_build<T: Copy>(patterns: &[(T, &[u8])]) -> AcDfa<T> {
     }
 }
 
-/// Generic search returning a HashMap (for custom patterns or non-contiguous IDs)
+/// Generic search returning a `HashMap` (for custom patterns or non-contiguous IDs)
 #[inline]
 fn ac_search_map<T: Copy + Eq + std::hash::Hash>(text: &[u8], dfa: &AcDfa<T>) -> HashMap<T, u32> {
     let mut counts = HashMap::new();
@@ -226,7 +226,7 @@ fn ac_search_map<T: Copy + Eq + std::hash::Hash>(text: &[u8], dfa: &AcDfa<T>) ->
     counts
 }
 
-/// Specialized search returning a fixed-size array for PatternVariant
+/// Specialized search returning a fixed-size array for `PatternVariant`
 #[inline]
 fn ac_search_array(text: &[u8], dfa: &AcDfa<PatternVariant>) -> PatternCounts {
     let mut counts = [0u32; PATTERN_COUNT];
@@ -391,6 +391,7 @@ static PATTERN_DFA: LazyLock<AcDfa<PatternVariant>> = LazyLock::new(|| {
 // Pattern Detection Functions
 // ============================================================================
 
+#[must_use] 
 pub fn detect_patterns(
     bitmasks: &[u8],
     patterns: &[(PatternVariant, Vec<u8>)],
@@ -428,7 +429,7 @@ pub(crate) fn compiled_custom_empty() -> CompiledCustomPatterns {
 
 /// Checks if compiled custom patterns is empty
 #[inline]
-pub(crate) fn compiled_custom_is_empty(compiled: &CompiledCustomPatterns) -> bool {
+pub(crate) const fn compiled_custom_is_empty(compiled: &CompiledCustomPatterns) -> bool {
     compiled.patterns.is_empty()
 }
 
@@ -477,6 +478,7 @@ pub(crate) fn detect_custom_patterns_compiled(
         .collect()
 }
 
+#[must_use] 
 pub fn detect_custom_patterns(bitmasks: &[u8], patterns: &[String]) -> Vec<CustomPatternSummary> {
     let compiled = compile_custom_patterns(patterns);
     detect_custom_patterns_compiled(bitmasks, &compiled)
@@ -486,6 +488,7 @@ pub fn detect_custom_patterns(bitmasks: &[u8], patterns: &[String]) -> Vec<Custo
 // Anchor Counting
 // ============================================================================
 
+#[must_use] 
 pub fn count_anchors(bitmasks: &[u8]) -> (u32, u32, u32, u32) {
     let mut anchor_left = 0u32;
     let mut anchor_down = 0u32;
@@ -556,8 +559,8 @@ const fn map_bitmask_to_arrow(mask: u8) -> Option<Arrow> {
 
 #[inline(always)]
 const fn determine_direction(prev: Arrow, curr: Arrow) -> Option<Direction> {
-    use Arrow::*;
-    use Direction::*;
+    use Arrow::{L, U, D, R};
+    use Direction::{Left, Right};
     match (prev, curr) {
         (L, U) | (D, R) | (R, D) | (U, L) => Some(Left),
         (L, D) | (U, R) | (R, U) | (D, L) => Some(Right),
@@ -598,7 +601,7 @@ fn next_foot(prev_foot: Option<Foot>, curr_arrow: Arrow) -> (Option<Foot>, bool)
 }
 
 #[inline(always)]
-fn update_facing_state(
+const fn update_facing_state(
     state: FacingState,
     direction: Option<Direction>,
     final_left: &mut u32,
@@ -633,7 +636,7 @@ fn update_facing_state(
 }
 
 #[inline(always)]
-fn finalize_segment(
+const fn finalize_segment(
     state: &mut FacingState,
     final_left: &mut u32,
     final_right: &mut u32,
@@ -647,6 +650,7 @@ fn finalize_segment(
     *state = FacingState::Waiting { count: 0 };
 }
 
+#[must_use] 
 pub fn count_facing_steps(bitmasks: &[u8], mono_threshold: usize) -> (u32, u32) {
     let mut final_left = 0_u32;
     let mut final_right = 0_u32;
@@ -713,10 +717,12 @@ pub fn count_facing_steps(bitmasks: &[u8], mono_threshold: usize) -> (u32, u32) 
 // ============================================================================
 
 #[inline(always)]
-pub fn count_pattern(counts: &PatternCounts, variant: PatternVariant) -> u32 {
+#[must_use] 
+pub const fn count_pattern(counts: &PatternCounts, variant: PatternVariant) -> u32 {
     counts[variant as usize]
 }
 
+#[must_use] 
 pub fn compute_box_counts(counts: &PatternCounts) -> BoxCounts {
     let lr = count_pattern(counts, PatternVariant::BoxLR);
     let ud = count_pattern(counts, PatternVariant::BoxUD);

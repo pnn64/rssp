@@ -791,7 +791,7 @@ static DIFFICULTY_TABLE: LazyLock<DifficultyTable> = LazyLock::new(|| {
         .map(|&(bpm, measures_arr)| {
             (
                 bpm,
-                measures_arr.iter().cloned().collect::<BTreeMap<_, _>>(),
+                measures_arr.iter().copied().collect::<BTreeMap<_, _>>(),
             )
         })
         .collect()
@@ -803,9 +803,9 @@ fn find_lower_bound(measures: f64, bpm_data: &BTreeMap<i32, i32>) -> (f64, f64) 
     if let Some((&m, &d)) = bpm_data
         .iter()
         .rev()
-        .find(|&(&m, _)| (m as f64) <= measures)
+        .find(|&(&m, _)| f64::from(m) <= measures)
     {
-        (m as f64, d as f64)
+        (f64::from(m), f64::from(d))
     } else {
         (0.0, 0.0)
     }
@@ -816,9 +816,8 @@ fn find_lower_bound(measures: f64, bpm_data: &BTreeMap<i32, i32>) -> (f64, f64) 
 fn find_range_start(base_difficulty: f64, bpm_data: &BTreeMap<i32, i32>) -> f64 {
     bpm_data
         .iter()
-        .find(|&(_, &d)| (d as f64) == base_difficulty)
-        .map(|(&m, _)| m as f64)
-        .unwrap_or(0.0)
+        .find(|&(_, &d)| f64::from(d) == base_difficulty)
+        .map_or(0.0, |(&m, _)| f64::from(m))
 }
 
 /// Finds the start of the next difficulty range.
@@ -826,9 +825,8 @@ fn find_range_start(base_difficulty: f64, bpm_data: &BTreeMap<i32, i32>) -> f64 
 fn find_range_end(range_start_m: f64, base_difficulty: f64, bpm_data: &BTreeMap<i32, i32>) -> f64 {
     bpm_data
         .iter()
-        .find(|&(&m, &d)| (m as f64) > range_start_m && (d as f64) > base_difficulty)
-        .map(|(&m, _)| m as f64)
-        .unwrap_or(f64::INFINITY)
+        .find(|&(&m, &d)| f64::from(m) > range_start_m && f64::from(d) > base_difficulty)
+        .map_or(f64::INFINITY, |(&m, _)| f64::from(m))
 }
 
 /// Computes downward extrapolation for low measures.
@@ -870,16 +868,16 @@ fn calculate_difficulty_for_bpm(measures: f64, bpm_data: &BTreeMap<i32, i32>) ->
         return 0.0;
     }
 
-    let min_measure_key = *bpm_data.keys().next().unwrap_or(&0) as f64;
+    let min_measure_key = f64::from(*bpm_data.keys().next().unwrap_or(&0));
 
     if measures < min_measure_key {
-        let min_difficulty = *bpm_data.get(&(min_measure_key as i32)).unwrap_or(&0) as f64;
+        let min_difficulty = f64::from(*bpm_data.get(&(min_measure_key as i32)).unwrap_or(&0));
         return extrapolate_downward(measures, min_measure_key, min_difficulty);
     }
 
     let (_, base_difficulty) = find_lower_bound(measures, bpm_data);
 
-    let max_diff_in_row = *bpm_data.values().max().unwrap_or(&0) as f64;
+    let max_diff_in_row = f64::from(*bpm_data.values().max().unwrap_or(&0));
 
     if (base_difficulty - max_diff_in_row).abs() < f64::EPSILON {
         let plateau_start_m = find_range_start(max_diff_in_row, bpm_data);
@@ -894,29 +892,24 @@ fn calculate_difficulty_for_bpm(measures: f64, bpm_data: &BTreeMap<i32, i32>) ->
 /// Finds bounding BPMs for interpolation without collecting all keys.
 #[inline(always)]
 fn find_bounding_bpms(bpm: f64, table: &DifficultyTable) -> (i32, i32) {
-    if let Some((&max_bpm, _)) = table.iter().next_back() {
-        if bpm > max_bpm as f64 {
-            if let Some((&prev, _)) = table.range(..max_bpm).next_back() {
+    if let Some((&max_bpm, _)) = table.iter().next_back()
+        && bpm > f64::from(max_bpm)
+            && let Some((&prev, _)) = table.range(..max_bpm).next_back() {
                 return (prev, max_bpm);
             }
-        }
-    }
 
-    if let Some((&min_bpm, _)) = table.iter().next() {
-        if bpm < min_bpm as f64 {
-            if let Some((&next, _)) = table.range(min_bpm + 1..).next() {
+    if let Some((&min_bpm, _)) = table.iter().next()
+        && bpm < f64::from(min_bpm)
+            && let Some((&next, _)) = table.range(min_bpm + 1..).next() {
                 return (min_bpm, next);
             }
-        }
-    }
 
     let bpm_i = bpm as i32;
     let bpm1 = table
         .range(..=bpm_i)
         .next_back()
-        .map(|(&b, _)| b)
-        .unwrap_or(0);
-    let bpm2 = table.range(bpm_i..).next().map(|(&b, _)| b).unwrap_or(bpm1);
+        .map_or(0, |(&b, _)| b);
+    let bpm2 = table.range(bpm_i..).next().map_or(bpm1, |(&b, _)| b);
     (bpm1, bpm2)
 }
 
@@ -938,13 +931,13 @@ pub fn get_difficulty(bpm: f64, measures: f64) -> f64 {
         DIFFICULTY_TABLE.get(&bpm2).unwrap_or(&BTreeMap::new()),
     );
 
-    let bpm_range = (bpm2 - bpm1) as f64;
+    let bpm_range = f64::from(bpm2 - bpm1);
     if bpm_range == 0.0 {
         return diff_at_bpm1;
     }
 
-    let bpm_progress = (bpm - bpm1 as f64) / bpm_range;
-    diff_at_bpm1 + (diff_at_bpm2 - diff_at_bpm1) * bpm_progress
+    let bpm_progress = (bpm - f64::from(bpm1)) / bpm_range;
+    (diff_at_bpm2 - diff_at_bpm1).mul_add(bpm_progress, diff_at_bpm1)
 }
 
 /// Computes effective BPM multiplier based on run density.

@@ -190,7 +190,7 @@ fn bench_duration_pipeline(c: &mut Criterion) {
             )
             .expect("duration compute should succeed");
             black_box(durations);
-        })
+        });
     });
     group.finish();
 }
@@ -302,7 +302,7 @@ fn bench_duration_inner(c: &mut Criterion) {
                 durations.push(duration);
             }
             black_box(durations);
-        })
+        });
     });
     group.finish();
 }
@@ -324,7 +324,7 @@ fn bench_duration_last_beat(c: &mut Criterion) {
                 beats.push(beat);
             }
             black_box(beats);
-        })
+        });
     });
     group.finish();
 }
@@ -412,7 +412,7 @@ fn bench_duration_timing(c: &mut Criterion) {
                 durations.push(rssp::math::round_sig_figs_itg(duration));
             }
             black_box(durations);
-        })
+        });
     });
     group.finish();
 }

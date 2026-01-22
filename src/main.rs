@@ -56,18 +56,16 @@ fn main() -> io::Result<()> {
         if let (Some(bpm), Some(measures)) = (bpm_opt, measures_opt) {
             let rating = get_difficulty(bpm, measures);
             println!(
-                "Matrix rating of {} measures @ {} BPM is {:.4}",
-                measures, bpm, rating
+                "Matrix rating of {measures} measures @ {bpm} BPM is {rating:.4}"
             );
             return Ok(());
-        } else {
-            eprintln!(
-                "Usage: {} --matrix --bpm <BPM> --measures <MEASURES>",
-                args[0]
-            );
-            eprintln!("   (Short flags -b and -m are also accepted)");
-            std::process::exit(1);
         }
+        eprintln!(
+            "Usage: {} --matrix --bpm <BPM> --measures <MEASURES>",
+            args[0]
+        );
+        eprintln!("   (Short flags -b and -m are also accepted)");
+        std::process::exit(1);
     }
 
     // --- Simfile Analysis Mode ---
@@ -131,18 +129,16 @@ fn main() -> io::Result<()> {
                     .all(|c| matches!(c, 'L' | 'l' | 'D' | 'd' | 'U' | 'u' | 'R' | 'r' | 'N' | 'n'))
                 {
                     eprintln!(
-                        "Error: Invalid character in custom pattern '{}'. Allowed characters: L, D, U, R, N.",
-                        pattern_str
+                        "Error: Invalid character in custom pattern '{pattern_str}'. Allowed characters: L, D, U, R, N."
                     );
                     std::process::exit(1);
                 }
                 custom_patterns.push(pattern_str.to_uppercase());
                 i += 2;
                 continue;
-            } else {
-                eprintln!("Error: Missing value for --custom-pattern.");
-                std::process::exit(1);
             }
+            eprintln!("Error: Missing value for --custom-pattern.");
+            std::process::exit(1);
         }
         i += 1;
     }

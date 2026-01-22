@@ -21,7 +21,8 @@ pub enum TimingFormat {
 }
 
 #[inline(always)]
-pub fn timing_format_from_ext(ext: &str) -> TimingFormat {
+#[must_use] 
+pub const fn timing_format_from_ext(ext: &str) -> TimingFormat {
     if ext.eq_ignore_ascii_case("sm") {
         TimingFormat::Sm
     } else {
@@ -29,7 +30,7 @@ pub fn timing_format_from_ext(ext: &str) -> TimingFormat {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpeedUnit {
     Beats,
     Seconds,
@@ -58,7 +59,7 @@ pub type ScrollSegment = Segment;
 // --- Core math ---
 #[inline(always)]
 pub(crate) fn note_row_to_beat(row: i32) -> f64 {
-    row as f64 / ROWS_PER_BEAT as f64
+    f64::from(row) / f64::from(ROWS_PER_BEAT)
 }
 
 #[inline(always)]
@@ -68,7 +69,7 @@ fn note_row_to_beat_f32(row: i32) -> f32 {
 
 #[inline(always)]
 pub(crate) fn beat_to_note_row(beat: f64) -> i32 {
-    lrint_f64(beat * ROWS_PER_BEAT as f64) as i32
+    lrint_f64(beat * f64::from(ROWS_PER_BEAT)) as i32
 }
 
 #[inline(always)]
@@ -78,7 +79,7 @@ pub(crate) fn beat_to_note_row_f32(beat: f32) -> i32 {
 
 #[inline(always)]
 fn quantize_beat(beat: f64) -> f64 {
-    note_row_to_beat_f32(beat_to_note_row_f32(beat as f32)) as f64
+    f64::from(note_row_to_beat_f32(beat_to_note_row_f32(beat as f32)))
 }
 
 #[inline(always)]
@@ -87,6 +88,7 @@ fn quantize_beat_f32(beat: f32) -> f32 {
 }
 
 #[inline(always)]
+#[must_use] 
 pub fn steps_timing_allowed(version: f32, format: TimingFormat) -> bool {
     matches!(format, TimingFormat::Sm) || version >= VERSION_SPLIT_TIMING
 }
@@ -203,7 +205,7 @@ fn parse_segments(s: &str) -> Vec<Segment> {
             let value = parse_f64_fast(val_str)?;
             (beat.is_finite() && value.is_finite()).then(|| Segment {
                 beat,
-                value: value as f32 as f64,
+                value: f64::from(value as f32),
             })
         })
         .collect()
@@ -224,8 +226,8 @@ fn parse_speeds(s: &str) -> Vec<SpeedSegment> {
         .filter_map(|chunk| {
             let mut parts = chunk.split('=').map(str::trim);
             let beat = parse_beat_or_row(parts.next()?)?;
-            let ratio = parts.next()?.parse::<f64>().ok()? as f32 as f64;
-            let delay = parts.next()?.parse::<f64>().ok()? as f32 as f64;
+            let ratio = f64::from(parts.next()?.parse::<f64>().ok()? as f32);
+            let delay = f64::from(parts.next()?.parse::<f64>().ok()? as f32);
             let unit = if parts.next() == Some("1") {
                 SpeedUnit::Seconds
             } else {
@@ -568,6 +570,7 @@ pub fn compute_timing_segments(
     }
 }
 
+#[must_use] 
 pub fn normalize_speeds_like_itg(
     mut speeds: Vec<(f64, f64, f64, i32)>,
 ) -> Vec<(f64, f64, f64, i32)> {
@@ -577,6 +580,7 @@ pub fn normalize_speeds_like_itg(
     speeds
 }
 
+#[must_use] 
 pub fn normalize_scrolls_like_itg(mut scrolls: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
     if scrolls.is_empty() {
         scrolls.push((0.0, 1.0));
@@ -584,6 +588,7 @@ pub fn normalize_scrolls_like_itg(mut scrolls: Vec<(f64, f64)>) -> Vec<(f64, f64
     scrolls
 }
 
+#[must_use] 
 pub fn format_bpm_segments_like_itg(bpms: &[(f64, f64)]) -> String {
     bpms.iter()
         .enumerate()
@@ -591,7 +596,7 @@ pub fn format_bpm_segments_like_itg(bpms: &[(f64, f64)]) -> String {
             if idx > 0 {
                 out.push(',');
             }
-            let beat = note_row_to_beat_f32(beat_to_note_row_f32(*beat as f32)) as f64;
+            let beat = f64::from(note_row_to_beat_f32(beat_to_note_row_f32(*beat as f32)));
             out.push_str(&fmt_dec3_itg(beat));
             out.push('=');
             out.push_str(&fmt_dec3_itg(roundtrip_bpm_itg(*bpm)));
@@ -599,6 +604,7 @@ pub fn format_bpm_segments_like_itg(bpms: &[(f64, f64)]) -> String {
         })
 }
 
+#[must_use] 
 pub fn compute_row_to_beat(minimized_note_data: &[u8]) -> Vec<f32> {
     let mut row_to_beat = Vec::new();
     for (measure_index, measure_bytes) in minimized_note_data.split(|&b| b == b',').enumerate() {
@@ -610,7 +616,7 @@ pub fn compute_row_to_beat(minimized_note_data: &[u8]) -> Vec<f32> {
         let measure_start = measure_index as f32 * 4.0;
         let row_step = 4.0 / num_rows as f32;
         for row in 0..num_rows {
-            row_to_beat.push(measure_start + row as f32 * row_step);
+            row_to_beat.push((row as f32).mul_add(row_step, measure_start));
         }
     }
     row_to_beat
@@ -656,12 +662,11 @@ fn tidy_bpms(mut bpms: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
 
     let mut last_per_beat: Vec<(f64, f64)> = Vec::with_capacity(bpms.len());
     for (beat, bpm) in bpms {
-        if let Some(last) = last_per_beat.last_mut() {
-            if beat == last.0 {
+        if let Some(last) = last_per_beat.last_mut()
+            && beat == last.0 {
                 *last = (beat, bpm);
                 continue;
             }
-        }
         last_per_beat.push((beat, bpm));
     }
     if let Some(first) = last_per_beat.first_mut() {
@@ -770,13 +775,13 @@ fn process_bpms_and_stops_sm(
 
         if bpm <= FAST_BPM_WARP_F32 {
             time_offset += (change_beat - prev_beat) * 60.0 / bpm;
-            if let Some(start) = warp_start {
-                if bpm > 0.0 && time_offset > 0.0 {
+            if let Some(start) = warp_start
+                && bpm > 0.0 && time_offset > 0.0 {
                     let warp_end = change_beat - (time_offset * bpm / 60.0);
                     if warp_end > start {
                         out_warps.push(Segment {
-                            beat: quantize_beat_f32(start) as f64,
-                            value: quantize_beat_f32(warp_end - start) as f64,
+                            beat: f64::from(quantize_beat_f32(start)),
+                            value: f64::from(quantize_beat_f32(warp_end - start)),
                         });
                     }
                     if bpm != prewarp_bpm {
@@ -784,12 +789,11 @@ fn process_bpms_and_stops_sm(
                     }
                     warp_start = None;
                 }
-            }
         }
         prev_beat = change_beat;
 
         if is_bpm {
-            if warp_start.is_none() && (change_val < 0.0 || change_val > FAST_BPM_WARP_F32) {
+            if warp_start.is_none() && !(0.0..=FAST_BPM_WARP_F32).contains(&change_val) {
                 warp_start = Some(change_beat);
                 prewarp_bpm = bpm;
                 time_offset = 0.0;
@@ -805,24 +809,24 @@ fn process_bpms_and_stops_sm(
                 time_offset = change_val;
             } else if warp_start.is_none() {
                 out_stops.push(Segment {
-                    beat: quantize_beat_f32(change_beat) as f64,
-                    value: change_val as f64,
+                    beat: f64::from(quantize_beat_f32(change_beat)),
+                    value: f64::from(change_val),
                 });
             } else {
                 time_offset += change_val;
-                if change_val > 0.0 && time_offset > 0.0 {
-                    if let Some(start) = warp_start {
+                if change_val > 0.0 && time_offset > 0.0
+                    && let Some(start) = warp_start {
                         if change_beat > start {
                             out_warps.push(Segment {
-                                beat: quantize_beat_f32(start) as f64,
-                                value: quantize_beat_f32(change_beat - start) as f64,
+                                beat: f64::from(quantize_beat_f32(start)),
+                                value: f64::from(quantize_beat_f32(change_beat - start)),
                             });
                         }
                         out_stops.push(Segment {
-                            beat: quantize_beat_f32(change_beat) as f64,
-                            value: time_offset as f64,
+                            beat: f64::from(quantize_beat_f32(change_beat)),
+                            value: f64::from(time_offset),
                         });
-                        if bpm < 0.0 || bpm > FAST_BPM_WARP_F32 {
+                        if !(0.0..=FAST_BPM_WARP_F32).contains(&bpm) {
                             warp_start = Some(change_beat);
                             time_offset = 0.0;
                         } else {
@@ -832,22 +836,21 @@ fn process_bpms_and_stops_sm(
                             warp_start = None;
                         }
                     }
-                }
             }
             stop_idx += 1;
         }
     }
 
     if let Some(start) = warp_start {
-        let warp_end = if bpm < 0.0 || bpm > FAST_BPM_WARP_F32 {
+        let warp_end = if !(0.0..=FAST_BPM_WARP_F32).contains(&bpm) {
             99_999_999.0_f32
         } else {
             prev_beat - (time_offset * bpm / 60.0)
         };
         if warp_end > start {
             out_warps.push(Segment {
-                beat: quantize_beat_f32(start) as f64,
-                value: quantize_beat_f32(warp_end - start) as f64,
+                beat: f64::from(quantize_beat_f32(start)),
+                value: f64::from(quantize_beat_f32(warp_end - start)),
             });
         }
         if bpm != prewarp_bpm {
@@ -858,13 +861,13 @@ fn process_bpms_and_stops_sm(
     let out_bpms = tidy_bpms(
         out_bpms
             .into_iter()
-            .map(|(b, v)| (b as f64, v as f64))
+            .map(|(b, v)| (f64::from(b), f64::from(v)))
             .collect(),
     );
     out_stops.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
     out_warps.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
 
-    (out_bpms, out_stops, out_warps, beat0_offset as f64)
+    (out_bpms, out_stops, out_warps, f64::from(beat0_offset))
 }
 
 // --- TimingData ---
@@ -950,20 +953,21 @@ pub struct BeatInfo {
     pub is_in_delay: bool,
 }
 
+#[must_use] 
 pub fn timing_data_from_segments(
     song_offset: f64,
     global_offset: f64,
     segments: &TimingSegments,
 ) -> TimingData {
         let to_seg = |(b, v): &(f32, f32)| Segment {
-            beat: *b as f64,
-            value: *v as f64,
+            beat: f64::from(*b),
+            value: f64::from(*v),
         };
 
         let mut bpms: Vec<_> = segments
             .bpms
             .iter()
-            .map(|(b, v)| (*b as f64, *v as f64))
+            .map(|(b, v)| (f64::from(*b), f64::from(*v)))
             .collect();
         if bpms.is_empty() {
             bpms.push((0.0, DEFAULT_BPM));
@@ -978,15 +982,15 @@ pub fn timing_data_from_segments(
             .speeds
             .iter()
             .map(|(b, r, d, u)| SpeedSegment {
-                beat: *b as f64,
-                ratio: *r as f64,
-                delay: *d as f64,
+                beat: f64::from(*b),
+                ratio: f64::from(*r),
+                delay: f64::from(*d),
                 unit: *u,
             })
             .collect();
 
         timing_data_build(
-            song_offset + segments.beat0_offset_adjust as f64,
+            song_offset + f64::from(segments.beat0_offset_adjust),
             global_offset,
             bpms,
             stops,
@@ -1188,58 +1192,71 @@ fn timing_data_build(
     }
 
 #[inline(always)]
-pub fn beat0_offset_seconds(t: &TimingData) -> f64 {
+#[must_use] 
+pub const fn beat0_offset_seconds(t: &TimingData) -> f64 {
     t.beat0_offset_sec
 }
 #[inline(always)]
-pub fn beat0_group_offset_seconds(t: &TimingData) -> f64 {
+#[must_use] 
+pub const fn beat0_group_offset_seconds(t: &TimingData) -> f64 {
     t.global_offset_sec
 }
 #[inline(always)]
+#[must_use] 
 pub fn warps(t: &TimingData) -> &[Segment] {
     &t.warps
 }
 #[inline(always)]
+#[must_use] 
 pub fn stops(t: &TimingData) -> &[Segment] {
     &t.stops
 }
 #[inline(always)]
+#[must_use] 
 pub fn delays(t: &TimingData) -> &[Segment] {
     &t.delays
 }
 #[inline(always)]
+#[must_use] 
 pub fn speeds(t: &TimingData) -> &[SpeedSegment] {
     &t.speeds
 }
 #[inline(always)]
+#[must_use] 
 pub fn scrolls(t: &TimingData) -> &[Segment] {
     &t.scrolls
 }
 #[inline(always)]
+#[must_use] 
 pub fn fakes(t: &TimingData) -> &[Segment] {
     &t.fakes
 }
 
+#[must_use] 
 pub fn bpm_segments(t: &TimingData) -> Vec<(f64, f64)> {
     t.beat_to_time.iter().map(|p| (p.beat, p.bpm)).collect()
 }
 
 #[inline(always)]
+#[must_use] 
 pub fn is_fake_at_beat(t: &TimingData, beat: f64) -> bool {
     is_in_range_segment(&t.fakes, &t.fake_start_rows, beat)
 }
 
 #[inline(always)]
+#[must_use] 
 pub fn is_fake_at_row(t: &TimingData, row: i32) -> bool {
     is_in_range_segment(&t.fakes, &t.fake_start_rows, note_row_to_beat(row))
 }
 
 #[inline(always)]
+#[must_use] 
 pub fn is_warp_at_beat(t: &TimingData, beat: f64) -> bool {
     is_warp_at_row(t, beat_to_note_row_f32(beat as f32))
 }
 
 #[inline(always)]
+#[must_use] 
 pub fn is_warp_at_row(t: &TimingData, row: i32) -> bool {
     let Some(idx) = segment_index_at_row(&t.warp_start_rows, row) else {
         return false;
@@ -1270,25 +1287,30 @@ fn is_in_range_segment(segs: &[Segment], rows: &[i32], beat: f64) -> bool {
 }
 
 #[inline(always)]
+#[must_use] 
 pub fn is_judgable_at_row(t: &TimingData, row: i32) -> bool {
     !is_warp_at_row(t, row) && !is_fake_at_row(t, row)
 }
 
 #[inline(always)]
+#[must_use] 
 pub fn is_judgable_at_beat(t: &TimingData, beat: f64) -> bool {
     is_judgable_at_row(t, beat_to_note_row_f32(beat as f32))
 }
 
+#[must_use] 
 pub fn get_beat_info_from_time(t: &TimingData, time: f64) -> BeatInfo {
     let elapsed = time + t.global_offset_sec;
     let start_time = -t.beat0_offset_sec - t.global_offset_sec;
     get_beat_internal(t, elapsed, start_time)
 }
 
+#[must_use] 
 pub fn get_beat_for_time(t: &TimingData, time: f64) -> f64 {
     get_beat_info_from_time(t, time).beat
 }
 
+#[must_use] 
 pub fn get_time_for_beat(t: &TimingData, beat: f64) -> f64 {
     get_time_internal(t, beat) - t.global_offset_sec
 }
@@ -1297,7 +1319,7 @@ pub(crate) fn get_time_for_beat_f32(t: &TimingData, target_beat: f64) -> f64 {
     let mut state = GetBeatStateF32::default();
     state.last_time = (-t.beat0_offset_sec - t.global_offset_sec) as f32;
     get_elapsed_time_f32(t, &mut state, target_beat as f32);
-    state.last_time as f64 - t.global_offset_sec
+    f64::from(state.last_time) - t.global_offset_sec
 }
 
 fn get_time_internal(t: &TimingData, target_beat: f64) -> f64 {
@@ -1373,7 +1395,7 @@ fn get_beat_internal(t: &TimingData, elapsed: f64, start_time: f64) -> BeatInfo 
         }
 
         BeatInfo {
-            beat: note_row_to_beat(state.last_row) + (elapsed - state.last_time) * bps,
+            beat: (elapsed - state.last_time).mul_add(bps, note_row_to_beat(state.last_row)),
             is_in_freeze: false,
             is_in_delay: false,
         }
@@ -1599,6 +1621,7 @@ fn get_bpm_for_row_f32(t: &TimingData, row: i32) -> f32 {
     }
 }
 
+#[must_use] 
 pub fn get_bpm_for_beat(t: &TimingData, beat: f64) -> f64 {
     if t.beat_to_time.is_empty() {
         return DEFAULT_BPM;
@@ -1615,14 +1638,14 @@ pub fn get_capped_max_bpm(t: &TimingData, cap: Option<f64>) -> f64 {
             .filter(|b| b.is_finite() && *b > 0.0)
             .fold(0.0, f64::max),
     );
-    if let Some(c) = cap {
-        if c > 0.0 {
+    if let Some(c) = cap
+        && c > 0.0 {
             max = max.min(c);
         }
-    }
     if max > 0.0 { max } else { DEFAULT_BPM }
 }
 
+#[must_use] 
 pub fn get_displayed_beat(t: &TimingData, beat: f64) -> f64 {
     if t.scroll_prefix.is_empty() || beat < t.scroll_prefix[0].beat {
         return beat;
@@ -1632,9 +1655,10 @@ pub fn get_displayed_beat(t: &TimingData, beat: f64) -> f64 {
         .partition_point(|p| p.beat <= beat)
         .saturating_sub(1);
     let p = t.scroll_prefix[idx];
-    p.cum_displayed + (beat - p.beat) * p.ratio
+    (beat - p.beat).mul_add(p.ratio, p.cum_displayed)
 }
 
+#[must_use] 
 pub fn get_speed_multiplier(t: &TimingData, beat: f64, time: f64) -> f64 {
     if t.speeds.is_empty() {
         return 1.0;
@@ -1654,5 +1678,5 @@ pub fn get_speed_multiplier(t: &TimingData, beat: f64, time: f64) -> f64 {
         return rt.prev_ratio;
     }
     let progress = (time - rt.start_time) / (rt.end_time - rt.start_time);
-    rt.prev_ratio + (seg.ratio - rt.prev_ratio) * progress
+    (seg.ratio - rt.prev_ratio).mul_add(progress, rt.prev_ratio)
 }

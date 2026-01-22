@@ -405,15 +405,11 @@ fn sorted_entries(
 }
 
 fn format_count(value: Option<u32>) -> String {
-    value
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| "-".to_string())
+    value.map_or_else(|| "-".to_string(), |v| v.to_string())
 }
 
 fn format_len<T>(value: Option<&[T]>) -> String {
-    value
-        .map(|v| v.len().to_string())
-        .unwrap_or_else(|| "-".to_string())
+    value.map_or_else(|| "-".to_string(), |v| v.len().to_string())
 }
 
 const TIMING_EPS: f64 = 1e-3;
@@ -533,18 +529,7 @@ fn format_timing_counts(
     fakes: usize,
 ) -> String {
     format!(
-        "bpms:{} stops:{} delays:{} warps:{} speeds:{} scrolls:{} time_sigs:{} labels:{} tickcounts:{} combos:{} fakes:{}",
-        bpms,
-        stops,
-        delays,
-        warps,
-        speeds,
-        scrolls,
-        time_signatures,
-        labels,
-        tickcounts,
-        combos,
-        fakes
+        "bpms:{bpms} stops:{stops} delays:{delays} warps:{warps} speeds:{speeds} scrolls:{scrolls} time_sigs:{time_signatures} labels:{labels} tickcounts:{tickcounts} combos:{combos} fakes:{fakes}"
     )
 }
 
@@ -741,13 +726,11 @@ fn compare_step_artists(
     for ((step_type, difficulty), expected_indices) in harness_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
             println!(
-                "  step_artist {} {}: baseline present, RSSP missing chart",
-                step_type, difficulty
+                "  step_artist {step_type} {difficulty}: baseline present, RSSP missing chart"
             );
             step_artist_ok = false;
             step_artist_errors.push(format!(
-                "Step artist chart missing: {} {}",
-                step_type, difficulty
+                "Step artist chart missing: {step_type} {difficulty}"
             ));
             continue;
         };
@@ -757,14 +740,10 @@ fn compare_step_artists(
             let expected = expected_indices.get(idx).map(|&i| &harness_charts[i]);
             let actual = actual_indices.get(idx).map(|&i| &actual_charts[i]);
             let meter_label = expected
-                .and_then(|entry| entry.meter)
-                .map(|meter| meter.to_string())
-                .unwrap_or_else(|| (idx + 1).to_string());
+                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
             let desc_label = expected
                 .map(|entry| entry.description.trim())
-                .filter(|label| !label.is_empty())
-                .map(|label| format!("{} {}", meter_label, label))
-                .unwrap_or_else(|| meter_label.clone());
+                .filter(|label| !label.is_empty()).map_or_else(|| meter_label.clone(), |label| format!("{meter_label} {label}"));
 
             let expected_val = expected.map(|entry| entry.step_artist.as_str());
             let actual_val = actual.map(|entry| entry.chart_info.step_artists.as_str());
@@ -787,12 +766,7 @@ fn compare_step_artists(
 
             if status != "....ok" {
                 step_artist_errors.push(format!(
-                    "Step artist mismatch {} {} [{}]: RSSP step_artist: {:?}, Golden step_artist: {:?}",
-                    step_type,
-                    difficulty,
-                    desc_label,
-                    actual_val,
-                    expected_val
+                    "Step artist mismatch {step_type} {difficulty} [{desc_label}]: RSSP step_artist: {actual_val:?}, Golden step_artist: {expected_val:?}"
                 ));
             }
         }
@@ -825,8 +799,7 @@ fn compare_bpm(
     for ((step_type, difficulty), expected_indices) in harness_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
             println!(
-                "  {} {}: baseline present, RSSP missing chart",
-                step_type, difficulty
+                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
             );
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
@@ -841,9 +814,7 @@ fn compare_bpm(
             let expected = expected_indices.get(idx).map(|&i| &harness_charts[i]);
             let actual = actual_indices.get(idx).map(|&i| &actual_charts[i]);
             let meter_label = expected
-                .and_then(|entry| entry.meter)
-                .map(|meter| meter.to_string())
-                .unwrap_or_else(|| (idx + 1).to_string());
+                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
 
             let expected_hash = expected.map(|entry| entry.hash_bpms.as_str());
             let actual_hash = actual.and_then(|entry| entry.timing.hash_bpms.as_deref());
@@ -891,32 +862,16 @@ fn compare_bpm(
                 actual_hash.unwrap_or("-"),
                 expected_bpms.unwrap_or("-"),
                 actual_bpms.unwrap_or("-"),
-                expected_min
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-                actual_min
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-                expected_max
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-                actual_max
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
+                expected_min.map_or_else(|| "-".to_string(), |v| v.to_string()),
+                actual_min.map_or_else(|| "-".to_string(), |v| v.to_string()),
+                expected_max.map_or_else(|| "-".to_string(), |v| v.to_string()),
+                actual_max.map_or_else(|| "-".to_string(), |v| v.to_string()),
                 expected_display.unwrap_or("-"),
                 actual_display.unwrap_or("-"),
-                expected_display_min
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-                actual_display_min
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-                expected_display_max
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-                actual_display_max
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
+                expected_display_min.map_or_else(|| "-".to_string(), |v| v.to_string()),
+                actual_display_min.map_or_else(|| "-".to_string(), |v| v.to_string()),
+                expected_display_max.map_or_else(|| "-".to_string(), |v| v.to_string()),
+                actual_display_max.map_or_else(|| "-".to_string(), |v| v.to_string()),
                 status
             );
         }
@@ -1035,8 +990,7 @@ fn compare_hashes(
     for ((step_type, difficulty), expected_indices) in harness_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
             println!(
-                "  {} {}: baseline present, RSSP missing chart",
-                step_type, difficulty
+                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
             );
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
@@ -1051,9 +1005,7 @@ fn compare_hashes(
             let expected = expected_indices.get(idx).map(|&i| &harness_charts[i]);
             let actual = actual_indices.get(idx).map(|&i| &actual_charts[i]);
             let meter_label = expected
-                .and_then(|entry| entry.meter)
-                .map(|meter| meter.to_string())
-                .unwrap_or_else(|| (idx + 1).to_string());
+                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
             let expected_hash = expected.map(|entry| entry.hash.as_str());
             let actual_hash = actual.map(|entry| entry.chart_info.sha1.as_str());
             let status = if expected_hash.is_some() && expected_hash == actual_hash {
@@ -1113,8 +1065,7 @@ fn compare_durations(
     for ((step_type, difficulty), expected_indices) in harness_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
             println!(
-                "  {} {}: baseline present, RSSP missing chart",
-                step_type, difficulty
+                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
             );
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
@@ -1129,9 +1080,7 @@ fn compare_durations(
             let expected = expected_indices.get(idx).map(|&i| &harness_charts[i]);
             let actual = actual_indices.get(idx).map(|&i| &actual_charts[i]);
             let meter_label = expected
-                .and_then(|entry| entry.meter)
-                .map(|meter| meter.to_string())
-                .unwrap_or_else(|| (idx + 1).to_string());
+                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
 
             let expected_val = expected.map(|e| round_sig_figs_itg(e.duration_seconds));
             let actual_val = actual
@@ -1148,12 +1097,8 @@ fn compare_durations(
                 step_type,
                 difficulty,
                 meter_label,
-                expected_val
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-                actual_val
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
+                expected_val.map_or_else(|| "-".to_string(), |v| v.to_string()),
+                actual_val.map_or_else(|| "-".to_string(), |v| v.to_string()),
                 status
             );
         }
@@ -1211,8 +1156,7 @@ fn compare_timing(
     for ((step_type, difficulty), expected_indices) in harness_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
             println!(
-                "  {} {}: baseline present, RSSP missing chart",
-                step_type, difficulty
+                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
             );
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
@@ -1227,9 +1171,7 @@ fn compare_timing(
             let expected = expected_indices.get(idx).map(|&i| &harness_charts[i]);
             let actual = actual_indices.get(idx).map(|&i| &actual_charts[i]);
             let meter_label = expected
-                .and_then(|entry| entry.meter)
-                .map(|meter| meter.to_string())
-                .unwrap_or_else(|| (idx + 1).to_string());
+                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
 
             let expected_timing = expected.and_then(|entry| entry.timing.as_ref());
             let actual_timing = actual.map(|entry| &entry.timing);
@@ -1294,8 +1236,7 @@ fn compare_nps(
     for ((step_type, difficulty), expected_indices) in harness_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
             println!(
-                "  {} {}: baseline present, RSSP missing chart",
-                step_type, difficulty
+                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
             );
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
@@ -1310,9 +1251,7 @@ fn compare_nps(
             let expected = expected_indices.get(idx).map(|&i| &harness_charts[i]);
             let actual = actual_indices.get(idx).map(|&i| &actual_charts[i]);
             let meter_label = expected
-                .and_then(|entry| entry.meter)
-                .map(|meter| meter.to_string())
-                .unwrap_or_else(|| (idx + 1).to_string());
+                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
 
             let expected_peak = expected.map(|e| e.peak_nps);
             let actual_peak = actual.map(|a| a.nps.max_nps);
@@ -1350,12 +1289,8 @@ fn compare_nps(
                 step_type,
                 difficulty,
                 meter_label,
-                expected_peak
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-                actual_peak
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
+                expected_peak.map_or_else(|| "-".to_string(), |v| v.to_string()),
+                actual_peak.map_or_else(|| "-".to_string(), |v| v.to_string()),
                 format_len(expected_notes),
                 format_len(actual_notes),
                 format_len(expected_nps),
@@ -1442,8 +1377,7 @@ fn compare_step_counts(
     for ((step_type, difficulty), expected_indices) in harness_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
             println!(
-                "  {} {}: baseline present, RSSP missing chart",
-                step_type, difficulty
+                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
             );
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
@@ -1458,9 +1392,7 @@ fn compare_step_counts(
             let expected = expected_indices.get(idx).map(|&i| &harness_charts[i]);
             let actual = actual_indices.get(idx).map(|&i| &actual_charts[i]);
             let meter_label = expected
-                .and_then(|entry| entry.meter)
-                .map(|meter| meter.to_string())
-                .unwrap_or_else(|| (idx + 1).to_string());
+                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
 
             let mut all_match = true;
             let mut field = |label: &str, expected: Option<u32>, actual: Option<u32>| -> String {
@@ -1527,20 +1459,7 @@ fn compare_step_counts(
             let status = if all_match { "....ok" } else { "....MISMATCH" };
 
             println!(
-                "  {} {} [{}]: {} | {} | {} | {} | {} | {} | {} | {} | {} {}",
-                step_type,
-                difficulty,
-                meter_label,
-                holds,
-                mines,
-                rolls,
-                notes,
-                lifts,
-                fakes,
-                jumps,
-                hands,
-                total_steps,
-                status
+                "  {step_type} {difficulty} [{meter_label}]: {holds} | {mines} | {rolls} | {notes} | {lifts} | {fakes} | {jumps} | {hands} | {total_steps} {status}"
             );
         }
 
@@ -1675,8 +1594,7 @@ fn compare_stream_breakdown(
     for ((step_type, difficulty), expected_indices) in harness_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
             println!(
-                "  {} {}: baseline present, RSSP missing chart",
-                step_type, difficulty
+                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
             );
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
@@ -1691,28 +1609,20 @@ fn compare_stream_breakdown(
             let expected = expected_indices.get(idx).map(|&i| &harness_charts[i]);
             let actual = actual_indices.get(idx).map(|&i| &actual_charts[i]);
             let meter_label = expected
-                .and_then(|entry| entry.meter)
-                .map(|meter| meter.to_string())
-                .unwrap_or_else(|| (idx + 1).to_string());
+                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
 
             let expected_detail = expected
-                .map(|v| v.streams_breakdown.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.streams_breakdown.as_str());
             let actual_detail = actual
-                .map(|v| v.stream_breakdown.detailed_breakdown.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.stream_breakdown.detailed_breakdown.as_str());
             let expected_partial = expected
-                .map(|v| v.streams_breakdown_level1.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.streams_breakdown_level1.as_str());
             let actual_partial = actual
-                .map(|v| v.stream_breakdown.partial_breakdown.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.stream_breakdown.partial_breakdown.as_str());
             let expected_simple = expected
-                .map(|v| v.streams_breakdown_level2.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.streams_breakdown_level2.as_str());
             let actual_simple = actual
-                .map(|v| v.stream_breakdown.simple_breakdown.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.stream_breakdown.simple_breakdown.as_str());
             let expected_total_streams = expected.map(|v| v.total_stream_measures);
             let actual_total_streams = actual.map(|v| v.stream_info.total_streams);
             let expected_total_breaks = expected.map(|v| v.total_break_measures);
@@ -1734,18 +1644,10 @@ fn compare_stream_breakdown(
                 && sequences_match;
             let status = if matches { "....ok" } else { "....MISMATCH" };
 
-            let expected_total_streams = expected_total_streams
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string());
-            let actual_total_streams = actual_total_streams
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string());
-            let expected_total_breaks = expected_total_breaks
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string());
-            let actual_total_breaks = actual_total_breaks
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string());
+            let expected_total_streams = expected_total_streams.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let actual_total_streams = actual_total_streams.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let expected_total_breaks = expected_total_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let actual_total_breaks = actual_total_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
 
             println!(
                 "  {} {} [{}]: detailed {} -> {} | partial {} -> {} | simple {} -> {} | total_streams {} -> {} | total_breaks {} -> {} | sequences len {} -> {} {}",
@@ -1868,8 +1770,7 @@ fn compare_sn_breakdown(
     for ((step_type, difficulty), expected_indices) in rssp_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
             println!(
-                "  {} {}: baseline present, RSSP missing chart",
-                step_type, difficulty
+                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
             );
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
@@ -1890,28 +1791,20 @@ fn compare_sn_breakdown(
                     actual
                         .map(|entry| entry.chart_info.rating.as_str())
                         .filter(|label| !label.is_empty())
-                })
-                .map(|label| label.to_string())
-                .unwrap_or_else(|| (idx + 1).to_string());
+                }).map_or_else(|| (idx + 1).to_string(), std::string::ToString::to_string);
 
             let expected_detail = expected
-                .map(|v| v.breakdown.sn_detailed_breakdown.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.breakdown.sn_detailed_breakdown.as_str());
             let actual_detail = actual
-                .map(|v| v.breakdown.sn_detailed_breakdown.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.breakdown.sn_detailed_breakdown.as_str());
             let expected_partial = expected
-                .map(|v| v.breakdown.sn_partial_breakdown.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.breakdown.sn_partial_breakdown.as_str());
             let actual_partial = actual
-                .map(|v| v.breakdown.sn_partial_breakdown.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.breakdown.sn_partial_breakdown.as_str());
             let expected_simple = expected
-                .map(|v| v.breakdown.sn_simple_breakdown.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.breakdown.sn_simple_breakdown.as_str());
             let actual_simple = actual
-                .map(|v| v.breakdown.sn_simple_breakdown.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.breakdown.sn_simple_breakdown.as_str());
             let expected_sn_breaks = expected.map(|v| v.stream_info.sn_breaks);
             let actual_sn_breaks = actual.map(|v| v.stream_info.sn_breaks);
 
@@ -1923,27 +1816,11 @@ fn compare_sn_breakdown(
                 && expected_sn_breaks == actual_sn_breaks;
             let status = if matches { "....ok" } else { "....MISMATCH" };
 
-            let expected_sn_breaks = expected_sn_breaks
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string());
-            let actual_sn_breaks = actual_sn_breaks
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string());
+            let expected_sn_breaks = expected_sn_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let actual_sn_breaks = actual_sn_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
 
             println!(
-                "  {} {} [{}]: sn_detailed {} -> {} | sn_partial {} -> {} | sn_simple {} -> {} | sn_breaks {} -> {} {}",
-                step_type,
-                difficulty,
-                meter_label,
-                expected_detail,
-                actual_detail,
-                expected_partial,
-                actual_partial,
-                expected_simple,
-                actual_simple,
-                expected_sn_breaks,
-                actual_sn_breaks,
-                status
+                "  {step_type} {difficulty} [{meter_label}]: sn_detailed {expected_detail} -> {actual_detail} | sn_partial {expected_partial} -> {actual_partial} | sn_simple {expected_simple} -> {actual_simple} | sn_breaks {expected_sn_breaks} -> {actual_sn_breaks} {status}"
             );
         }
 
@@ -2130,8 +2007,7 @@ fn compare_rssp_unique(
     for ((step_type, difficulty), expected_indices) in rssp_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
             println!(
-                "  {} {}: baseline present, RSSP missing chart",
-                step_type, difficulty
+                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
             );
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
@@ -2153,9 +2029,7 @@ fn compare_rssp_unique(
                     actual
                         .map(|entry| entry.chart_info.rating.as_str())
                         .filter(|label| !label.is_empty())
-                })
-                .map(|label| label.to_string())
-                .unwrap_or_else(|| (idx + 1).to_string());
+                }).map_or_else(|| (idx + 1).to_string(), std::string::ToString::to_string);
 
             let expected_values = expected.map(|entry| unique_from_rssp(entry, compare_patterns));
             let actual_values = actual.map(|entry| unique_from_actual(entry, compare_patterns));
@@ -2166,36 +2040,28 @@ fn compare_rssp_unique(
 
             let expected_matrix = expected_values
                 .as_ref()
-                .map(|v| v.matrix_rating.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.matrix_rating.as_str());
             let actual_matrix = actual_values
                 .as_ref()
-                .map(|v| v.matrix_rating.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.matrix_rating.as_str());
             let expected_detail = expected_values
                 .as_ref()
-                .map(|v| v.breakdown.sn_detailed_breakdown.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.breakdown.sn_detailed_breakdown.as_str());
             let actual_detail = actual_values
                 .as_ref()
-                .map(|v| v.breakdown.sn_detailed_breakdown.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.breakdown.sn_detailed_breakdown.as_str());
             let expected_partial = expected_values
                 .as_ref()
-                .map(|v| v.breakdown.sn_partial_breakdown.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.breakdown.sn_partial_breakdown.as_str());
             let actual_partial = actual_values
                 .as_ref()
-                .map(|v| v.breakdown.sn_partial_breakdown.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.breakdown.sn_partial_breakdown.as_str());
             let expected_simple = expected_values
                 .as_ref()
-                .map(|v| v.breakdown.sn_simple_breakdown.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.breakdown.sn_simple_breakdown.as_str());
             let actual_simple = actual_values
                 .as_ref()
-                .map(|v| v.breakdown.sn_simple_breakdown.as_str())
-                .unwrap_or("-");
+                .map_or("-", |v| v.breakdown.sn_simple_breakdown.as_str());
             let expected_candles = format_candles(
                 expected_values
                     .as_ref()
@@ -2238,27 +2104,7 @@ fn compare_rssp_unique(
             );
 
             println!(
-                "  {} {} [{}]: matrix_rating {} -> {} | detailed {} -> {} | partial {} -> {} | simple {} -> {} | candles {} -> {} | mono {} -> {} | boxes {} -> {} | anchors {} -> {} {}",
-                step_type,
-                difficulty,
-                meter_label,
-                expected_matrix,
-                actual_matrix,
-                expected_detail,
-                actual_detail,
-                expected_partial,
-                actual_partial,
-                expected_simple,
-                actual_simple,
-                expected_candles,
-                actual_candles,
-                expected_mono,
-                actual_mono,
-                expected_boxes,
-                actual_boxes,
-                expected_anchors,
-                actual_anchors,
-                status
+                "  {step_type} {difficulty} [{meter_label}]: matrix_rating {expected_matrix} -> {actual_matrix} | detailed {expected_detail} -> {actual_detail} | partial {expected_partial} -> {actual_partial} | simple {expected_simple} -> {actual_simple} | candles {expected_candles} -> {actual_candles} | mono {expected_mono} -> {actual_mono} | boxes {expected_boxes} -> {actual_boxes} | anchors {expected_anchors} -> {actual_anchors} {status}"
             );
         }
 
@@ -2299,29 +2145,29 @@ fn run_rssp_json(raw_bytes: &[u8], extension: &str) -> Result<RsspJsonFile, Stri
         compute_pattern_counts: false,
         translate_markers: false,
     };
-    let summary = analyze(raw_bytes, extension, options).map_err(|e| e.to_string())?;
+    let summary = analyze(raw_bytes, extension, options).map_err(|e| e)?;
     let mut stdout = Vec::new();
     write_reports(&summary, OutputMode::JSON, &mut stdout).map_err(|e| e.to_string())?;
-    serde_json::from_slice(&stdout).map_err(|e| format!("Failed to parse rssp JSON: {}", e))
+    serde_json::from_slice(&stdout).map_err(|e| format!("Failed to parse rssp JSON: {e}"))
 }
 
 fn read_zst(path: &Path) -> Result<Vec<u8>, String> {
-    let compressed = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
-    zstd::decode_all(&compressed[..]).map_err(|e| format!("Failed to decompress file: {}", e))
+    let compressed = fs::read(path).map_err(|e| format!("Failed to read file: {e}"))?;
+    zstd::decode_all(&compressed[..]).map_err(|e| format!("Failed to decompress file: {e}"))
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
-    let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+    let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {e}"))?;
 
     let raw_bytes = zstd::decode_all(&compressed_bytes[..])
-        .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
+        .map_err(|e| format!("Failed to decompress simfile: {e}"))?;
 
     let file_hash = format!("{:x}", md5::compute(&raw_bytes));
     let subfolder = &file_hash[0..2];
 
     let harness_path = baseline_dir
         .join(subfolder)
-        .join(format!("{}.json.zst", file_hash));
+        .join(format!("{file_hash}.json.zst"));
     if !harness_path.exists() {
         return Err(format!(
             "\n\nMISSING BASELINE\nFile: {}\nHash: {}\nExpected baseline: {}\n",
@@ -2333,7 +2179,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
 
     let rssp_path = baseline_dir
         .join(subfolder)
-        .join(format!("{}.rssp.json.zst", file_hash));
+        .join(format!("{file_hash}.rssp.json.zst"));
     if !rssp_path.exists() {
         return Err(format!(
             "\n\nMISSING BASELINE\nFile: {}\nHash: {}\nExpected baseline: {}\n",
@@ -2345,11 +2191,11 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
 
     let harness_json = read_zst(&harness_path)?;
     let harness_charts: Vec<HarnessChart> = serde_json::from_slice(&harness_json)
-        .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
+        .map_err(|e| format!("Failed to parse baseline JSON: {e}"))?;
 
     let rssp_json = read_zst(&rssp_path)?;
     let rssp_file: RsspBaselineFile = serde_json::from_slice(&rssp_json)
-        .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
+        .map_err(|e| format!("Failed to parse baseline JSON: {e}"))?;
 
     let actual = run_rssp_json(&raw_bytes, extension)?;
 
@@ -2461,7 +2307,7 @@ fn main() {
 
     let mut tests = Vec::new();
 
-    for entry in WalkDir::new(&packs_dir).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(&packs_dir).into_iter().filter_map(std::result::Result::ok) {
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -2477,7 +2323,7 @@ fn main() {
         let inner_extension = inner_path
             .extension()
             .and_then(|e| e.to_str())
-            .map(|s| s.to_lowercase())
+            .map(str::to_lowercase)
             .unwrap_or_default();
 
         if inner_extension != "sm" && inner_extension != "ssc" {
@@ -2541,11 +2387,11 @@ fn main() {
         let res = check_file(&path, &extension, &baseline_dir);
         match res {
             Ok(()) => {
-                println!("test {} ... ok", name);
+                println!("test {name} ... ok");
                 num_passed += 1;
             }
             Err(msg) => {
-                println!("test {} ... FAILED", name);
+                println!("test {name} ... FAILED");
                 failures.push(Failure {
                     name,
                     message: msg.trim().to_string(),
@@ -2580,13 +2426,12 @@ fn main() {
     }
 
     if num_failed == 0 {
-        println!("test result: ok. {} passed; 0 failed", num_passed);
+        println!("test result: ok. {num_passed} passed; 0 failed");
         return;
     }
 
     println!(
-        "test result: FAILED. {} passed; {} failed",
-        num_passed, num_failed
+        "test result: FAILED. {num_passed} passed; {num_failed} failed"
     );
     std::process::exit(101);
 }

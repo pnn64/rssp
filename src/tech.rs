@@ -39,12 +39,7 @@ fn best_prefix(remainder: &str) -> Option<&'static str> {
 
     let table = tech_prefixes();
     let list = &table[bytes[0] as usize];
-    for &pat in list {
-        if remainder.starts_with(pat) {
-            return Some(pat);
-        }
-    }
-    None
+    list.iter().find(|&&pat| remainder.starts_with(pat)).copied().map(|v| v as _)
 }
 
 #[inline(always)]
@@ -115,6 +110,7 @@ fn parse_single_tech(input: &str) -> Vec<&'static str> {
 }
 
 /// Parses credit and description into a formatted tech notation string.
+#[must_use] 
 pub fn parse_tech_notation(credit: &str, description: &str) -> String {
     let mut tech_notations = parse_single_tech(credit);
     tech_notations.extend(parse_single_tech(description));

@@ -108,13 +108,13 @@ fn build_timing_inputs() -> (Vec<ChartTimingInput>, TimingGlobals) {
         .map(|entry| ChartTimingInput {
             field_count: entry.field_count,
             fields: entry.fields,
-            chart_bpms: entry.chart_bpms.map(|v| v.into_owned()),
-            chart_stops: entry.chart_stops.map(|v| v.into_owned()),
-            chart_delays: entry.chart_delays.map(|v| v.into_owned()),
-            chart_warps: entry.chart_warps.map(|v| v.into_owned()),
-            chart_speeds: entry.chart_speeds.map(|v| v.into_owned()),
-            chart_scrolls: entry.chart_scrolls.map(|v| v.into_owned()),
-            chart_fakes: entry.chart_fakes.map(|v| v.into_owned()),
+            chart_bpms: entry.chart_bpms.map(std::borrow::Cow::into_owned),
+            chart_stops: entry.chart_stops.map(std::borrow::Cow::into_owned),
+            chart_delays: entry.chart_delays.map(std::borrow::Cow::into_owned),
+            chart_warps: entry.chart_warps.map(std::borrow::Cow::into_owned),
+            chart_speeds: entry.chart_speeds.map(std::borrow::Cow::into_owned),
+            chart_scrolls: entry.chart_scrolls.map(std::borrow::Cow::into_owned),
+            chart_fakes: entry.chart_fakes.map(std::borrow::Cow::into_owned),
         })
         .collect();
 
@@ -131,7 +131,7 @@ fn bench_bpm_pipeline(c: &mut Criterion) {
             let snapshots = rssp::bpm::chart_bpm_snapshots(black_box(fixture), black_box("ssc"))
                 .expect("bpm snapshots should succeed");
             black_box(snapshots);
-        })
+        });
     });
     group.finish();
 }
@@ -214,7 +214,7 @@ fn bench_bpm_inner(c: &mut Criterion) {
                 outputs.push((hash_bpms, bpms_formatted));
             }
             black_box(outputs);
-        })
+        });
     });
     group.finish();
 }

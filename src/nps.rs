@@ -169,6 +169,7 @@ pub fn compute_chart_peak_nps(
     Ok(results)
 }
 
+#[must_use] 
 pub fn compute_measure_nps_vec(densities: &[usize], bpms: &[(f64, f64)]) -> Vec<f64> {
     compute_nps_iter(densities, |i| {
         let beat = i as f64 * 4.0;
@@ -177,6 +178,7 @@ pub fn compute_measure_nps_vec(densities: &[usize], bpms: &[(f64, f64)]) -> Vec<
     })
 }
 
+#[must_use] 
 pub fn compute_measure_nps_vec_with_timing(densities: &[usize], timing: &TimingData) -> Vec<f64> {
     densities
         .iter()
@@ -222,10 +224,11 @@ fn median(arr: &[f64]) -> f64 {
     if v.len() % 2 == 1 {
         v[mid]
     } else {
-        (v[..mid].iter().fold(f64::MIN, |a, &b| a.max(b)) + v[mid]) / 2.0
+        f64::midpoint(v[..mid].iter().fold(f64::MIN, |a, &b| a.max(b)), v[mid])
     }
 }
 
+#[must_use] 
 pub fn get_nps_stats(nps: &[f64]) -> (f64, f64) {
     (
         nps.iter().fold(f64::MIN, |a, &b| a.max(b)).max(0.0),
@@ -233,6 +236,7 @@ pub fn get_nps_stats(nps: &[f64]) -> (f64, f64) {
     )
 }
 
+#[must_use] 
 pub fn measure_equally_spaced(data: &[u8], lanes: usize) -> Vec<bool> {
     let lanes = if lanes == 8 { 8 } else { 4 };
     let minimized = crate::stats::minimize_chart_for_hash(data, lanes);
@@ -245,11 +249,11 @@ pub fn measure_equally_spaced(data: &[u8], lanes: usize) -> Vec<bool> {
 
 #[inline(always)]
 fn trim_cr(line: &[u8]) -> &[u8] {
-    line.strip_suffix(&[b'\r']).unwrap_or(line)
+    line.strip_suffix(b"\r").unwrap_or(line)
 }
 
 #[inline(always)]
-fn is_note(ch: u8) -> bool {
+const fn is_note(ch: u8) -> bool {
     matches!(ch, b'1' | b'2' | b'4')
 }
 

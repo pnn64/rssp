@@ -207,9 +207,7 @@ fn build_parity_inputs(charts: &[TechChartInput], globals: &TechGlobals) -> Vec<
 
 fn bench_tech_counts_pipeline(c: &mut Criterion) {
     let fixture = FIXTURE.as_bytes();
-    let options = rssp::AnalysisOptions {
-        ..rssp::AnalysisOptions::default()
-    };
+    let options = rssp::AnalysisOptions::default();
     let mut group = c.benchmark_group("tech_counts_pipeline");
     group.sample_size(200);
     group.measurement_time(Duration::from_secs(2));
@@ -223,7 +221,7 @@ fn bench_tech_counts_pipeline(c: &mut Criterion) {
                 .map(|chart| chart.tech_counts)
                 .collect();
             black_box(counts);
-        })
+        });
     });
     group.finish();
 }
@@ -245,7 +243,7 @@ fn bench_tech_counts_inner(c: &mut Criterion) {
                 outputs.push(counts);
             }
             black_box(outputs);
-        })
+        });
     });
     group.finish();
 }
@@ -268,7 +266,7 @@ fn bench_tech_counts_step_parity(c: &mut Criterion) {
                 outputs.push(counts);
             }
             black_box(outputs);
-        })
+        });
     });
     group.finish();
 }

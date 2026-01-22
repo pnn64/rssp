@@ -113,7 +113,7 @@ fn bench_metadata_pipeline(c: &mut Criterion) {
             black_box(artist_out);
             black_box(chart_meta_bytes);
             black_box(chart_count);
-        })
+        });
     });
     group.finish();
 }

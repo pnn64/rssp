@@ -78,7 +78,7 @@ fn bench_mono_counts(c: &mut Criterion) {
             let counts =
                 rssp::patterns::count_facing_steps(black_box(&bitmasks), black_box(MONO_THRESHOLD));
             black_box(counts);
-        })
+        });
     });
     group.finish();
 }

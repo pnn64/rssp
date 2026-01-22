@@ -214,7 +214,7 @@ fn bench_nps_pipeline(c: &mut Criterion) {
             let nps = rssp::compute_chart_peak_nps(black_box(fixture), black_box(EXTENSION))
                 .expect("nps should succeed");
             black_box(nps);
-        })
+        });
     });
     group.finish();
 }
@@ -324,7 +324,7 @@ fn bench_nps_inner(c: &mut Criterion) {
                 outputs.push(stats);
             }
             black_box(outputs);
-        })
+        });
     });
     group.finish();
 }
@@ -347,7 +347,7 @@ fn bench_nps_stats(c: &mut Criterion) {
                 outputs.push(stats);
             }
             black_box(outputs);
-        })
+        });
     });
     group.finish();
 }

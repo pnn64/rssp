@@ -9,7 +9,7 @@ pub(crate) fn lc_name(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-pub(crate) fn img_rank(ext: &str) -> Option<u8> {
+pub(crate) const fn img_rank(ext: &str) -> Option<u8> {
     if ext.eq_ignore_ascii_case("png") {
         Some(0)
     } else if ext.eq_ignore_ascii_case("jpg") {
@@ -98,9 +98,7 @@ fn resolve_rel_ci(base: &Path, rel: &str) -> Option<PathBuf> {
             continue;
         }
         if part == ".." {
-            if parts.pop().is_none() {
-                return None;
-            }
+            parts.pop()?;
             continue;
         }
         parts.push(part);
@@ -178,8 +176,8 @@ fn gif_dims(mut f: fs::File) -> Option<(u32, u32)> {
     if &header[0..3] != b"GIF" {
         return None;
     }
-    let w = u16::from_le_bytes(header[6..8].try_into().ok()?) as u32;
-    let h = u16::from_le_bytes(header[8..10].try_into().ok()?) as u32;
+    let w = u32::from(u16::from_le_bytes(header[6..8].try_into().ok()?));
+    let h = u32::from(u16::from_le_bytes(header[8..10].try_into().ok()?));
     Some((w, h))
 }
 
@@ -194,7 +192,7 @@ fn bmp_dims(mut f: fs::File) -> Option<(u32, u32)> {
     Some((w.unsigned_abs(), h.unsigned_abs()))
 }
 
-fn jpg_sof(marker: u8) -> bool {
+const fn jpg_sof(marker: u8) -> bool {
     matches!(
         marker,
         0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF
@@ -233,8 +231,8 @@ fn jpg_dims(mut f: fs::File) -> Option<(u32, u32)> {
         if jpg_sof(marker) {
             let mut sof = [0u8; 5];
             f.read_exact(&mut sof).ok()?;
-            let h = u16::from_be_bytes(sof[1..3].try_into().ok()?) as u32;
-            let w = u16::from_be_bytes(sof[3..5].try_into().ok()?) as u32;
+            let h = u32::from(u16::from_be_bytes(sof[1..3].try_into().ok()?));
+            let w = u32::from(u16::from_be_bytes(sof[3..5].try_into().ok()?));
             return Some((w, h));
         }
         io::copy(&mut f.by_ref().take((len - 2) as u64), &mut io::sink()).ok()?;
@@ -258,6 +256,7 @@ fn img_dims(path: &Path) -> Option<(u32, u32)> {
     }
 }
 
+#[must_use] 
 pub fn resolve_song_assets(
     song_dir: &Path,
     banner_tag: &str,

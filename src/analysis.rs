@@ -6,12 +6,12 @@ use crate::report::{ChartSummary, SimfileSummary};
 use crate::stats;
 use crate::step_parity;
 
-use crate::bpm::*;
-use crate::hash::*;
+use crate::bpm::{clean_timing_map, normalize_float_digits, clean_timing_map_cow, compute_tier_bpm, compute_measure_nps_vec_with_timing, get_nps_stats, compute_bpm_range, compute_bpm_stats};
+use crate::hash::compute_chart_hash;
 use crate::math::{round_dp, round_sig_figs_6};
 use crate::matrix::compute_matrix_rating;
-use crate::parse::*;
-use crate::stats::*;
+use crate::parse::{decode_bytes, ParsedChartEntry, unescape_trim, normalize_chart_desc, unescape_tag, clean_tag, extract_sections, strip_title_tags, parse_offset_seconds, parse_version};
+use crate::stats::{RADAR_CATEGORY_COUNT, StreamCounts, compute_stream_counts, generate_breakdown, BreakdownMode, stream_breakdown, StreamBreakdownLevel, minimize_chart_rows_bits, minimize_chart_count_rows, parse_minimized_rows, compute_timing_aware_stats_from_rows_with_row_to_beat, compute_timing_aware_stats_with_row_to_beat, minimize_chart_for_hash};
 use crate::tech::parse_tech_notation;
 use crate::timing::{
     TimingFormat, compute_timing_segments, get_time_for_beat, steps_timing_allowed,
@@ -63,9 +63,7 @@ pub struct ChartNpsInfo {
 
 /// Normalizes common difficulty labels to a canonical form (e.g. Expert -> Challenge).
 pub fn normalize_difficulty_label(raw: &str) -> String {
-    old_style_difficulty_label(raw)
-        .map(str::to_string)
-        .unwrap_or_else(|| raw.trim().to_string())
+    old_style_difficulty_label(raw).map_or_else(|| raw.trim().to_string(), str::to_string)
 }
 
 fn canonical_difficulty_label(raw: &str) -> Option<&'static str> {
@@ -102,6 +100,7 @@ fn parse_meter_for_difficulty(meter_str: &str, extension: &str) -> i32 {
     trimmed.parse::<i32>().unwrap_or(0)
 }
 
+#[must_use] 
 pub fn resolve_difficulty_label(
     raw_difficulty: &str,
     description: &str,
@@ -142,6 +141,7 @@ pub fn resolve_difficulty_label(
     }
 }
 
+#[must_use] 
 pub fn step_type_lanes(step_type: &str) -> usize {
     let normalized = step_type.trim().to_ascii_lowercase().replace('_', "-");
     match normalized.as_str() {
@@ -151,7 +151,7 @@ pub fn step_type_lanes(step_type: &str) -> usize {
 }
 
 #[inline(always)]
-fn trim_ascii_ws(mut s: &[u8]) -> &[u8] {
+const fn trim_ascii_ws(mut s: &[u8]) -> &[u8] {
     while let Some((&b, rest)) = s.split_first() {
         if b.is_ascii_whitespace() {
             s = rest;
@@ -181,6 +181,7 @@ pub(crate) fn supported_stepstype_lanes_bytes(raw: &[u8]) -> Option<usize> {
     }
 }
 
+#[must_use] 
 pub fn display_metadata(
     title: &str,
     subtitle: &str,
@@ -254,7 +255,7 @@ fn chart_display_bpm_tag(tag: Option<&[u8]>) -> Option<String> {
 fn msd_first_param_bytes(bytes: &[u8]) -> &[u8] {
     let mut bs_run = 0usize;
     for (idx, &b) in bytes.iter().enumerate() {
-        if b == b':' && bs_run % 2 == 0 {
+        if b == b':' && bs_run.is_multiple_of(2) {
             return &bytes[..idx];
         }
         if b == b'\\' {
@@ -344,7 +345,7 @@ fn compute_mono_and_candle_stats(
     let (facing_left, facing_right) = count_facing_steps(bitmasks, options.mono_threshold);
     let mono_total = facing_left + facing_right;
     let mono_percent = if stats.total_steps > 0 {
-        (mono_total as f64 / stats.total_steps as f64) * 100.0
+        (f64::from(mono_total) / f64::from(stats.total_steps)) * 100.0
     } else {
         0.0
     };
@@ -355,7 +356,7 @@ fn compute_mono_and_candle_stats(
 
     let max_candles = (stats.total_steps.saturating_sub(1)) / 2;
     let candle_percent = if max_candles > 0 {
-        (candle_total as f64 / max_candles as f64) * 100.0
+        (f64::from(candle_total) / f64::from(max_candles)) * 100.0
     } else {
         0.0
     };
@@ -517,7 +518,7 @@ fn build_chart_summary(
 
     let (chart_bpms, chart_bpms_norm) = chart_timing_tag_pair(chart_bpms_opt);
     let bpms_to_use = chart_bpms_norm
-        .clone()
+        
         .unwrap_or_else(|| global_bpms_norm.to_string());
     let chart_stops = chart_timing_tag_raw(chart_stops_opt);
     let chart_speeds = chart_timing_tag_raw(chart_speeds_opt);
@@ -648,7 +649,7 @@ fn build_chart_summary(
     let bpm_map: Vec<(f64, f64)> = timing_segments
         .bpms
         .iter()
-        .map(|(beat, bpm)| (*beat as f64, *bpm as f64))
+        .map(|(beat, bpm)| (f64::from(*beat), f64::from(*bpm)))
         .collect();
 
     let metrics =
@@ -834,9 +835,7 @@ pub fn analyze(
     let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
 
     let mut title_str = parsed_data
-        .title
-        .map(|b| clean_tag(&unescape_tag(decode_bytes(b).as_ref())))
-        .unwrap_or_else(|| "<invalid-title>".to_string());
+        .title.map_or_else(|| "<invalid-title>".to_string(), |b| clean_tag(&unescape_tag(decode_bytes(b).as_ref())));
     if options.strip_tags {
         title_str = strip_title_tags(&title_str);
     }
@@ -959,8 +958,7 @@ pub fn analyze(
     let normalized_global_time_signatures = parsed_data
         .time_signatures
         .and_then(|b| std::str::from_utf8(b).ok())
-        .map(str::trim)
-        .unwrap_or("")
+        .map_or("", str::trim)
         .to_string();
     let normalized_global_labels = parsed_data
         .labels
@@ -973,14 +971,12 @@ pub fn analyze(
     let normalized_global_tickcounts = parsed_data
         .tickcounts
         .and_then(|b| std::str::from_utf8(b).ok())
-        .map(str::trim)
-        .unwrap_or("")
+        .map_or("", str::trim)
         .to_string();
     let normalized_global_combos = parsed_data
         .combos
         .and_then(|b| std::str::from_utf8(b).ok())
-        .map(str::trim)
-        .unwrap_or("")
+        .map_or("", str::trim)
         .to_string();
 
     let allow_steps_timing = steps_timing_allowed(ssc_version, timing_format);
@@ -1011,7 +1007,7 @@ pub fn analyze(
     let global_bpm_map: Vec<(f64, f64)> = global_timing_segments
         .bpms
         .iter()
-        .map(|(beat, bpm)| (*beat as f64, *bpm as f64))
+        .map(|(beat, bpm)| (f64::from(*beat), f64::from(*bpm)))
         .collect();
     let (min_bpm_i32, max_bpm_i32) = compute_bpm_range(&global_bpm_map);
     let bpm_values: Vec<f64> = global_bpm_map.iter().map(|&(_, bpm)| bpm).collect();
@@ -1094,8 +1090,8 @@ pub fn analyze(
         display_bpm_str,
         sample_start,
         sample_length,
-        min_bpm: min_bpm_i32 as f64,
-        max_bpm: max_bpm_i32 as f64,
+        min_bpm: f64::from(min_bpm_i32),
+        max_bpm: f64::from(max_bpm_i32),
         median_bpm,
         average_bpm,
         total_length,

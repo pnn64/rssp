@@ -157,7 +157,7 @@ fn parse_metadata(simfile_data: &[u8], extension: &str) -> Result<ParsedMetadata
         translate_markers: true,
         ..AnalysisOptions::default()
     };
-    let summary = analyze(simfile_data, extension, options).map_err(|e| e.to_string())?;
+    let summary = analyze(simfile_data, extension, options).map_err(|e| e)?;
     let title = summary.title_str;
     let subtitle = summary.subtitle_str;
     let artist = summary.artist_str;
@@ -193,7 +193,7 @@ fn parse_step_artists(
         translate_markers: true,
         ..AnalysisOptions::default()
     };
-    let summary = analyze(simfile_data, extension, options).map_err(|e| e.to_string())?;
+    let summary = analyze(simfile_data, extension, options).map_err(|e| e)?;
     let mut results = Vec::with_capacity(summary.charts.len());
     for chart in summary.charts {
         let meter = chart.rating_str.trim().parse::<u32>().ok();
@@ -209,17 +209,17 @@ fn parse_step_artists(
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
-    let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+    let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {e}"))?;
 
     let raw_bytes = zstd::decode_all(&compressed_bytes[..])
-        .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
+        .map_err(|e| format!("Failed to decompress simfile: {e}"))?;
 
     let file_hash = format!("{:x}", md5::compute(&raw_bytes));
     let subfolder = &file_hash[0..2];
 
     let golden_path = baseline_dir
         .join(subfolder)
-        .join(format!("{}.json.zst", file_hash));
+        .join(format!("{file_hash}.json.zst"));
 
     if !golden_path.exists() {
         return Err(format!(
@@ -231,21 +231,21 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     }
 
     let compressed_golden =
-        fs::read(&golden_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
+        fs::read(&golden_path).map_err(|e| format!("Failed to read baseline file: {e}"))?;
 
     let json_bytes = zstd::decode_all(&compressed_golden[..])
-        .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
+        .map_err(|e| format!("Failed to decompress baseline json: {e}"))?;
 
     let golden_entries: Vec<GoldenMetadata> = serde_json::from_slice(&json_bytes)
-        .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
+        .map_err(|e| format!("Failed to parse baseline JSON: {e}"))?;
 
     let golden_step_entries: Vec<GoldenChartStepArtist> = serde_json::from_slice(&json_bytes)
-        .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
+        .map_err(|e| format!("Failed to parse baseline JSON: {e}"))?;
 
     let expected = expected_metadata(&golden_entries, path)?;
 
     let actual =
-        parse_metadata(&raw_bytes, extension).map_err(|e| format!("RSSP Parsing Error: {}", e))?;
+        parse_metadata(&raw_bytes, extension).map_err(|e| format!("RSSP Parsing Error: {e}"))?;
 
     let title_ok = actual.title == expected.title;
     let subtitle_ok = actual.subtitle == expected.subtitle
@@ -310,7 +310,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     );
 
     let rssp_step_entries = parse_step_artists(&raw_bytes, extension)
-        .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
+        .map_err(|e| format!("RSSP Parsing Error: {e}"))?;
 
     let mut golden_map: HashMap<(String, String), Vec<GoldenChartStepArtist>> = HashMap::new();
     for golden in golden_step_entries {
@@ -352,8 +352,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                     expected.description.trim().to_string()
                 };
                 println!(
-                    "  step_artist {} {} [{}]: baseline present, RSSP missing chart",
-                    step_type, difficulty, desc_label
+                    "  step_artist {step_type} {difficulty} [{desc_label}]: baseline present, RSSP missing chart"
                 );
                 step_artist_errors.push(format!(
                     "Step artist chart missing: {} {} {:?}",
@@ -388,24 +387,20 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             });
 
             let meter_label = expected
-                .meter
-                .map(|meter| meter.to_string())
-                .unwrap_or_else(|| (idx + 1).to_string());
+                .meter.map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
             let desc_label = if description.is_empty() {
                 meter_label.clone()
             } else {
-                format!("{} {}", meter_label, description)
+                format!("{meter_label} {description}")
             };
 
             if actual.is_none() {
                 step_artist_ok = false;
                 println!(
-                    "  step_artist {} {} [{}]: baseline present, RSSP missing chart",
-                    step_type, difficulty, desc_label
+                    "  step_artist {step_type} {difficulty} [{desc_label}]: baseline present, RSSP missing chart"
                 );
                 step_artist_errors.push(format!(
-                    "Step artist chart missing: {} {} {:?}",
-                    step_type, difficulty, description
+                    "Step artist chart missing: {step_type} {difficulty} {description:?}"
                 ));
                 continue;
             }
@@ -413,8 +408,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             let expected_val = expected.step_artist.as_str();
             let actual_val = actual
                 .as_ref()
-                .map(|a| a.step_artist.as_str())
-                .unwrap_or("-");
+                .map_or("-", |a| a.step_artist.as_str());
             let status = if expected_val == actual_val {
                 "....ok"
             } else {
@@ -422,8 +416,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             };
 
             println!(
-                "  step_artist {} {} [{}]: baseline: {} -> rssp: {} {}",
-                step_type, difficulty, desc_label, expected_val, actual_val, status
+                "  step_artist {step_type} {difficulty} [{desc_label}]: baseline: {expected_val} -> rssp: {actual_val} {status}"
             );
 
             if status != "....ok" {
@@ -503,7 +496,7 @@ fn main() {
 
     let mut tests = Vec::new();
 
-    for entry in WalkDir::new(&packs_dir).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(&packs_dir).into_iter().filter_map(std::result::Result::ok) {
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -519,7 +512,7 @@ fn main() {
         let inner_extension = inner_path
             .extension()
             .and_then(|e| e.to_str())
-            .map(|s| s.to_lowercase())
+            .map(str::to_lowercase)
             .unwrap_or_default();
 
         if inner_extension != "sm" && inner_extension != "ssc" {
@@ -583,11 +576,11 @@ fn main() {
         let res = check_file(&path, &extension, &baseline_dir);
         match res {
             Ok(()) => {
-                println!("test {} ... ok", name);
+                println!("test {name} ... ok");
                 num_passed += 1;
             }
             Err(msg) => {
-                println!("test {} ... FAILED", name);
+                println!("test {name} ... FAILED");
                 failures.push(Failure {
                     name,
                     message: msg.trim().to_string(),
@@ -622,13 +615,12 @@ fn main() {
     }
 
     if num_failed == 0 {
-        println!("test result: ok. {} passed; 0 failed", num_passed);
+        println!("test result: ok. {num_passed} passed; 0 failed");
         return;
     }
 
     println!(
-        "test result: FAILED. {} passed; {} failed",
-        num_passed, num_failed
+        "test result: FAILED. {num_passed} passed; {num_failed} failed"
     );
     std::process::exit(101);
 }

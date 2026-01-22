@@ -124,7 +124,7 @@ fn bench_step_counts_pipeline(c: &mut Criterion) {
                 })
                 .collect();
             black_box(counts);
-        })
+        });
     });
     group.finish();
 }
@@ -237,7 +237,7 @@ fn bench_step_counts_inner(c: &mut Criterion) {
                 outputs.push(timing_stats);
             }
             black_box(outputs);
-        })
+        });
     });
     group.finish();
 }

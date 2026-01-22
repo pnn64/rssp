@@ -3,6 +3,7 @@ use std::io;
 
 use crate::timing::{STEPFILE_VERSION_NUMBER, TimingFormat};
 
+#[must_use] 
 pub fn strip_title_tags(mut title: &str) -> String {
     loop {
         let original = title;
@@ -13,12 +14,11 @@ pub fn strip_title_tags(mut title: &str) -> String {
             continue;
         }
 
-        if let Some(pos) = title.find("- ") {
-            if title[..pos].chars().all(|c| c.is_ascii_digit() || c == '.') {
+        if let Some(pos) = title.find("- ")
+            && title[..pos].chars().all(|c| c.is_ascii_digit() || c == '.') {
                 title = title[pos + 2..].trim_start();
                 continue;
             }
-        }
 
         if title == original {
             break;
@@ -27,10 +27,12 @@ pub fn strip_title_tags(mut title: &str) -> String {
     title.to_string()
 }
 
+#[must_use] 
 pub fn clean_tag(tag: &str) -> String {
     tag.chars().filter(|c| !c.is_control()).collect()
 }
 
+#[must_use] 
 pub fn unescape_tag(tag: &str) -> String {
     let mut out = String::with_capacity(tag.len());
     let mut chars = tag.chars();
@@ -44,6 +46,7 @@ pub fn unescape_tag(tag: &str) -> String {
     out
 }
 
+#[must_use] 
 pub fn unescape_trim(tag: &str) -> String {
     let s = unescape_tag(tag);
     let t = s.trim();
@@ -62,27 +65,26 @@ fn decode_cp1252(bytes: &[u8]) -> String {
         .map(|&b| match b {
             0x00..=0x7F => b as char,
             0x80..=0x9F => {
-                char::from_u32(CP1252_MAP[(b - 0x80) as usize] as u32).unwrap_or('\u{FFFD}')
+                char::from_u32(u32::from(CP1252_MAP[(b - 0x80) as usize])).unwrap_or('\u{FFFD}')
             }
-            _ => char::from_u32(b as u32).unwrap_or('\u{FFFD}'),
+            _ => char::from_u32(u32::from(b)).unwrap_or('\u{FFFD}'),
         })
         .collect()
 }
 
 pub fn decode_bytes(bytes: &[u8]) -> Cow<'_, str> {
-    std::str::from_utf8(bytes)
-        .map(Cow::Borrowed)
-        .unwrap_or_else(|_| Cow::Owned(decode_cp1252(bytes)))
+    std::str::from_utf8(bytes).map_or_else(|_| Cow::Owned(decode_cp1252(bytes)), Cow::Borrowed)
 }
 
+#[must_use] 
 pub fn parse_offset_seconds(offset: Option<&[u8]>) -> f64 {
     offset
         .and_then(|b| std::str::from_utf8(b).ok())
         .and_then(|s| s.parse::<f64>().ok())
-        .map(|f| f as f32 as f64)
-        .unwrap_or(0.0)
+        .map_or(0.0, |f| f64::from(f as f32))
 }
 
+#[must_use] 
 pub fn parse_version(version: Option<&[u8]>, fmt: TimingFormat) -> f32 {
     version
         .and_then(|b| std::str::from_utf8(b).ok())
@@ -96,6 +98,7 @@ pub fn parse_version(version: Option<&[u8]>, fmt: TimingFormat) -> f32 {
 
 pub const SSC_VERSION_CHART_NAME_TAG: f32 = 0.74;
 
+#[must_use] 
 pub fn normalize_chart_desc(desc: String, fmt: TimingFormat, ver: f32) -> String {
     if fmt == TimingFormat::Ssc && ver < SSC_VERSION_CHART_NAME_TAG {
         String::new()
@@ -192,7 +195,7 @@ fn starts_with_ci(slice: &[u8], tag: &[u8]) -> bool {
             .all(|(a, b)| a.eq_ignore_ascii_case(b))
 }
 
-/// Returns (value_end, next_position) if terminator found.
+/// Returns (`value_end`, `next_position`) if terminator found.
 #[inline(always)]
 fn scan_tag_end(slice: &[u8], allow_nl: bool) -> Option<(usize, usize)> {
     let mut i = 0;
@@ -265,7 +268,7 @@ macro_rules! try_tags {
     };
 }
 
-fn parse_notedata_entry<'a>(data: &'a [u8], start: usize) -> (Option<ParsedChartEntry<'a>>, usize) {
+fn parse_notedata_entry(data: &[u8], start: usize) -> (Option<ParsedChartEntry<'_>>, usize) {
     let mut out = NotedataFields::default();
     let mut i = start;
 
@@ -439,6 +442,7 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
     Ok(r)
 }
 
+#[must_use] 
 pub fn split_notes_fields(block: &[u8]) -> (Vec<&[u8]>, &[u8]) {
     let (n, parts, note_data) = split_notes6(block);
     let mut fields = Vec::with_capacity(n as usize);

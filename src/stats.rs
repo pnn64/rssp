@@ -11,7 +11,7 @@ pub use crate::streams::{
 // Data Structures
 // ============================================================================
 
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ArrowStats {
     pub total_arrows: u32,
     pub left: u32,
@@ -52,7 +52,7 @@ macro_rules! dispatch_lanes {
 
 #[inline(always)]
 fn trim_cr(line: &[u8]) -> &[u8] {
-    line.strip_suffix(&[b'\r']).unwrap_or(line)
+    line.strip_suffix(b"\r").unwrap_or(line)
 }
 
 #[inline(always)]
@@ -67,12 +67,12 @@ fn skip_ws(mut line: &[u8]) -> &[u8] {
 }
 
 #[inline(always)]
-fn is_hold_blocker(ch: u8) -> bool {
+const fn is_hold_blocker(ch: u8) -> bool {
     matches!(ch, b'1' | b'M' | b'L' | b'F')
 }
 
 #[inline(always)]
-fn is_note(ch: u8) -> bool {
+const fn is_note(ch: u8) -> bool {
     matches!(ch, b'1' | b'2' | b'4')
 }
 
@@ -82,7 +82,7 @@ fn is_all_zero<const L: usize>(line: &[u8; L]) -> bool {
 }
 
 #[inline(always)]
-fn bump_dir(stats: &mut ArrowStats, col: usize) {
+const fn bump_dir(stats: &mut ArrowStats, col: usize) {
     match col & 3 {
         0 => stats.left += 1,
         1 => stats.down += 1,
@@ -138,7 +138,7 @@ fn track_holds_core<const L: usize>(
 }
 
 fn scan_hold_ends<const L: usize>(rows: &[[u8; L]]) -> Vec<[usize; L]> {
-    track_holds_core::<L>(rows.iter().map(|r| r.as_slice()), rows.len())
+    track_holds_core::<L>(rows.iter().map(<[u8; L]>::as_slice), rows.len())
 }
 
 fn match_hold_ends<const L: usize>(rows: &[[u8; L]]) -> Vec<[Option<usize>; L]> {
@@ -326,7 +326,7 @@ fn count_line_masked<const L: usize>(
 
 #[inline(always)]
 pub fn minimize_measure<const L: usize>(m: &mut Vec<[u8; L]>) {
-    while m.len() >= 2 && m.len() % 2 == 0 && m.iter().skip(1).step_by(2).all(is_all_zero) {
+    while m.len() >= 2 && m.len().is_multiple_of(2) && m.iter().skip(1).step_by(2).all(is_all_zero) {
         let half = m.len() / 2;
         for i in 0..half {
             m[i] = m[i * 2];
@@ -343,14 +343,14 @@ fn append_row_beats(beats: &mut Vec<f32>, midx: usize, rows: usize) {
     beats.reserve(rows);
     let (start, step) = (midx as f32 * 4.0, 4.0 / rows as f32);
     for r in 0..rows {
-        beats.push(start + r as f32 * step);
+        beats.push((r as f32).mul_add(step, start));
     }
 }
 
 #[inline(always)]
 pub(crate) fn calc_last_beat(midx: Option<usize>, row: usize, rows: usize) -> f64 {
     let m = midx.unwrap_or(0);
-    let beat = m as f64 * 4.0 + 4.0 * row as f64 / rows.max(1) as f64;
+    let beat = (m as f64).mul_add(4.0, 4.0 * row as f64 / rows.max(1) as f64);
     note_row_to_beat(beat_to_note_row(beat))
 }
 
@@ -491,19 +491,17 @@ where
     (output, stats, densities)
 }
 
+#[must_use] 
 pub fn minimize_chart_and_count_with_lanes(
     data: &[u8],
     lanes: usize,
 ) -> (Vec<u8>, ArrowStats, Vec<usize>) {
-    match lanes {
-        8 => {
-            let (mut nr, mut nl) = (|_, _| {}, |_: &[u8; 8], _, _, _| {});
-            process_chart::<8, _, _>(data, &mut nr, &mut nl)
-        }
-        _ => {
-            let (mut nr, mut nl) = (|_, _| {}, |_: &[u8; 4], _, _, _| {});
-            process_chart::<4, _, _>(data, &mut nr, &mut nl)
-        }
+    if lanes == 8 {
+        let (mut nr, mut nl) = (|_, _| {}, |_: &[u8; 8], _, _, _| {});
+        process_chart::<8, _, _>(data, &mut nr, &mut nl)
+    } else {
+        let (mut nr, mut nl) = (|_, _| {}, |_: &[u8; 4], _, _, _| {});
+        process_chart::<4, _, _>(data, &mut nr, &mut nl)
     }
 }
 
@@ -577,6 +575,7 @@ pub(crate) fn minimize_chart_rows_bits(
     (out, stats, dens, beats, last, bits)
 }
 
+#[must_use] 
 pub fn minimize_chart_for_hash(data: &[u8], lanes: usize) -> Vec<u8> {
     dispatch_lanes!(lanes, minimize_hash_impl(data))
 }
@@ -593,6 +592,7 @@ fn minimize_hash_impl<const L: usize>(data: &[u8]) -> Vec<u8> {
 // Timing-Aware Stats
 // ============================================================================
 
+#[must_use] 
 pub fn compute_timing_aware_stats(data: &[u8], lanes: usize, timing: &TimingData) -> ArrowStats {
     let (minimized, _stats, _densities, beats, _last_beat) =
         minimize_chart_count_rows(data, lanes);
@@ -605,15 +605,12 @@ pub(crate) fn compute_timing_aware_stats_with_row_to_beat(
     timing: &TimingData,
     beats: &[f32],
 ) -> ArrowStats {
-    match lanes {
-        8 => {
-            let rows = parse_minimized_rows::<8>(data);
-            compute_timing_aware_stats_from_rows_with_row_to_beat::<8>(&rows, timing, beats)
-        }
-        _ => {
-            let rows = parse_minimized_rows::<4>(data);
-            compute_timing_aware_stats_from_rows_with_row_to_beat::<4>(&rows, timing, beats)
-        }
+    if lanes == 8 {
+        let rows = parse_minimized_rows::<8>(data);
+        compute_timing_aware_stats_from_rows_with_row_to_beat::<8>(&rows, timing, beats)
+    } else {
+        let rows = parse_minimized_rows::<4>(data);
+        compute_timing_aware_stats_from_rows_with_row_to_beat::<4>(&rows, timing, beats)
     }
 }
 
@@ -646,7 +643,7 @@ fn process_timing_rows<'a, const L: usize>(
         process_timing_row::<L>(
             line,
             &ends[ridx],
-            is_judgable_at_beat(timing, beats[ridx] as f64),
+            is_judgable_at_beat(timing, f64::from(beats[ridx])),
             &mut stats,
             &mut ends_per,
             &mut active,
@@ -738,6 +735,7 @@ fn process_timing_row<const L: usize>(
 // Measure Density Analysis
 // ============================================================================
 
+#[must_use] 
 pub fn measure_densities(data: &[u8], lanes: usize) -> Vec<usize> {
     dispatch_lanes!(lanes, densities_impl(data))
 }

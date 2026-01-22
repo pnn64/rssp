@@ -8,7 +8,7 @@ const SHA1_K: [[u32; 4]; 4] = [
 ];
 
 #[inline(always)]
-fn add4(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
+const fn add4(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
     [
         a[0].wrapping_add(b[0]),
         a[1].wrapping_add(b[1]),
@@ -18,25 +18,25 @@ fn add4(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
 }
 
 #[inline(always)]
-fn xor4(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
+const fn xor4(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
     [a[0] ^ b[0], a[1] ^ b[1], a[2] ^ b[2], a[3] ^ b[3]]
 }
 
 #[inline(always)]
-fn sha1_first_add(e: u32, w0: [u32; 4]) -> [u32; 4] {
+const fn sha1_first_add(e: u32, w0: [u32; 4]) -> [u32; 4] {
     let [a, b, c, d] = w0;
     [e.wrapping_add(a), b, c, d]
 }
 
 #[inline(always)]
-fn sha1msg1(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
+const fn sha1msg1(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
     let [_, _, w2, w3] = a;
     let [w4, w5, _, _] = b;
     [a[0] ^ w2, a[1] ^ w3, a[2] ^ w4, a[3] ^ w5]
 }
 
 #[inline(always)]
-fn sha1msg2(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
+const fn sha1msg2(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
     let [x0, x1, x2, x3] = a;
     let [_, w13, w14, w15] = b;
 
@@ -54,7 +54,7 @@ fn sha1_first_half(abcd: [u32; 4], msg: [u32; 4]) -> [u32; 4] {
 }
 
 #[inline(always)]
-fn sha1rnds4c(abcd: [u32; 4], msg: [u32; 4]) -> [u32; 4] {
+const fn sha1rnds4c(abcd: [u32; 4], msg: [u32; 4]) -> [u32; 4] {
     let [mut a, mut b, mut c, mut d] = abcd;
     let [t, u, v, w] = msg;
     let mut e = 0u32;
@@ -93,7 +93,7 @@ fn sha1rnds4c(abcd: [u32; 4], msg: [u32; 4]) -> [u32; 4] {
 }
 
 #[inline(always)]
-fn sha1rnds4p(abcd: [u32; 4], msg: [u32; 4]) -> [u32; 4] {
+const fn sha1rnds4p(abcd: [u32; 4], msg: [u32; 4]) -> [u32; 4] {
     let [mut a, mut b, mut c, mut d] = abcd;
     let [t, u, v, w] = msg;
     let mut e = 0u32;
@@ -132,7 +132,7 @@ fn sha1rnds4p(abcd: [u32; 4], msg: [u32; 4]) -> [u32; 4] {
 }
 
 #[inline(always)]
-fn sha1rnds4m(abcd: [u32; 4], msg: [u32; 4]) -> [u32; 4] {
+const fn sha1rnds4m(abcd: [u32; 4], msg: [u32; 4]) -> [u32; 4] {
     let [mut a, mut b, mut c, mut d] = abcd;
     let [t, u, v, w] = msg;
     let mut e = 0u32;
@@ -348,10 +348,11 @@ const HEX_TABLE: [[u8; 2]; 256] = {
     table
 };
 
+#[must_use] 
 pub fn compute_chart_hash(chart_data: &[u8], normalized_bpms: &str) -> String {
     let digest = sha1_digest(chart_data, normalized_bpms.as_bytes());
     let mut out = String::with_capacity(16);
-    for &byte in digest[..8].iter() {
+    for &byte in &digest[..8] {
         let hex = HEX_TABLE[byte as usize];
         out.push(hex[0] as char);
         out.push(hex[1] as char);

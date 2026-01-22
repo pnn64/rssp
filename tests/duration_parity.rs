@@ -34,17 +34,17 @@ struct Failure {
 }
 
 fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
-    let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+    let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {e}"))?;
 
     let raw_bytes = zstd::decode_all(&compressed_bytes[..])
-        .map_err(|e| format!("Failed to decompress simfile: {}", e))?;
+        .map_err(|e| format!("Failed to decompress simfile: {e}"))?;
 
     let file_hash = format!("{:x}", md5::compute(&raw_bytes));
     let subfolder = &file_hash[0..2];
 
     let golden_path = baseline_dir
         .join(subfolder)
-        .join(format!("{}.json.zst", file_hash));
+        .join(format!("{file_hash}.json.zst"));
 
     if !golden_path.exists() {
         return Err(format!(
@@ -56,16 +56,16 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     }
 
     let compressed_golden =
-        fs::read(&golden_path).map_err(|e| format!("Failed to read baseline file: {}", e))?;
+        fs::read(&golden_path).map_err(|e| format!("Failed to read baseline file: {e}"))?;
 
     let json_bytes = zstd::decode_all(&compressed_golden[..])
-        .map_err(|e| format!("Failed to decompress baseline json: {}", e))?;
+        .map_err(|e| format!("Failed to decompress baseline json: {e}"))?;
 
     let golden_charts: Vec<GoldenChart> = serde_json::from_slice(&json_bytes)
-        .map_err(|e| format!("Failed to parse baseline JSON: {}", e))?;
+        .map_err(|e| format!("Failed to parse baseline JSON: {e}"))?;
 
     let rssp_charts = compute_chart_durations(&raw_bytes, extension, TimingOffsets::default())
-        .map_err(|e| format!("RSSP Parsing Error: {}", e))?;
+        .map_err(|e| format!("RSSP Parsing Error: {e}"))?;
 
     let mut golden_map: HashMap<(String, String), Vec<GoldenChart>> = HashMap::new();
     for golden in golden_charts {
@@ -96,8 +96,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     for ((step_type, difficulty), expected_entries) in golden_entries {
         let Some(actual_entries) = rssp_map.remove(&(step_type.clone(), difficulty.clone())) else {
             println!(
-                "  {} {}: baseline present, RSSP missing chart",
-                step_type, difficulty
+                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
             );
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
@@ -112,9 +111,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             let expected = expected_entries.get(idx);
             let actual = actual_entries.get(idx);
             let meter_label = expected
-                .and_then(|entry| entry.meter)
-                .map(|meter| meter.to_string())
-                .unwrap_or_else(|| (idx + 1).to_string());
+                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
 
             let expected_val = expected.map(|e| round_sig_figs_itg(e.duration_seconds));
             let actual_val = actual.map(|a| a.duration_seconds);
@@ -129,12 +126,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 step_type,
                 difficulty,
                 meter_label,
-                expected_val
-                    .map(|v| format!("{:.3}", v))
-                    .unwrap_or_else(|| "-".to_string()),
-                actual_val
-                    .map(|v| format!("{:.3}", v))
-                    .unwrap_or_else(|| "-".to_string()),
+                expected_val.map_or_else(|| "-".to_string(), |v| format!("{v:.3}")),
+                actual_val.map_or_else(|| "-".to_string(), |v| format!("{v:.3}")),
                 status
             );
         }
@@ -179,7 +172,7 @@ fn main() {
 
     let mut tests = Vec::new();
 
-    for entry in WalkDir::new(&packs_dir).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(&packs_dir).into_iter().filter_map(std::result::Result::ok) {
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -195,7 +188,7 @@ fn main() {
         let inner_extension = inner_path
             .extension()
             .and_then(|e| e.to_str())
-            .map(|s| s.to_lowercase())
+            .map(str::to_lowercase)
             .unwrap_or_default();
 
         if inner_extension != "sm" && inner_extension != "ssc" {
@@ -259,11 +252,11 @@ fn main() {
         let res = check_file(&path, &extension, &baseline_dir);
         match res {
             Ok(()) => {
-                println!("test {} ... ok", name);
+                println!("test {name} ... ok");
                 num_passed += 1;
             }
             Err(msg) => {
-                println!("test {} ... FAILED", name);
+                println!("test {name} ... FAILED");
                 failures.push(Failure {
                     name,
                     message: msg.trim().to_string(),
@@ -298,13 +291,12 @@ fn main() {
     }
 
     if num_failed == 0 {
-        println!("test result: ok. {} passed; 0 failed", num_passed);
+        println!("test result: ok. {num_passed} passed; 0 failed");
         return;
     }
 
     println!(
-        "test result: FAILED. {} passed; {} failed",
-        num_passed, num_failed
+        "test result: FAILED. {num_passed} passed; {num_failed} failed"
     );
     std::process::exit(101);
 }

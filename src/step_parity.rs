@@ -105,7 +105,7 @@ impl Hasher for IdentityHasher {
     fn write(&mut self, bytes: &[u8]) {
         let mut hash = 0u64;
         for &b in bytes {
-            hash = hash.wrapping_mul(0x100_0000_01b3).wrapping_add(b as u64);
+            hash = hash.wrapping_mul(0x100_0000_01b3).wrapping_add(u64::from(b));
         }
         self.0 = hash;
     }
@@ -113,7 +113,7 @@ impl Hasher for IdentityHasher {
         self.0 = v as u64;
     }
     fn write_u32(&mut self, v: u32) {
-        self.0 = v as u64;
+        self.0 = u64::from(v);
     }
     fn write_u64(&mut self, v: u64) {
         self.0 = v;
@@ -194,7 +194,7 @@ fn layout_new(points: &[StagePoint], up_mask: u8, down_mask: u8, side_mask: u8) 
     let facing_penalty = |v: f32| -> f32 {
         let base = -(v.min(0.0));
         if base > 0.0 {
-            (base as f64).powf(1.8) as f32 * 100.0 * FACING_WEIGHT
+            f64::from(base).powf(1.8) as f32 * 100.0 * FACING_WEIGHT
         } else {
             0.0
         }
@@ -219,8 +219,8 @@ fn layout_new(points: &[StagePoint], up_mask: u8, down_mask: u8, side_mask: u8) 
                 (None, Some(r)) => r,
                 (Some(l), None) => l,
                 (Some(l), Some(r)) => StagePoint {
-                    x: (l.x + r.x) / 2.0,
-                    y: (l.y + r.y) / 2.0,
+                    x: f32::midpoint(l.x, r.x),
+                    y: f32::midpoint(l.y, r.y),
                 },
             };
 
@@ -229,10 +229,10 @@ fn layout_new(points: &[StagePoint], up_mask: u8, down_mask: u8, side_mask: u8) 
             }
 
             let (dx, dy) = (
-                (columns[right].x - columns[left].x) as f64,
-                (columns[right].y - columns[left].y) as f64,
+                f64::from(columns[right].x - columns[left].x),
+                f64::from(columns[right].y - columns[left].y),
             );
-            let dist = (dx * dx + dy * dy).sqrt();
+            let dist = dx.hypot(dy);
             if dist == 0.0 {
                 continue;
             }
@@ -259,12 +259,12 @@ fn layout_new(points: &[StagePoint], up_mask: u8, down_mask: u8, side_mask: u8) 
     for l in 0..cols {
         for r in 0..cols {
             let (dx, dy) = (columns[l].x - columns[r].x, columns[l].y - columns[r].y);
-            let sq = dx * dx + dy * dy;
+            let sq = dx.mul_add(dx, dy * dy);
             let idx = l * MAX_COLUMNS + r;
             bracket_ok[idx] = sq <= 2.0;
-            let dist = (sq as f64).sqrt();
+            let dist = f64::from(sq).sqrt();
             hold_switch_cost[idx] = dist as f32 * HOLDSWITCH_WEIGHT;
-            dist_weighted[idx] = dist * DISTANCE_WEIGHT as f64;
+            dist_weighted[idx] = dist * f64::from(DISTANCE_WEIGHT);
         }
     }
 
@@ -284,27 +284,27 @@ fn layout_new(points: &[StagePoint], up_mask: u8, down_mask: u8, side_mask: u8) 
 }
 
 #[inline(always)]
-fn layout_cols(layout: &StageLayout) -> usize {
+const fn layout_cols(layout: &StageLayout) -> usize {
     layout.cols as usize
 }
 
 #[inline(always)]
-fn layout_bracket_ok(layout: &StageLayout, c1: usize, c2: usize) -> bool {
+const fn layout_bracket_ok(layout: &StageLayout, c1: usize, c2: usize) -> bool {
     layout.bracket_ok[c1 * MAX_COLUMNS + c2]
 }
 
 #[inline(always)]
-fn layout_hold_switch_cost(layout: &StageLayout, c1: usize, c2: usize) -> f32 {
+const fn layout_hold_switch_cost(layout: &StageLayout, c1: usize, c2: usize) -> f32 {
     layout.hold_switch_cost[c1 * MAX_COLUMNS + c2]
 }
 
 #[inline(always)]
-fn layout_dist_weighted(layout: &StageLayout, c1: usize, c2: usize) -> f64 {
+const fn layout_dist_weighted(layout: &StageLayout, c1: usize, c2: usize) -> f64 {
     layout.dist_weighted[c1 * MAX_COLUMNS + c2]
 }
 
 #[inline(always)]
-fn layout_pair_idx(layout: &StageLayout, left: i8, right: i8) -> usize {
+const fn layout_pair_idx(layout: &StageLayout, left: i8, right: i8) -> usize {
     let max = layout.cols as usize;
     let l = if left == INVALID_COLUMN {
         max
@@ -367,7 +367,7 @@ struct Row {
     fake_mine_mask: u8,
 }
 
-fn row_new() -> Row {
+const fn row_new() -> Row {
     Row {
         second: 0.0,
         beat: 0.0,
@@ -389,7 +389,7 @@ struct State {
     holding_mask: u8,
 }
 
-fn state_new() -> State {
+const fn state_new() -> State {
     State {
         combined_columns: [Foot::None; MAX_COLUMNS],
         where_the_feet_are: [INVALID_COLUMN; NUM_FEET],
@@ -399,13 +399,13 @@ fn state_new() -> State {
 }
 
 #[inline(always)]
-fn foot_moved(s: &State, pair: &FootPair) -> bool {
+const fn foot_moved(s: &State, pair: &FootPair) -> bool {
     let mask = FOOT_MASKS[foot_idx(pair.heel)] | FOOT_MASKS[foot_idx(pair.toe)];
     (s.moved_mask & mask) != 0
 }
 
 #[inline(always)]
-fn foot_moved_not_holding(s: &State, pair: &FootPair) -> bool {
+const fn foot_moved_not_holding(s: &State, pair: &FootPair) -> bool {
     let mask = FOOT_MASKS[foot_idx(pair.heel)] | FOOT_MASKS[foot_idx(pair.toe)];
     ((s.moved_mask & !s.holding_mask) & mask) != 0
 }
@@ -535,7 +535,7 @@ fn calc_hold_switch_cost(layout: &StageLayout, initial: &State, result: &State, 
                 cost += HOLDSWITCH_WEIGHT;
             } else {
                 cost += layout_hold_switch_cost(layout, c, prev_col as usize);
-            };
+            }
         }
     }
     cost
@@ -698,13 +698,12 @@ fn calc_spin_cost(layout: &StageLayout, initial: &State, result: &State) -> f32 
     let right = layout_avg_point(layout, get(result, Foot::RightHeel), rt);
 
     let mut cost = 0.0;
-    if right.x < left.x && prev_right.x < prev_left.x {
-        if (right.y < left.y && prev_right.y > prev_left.y)
-            || (right.y > left.y && prev_right.y < prev_left.y)
+    if right.x < left.x && prev_right.x < prev_left.x
+        && ((right.y < left.y && prev_right.y > prev_left.y)
+            || (right.y > left.y && prev_right.y < prev_left.y))
         {
             cost += SPIN_WEIGHT;
         }
-    }
     cost
 }
 
@@ -715,7 +714,7 @@ fn calc_footswitch_cost(
     elapsed: f32,
     cols: usize,
 ) -> f32 {
-    if elapsed < SLOW_FOOTSWITCH_THRESHOLD || elapsed >= SLOW_FOOTSWITCH_IGNORE {
+    if !(SLOW_FOOTSWITCH_THRESHOLD..SLOW_FOOTSWITCH_IGNORE).contains(&elapsed) {
         return 0.0;
     }
     if row.mine_i32_mask != 0 || row.fake_mine_mask != 0 {
@@ -760,7 +759,7 @@ fn calc_sideswitch_cost(
     count as f32 * SIDESWITCH_WEIGHT
 }
 
-fn calc_missed_footswitch_cost(row: &Row, jacked_left: bool, jacked_right: bool) -> f32 {
+const fn calc_missed_footswitch_cost(row: &Row, jacked_left: bool, jacked_right: bool) -> f32 {
     if (jacked_left || jacked_right) && (row.mine_i32_mask != 0 || row.fake_mine_mask != 0) {
         MISSED_FOOTSWITCH_WEIGHT
     } else {
@@ -803,7 +802,7 @@ fn calc_big_movements_cost(
 
 	        let res_pos = hit[foot_idx(foot)];
 	        let dist = layout_dist_weighted(layout, init_pos as usize, res_pos as usize);
-	        let mut d = (dist / elapsed as f64) as f32;
+	        let mut d = (dist / f64::from(elapsed)) as f32;
 
 	        let other = OTHER_PART_OF_FOOT[foot_idx(foot)];
 	        let other_pos = hit[foot_idx(other)];
@@ -1025,7 +1024,7 @@ fn parity_perms_for_row(g: &mut StepParityGenerator, row_idx: usize) -> &'static
         union
     } else {
         let note = g.perm_table[row.note_mask as usize].as_ref();
-        if !note.is_empty() { note } else { &NO_PERMS }
+        if note.is_empty() { &NO_PERMS } else { note }
     };
 
     g.perm_cache[key] = Some(perms);
@@ -1041,7 +1040,7 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
     g.next_ids.clear();
     g.state_map.clear();
 
-    let mut prev_second = g.rows.first().map(|r| r.second - 1.0).unwrap_or(-1.0);
+    let mut prev_second = g.rows.first().map_or(-1.0, |r| r.second - 1.0);
 
     for i in 0..g.rows.len() {
         let row_second = g.rows[i].second;
@@ -1057,7 +1056,7 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
             let init_id = g.prev_ids[j];
             let init_state = g.nodes[init_id].state;
             let init_cost = g.nodes[init_id].cost;
-            for perm in perms.iter() {
+            for perm in perms {
                 let (result, hit, key) = parity_result_state(g, &init_state, i, perm);
                 let nc = init_cost
                     + calc_action_cost(
@@ -1071,14 +1070,11 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
                         elapsed,
                         g.column_count,
                     );
-                let res_id = match g.state_map.get(&key) {
-                    Some(&id) => id,
-                    None => {
-                        let id = parity_add_node(g, result);
-                        g.next_ids.push(id);
-                        g.state_map.insert(key, id);
-                        id
-                    }
+                let res_id = if let Some(&id) = g.state_map.get(&key) { id } else {
+                    let id = parity_add_node(g, result);
+                    g.next_ids.push(id);
+                    g.state_map.insert(key, id);
+                    id
                 };
 
                 let node = &mut g.nodes[res_id];
@@ -1129,9 +1125,7 @@ fn parity_result_state(
         ((moved_mask & LEFT_FOOT_MASK) != 0, (moved_mask & RIGHT_FOOT_MASK) != 0);
     let (mut where_the_feet_are, mut comb_p) = ([INVALID_COLUMN; NUM_FEET], 0u32);
     for i in 0..n {
-        let foot = if combined[i] != Foot::None {
-            combined[i]
-        } else {
+        let foot = if combined[i] == Foot::None {
             let prev = initial.combined_columns[i];
             match prev {
                 Foot::LeftHeel | Foot::RightHeel
@@ -1140,6 +1134,8 @@ fn parity_result_state(
                 Foot::RightToe if !moved_right => prev,
                 _ => Foot::None,
             }
+        } else {
+            combined[i]
         };
         combined[i] = foot;
         comb_p |= (foot as u32) << (i * 3);
@@ -1148,7 +1144,7 @@ fn parity_result_state(
         }
     }
 
-    let key = comb_p | ((moved_mask as u32) << 24) | ((holding_mask as u32) << 28);
+    let key = comb_p | (u32::from(moved_mask) << 24) | (u32::from(holding_mask) << 28);
     (
         State {
             combined_columns: combined,
@@ -1195,7 +1191,7 @@ struct RowCounter {
     last_beat: f32,
 }
 
-fn row_counter_new() -> RowCounter {
+const fn row_counter_new() -> RowCounter {
     RowCounter {
         note_mask: 0,
         hold_ends: [HOLD_END_NONE; MAX_COLUMNS],
@@ -1555,7 +1551,7 @@ fn layout_for_lanes(lanes: usize) -> Option<&'static LayoutCache> {
 }
 
 #[inline(always)]
-fn trim_ws(mut s: &[u8]) -> &[u8] {
+const fn trim_ws(mut s: &[u8]) -> &[u8] {
     while let Some((&f, r)) = s.split_first() {
         if f.is_ascii_whitespace() {
             s = r;
@@ -1612,7 +1608,7 @@ where
                 continue;
             }
 
-            let beat = start + j as f32 * step;
+            let beat = (j as f32).mul_add(step, start);
             let note_row = beat_to_note_row_f32(beat);
             let beat = note_row as f32 / ROWS_PER_BEAT as f32;
             let second = get_second(beat);
@@ -1652,7 +1648,7 @@ fn parse_rows_from_arrays<const LANES: usize>(
         let beat_raw = row_to_beat[idx];
         let note_row = beat_to_note_row_f32(beat_raw);
         let beat = note_row as f32 / ROWS_PER_BEAT as f32;
-        let second = get_time_for_beat_f32(timing, beat as f64) as f32;
+        let second = get_time_for_beat_f32(timing, f64::from(beat)) as f32;
 
         let mut chars = [b'0'; 8];
         chars[..copy_len].copy_from_slice(&row[..copy_len]);
@@ -1668,7 +1664,7 @@ fn parse_rows_from_arrays<const LANES: usize>(
 }
 
 fn build_notes(rows: &[ParsedRow], timing: Option<&TimingData>) -> Vec<IntermediateNoteData> {
-    let cols = rows.first().map(|r| r.columns as usize).unwrap_or(0);
+    let cols = rows.first().map_or(0, |r| r.columns as usize);
     if cols == 0 {
         return Vec::new();
     }
@@ -1695,7 +1691,7 @@ fn build_notes(rows: &[ParsedRow], timing: Option<&TimingData>) -> Vec<Intermedi
 
     let mut notes = Vec::new();
     for (idx, row) in rows.iter().enumerate() {
-        let row_fake = timing.map_or(false, |t| is_fake_at_beat(t, row.row as f64));
+        let row_fake = timing.is_some_and(|t| is_fake_at_beat(t, f64::from(row.row)));
 
         for c in 0..cols {
             let ch = row.chars[c];
@@ -1751,6 +1747,7 @@ where
     calculate_tech_counts(&generator.rows, &generator.result_columns, generator.layout)
 }
 
+#[must_use] 
 pub fn analyze_lanes(
     minimized_note_data: &[u8],
     bpm_map: &[(f64, f64)],
@@ -1768,6 +1765,7 @@ pub fn analyze_lanes(
     })
 }
 
+#[must_use] 
 pub fn analyze_timing_lanes(minimized_note_data: &[u8], timing: &TimingData, lanes: usize) -> TechCounts {
     let Some(cache) = layout_for_lanes(lanes) else {
         return TechCounts::default();
@@ -1776,7 +1774,7 @@ pub fn analyze_timing_lanes(minimized_note_data: &[u8], timing: &TimingData, lan
     let cols = layout_cols(&cache.layout);
     debug_assert!(!minimized_note_data.contains(&b';'));
 	    analyze_core(cache, minimized_note_data, cols, Some(timing), |beat| {
-	        get_time_for_beat_f32(timing, beat as f64) as f32
+	        get_time_for_beat_f32(timing, f64::from(beat)) as f32
 	    })
 }
 
@@ -1805,21 +1803,21 @@ fn time_between_beats(start: f32, end: f32, bpm_map: &[(f64, f64)]) -> f64 {
     if end <= start {
         return 0.0;
     }
-    let mut bpm = bpm_map.first().map(|b| b.1).unwrap_or(60.0);
+    let mut bpm = bpm_map.first().map_or(60.0, |b| b.1);
     let mut time = 0.0;
-    let mut last = start as f64;
+    let mut last = f64::from(start);
 
     for &(beat, value) in bpm_map {
         if beat <= last {
             bpm = value;
             continue;
         }
-        if beat >= end as f64 {
+        if beat >= f64::from(end) {
             break;
         }
         time += (beat - last) * 60.0 / bpm;
         last = beat;
         bpm = value;
     }
-    time + (end as f64 - last) * 60.0 / bpm
+    time + (f64::from(end) - last) * 60.0 / bpm
 }

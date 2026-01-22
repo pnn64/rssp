@@ -22,13 +22,13 @@ fn compute_stream_percentages(
     total_measures: usize,
 ) -> (f64, f64, f64) {
     let adj_stream_percent = if total_streams + total_breaks > 0 {
-        (total_streams as f64 / (total_streams + total_breaks) as f64) * 100.0
+        (f64::from(total_streams) / f64::from(total_streams + total_breaks)) * 100.0
     } else {
         0.0
     };
 
     let stream_percent = if total_measures > 0 {
-        (total_streams as f64 / total_measures as f64) * 100.0
+        (f64::from(total_streams) / total_measures as f64) * 100.0
     } else {
         0.0
     };
@@ -53,7 +53,7 @@ struct BoxParts {
 }
 
 #[inline(always)]
-fn compute_box_parts(patterns: &PatternCounts) -> BoxParts {
+const fn compute_box_parts(patterns: &PatternCounts) -> BoxParts {
     BoxParts {
         lr: patterns[PatternVariant::BoxLR as usize],
         ud: patterns[PatternVariant::BoxUD as usize],
@@ -73,7 +73,7 @@ struct StairParts {
 }
 
 #[inline(always)]
-fn compute_stair_parts(
+const fn compute_stair_parts(
     patterns: &PatternCounts,
     left: PatternVariant,
     right: PatternVariant,
@@ -97,7 +97,7 @@ struct SweepParts {
 }
 
 #[inline(always)]
-fn compute_sweep_parts(
+const fn compute_sweep_parts(
     patterns: &PatternCounts,
     left: PatternVariant,
     right: PatternVariant,
@@ -123,7 +123,7 @@ struct TowerParts {
 }
 
 #[inline(always)]
-fn compute_tower_parts(patterns: &PatternCounts) -> TowerParts {
+const fn compute_tower_parts(patterns: &PatternCounts) -> TowerParts {
     TowerParts {
         lr: patterns[PatternVariant::TowerLR as usize],
         ud: patterns[PatternVariant::TowerUD as usize],
@@ -143,7 +143,7 @@ struct TriangleParts {
 }
 
 #[inline(always)]
-fn compute_triangle_parts(patterns: &PatternCounts) -> TriangleParts {
+const fn compute_triangle_parts(patterns: &PatternCounts) -> TriangleParts {
     TriangleParts {
         ldl: patterns[PatternVariant::TriangleLDL as usize],
         lul: patterns[PatternVariant::TriangleLUL as usize],
@@ -161,7 +161,7 @@ struct SimpleQuadParts {
 }
 
 #[inline(always)]
-fn compute_simple_quad_parts(
+const fn compute_simple_quad_parts(
     patterns: &PatternCounts,
     a: PatternVariant,
     b: PatternVariant,
@@ -361,14 +361,15 @@ pub fn write_course_reports<W: Write>(
 }
 
 #[inline(always)]
+#[must_use] 
 pub fn format_json_float(value: f64) -> String {
-    format!("{:.2}", value)
+    format!("{value:.2}")
 }
 
 fn format_duration(seconds: i32) -> String {
     let minutes = seconds / 60;
     let seconds = seconds % 60;
-    format!("{}m {:02}s", minutes, seconds)
+    format!("{minutes}m {seconds:02}s")
 }
 
 fn dummy_simfile_for_course(course: &CourseSummary) -> SimfileSummary {
@@ -613,7 +614,7 @@ fn write_csv_course<W: Write>(writer: &mut W, course: &CourseSummary) -> io::Res
     Ok(())
 }
 
-fn count(counts: &PatternCounts, variant: PatternVariant) -> u32 {
+const fn count(counts: &PatternCounts, variant: PatternVariant) -> u32 {
     counts[variant as usize]
 }
 
@@ -627,18 +628,16 @@ fn chart_or_global<'a>(
         return chart_value.as_deref().filter(|s| !s.is_empty());
     }
 
-    if allow_chart {
-        if let Some(s) = chart_value {
-            if !s.is_empty() {
+    if allow_chart
+        && let Some(s) = chart_value
+            && !s.is_empty() {
                 return Some(s.as_str());
             }
-        }
-    }
 
-    if !global_value.is_empty() {
-        Some(global_value)
-    } else {
+    if global_value.is_empty() {
         None
+    } else {
+        Some(global_value)
     }
 }
 
@@ -752,8 +751,7 @@ fn parse_time_signatures(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
 
     let needs_default = raw
         .first()
-        .map(|(beat, _)| beat_to_note_row(*beat) > 0)
-        .unwrap_or(false);
+        .is_some_and(|(beat, _)| beat_to_note_row(*beat) > 0);
     if needs_default {
         raw.insert(0, (0.0, (4, 4)));
     }
@@ -841,6 +839,7 @@ fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
         .collect()
 }
 
+#[must_use] 
 pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> TimingSnapshot {
     let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
     let timing = &chart.timing_segments;
@@ -848,7 +847,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
     let bpms_raw: Vec<(f64, f64)> = timing
         .bpms
         .iter()
-        .map(|(beat, bpm)| (*beat as f64, roundtrip_bpm_itg(*bpm as f64)))
+        .map(|(beat, bpm)| (f64::from(*beat), roundtrip_bpm_itg(f64::from(*bpm))))
         .collect();
     let bpms_formatted = format_bpm_segments_like_itg(&bpms_raw);
     let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw(&bpms_raw);
@@ -860,24 +859,24 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
     let stops = timing
         .stops
         .iter()
-        .map(|(beat, duration)| (finalize(*beat as f64), finalize(*duration as f64)))
+        .map(|(beat, duration)| (finalize(f64::from(*beat)), finalize(f64::from(*duration))))
         .collect();
     let delays = timing
         .delays
         .iter()
-        .map(|(beat, duration)| (finalize(*beat as f64), finalize(*duration as f64)))
+        .map(|(beat, duration)| (finalize(f64::from(*beat)), finalize(f64::from(*duration))))
         .collect();
     let warps = timing
         .warps
         .iter()
-        .map(|(beat, length)| (finalize(*beat as f64), finalize(*length as f64)))
+        .map(|(beat, length)| (finalize(f64::from(*beat)), finalize(f64::from(*length))))
         .collect();
     let speeds = timing
         .speeds
         .iter()
         .map(|(beat, ratio, delay, unit)| {
-            let unit = if *unit == SpeedUnit::Seconds { 1 } else { 0 };
-            (*beat as f64, *ratio as f64, *delay as f64, unit)
+            let unit = i32::from(*unit == SpeedUnit::Seconds);
+            (f64::from(*beat), f64::from(*ratio), f64::from(*delay), unit)
         })
         .collect();
     let speeds = normalize_speeds_like_itg(speeds);
@@ -888,7 +887,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
     let scrolls = timing
         .scrolls
         .iter()
-        .map(|(beat, ratio)| (*beat as f64, *ratio as f64))
+        .map(|(beat, ratio)| (f64::from(*beat), f64::from(*ratio)))
         .collect();
     let scrolls = normalize_scrolls_like_itg(scrolls);
     let scrolls: Vec<(f64, f64)> = scrolls
@@ -898,7 +897,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
     let fakes = timing
         .fakes
         .iter()
-        .map(|(beat, length)| (finalize(*beat as f64), finalize(*length as f64)))
+        .map(|(beat, length)| (finalize(f64::from(*beat)), finalize(f64::from(*length))))
         .collect();
 
     let time_signatures: Vec<(f64, i32, i32)> = parse_time_signatures(chart_or_global(
@@ -940,7 +939,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
 
     TimingSnapshot {
         beat0_offset_seconds: finalize(
-            chart.chart_offset_seconds + timing.beat0_offset_adjust as f64,
+            chart.chart_offset_seconds + f64::from(timing.beat0_offset_adjust),
         ),
         beat0_group_offset_seconds: 0.0,
         bpms,
@@ -1052,7 +1051,7 @@ fn count_gimmick_scroll_segments(opt: Option<&str>) -> u32 {
 }
 
 #[inline]
-fn chart_mine_fake_counts(chart: &ChartSummary) -> (u32, u32) {
+const fn chart_mine_fake_counts(chart: &ChartSummary) -> (u32, u32) {
     (chart.stats.mines, chart.stats.fakes)
 }
 
@@ -1118,22 +1117,22 @@ fn write_gimmicks<W: Write>(
         writeln!(writer, "Lifts: {}", chart.stats.lifts)?;
     }
     if has_fakes {
-        writeln!(writer, "Fakes: {}", fakes)?;
+        writeln!(writer, "Fakes: {fakes}")?;
     }
     if stop_count > 0 {
-        writeln!(writer, "Stops/Freezes: {}", stop_count)?;
+        writeln!(writer, "Stops/Freezes: {stop_count}")?;
     }
     if speed_count > 0 {
-        writeln!(writer, "Speeds: {}", speed_count)?;
+        writeln!(writer, "Speeds: {speed_count}")?;
     }
     if scroll_count > 0 {
-        writeln!(writer, "Scrolls: {}", scroll_count)?;
+        writeln!(writer, "Scrolls: {scroll_count}")?;
     }
     if delay_count > 0 {
-        writeln!(writer, "Delays: {}", delay_count)?;
+        writeln!(writer, "Delays: {delay_count}")?;
     }
     if warp_count > 0 {
-        writeln!(writer, "Warps: {}", warp_count)?;
+        writeln!(writer, "Warps: {warp_count}")?;
     }
 
     Ok(())
@@ -1177,7 +1176,7 @@ fn write_pretty_chart<W: Write>(
         "{} {} : {}",
         chart.difficulty_str, chart.rating_str, chart.step_artist_str
     );
-    writeln!(writer, "\n{}", header)?;
+    writeln!(writer, "\n{header}")?;
     writeln!(writer, "{}", "-".repeat(header.len()))?;
 
     if (chart.median_nps - chart.max_nps).abs() < f64::EPSILON {
@@ -1198,13 +1197,11 @@ fn write_pretty_chart<W: Write>(
 
     writeln!(
         writer,
-        "Total Stream: {} ({:.2}%/{:.2}% Adj.)",
-        total_stream, stream_percent, adjusted_stream_percent
+        "Total Stream: {total_stream} ({stream_percent:.2}%/{adjusted_stream_percent:.2}% Adj.)"
     )?;
     writeln!(
         writer,
-        "Total Break: {} ({:.2}%)",
-        total_break, break_percent
+        "Total Break: {total_break} ({break_percent:.2}%)"
     )?;
 
     writeln!(writer, "\n--- Chart Info ---")?;
@@ -1218,7 +1215,7 @@ fn write_pretty_chart<W: Write>(
     writeln!(writer, "Holds: {}", chart.stats.holds)?;
     writeln!(writer, "Rolls: {}", chart.stats.rolls)?;
     let (mines_judgable, _) = chart_mine_fake_counts(chart);
-    writeln!(writer, "Mines: {}", mines_judgable)?;
+    writeln!(writer, "Mines: {mines_judgable}")?;
 
     write_gimmicks(writer, chart, simfile)?;
     if simfile.pattern_counts_enabled {
@@ -1349,7 +1346,7 @@ fn write_full_chart<W: Write>(
         "{} {} : {}",
         chart.difficulty_str, chart.rating_str, chart.step_artist_str
     );
-    writeln!(writer, "\n{}", header)?;
+    writeln!(writer, "\n{header}")?;
     writeln!(writer, "{}", "-".repeat(header.len()))?;
 
     writeln!(writer, "Step Type: {}", chart.step_type_str)?;
@@ -1382,8 +1379,7 @@ fn write_full_chart<W: Write>(
 
     writeln!(
         writer,
-        "Total Stream: {} ({:.2}%/{:.2}% Adj.)",
-        total_stream, stream_percent, adjusted_stream_percent
+        "Total Stream: {total_stream} ({stream_percent:.2}%/{adjusted_stream_percent:.2}% Adj.)"
     )?;
     writeln!(
         writer,
@@ -1407,8 +1403,7 @@ fn write_full_chart<W: Write>(
     )?;
     writeln!(
         writer,
-        "Total Break: {} ({:.2}%)",
-        total_break, break_percent
+        "Total Break: {total_break} ({break_percent:.2}%)"
     )?;
 
     writeln!(writer, "\n--- Chart Info ---")?;
@@ -1427,7 +1422,7 @@ fn write_full_chart<W: Write>(
     writeln!(writer, "Holds: {}", chart.stats.holds)?;
     writeln!(writer, "Rolls: {}", chart.stats.rolls)?;
     let (mines_judgable, _) = chart_mine_fake_counts(chart);
-    writeln!(writer, "Mines: {}", mines_judgable)?;
+    writeln!(writer, "Mines: {mines_judgable}")?;
 
     write_gimmicks(writer, chart, simfile)?;
 
@@ -2389,23 +2384,18 @@ fn write_json_number_for_key<W: Write>(
     number: &JsonNumber,
 ) -> io::Result<()> {
     if let Some(i) = number.as_i64() {
-        write!(writer, "{}", i)
+        write!(writer, "{i}")
     } else if let Some(u) = number.as_u64() {
-        write!(writer, "{}", u)
+        write!(writer, "{u}")
     } else if let Some(f) = number.as_f64() {
         match key {
-            None => write!(writer, "{}", f),
-            Some("offset") => write!(writer, "{:.3}", f),
-            Some("beat0_offset_seconds")
-            | Some("beat0_group_offset_seconds")
-            | Some("duration_seconds")
-            | Some("max_nps")
-            | Some("bpm_min")
-            | Some("bpm_max")
-            | Some("display_bpm_min")
-            | Some("display_bpm_max") => write!(writer, "{}", f),
-            Some("bpm") => write!(writer, "{}", f),
-            _ => write!(writer, "{:.2}", f),
+            None => write!(writer, "{f}"),
+            Some("offset") => write!(writer, "{f:.3}"),
+            Some("beat0_offset_seconds" | "beat0_group_offset_seconds" |
+"duration_seconds" | "max_nps" | "bpm_min" | "bpm_max" | "display_bpm_min" |
+"display_bpm_max") => write!(writer, "{f}"),
+            Some("bpm") => write!(writer, "{f}"),
+            _ => write!(writer, "{f:.2}"),
         }
     } else {
         write!(writer, "0")

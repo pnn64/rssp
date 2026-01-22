@@ -63,7 +63,8 @@ pub enum Difficulty {
     Edit = 5,
 }
 
-pub fn difficulty_label(d: Difficulty) -> &'static str {
+#[must_use] 
+pub const fn difficulty_label(d: Difficulty) -> &'static str {
     match d {
         Difficulty::Beginner => "Beginner",
         Difficulty::Easy => "Easy",
@@ -97,7 +98,7 @@ fn normalize_stepstype(raw: &str) -> String {
     raw.trim().to_ascii_lowercase().replace('_', "-")
 }
 
-fn diff_from_idx(idx: i32) -> Difficulty {
+const fn diff_from_idx(idx: i32) -> Difficulty {
     match idx {
         i if i <= Difficulty::Beginner as i32 => Difficulty::Beginner,
         1 => Difficulty::Easy,
@@ -128,7 +129,7 @@ fn scan_term(slice: &[u8]) -> Option<(usize, usize)> {
 }
 
 #[inline(always)]
-fn split_unescaped<'a>(block: &'a [u8], delim: u8) -> Vec<&'a [u8]> {
+fn split_unescaped(block: &[u8], delim: u8) -> Vec<&[u8]> {
     if block.is_empty() {
         return Vec::new();
     }
@@ -150,7 +151,7 @@ fn split_unescaped<'a>(block: &'a [u8], delim: u8) -> Vec<&'a [u8]> {
 }
 
 #[inline(always)]
-fn trim_ascii(mut s: &[u8]) -> &[u8] {
+const fn trim_ascii(mut s: &[u8]) -> &[u8] {
     while let Some((&b, rest)) = s.split_first() {
         if !b.is_ascii_whitespace() {
             break;
@@ -201,11 +202,10 @@ fn parse_song(raw: &str) -> (CourseSong, bool) {
     }
 
     let normalized = raw.replace('\\', "/");
-    if let Some(group) = normalized.strip_suffix("/*").map(str::trim) {
-        if !group.is_empty() {
+    if let Some(group) = normalized.strip_suffix("/*").map(str::trim)
+        && !group.is_empty() {
             return (CourseSong::RandomWithinGroup { group: group.to_string() }, true);
         }
-    }
 
     let mut parts = normalized.split('/').map(str::trim).filter(|s| !s.is_empty());
     let first = parts.next().unwrap_or_default();
@@ -301,7 +301,7 @@ fn apply_song_mods(mut secret: bool, mods_raw: &str) -> (bool, bool, i32, String
 }
 
 fn parse_song_entry(params: &[&[u8]]) -> CourseEntry {
-    let song_raw = params.get(0).copied().unwrap_or_default();
+    let song_raw = params.first().copied().unwrap_or_default();
     let diff_raw = params.get(1).copied().unwrap_or_default();
     let mods_raw = params.get(2).copied().unwrap_or_default();
 
@@ -397,7 +397,7 @@ pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
     Ok(out)
 }
 
-fn empty_timing_segments() -> TimingSegments {
+const fn empty_timing_segments() -> TimingSegments {
     TimingSegments {
         beat0_offset_adjust: 0.0,
         bpms: Vec::new(),
@@ -676,7 +676,7 @@ fn avg_meter(meters: &[i32]) -> i32 {
         return 0;
     }
     let sum: i32 = meters.iter().sum();
-    ((sum as f64) / (meters.len() as f64)).round() as i32
+    (f64::from(sum) / (meters.len() as f64)).round() as i32
 }
 
 fn dedup_push(vec: &mut Vec<String>, seen: &mut HashSet<String>, value: &str) {
@@ -729,7 +729,7 @@ pub fn analyze_crs_path(
         };
 
         let song_dir = resolve_song_dir(&songs_dir, group.as_deref(), song)
-            .ok_or_else(|| format!("Song not found: {}", song))?;
+            .ok_or_else(|| format!("Song not found: {song}"))?;
         let scan = pack::scan_song_dir(&song_dir, pack::ScanOpt::default())
             .map_err(|e| format!("Failed scanning {}: {e:?}", song_dir.display()))?;
         let scan = scan.ok_or_else(|| format!("No simfile in {}", song_dir.display()))?;
@@ -780,14 +780,14 @@ pub fn analyze_crs_path(
     total.rating_str = avg_meter(&meters).to_string();
     total.mono_total = total.facing_left + total.facing_right;
     total.mono_percent = if total.stats.total_steps > 0 {
-        (total.mono_total as f64 / total.stats.total_steps as f64) * 100.0
+        (f64::from(total.mono_total) / f64::from(total.stats.total_steps)) * 100.0
     } else {
         0.0
     };
     total.mono_percent = round_dp(total.mono_percent, 2);
     let max_candles = (total.stats.total_steps.saturating_sub(1)) / 2;
     total.candle_percent = if max_candles > 0 {
-        (total.candle_total as f64 / max_candles as f64) * 100.0
+        (f64::from(total.candle_total) / f64::from(max_candles)) * 100.0
     } else {
         0.0
     };

@@ -259,7 +259,7 @@ struct AliasEntry {
 }
 
 #[inline(always)]
-fn lower_byte(b: u8) -> u8 {
+const fn lower_byte(b: u8) -> u8 {
     if b'A' <= b && b <= b'Z' { b + 32 } else { b }
 }
 
@@ -309,7 +309,7 @@ fn alias_table() -> &'static [Vec<AliasEntry>] {
                 }
                 if !found {
                     bucket.push(AliasEntry {
-                        key: *alias,
+                        key: alias,
                         value: ch,
                     });
                 }
@@ -372,9 +372,9 @@ fn parse_numeric_marker(element: &str, invalid: char) -> Option<char> {
     if hex {
         for &b in &bytes[digits_start..] {
             let digit = match b {
-                b'0'..=b'9' => (b - b'0') as u32,
-                b'a'..=b'f' => (b - b'a' + 10) as u32,
-                b'A'..=b'F' => (b - b'A' + 10) as u32,
+                b'0'..=b'9' => u32::from(b - b'0'),
+                b'a'..=b'f' => u32::from(b - b'a' + 10),
+                b'A'..=b'F' => u32::from(b - b'A' + 10),
                 _ => return None,
             };
             if !overflow {
@@ -390,7 +390,7 @@ fn parse_numeric_marker(element: &str, invalid: char) -> Option<char> {
             if !b.is_ascii_digit() {
                 return None;
             }
-            let digit = (b - b'0') as u32;
+            let digit = u32::from(b - b'0');
             if !overflow {
                 if let Some(next) = value.checked_mul(10).and_then(|v| v.checked_add(digit)) {
                     value = next;
@@ -407,7 +407,7 @@ fn parse_numeric_marker(element: &str, invalid: char) -> Option<char> {
     Some(char::from_u32(value).unwrap_or(invalid))
 }
 
-/// Replace &alias; markers and unicode markers in place, matching ITGmania behavior.
+/// Replace &alias; markers and unicode markers in place, matching `ITGmania` behavior.
 pub fn replace_markers_in_place(text: &mut String) {
     if !text.contains('&') {
         return;
@@ -419,13 +419,10 @@ pub fn replace_markers_in_place(text: &mut String) {
     let mut offset = 0usize;
 
     while offset < len {
-        let start = match input[offset..].find('&') {
-            Some(pos) => offset + pos,
-            None => {
-                out.push_str(&input[offset..]);
-                *text = out;
-                return;
-            }
+        let start = if let Some(pos) = input[offset..].find('&') { offset + pos } else {
+            out.push_str(&input[offset..]);
+            *text = out;
+            return;
         };
         out.push_str(&input[offset..start]);
         let after_amp = start + 1;
@@ -473,6 +470,7 @@ pub fn replace_markers_in_place(text: &mut String) {
 }
 
 /// Replace &alias; markers and unicode markers, returning an updated string.
+#[must_use] 
 pub fn replace_markers(text: &str) -> String {
     let mut out = text.to_string();
     replace_markers_in_place(&mut out);
