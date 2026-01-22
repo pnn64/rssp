@@ -320,12 +320,12 @@ const fn layout_pair_idx(layout: &StageLayout, left: i8, right: i8) -> usize {
 }
 
 #[inline(always)]
-fn layout_facing_x(layout: &StageLayout, l: i8, r: i8) -> f32 {
+const fn layout_facing_x(layout: &StageLayout, l: i8, r: i8) -> f32 {
     layout.facing_x_penalty[layout_pair_idx(layout, l, r)]
 }
 
 #[inline(always)]
-fn layout_facing_y(layout: &StageLayout, l: i8, r: i8) -> f32 {
+const fn layout_facing_y(layout: &StageLayout, l: i8, r: i8) -> f32 {
     layout.facing_y_penalty[layout_pair_idx(layout, l, r)]
 }
 
@@ -482,14 +482,14 @@ fn calc_action_cost(
         initial, result, rows, row_idx, moved_left, moved_right, jacked_left, jacked_right, did_jump,
     );
     cost += calc_slow_bracket_cost(row, moved_left, moved_right, elapsed);
-    cost += calc_twisted_foot_cost(layout, hit);
+    cost += calc_twisted_foot_cost(layout, *hit);
     cost += calc_facing_cost(layout, result);
     cost += calc_spin_cost(layout, initial, result);
-    cost += calc_footswitch_cost(initial, placement, row, elapsed, cols);
-    cost += calc_sideswitch_cost(layout, initial, result, placement);
+    cost += calc_footswitch_cost(initial, *placement, row, elapsed, cols);
+    cost += calc_sideswitch_cost(layout, initial, result, *placement);
     cost += calc_missed_footswitch_cost(row, jacked_left, jacked_right);
     cost += calc_jack_cost(moved_left, moved_right, jacked_left, jacked_right, elapsed);
-    cost += calc_big_movements_cost(layout, initial, result, hit, elapsed);
+    cost += calc_big_movements_cost(layout, initial, result, *hit, elapsed);
     cost
 }
 
@@ -638,7 +638,7 @@ fn calc_slow_bracket_cost(row: &Row, moved_left: bool, moved_right: bool, elapse
     }
 }
 
-fn calc_twisted_foot_cost(layout: &StageLayout, hit: &[i8; NUM_FEET]) -> f32 {
+fn calc_twisted_foot_cost(layout: &StageLayout, hit: [i8; NUM_FEET]) -> f32 {
     let lh = hit[1];
     let lt = hit[2];
     let rh = hit[3];
@@ -709,7 +709,7 @@ fn calc_spin_cost(layout: &StageLayout, initial: &State, result: &State) -> f32 
 
 fn calc_footswitch_cost(
     initial: &State,
-    placement: &FootPlacement,
+    placement: FootPlacement,
     row: &Row,
     elapsed: f32,
     cols: usize,
@@ -722,8 +722,8 @@ fn calc_footswitch_cost(
     }
 
     let time_scaled = elapsed - SLOW_FOOTSWITCH_THRESHOLD;
-    for i in 0..cols {
-        let (init, res) = (initial.combined_columns[i], placement[i]);
+    for (i, &res) in placement.iter().enumerate().take(cols) {
+        let init = initial.combined_columns[i];
         if init == Foot::None || res == Foot::None {
             continue;
         }
@@ -741,7 +741,7 @@ fn calc_sideswitch_cost(
     layout: &StageLayout,
     initial: &State,
     result: &State,
-    placement: &FootPlacement,
+    placement: FootPlacement,
 ) -> f32 {
     let mut mask = layout.side_mask;
     let mut count = 0u32;
@@ -787,7 +787,7 @@ fn calc_big_movements_cost(
     layout: &StageLayout,
     initial: &State,
     result: &State,
-    hit: &[i8; NUM_FEET],
+    hit: [i8; NUM_FEET],
     elapsed: f32,
 ) -> f32 {
 	    let mut cost = 0.0;
@@ -1020,11 +1020,11 @@ fn parity_perms_for_row(g: &mut StepParityGenerator, row_idx: usize) -> &'static
     }
 
     let union = g.perm_table[key].as_ref();
-    let perms = if !union.is_empty() {
-        union
-    } else {
+    let perms = if union.is_empty() {
         let note = g.perm_table[row.note_mask as usize].as_ref();
         if note.is_empty() { &NO_PERMS } else { note }
+    } else {
+        union
     };
 
     g.perm_cache[key] = Some(perms);
@@ -1057,7 +1057,7 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
             let init_state = g.nodes[init_id].state;
             let init_cost = g.nodes[init_id].cost;
             for perm in perms {
-                let (result, hit, key) = parity_result_state(g, &init_state, i, perm);
+                let (result, hit, key) = parity_result_state(g, &init_state, i, *perm);
                 let nc = init_cost
                     + calc_action_cost(
                         g.layout,
@@ -1098,7 +1098,7 @@ fn parity_result_state(
     g: &StepParityGenerator,
     initial: &State,
     row_idx: usize,
-    cols: &FootPlacement,
+    cols: FootPlacement,
 ) -> (State, [i8; NUM_FEET], u32) {
     let (n, hold_mask) = (g.column_count, g.rows[row_idx].hold_mask);
     let (mut combined, mut hit) = ([Foot::None; MAX_COLUMNS], [INVALID_COLUMN; NUM_FEET]);
@@ -1124,8 +1124,8 @@ fn parity_result_state(
     let (moved_left, moved_right) =
         ((moved_mask & LEFT_FOOT_MASK) != 0, (moved_mask & RIGHT_FOOT_MASK) != 0);
     let (mut where_the_feet_are, mut comb_p) = ([INVALID_COLUMN; NUM_FEET], 0u32);
-    for i in 0..n {
-        let foot = if combined[i] == Foot::None {
+    for (i, slot) in combined.iter_mut().enumerate().take(n) {
+        let foot = if *slot == Foot::None {
             let prev = initial.combined_columns[i];
             match prev {
                 Foot::LeftHeel | Foot::RightHeel
@@ -1135,9 +1135,9 @@ fn parity_result_state(
                 _ => Foot::None,
             }
         } else {
-            combined[i]
+            *slot
         };
-        combined[i] = foot;
+        *slot = foot;
         comb_p |= (foot as u32) << (i * 3);
         if foot != Foot::None {
             where_the_feet_are[foot_idx(foot)] = i as i8;
