@@ -20,7 +20,7 @@ pub fn round_dp(value: f64, dp: usize) -> f64 {
         (value * scale).round_ties_even() / scale
     } else {
         // Fallback for dp >= 19 (rare)
-        let scale = 10_f64.powi(dp as i32);
+        let scale = 10_f64.powi(i32::try_from(dp).unwrap_or(0));
         (value * scale).round_ties_even() / scale
     }
 }

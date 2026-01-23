@@ -676,7 +676,7 @@ fn dedup_push(vec: &mut Vec<String>, seen: &mut HashSet<String>, value: &str) {
 pub fn analyze_crs_path(
     course_path: &Path,
     songs_dir: Option<&Path>,
-    steps_type: &str,
+    target_step_type: &str,
     course_difficulty: &str,
     options: AnalysisOptions,
 ) -> Result<CourseSummary, String> {
@@ -684,14 +684,14 @@ pub fn analyze_crs_path(
     let data = std::fs::read(course_path).map_err(|e| e.to_string())?;
     let course = parse_crs(&data)?;
 
-    let songs_dir = songs_dir
+    let base_songs_dir = songs_dir
         .map(PathBuf::from)
         .or_else(|| guess_songs_dir(course_path))
         .ok_or_else(|| "Unable to locate Songs/ directory (pass --songs-dir)".to_string())?;
 
     let course_diff = parse_course_difficulty(course_difficulty)
         .ok_or_else(|| format!("Invalid course difficulty: {course_difficulty}"))?;
-    let step_type = normalize_stepstype(steps_type);
+    let step_type = normalize_stepstype(target_step_type);
 
     let mut sim_cache: HashMap<PathBuf, SimfileSummary> = HashMap::new();
     let mut entries = Vec::new();
@@ -713,7 +713,7 @@ pub fn analyze_crs_path(
             return Err("Only difficulty-based #SONG entries are supported (no meter ranges yet)".to_string());
         };
 
-        let song_dir = resolve_song_dir(&songs_dir, group.as_deref(), song)
+        let song_dir = resolve_song_dir(&base_songs_dir, group.as_deref(), song)
             .ok_or_else(|| format!("Song not found: {song}"))?;
         let scan = pack::scan_song_dir(&song_dir, pack::ScanOpt::default())
             .map_err(|e| format!("Failed scanning {}: {e:?}", song_dir.display()))?;

@@ -608,28 +608,28 @@ pub fn compute_mines_nonfake(
     let minimized = crate::stats::minimize_chart_for_hash(data, lanes);
     let mut rows = Vec::new();
     let mut per_measure = Vec::new();
-    let (mut m, mut r, mut cnt) = (0usize, 0usize, 0usize);
+    let (mut measure_idx, mut row_idx, mut count) = (0usize, 0usize, 0usize);
 
     for line in minimized.split(|&b| b == b'\n') {
         if line.is_empty() {
             continue;
         }
         if line[0] == b',' {
-            per_measure.push(cnt);
-            m += 1;
-            r = 0;
-            cnt = 0;
+            per_measure.push(count);
+            measure_idx += 1;
+            row_idx = 0;
+            count = 0;
             continue;
         }
         if line.len() < lanes {
             continue;
         }
         let mine = line[..lanes].iter().any(|&b| matches!(b, b'M' | b'm'));
-        rows.push((m, r, mine));
-        cnt += 1;
-        r += 1;
+        rows.push((measure_idx, row_idx, mine));
+        count += 1;
+        row_idx += 1;
     }
-    per_measure.push(cnt);
+    per_measure.push(count);
 
     let in_range = |b: f64, segs: &[(f64, f64)]| -> bool {
         let i = segs.partition_point(|(s, _)| *s <= b);
@@ -639,7 +639,7 @@ pub fn compute_mines_nonfake(
         }
     };
 
-    rows.iter()
+    u32::try_from(rows.iter()
         .filter(|&&(m, r, mine)| {
             if !mine {
                 return false;
@@ -648,7 +648,7 @@ pub fn compute_mines_nonfake(
             let beat = (m as f64).mul_add(4.0, 4.0 * (r as f64 / t));
             !in_range(beat, warps) && !in_range(beat, fakes)
         })
-        .count() as u32
+        .count()).unwrap_or(u32::MAX)
 }
 
 #[must_use]
