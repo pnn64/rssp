@@ -284,7 +284,7 @@ fn alias_table() -> &'static [Vec<AliasEntry>] {
         .get_or_init(|| {
             let mut table: Vec<Vec<AliasEntry>> = vec![Vec::new(); 256];
             let mut next_internal = INTERNAL_CODEPOINT;
-            let invalid = char::from_u32(INVALID_CODEPOINT).unwrap();
+            let invalid = char::REPLACEMENT_CHARACTER;
             for (alias, codepoint) in ALIAS_ENTRIES {
                 let bytes = alias.as_bytes();
                 if bytes.is_empty() {
@@ -414,7 +414,7 @@ pub fn replace_markers_in_place(text: &mut String) {
     }
     let input = text.as_str();
     let len = input.len();
-    let invalid = char::from_u32(INVALID_CODEPOINT).unwrap();
+    let invalid = char::REPLACEMENT_CHARACTER;
     let mut out = String::with_capacity(len);
     let mut offset = 0usize;
 
@@ -435,16 +435,9 @@ pub fn replace_markers_in_place(text: &mut String) {
         let next_amp = rest.find('&');
         let next_semi = rest.find(';');
         let end = match (next_amp, next_semi) {
-            (Some(a), Some(s)) => {
-                if a < s {
-                    None
-                } else {
-                    Some(after_amp + s)
-                }
-            }
-            (Some(_), None) => None,
+            (Some(a), Some(s)) => (a >= s).then_some(after_amp + s),
+            (Some(_), None) | (None, None) => None,
             (None, Some(s)) => Some(after_amp + s),
-            (None, None) => None,
         };
         let Some(end_idx) = end else {
             out.push('&');

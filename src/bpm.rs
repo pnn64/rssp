@@ -222,9 +222,11 @@ pub(crate) fn resolve_display_bpm(
         if rate == 1.0 {
             format!("{v:.0}")
         } else {
-            let s = format!("{v:.1}");
-            s.strip_suffix(".0")
-                .map_or_else(|| s.clone(), std::string::ToString::to_string)
+            let mut s = format!("{v:.1}");
+            if s.ends_with(".0") {
+                s.truncate(s.len() - 2);
+            }
+            s
         }
     };
     let display = if smin == smax {
@@ -419,11 +421,8 @@ pub fn get_current_bpm(beat: f64, map: &[(f64, f64)]) -> f64 {
     if map.is_empty() {
         return 0.0;
     }
-    let pos = map.partition_point(|&(b, _)| b <= beat);
-    map[pos
-        .saturating_sub(1)
-        .max(if pos == 0 { 0 } else { pos - 1 })]
-    .1
+    let idx = map.partition_point(|&(b, _)| b <= beat).saturating_sub(1);
+    map[idx].1
 }
 
 #[inline(always)]

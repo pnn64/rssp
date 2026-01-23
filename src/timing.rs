@@ -992,7 +992,7 @@ pub fn timing_data_from_segments(
         timing_data_build(
             song_offset + f64::from(segments.beat0_offset_adjust),
             global_offset,
-            bpms,
+            &bpms,
             stops,
             delays,
             warps,
@@ -1084,7 +1084,7 @@ pub fn timing_data_from_chart_data(
         timing_data_build(
             song_offset + beat0_adj,
             global_offset,
-            bpms,
+            &bpms,
             stops,
             delays,
             warps,
@@ -1097,7 +1097,7 @@ pub fn timing_data_from_chart_data(
 fn timing_data_build(
         song_offset: f64,
         global_offset: f64,
-        bpms: Vec<(f64, f64)>,
+        bpms: &[(f64, f64)],
         stops: Vec<Segment>,
         delays: Vec<Segment>,
         warps: Vec<Segment>,
@@ -1108,7 +1108,7 @@ fn timing_data_build(
         let mut beat_to_time = Vec::with_capacity(bpms.len());
         let mut max_bpm = 0.0_f64;
 
-        for &(beat, bpm) in &bpms {
+        for &(beat, bpm) in bpms {
             beat_to_time.push(BeatTimePoint {
                 beat,
                 bpm,

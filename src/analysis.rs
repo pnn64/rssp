@@ -170,7 +170,7 @@ const fn trim_ascii_ws(mut s: &[u8]) -> &[u8] {
 }
 
 #[inline(always)]
-pub(crate) fn supported_stepstype_lanes_bytes(raw: &[u8]) -> Option<usize> {
+pub(crate) const fn supported_stepstype_lanes_bytes(raw: &[u8]) -> Option<usize> {
     let s = trim_ascii_ws(raw);
     if s.eq_ignore_ascii_case(b"dance-single") || s.eq_ignore_ascii_case(b"dance_single") {
         Some(4)
