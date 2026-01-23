@@ -1,6 +1,6 @@
 [package]
 name = "rssp"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2024"
 authors = ["Patrik Nilsson <perfecttaste@pm.me>"]
 description = "A high-performance simfile parser for StepMania."
@@ -133,7 +133,7 @@ debug = true
 correctness = "warn"
 complexity  = "warn"
 perf        = "warn"
-# Optional:
 all         = "warn"
 pedantic    = "warn"
 nursery     = "warn"
+inline_always = "allow"

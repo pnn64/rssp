@@ -2,12 +2,11 @@ use std::borrow::Cow;
 
 use crate::math::{fmt_dec3_half_up, round_sig_figs_itg, roundtrip_bpm_itg};
 use crate::parse::{
-    ParsedChartEntry, ParsedSimfileData, decode_bytes, extract_sections, parse_version,
-    unescape_trim,
+    decode_bytes, extract_sections, parse_version, unescape_trim, ParsedChartEntry, ParsedSimfileData,
 };
 use crate::timing::{
-    ROWS_PER_BEAT, TimingFormat, compute_timing_segments, format_bpm_segments_like_itg,
-    steps_timing_allowed, timing_format_from_ext,
+    compute_timing_segments, format_bpm_segments_like_itg, steps_timing_allowed, timing_format_from_ext,
+    TimingFormat, ROWS_PER_BEAT,
 };
 
 const GIMMICK_BPM_THRESHOLD: f64 = 10000.0;
@@ -40,12 +39,10 @@ fn normalize_decimal(s: &str) -> Option<String> {
 
 pub(crate) fn parse_beat_or_row(raw: &str) -> Option<f64> {
     let mut s = raw.trim();
-    let is_row = s
-        .strip_suffix(['r', 'R'])
-        .is_some_and(|r| {
-            s = r.trim_end();
-            true
-        });
+    let is_row = s.strip_suffix(['r', 'R']).is_some_and(|r| {
+        s = r.trim_end();
+        true
+    });
     let v = s.parse::<f32>().ok().filter(|v| v.is_finite())?;
     Some(if is_row {
         f64::from(v) / f64::from(ROWS_PER_BEAT)
@@ -54,7 +51,7 @@ pub(crate) fn parse_beat_or_row(raw: &str) -> Option<f64> {
     })
 }
 
-#[must_use] 
+#[must_use]
 pub fn normalize_float_digits(param: &str) -> String {
     let mut out = String::with_capacity(param.len());
     for entry in param.split(',') {
@@ -63,19 +60,20 @@ pub fn normalize_float_digits(param: &str) -> String {
             continue;
         }
         if let Some((b, v)) = t.split_once('=')
-            && let (Some(b), Some(v)) = (normalize_decimal(b), normalize_decimal(v)) {
-                if !out.is_empty() {
-                    out.push(',');
-                }
-                out.push_str(&b);
-                out.push('=');
-                out.push_str(&v);
+            && let (Some(b), Some(v)) = (normalize_decimal(b), normalize_decimal(v))
+        {
+            if !out.is_empty() {
+                out.push(',');
             }
+            out.push_str(&b);
+            out.push('=');
+            out.push_str(&v);
+        }
     }
     out
 }
 
-#[must_use] 
+#[must_use]
 pub fn clean_timing_map(param: &str) -> String {
     let mut out = String::with_capacity(param.len());
     for entry in param.split(',') {
@@ -95,7 +93,7 @@ pub fn clean_timing_map(param: &str) -> String {
     out
 }
 
-#[must_use] 
+#[must_use]
 pub fn clean_timing_map_cow(param: &str) -> Cow<'_, str> {
     if param.is_empty() {
         return Cow::Borrowed("");
@@ -125,8 +123,8 @@ fn map_tag_opt<F: FnOnce(&str) -> String>(tag: Option<&[u8]>, f: F) -> Option<St
         .filter(|s| !s.is_empty())
 }
 
-pub fn normalize_chart_tag(tag: Option<Vec<u8>>) -> Option<String> {
-    map_tag_opt(tag.as_deref(), normalize_float_digits)
+pub fn normalize_chart_tag(tag: Option<&[u8]>) -> Option<String> {
+    map_tag_opt(tag, normalize_float_digits)
 }
 
 fn decode_display_bpm_tag(tag: Option<&[u8]>) -> Option<String> {
@@ -141,12 +139,9 @@ fn split_display_bpm_params(tag: &str) -> (&str, Option<&str>) {
         match c {
             '\\' => {
                 depth = 1;
-                continue;
             }
             ':' if depth == 0 => return (tag[..i].trim(), Some(tag[i + 1..].trim())),
-            _ => {
-                depth = 0;
-            }
+            _ => depth = 0,
         }
     }
     (tag.trim(), None)
@@ -154,11 +149,8 @@ fn split_display_bpm_params(tag: &str) -> (&str, Option<&str>) {
 
 fn parse_float_prefix(s: &str) -> Option<f64> {
     let b = s.trim_start().as_bytes();
-    let mut i = if b.first().is_some_and(|&c| c == b'+' || c == b'-') {
-        1
-    } else {
-        0
-    };
+    let mut i = usize::from(b.first().is_some_and(|&c| c == b'+' || c == b'-'));
+
     let start = i;
     while i < b.len() && b[i].is_ascii_digit() {
         i += 1;
@@ -231,7 +223,8 @@ pub(crate) fn resolve_display_bpm(
             format!("{v:.0}")
         } else {
             let s = format!("{v:.1}");
-            s.strip_suffix(".0").map_or(s.clone(), std::string::ToString::to_string)
+            s.strip_suffix(".0")
+                .map_or_else(|| s.clone(), std::string::ToString::to_string)
         }
     };
     let display = if smin == smax {
@@ -363,8 +356,8 @@ fn chart_bpm_snapshot(
 
     let r = resolve_chart_tags(&chart, global, use_chart);
     let segments = compute_timing_segments(
-        r[0].1, r[0].0, r[1].1, r[1].0, r[2].1, r[2].0, r[3].1, r[3].0, r[4].1, r[4].0, r[5].1,
-        r[5].0, r[6].1, r[6].0, fmt, true,
+        r[0].1, r[0].0, r[1].1, r[1].0, r[2].1, r[2].0, r[3].1, r[3].0, r[4].1, r[4].0,
+        r[5].1, r[5].0, r[6].1, r[6].0, fmt, true,
     );
 
     let bpms: Vec<_> = segments
@@ -405,7 +398,7 @@ pub fn chart_bpm_snapshots(data: &[u8], ext: &str) -> Result<Vec<ChartBpmSnapsho
 }
 
 // BPM parsing - consolidated
-#[must_use] 
+#[must_use]
 pub fn parse_bpm_map(s: &str) -> Vec<(f64, f64)> {
     let mut v: Vec<_> = s
         .split(',')
@@ -421,7 +414,7 @@ pub fn parse_bpm_map(s: &str) -> Vec<(f64, f64)> {
     v
 }
 
-#[must_use] 
+#[must_use]
 pub fn get_current_bpm(beat: f64, map: &[(f64, f64)]) -> f64 {
     if map.is_empty() {
         return 0.0;
@@ -459,7 +452,7 @@ pub fn compute_bpm_range(map: &[(f64, f64)]) -> (i32, i32) {
     bpm_range_filtered(map, is_display_bpm, |v| v.round() as i32)
 }
 
-#[must_use] 
+#[must_use]
 pub fn compute_actual_bpm_range(map: &[(f64, f64)]) -> (f64, f64) {
     let (min, max) = actual_bpm_range_raw(map);
     (round_sig_figs_itg(min), round_sig_figs_itg(max))
@@ -494,7 +487,7 @@ fn bpm_range_filtered<T: PartialOrd + Default + Copy, F: Fn(f64) -> bool, M: Fn(
     (transform(min.max(0.0)), transform(max.max(0.0)))
 }
 
-#[must_use] 
+#[must_use]
 pub fn get_elapsed_time(
     target: f64,
     bpms: &[(f64, f64)],
@@ -582,13 +575,13 @@ fn elapsed_with_events(
     time
 }
 
-#[must_use] 
+#[must_use]
 pub fn compute_last_beat(data: &[u8], lanes: usize) -> f64 {
     let (_, _, _, _, last_beat) = crate::stats::minimize_chart_count_rows(data, lanes);
     last_beat
 }
 
-#[must_use] 
+#[must_use]
 pub fn compute_total_chart_length(
     data: &[u8],
     lanes: usize,
@@ -605,7 +598,7 @@ pub fn compute_total_chart_length(
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn compute_mines_nonfake(
     data: &[u8],
     lanes: usize,
@@ -659,16 +652,12 @@ pub fn compute_mines_nonfake(
         .count() as u32
 }
 
-#[must_use] 
+#[must_use]
 pub fn compute_bpm_stats(values: &[f64]) -> (f64, f64) {
     if values.is_empty() {
         return (0.0, 0.0);
     }
-    let mut v: Vec<_> = values
-        .iter()
-        .copied()
-        .filter(|&b| is_display_bpm(b))
-        .collect();
+    let mut v: Vec<_> = values.iter().copied().filter(|&b| is_display_bpm(b)).collect();
     if v.is_empty() {
         v.extend_from_slice(values);
     }
@@ -682,7 +671,7 @@ pub fn compute_bpm_stats(values: &[f64]) -> (f64, f64) {
 }
 
 pub fn compute_tier_bpm(densities: &[usize], bpms: &[(f64, f64)], bpm: f64) -> f64 {
-    use crate::stats::{RunDensity, categorize_measure_density};
+    use crate::stats::{categorize_measure_density, RunDensity};
 
     let max_bpm = bpms
         .iter()
@@ -692,9 +681,7 @@ pub fn compute_tier_bpm(densities: &[usize], bpms: &[(f64, f64)], bpm: f64) -> f
     let max_bpm = if max_bpm.is_finite() {
         max_bpm
     } else {
-        bpms.iter()
-            .map(|&(_, b)| b)
-            .fold(f64::NEG_INFINITY, f64::max)
+        bpms.iter().map(|&(_, b)| b).fold(f64::NEG_INFINITY, f64::max)
     };
 
     let (mut max_e, mut cat, mut len, mut run_e) = (0.0f64, RunDensity::Break, 0usize, 0.0f64);
@@ -728,7 +715,7 @@ pub fn compute_tier_bpm(densities: &[usize], bpms: &[(f64, f64)], bpm: f64) -> f
     if max_e > 0.0 { max_e } else { max_bpm }
 }
 
-#[must_use] 
+#[must_use]
 pub fn normalize_and_tidy_bpms(param: &str) -> String {
     let mut entries: Vec<_> = param
         .split(',')
@@ -759,10 +746,11 @@ pub fn normalize_and_tidy_bpms(param: &str) -> String {
     }
 
     if let Some(f) = deduped.first_mut()
-        && f.0 != 0 {
-            f.0 = 0;
-            f.1 = "0.000".into();
-        }
+        && f.0 != 0
+    {
+        f.0 = 0;
+        f.1 = "0.000".into();
+    }
 
     // Remove consecutive same values
     let mut out = String::new();
