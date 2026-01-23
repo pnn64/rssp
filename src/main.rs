@@ -15,7 +15,7 @@ fn analyze_simfile(
     options: &AnalysisOptions,
 ) -> io::Result<rssp::report::SimfileSummary> {
     let sim = rssp::simfile::open(path)?;
-    analyze(&sim.data, sim.extension, options.clone())
+    analyze(&sim.data, sim.extension, &options.clone())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 

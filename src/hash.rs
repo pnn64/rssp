@@ -49,7 +49,7 @@ const fn sha1msg2(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
 }
 
 #[inline(always)]
-fn sha1_first_half(abcd: [u32; 4], msg: [u32; 4]) -> [u32; 4] {
+const fn sha1_first_half(abcd: [u32; 4], msg: [u32; 4]) -> [u32; 4] {
     sha1_first_add(abcd[0].rotate_left(30), msg)
 }
 
@@ -273,8 +273,7 @@ fn sha1_compress(state: &mut [u32; 5], blocks: &[[u8; 64]]) {
 
 #[inline(always)]
 fn sha1_update(state: &mut [u32; 5], buf: &mut [u8; 64], buf_len: &mut usize, data: &[u8]) {
-    let mut offset = 0usize;
-    if *buf_len != 0 {
+    let offset = if *buf_len != 0 {
         let needed = 64 - *buf_len;
         if data.len() < needed {
             buf[*buf_len..*buf_len + data.len()].copy_from_slice(data);
@@ -284,8 +283,10 @@ fn sha1_update(state: &mut [u32; 5], buf: &mut [u8; 64], buf_len: &mut usize, da
         buf[*buf_len..].copy_from_slice(&data[..needed]);
         sha1_compress(state, std::slice::from_ref(buf));
         *buf_len = 0;
-        offset = needed;
-    }
+        needed
+    } else {
+        0usize
+    };
 
     let data = &data[offset..];
     for chunk in data.chunks_exact(64) {

@@ -656,18 +656,16 @@ fn build_chart_summary(
         compute_derived_chart_metrics(&measure_densities, &bpm_map, &minimized_chart, &bpms_to_use);
 
     let (detected_patterns, (anchor_left, anchor_down, anchor_up, anchor_right)) =
-        if let Some(bitmasks) = bitmasks.as_ref() {
-            compute_pattern_and_anchor_stats(bitmasks)
-        } else {
-            ([0u32; PATTERN_COUNT], (0, 0, 0, 0))
-        };
+        bitmasks.as_ref().map_or(
+            ([0u32; PATTERN_COUNT], (0, 0, 0, 0)),
+            |bm| compute_pattern_and_anchor_stats(bm.as_slice()),
+        );
 
     let (facing_left, facing_right, mono_total, mono_percent_raw, candle_total, candle_percent_raw) =
-        if let Some(bitmasks) = bitmasks.as_ref() {
-            compute_mono_and_candle_stats(bitmasks, &stats, &detected_patterns, options)
-        } else {
-            (0, 0, 0, 0.0, 0, 0.0)
-        };
+        bitmasks.as_ref().map_or(
+            (0, 0, 0, 0.0, 0, 0.0),
+            |bm| compute_mono_and_candle_stats(bm.as_slice(), &stats, &detected_patterns, options),
+        );
     let mono_percent = round_dp(mono_percent_raw, 2);
     let candle_percent = round_dp(candle_percent_raw, 2);
 
@@ -828,7 +826,7 @@ fn build_chart_summary(
 pub fn analyze(
     simfile_data: &[u8],
     extension: &str,
-    options: AnalysisOptions,
+    options: &AnalysisOptions,
 ) -> Result<SimfileSummary, String> {
     let total_start_time = Instant::now();
 
@@ -899,9 +897,8 @@ pub fn analyze(
         crate::translate::replace_markers_in_place(&mut artisttranslit_str);
     }
     if artist_str.is_empty() && artisttranslit_str.trim().is_empty() {
-        let unknown = "Unknown artist".to_string();
-        artist_str = unknown.clone();
-        artisttranslit_str = unknown;
+        artist_str = "Unknown artist".to_string();
+        artisttranslit_str = "Unknown artist".to_string();
     }
     let offset = parse_offset_seconds(parsed_data.offset);
     let ssc_version = parse_version(parsed_data.version, timing_format);
@@ -1144,12 +1141,14 @@ pub fn compute_all_hashes(
         }
 
         // 5. Normalize BPMs (Required for Hash consistency)
-        let bpms_to_use = if let Some(chart_bpms) = entry.chart_bpms.as_deref() {
-            let normalized = normalize_float_digits(std::str::from_utf8(chart_bpms).unwrap_or(""));
-            Cow::Owned(normalized)
-        } else {
-            Cow::Borrowed(normalized_global_bpms.as_str())
-        };
+        let bpms_to_use = entry.chart_bpms.as_deref().map_or(
+            Cow::Borrowed(normalized_global_bpms.as_str()),
+            |chart_bpms| {
+                let normalized =
+                    normalize_float_digits(std::str::from_utf8(chart_bpms).unwrap_or(""));
+                Cow::Owned(normalized)
+            },
+        );
 
         // 6. Compute SHA-1
         let hash = compute_chart_hash(&minimized_chart, bpms_to_use.as_ref());

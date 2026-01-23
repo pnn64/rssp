@@ -153,8 +153,7 @@ fn ac_build<T: Copy>(patterns: &[(T, &[u8])]) -> AcDfa<T> {
         .collect();
 
     while let Some(state) = queue.pop_front() {
-        for sym in 0..AC_ALPHA {
-            let child = goto[state][sym];
+        for (sym, &child) in goto[state].iter().enumerate() {
             if child == u32::MAX {
                 continue;
             }
@@ -174,28 +173,40 @@ fn ac_build<T: Copy>(patterns: &[(T, &[u8])]) -> AcDfa<T> {
 
             if fail_target != 0 {
                 let ft = fail_target as usize;
-                for j in 0..output[ft].len() {
-                    let val = output[ft][j];
-                    output[child_idx].push(val);
+
+                if child_idx != ft {
+                    let (dst, src) = if child_idx < ft {
+                        let (l, r) = output.split_at_mut(ft);
+                        (&mut l[child_idx], &r[0])
+                    } else {
+                        let (l, r) = output.split_at_mut(child_idx);
+                        (&mut r[0], &l[ft])
+                    };
+
+                    dst.extend_from_slice(src);
                 }
             }
         }
     }
 
     for state in 0..n {
+        let mut row = goto[state];
+
         for sym in 0..AC_ALPHA {
-            if goto[state][sym] == u32::MAX {
-                let mut f = state;
-                while f != 0 && goto[f][sym] == u32::MAX {
-                    f = fail[f] as usize;
-                }
-                goto[state][sym] = if goto[f][sym] == u32::MAX {
-                    0
-                } else {
-                    goto[f][sym]
-                };
+            if row[sym] != u32::MAX {
+                continue;
             }
+
+            let mut f = state;
+            while f != 0 && goto[f][sym] == u32::MAX {
+                f = fail[f] as usize;
+            }
+
+            let t = goto[f][sym];
+            row[sym] = if t == u32::MAX { 0 } else { t };
         }
+
+        goto[state] = row;
     }
 
     let mut flat_goto = Vec::with_capacity(goto.len() * AC_ALPHA);
@@ -591,13 +602,14 @@ fn next_foot(prev_foot: Option<Foot>, curr_arrow: Arrow) -> (Option<Foot>, bool)
         return (forced_foot(curr_arrow), false);
     };
 
-    if let Some(forced) = forced_foot(curr_arrow) {
-        let expected = opposite_foot(prev);
-        let conflict = forced != expected;
-        (Some(forced), conflict)
-    } else {
-        (Some(opposite_foot(prev)), false)
-    }
+    forced_foot(curr_arrow).map_or_else(
+        || (Some(opposite_foot(prev)), false),
+        |forced| {
+            let expected = opposite_foot(prev);
+            let conflict = forced != expected;
+            (Some(forced), conflict)
+        },
+    )
 }
 
 #[inline(always)]
@@ -723,7 +735,7 @@ pub const fn count_pattern(counts: &PatternCounts, variant: PatternVariant) -> u
 }
 
 #[must_use] 
-pub fn compute_box_counts(counts: &PatternCounts) -> BoxCounts {
+pub const fn compute_box_counts(counts: &PatternCounts) -> BoxCounts {
     let lr = count_pattern(counts, PatternVariant::BoxLR);
     let ud = count_pattern(counts, PatternVariant::BoxUD);
     let ld = count_pattern(counts, PatternVariant::BoxCornerLD);

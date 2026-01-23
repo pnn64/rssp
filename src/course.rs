@@ -213,23 +213,9 @@ fn parse_song(raw: &str) -> (CourseSong, bool) {
     if parts.next().is_some() {
         return (CourseSong::Unknown { raw: raw.to_string() }, false);
     }
-    if let Some(song) = second {
-        (
-            CourseSong::Fixed {
-                group: Some(first.to_string()),
-                song: song.to_string(),
-            },
-            false,
-        )
-    } else {
-        (
-            CourseSong::Fixed {
-                group: None,
-                song: first.to_string(),
-            },
-            false,
-        )
-    }
+    let song = second.map_or_else(|| first.to_string(), str::to_string);
+    let group = second.map(|_| first.to_string());
+    (CourseSong::Fixed { group, song }, false)
 }
 
 fn parse_difficulty_label(label: &str) -> Option<Difficulty> {
@@ -386,7 +372,6 @@ pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
         if name_bytes.eq_ignore_ascii_case(b"SONG") {
             let params = split_unescaped(value, b':');
             out.entries.push(parse_song_entry(&params));
-            continue;
         }
     }
 
@@ -739,7 +724,7 @@ pub fn analyze_crs_path(
         } else {
             let opened = simfile::open(&scan.simfile).map_err(|e| e.to_string())?;
             let summary =
-                crate::analysis::analyze(&opened.data, opened.extension, options.clone())?;
+                crate::analysis::analyze(&opened.data, opened.extension, &options.clone())?;
             sim_cache.insert(scan.simfile.clone(), summary);
             sim_cache
                 .get(&scan.simfile)

@@ -123,9 +123,8 @@ pub fn stream_sequences(measures: &[usize]) -> Vec<StreamSegment> {
 
 #[must_use] 
 pub fn compute_stream_counts(measures: &[usize]) -> StreamCounts {
-    let (start, end) = match active_range(measures) {
-        Some(r) => r,
-        _ => return StreamCounts::default(),
+    let Some((start, end)) = active_range(measures) else {
+        return StreamCounts::default();
     };
 
     let mut sc = StreamCounts::default();
@@ -148,9 +147,8 @@ pub fn compute_stream_counts(measures: &[usize]) -> StreamCounts {
 
 #[must_use] 
 pub fn generate_breakdown(measures: &[usize], mode: BreakdownMode) -> String {
-    let (start, end) = match active_range(measures) {
-        Some(r) => r,
-        None => return String::new(),
+    let Some((start, end)) = active_range(measures) else {
+        return String::new();
     };
 
     let tokens = tokenize(&measures[start..=end]);
@@ -293,8 +291,9 @@ fn format_break(out: &mut String, n: usize, mode: BreakdownMode) {
             5..=32 => Some("/"),
             _ => Some("|"),
         },
-        _ => None,
+        BreakdownMode::Detailed => None,
     };
+
     if let Some(s) = sym {
         if !out.is_empty() {
             out.push(' ');

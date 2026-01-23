@@ -826,14 +826,14 @@ fn process_bpms_and_stops_sm(
                             beat: f64::from(quantize_beat_f32(change_beat)),
                             value: f64::from(time_offset),
                         });
-                        if !(0.0..=FAST_BPM_WARP_F32).contains(&bpm) {
-                            warp_start = Some(change_beat);
-                            time_offset = 0.0;
-                        } else {
+                        if (0.0..=FAST_BPM_WARP_F32).contains(&bpm) {
                             if bpm != prewarp_bpm {
                                 out_bpms.push((quantize_beat_f32(start), bpm));
                             }
                             warp_start = None;
+                        } else {
+                            warp_start = Some(change_beat);
+                            time_offset = 0.0;
                         }
                     }
             }
@@ -842,10 +842,10 @@ fn process_bpms_and_stops_sm(
     }
 
     if let Some(start) = warp_start {
-        let warp_end = if !(0.0..=FAST_BPM_WARP_F32).contains(&bpm) {
-            99_999_999.0_f32
-        } else {
+        let warp_end = if (0.0..=FAST_BPM_WARP_F32).contains(&bpm) {
             prev_beat - (time_offset * bpm / 60.0)
+        } else {
+            99_999_999.0_f32
         };
         if warp_end > start {
             out_warps.push(Segment {
@@ -1316,15 +1316,20 @@ pub fn get_time_for_beat(t: &TimingData, beat: f64) -> f64 {
 }
 
 pub(crate) fn get_time_for_beat_f32(t: &TimingData, target_beat: f64) -> f64 {
-    let mut state = GetBeatStateF32::default();
+    let mut state = GetBeatStateF32 {
+        last_time: (-t.beat0_offset_sec - t.global_offset_sec) as f32,
+        ..Default::default()
+    };
     state.last_time = (-t.beat0_offset_sec - t.global_offset_sec) as f32;
     get_elapsed_time_f32(t, &mut state, target_beat as f32);
     f64::from(state.last_time) - t.global_offset_sec
 }
 
 fn get_time_internal(t: &TimingData, target_beat: f64) -> f64 {
-    let mut state = GetBeatState::default();
-    state.last_time = -t.beat0_offset_sec - t.global_offset_sec;
+    let mut state = GetBeatState {
+        last_time: -t.beat0_offset_sec - t.global_offset_sec,
+        ..Default::default()
+    };
     get_elapsed_time(t, &mut state, target_beat);
     state.last_time
 }

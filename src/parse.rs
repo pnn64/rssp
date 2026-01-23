@@ -446,9 +446,7 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
 pub fn split_notes_fields(block: &[u8]) -> (Vec<&[u8]>, &[u8]) {
     let (n, parts, note_data) = split_notes6(block);
     let mut fields = Vec::with_capacity(n as usize);
-    for i in 0..n as usize {
-        fields.push(parts[i]);
-    }
+    fields.extend(parts.iter().take(n as usize).copied());
     (fields, note_data)
 }
 

@@ -2356,7 +2356,7 @@ fn run_rssp_json(raw_bytes: &[u8], extension: &str) -> Result<RsspJsonFile, Stri
         compute_pattern_counts: true,
         translate_markers: false,
     };
-    let summary = analyze(raw_bytes, extension, options).map_err(|e| e)?;
+    let summary = analyze(raw_bytes, extension, &options).map_err(|e| e)?;
     let mut stdout = Vec::new();
     write_reports(&summary, OutputMode::JSON, &mut stdout).map_err(|e| e.to_string())?;
     serde_json::from_slice(&stdout).map_err(|e| format!("Failed to parse rssp JSON: {e}"))

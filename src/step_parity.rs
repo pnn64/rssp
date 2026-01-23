@@ -330,7 +330,7 @@ const fn layout_facing_y(layout: &StageLayout, l: i8, r: i8) -> f32 {
 }
 
 #[inline(always)]
-fn layout_avg_point(layout: &StageLayout, l: i8, r: i8) -> StagePoint {
+const fn layout_avg_point(layout: &StageLayout, l: i8, r: i8) -> StagePoint {
     layout.avg_points[layout_pair_idx(layout, l, r)]
 }
 
@@ -450,8 +450,8 @@ fn calc_action_cost(
     layout: &StageLayout,
     initial: &State,
     result: &State,
-    placement: &FootPlacement,
-    hit: &[i8; NUM_FEET],
+    placement: FootPlacement,
+    hit: [i8; NUM_FEET],
     rows: &[Row],
     row_idx: usize,
     elapsed: f32,
@@ -482,14 +482,14 @@ fn calc_action_cost(
         initial, result, rows, row_idx, moved_left, moved_right, jacked_left, jacked_right, did_jump,
     );
     cost += calc_slow_bracket_cost(row, moved_left, moved_right, elapsed);
-    cost += calc_twisted_foot_cost(layout, *hit);
+    cost += calc_twisted_foot_cost(layout, hit);
     cost += calc_facing_cost(layout, result);
     cost += calc_spin_cost(layout, initial, result);
-    cost += calc_footswitch_cost(initial, *placement, row, elapsed, cols);
-    cost += calc_sideswitch_cost(layout, initial, result, *placement);
+    cost += calc_footswitch_cost(initial, placement, row, elapsed, cols);
+    cost += calc_sideswitch_cost(layout, initial, result, placement);
     cost += calc_missed_footswitch_cost(row, jacked_left, jacked_right);
     cost += calc_jack_cost(moved_left, moved_right, jacked_left, jacked_right, elapsed);
-    cost += calc_big_movements_cost(layout, initial, result, *hit, elapsed);
+    cost += calc_big_movements_cost(layout, initial, result, hit, elapsed);
     cost
 }
 
@@ -826,29 +826,26 @@ fn did_double_step(
     moved_right: bool,
     jacked_right: bool,
 ) -> bool {
-    let mut ds = false;
-    if moved_left && !jacked_left && foot_moved_not_holding(initial, &LEFT_PAIR) {
-        ds = true;
-    }
-    if moved_right && !jacked_right && foot_moved_not_holding(initial, &RIGHT_PAIR) {
-        ds = true;
+    let ds0 =
+        (moved_left && !jacked_left && foot_moved_not_holding(initial, &LEFT_PAIR))
+        || (moved_right && !jacked_right && foot_moved_not_holding(initial, &RIGHT_PAIR));
+
+    if row_idx == 0 || !ds0 {
+        return ds0;
     }
 
-    if row_idx > 0 && ds {
-        let last = &rows[row_idx - 1];
-        let start = last.beat;
+    let last = &rows[row_idx - 1];
+    let start = last.beat;
 
-        let mut mask = last.hold_mask;
-        while mask != 0 {
-            let idx = mask.trailing_zeros() as usize;
-            mask &= mask - 1;
-            if last.hold_ends[idx] > start {
-                ds = false;
-                break;
-            }
+    let mut mask = last.hold_mask;
+    while mask != 0 {
+        let idx = mask.trailing_zeros() as usize;
+        mask &= mask - 1;
+        if last.hold_ends[idx] > start {
+            return false;
         }
     }
-    ds
+    true
 }
 
 // --- Generator ---
@@ -956,7 +953,7 @@ fn parity_create_rows(g: &mut StepParityGenerator, notes: Vec<IntermediateNoteDa
 
         if counter.last_second != note.second {
             if counter.last_second != CLM_SECOND_INVALID {
-                parity_flush_row(g, &mut counter);
+                parity_flush_row(g, &counter);
             }
             row_counter_reset(&mut counter, note.second, note.beat);
         }
@@ -968,10 +965,10 @@ fn parity_create_rows(g: &mut StepParityGenerator, notes: Vec<IntermediateNoteDa
             counter.hold_ends[col] = note.beat + note.hold_length;
         }
     }
-    parity_flush_row(g, &mut counter);
+    parity_flush_row(g, &counter);
 }
 
-fn parity_flush_row(g: &mut StepParityGenerator, counter: &mut RowCounter) {
+fn parity_flush_row(g: &mut StepParityGenerator, counter: &RowCounter) {
     if counter.last_second == CLM_SECOND_INVALID {
         return;
     }
@@ -1063,8 +1060,8 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
                         g.layout,
                         &init_state,
                         &result,
-                        perm,
-                        &hit,
+                        *perm,
+                        hit,
                         &g.rows,
                         i,
                         elapsed,

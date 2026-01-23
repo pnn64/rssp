@@ -66,7 +66,7 @@ pub struct PackScan {
     pub songs: Vec<SongScan>,
 }
 
-fn sort_paths_ci(paths: &mut Vec<PathBuf>) {
+fn sort_paths_ci(paths: &mut [PathBuf]) {
     paths.sort_by_cached_key(|p| assets::lc_name(p));
 }
 
@@ -354,10 +354,7 @@ pub fn find_simfiles(root: &Path, opt: ScanOpt) -> Vec<PathBuf> {
     let mut stack = vec![root.to_path_buf()];
 
     while let Some(dir) = stack.pop() {
-        let song = match scan_song_dir(&dir, opt) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
+        let Ok(song) = scan_song_dir(&dir, opt) else { continue };
         if let Some(song) = song {
             out.push(song.simfile);
             continue;

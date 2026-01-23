@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::sync::OnceLock;
 
 const KNOWN_TECH_LIST: &[&str] = &[
@@ -22,7 +23,6 @@ fn is_measure_data(chunk: &str) -> bool {
         match b {
             b'0'..=b'9' => {}
             b'/' | b'-' | b'*' | b'|' | b'~' | b'.' | b'\'' => has_symbol = true,
-            b'A'..=b'Z' | b'a'..=b'z' | b'_' => return false,
             _ => return false,
         }
     }
@@ -39,7 +39,10 @@ fn best_prefix(remainder: &str) -> Option<&'static str> {
 
     let table = tech_prefixes();
     let list = &table[bytes[0] as usize];
-    list.iter().find(|&&pat| remainder.starts_with(pat)).copied().map(|v| v as _)
+
+    list.iter()
+        .copied()
+        .find(|pat| remainder.starts_with(pat))
 }
 
 #[inline(always)]
@@ -57,7 +60,7 @@ fn tech_prefixes() -> &'static [Vec<&'static str>] {
             }
             for list in &mut table {
                 if list.len() > 1 {
-                    list.sort_unstable_by(|a, b| b.len().cmp(&a.len()));
+                    list.sort_unstable_by_key(|s| Reverse(s.len()));
                 }
             }
             table
@@ -72,9 +75,7 @@ fn parse_chunk_as_tech(chunk: &str) -> Option<Vec<&'static str>> {
     let mut results = Vec::new();
 
     while !remainder.is_empty() {
-        let Some(best) = best_prefix(remainder) else {
-            return None;
-        };
+        let best = best_prefix(remainder)?;
         results.push(best);
         remainder = &remainder[best.len()..];
     }
