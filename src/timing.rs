@@ -2,7 +2,6 @@ use crate::bpm::{clean_timing_map_cow, parse_beat_or_row, parse_bpm_map};
 use crate::math::{fmt_dec3_itg, lrint_f32, lrint_f64, roundtrip_bpm_itg};
 use crate::parse::parse_offset_seconds;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 
 // --- Constants ---
 pub const STEPFILE_VERSION_NUMBER: f32 = 0.83;
@@ -270,21 +269,30 @@ fn has_row(rows: &[i32], row: i32) -> bool {
 
 // --- Segment tidying ---
 fn tidy_row_segments(segments: Vec<Segment>) -> Vec<Segment> {
-    let mut out: Vec<(i32, Segment)> = Vec::with_capacity(segments.len());
-    let mut rows: HashMap<i32, usize> = HashMap::new();
+    let mut keyed: Vec<(i32, usize, Segment)> = Vec::with_capacity(segments.len());
 
-    for mut seg in segments {
+    for (idx, mut seg) in segments.into_iter().enumerate() {
         let row = beat_to_note_row(seg.beat);
         seg.beat = note_row_to_beat(row);
-        if let Some(&idx) = rows.get(&row) {
-            out[idx] = (row, seg);
-        } else {
-            rows.insert(row, out.len());
-            out.push((row, seg));
-        }
+        keyed.push((row, idx, seg));
     }
-    out.sort_by_key(|(row, _)| *row);
-    out.into_iter().map(|(_, seg)| seg).collect()
+
+    keyed.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+
+    let mut out = Vec::with_capacity(keyed.len());
+    let mut i = 0;
+    while i < keyed.len() {
+        let row = keyed[i].0;
+        let mut last = keyed[i].2;
+        i += 1;
+        while i < keyed.len() && keyed[i].0 == row {
+            last = keyed[i].2;
+            i += 1;
+        }
+        out.push(last);
+    }
+
+    out
 }
 
 #[inline]
