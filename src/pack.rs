@@ -167,6 +167,18 @@ fn pick_pack_parent_img(pack_dir: &Path, group_name: &str) -> Option<PathBuf> {
     None
 }
 
+fn pick_pack_dir_img(pack_dir: &Path) -> Option<PathBuf> {
+    let mut imgs = assets::list_img_files(pack_dir);
+    imgs.sort_by_cached_key(|p| {
+        let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
+        (
+            assets::img_rank(ext).unwrap_or(u8::MAX),
+            assets::lc_name(p),
+        )
+    });
+    imgs.into_iter().next()
+}
+
 fn pick_ini_img(pack_dir: &Path, hint: &str) -> Option<PathBuf> {
     let hint = hint.trim();
     if hint.is_empty() {
@@ -287,11 +299,11 @@ pub fn scan_pack_dir(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, ScanE
 
     let ini_banner = pick_ini_img(dir, &ini.banner);
     let ini_background = pick_ini_img(dir, &ini.background);
-    let (auto_banner, auto_background) = if ini_banner.is_none() || ini_background.is_none() {
-        assets::resolve_song_assets(dir, "", "")
-    } else {
-        (None, None)
-    };
+    let auto_banner = ini_banner.is_none().then(|| pick_pack_dir_img(dir)).flatten();
+    let auto_background = ini_background
+        .is_none()
+        .then(|| assets::resolve_song_assets(dir, "", "").1)
+        .flatten();
 
     let banner_path = ini_banner
         .or(auto_banner)
