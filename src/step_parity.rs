@@ -431,17 +431,17 @@ fn did_jack(
     toe_col: i8,
     moved: bool,
     did_jump: bool,
+    pair_moved_not_holding: bool,
 ) -> bool {
-    if did_jump || !moved {
+    if did_jump || !moved || !pair_moved_not_holding {
         return false;
     }
 
-	    let check = |col: i8, foot: Foot| -> bool {
-	        col > INVALID_COLUMN
-	            && initial.combined_columns[col as usize] == foot
-	            && (result.holding_mask & FOOT_MASKS[foot_idx(foot)]) == 0
-	            && foot_moved_not_holding(initial, pair)
-	    };
+    let check = |col: i8, foot: Foot| -> bool {
+        col > INVALID_COLUMN
+            && initial.combined_columns[col as usize] == foot
+            && (result.holding_mask & FOOT_MASKS[foot_idx(foot)]) == 0
+    };
 
     check(heel_col, pair.heel) || check(toe_col, pair.toe)
 }
@@ -456,20 +456,40 @@ fn calc_action_cost(
     row_idx: usize,
     elapsed: f32,
     cols: usize,
+    left_moved_not_holding: bool,
+    right_moved_not_holding: bool,
+    prev_row_has_live_hold: bool,
 ) -> f32 {
     let row = &rows[row_idx];
-	    let (lh, lt, rh, rt) = (
-	        hit[foot_idx(Foot::LeftHeel)],
-	        hit[foot_idx(Foot::LeftToe)],
-	        hit[foot_idx(Foot::RightHeel)],
-	        hit[foot_idx(Foot::RightToe)],
-	    );
+    let (lh, lt, rh, rt) = (
+        hit[foot_idx(Foot::LeftHeel)],
+        hit[foot_idx(Foot::LeftToe)],
+        hit[foot_idx(Foot::RightHeel)],
+        hit[foot_idx(Foot::RightToe)],
+    );
     let (moved_left, moved_right) = (foot_moved(result, &LEFT_PAIR), foot_moved(result, &RIGHT_PAIR));
-    let did_jump =
-        foot_moved_not_holding(initial, &LEFT_PAIR) && foot_moved_not_holding(initial, &RIGHT_PAIR);
+    let did_jump = left_moved_not_holding && right_moved_not_holding;
     let (jacked_left, jacked_right) = (
-        did_jack(initial, result, &LEFT_PAIR, lh, lt, moved_left, did_jump),
-        did_jack(initial, result, &RIGHT_PAIR, rh, rt, moved_right, did_jump),
+        did_jack(
+            initial,
+            result,
+            &LEFT_PAIR,
+            lh,
+            lt,
+            moved_left,
+            did_jump,
+            left_moved_not_holding,
+        ),
+        did_jack(
+            initial,
+            result,
+            &RIGHT_PAIR,
+            rh,
+            rt,
+            moved_right,
+            did_jump,
+            right_moved_not_holding,
+        ),
     );
 
     let mut cost = 0.0;
@@ -479,7 +499,15 @@ fn calc_action_cost(
     cost +=
         calc_bracket_jack_cost(result, moved_left, moved_right, jacked_left, jacked_right, did_jump);
     cost += calc_doublestep_cost(
-        initial, result, rows, row_idx, moved_left, moved_right, jacked_left, jacked_right, did_jump,
+        moved_left,
+        moved_right,
+        jacked_left,
+        jacked_right,
+        did_jump,
+        result.holding_mask != 0,
+        left_moved_not_holding,
+        right_moved_not_holding,
+        prev_row_has_live_hold,
     );
     cost += calc_slow_bracket_cost(row, moved_left, moved_right, elapsed);
     cost += calc_twisted_foot_cost(layout, hit);
@@ -601,29 +629,24 @@ fn calc_bracket_jack_cost(
 }
 
 fn calc_doublestep_cost(
-    initial: &State,
-    result: &State,
-    rows: &[Row],
-    row_idx: usize,
     moved_left: bool,
     moved_right: bool,
     jacked_left: bool,
     jacked_right: bool,
     did_jump: bool,
+    result_holding: bool,
+    left_moved_not_holding: bool,
+    right_moved_not_holding: bool,
+    prev_row_has_live_hold: bool,
 ) -> f32 {
-    if moved_left == moved_right || result.holding_mask != 0 || did_jump {
+    if moved_left == moved_right || did_jump || result_holding {
         return 0.0;
     }
 
-    if did_double_step(
-        initial,
-        rows,
-        row_idx,
-        moved_left,
-        jacked_left,
-        moved_right,
-        jacked_right,
-    ) {
+    let did_double_step =
+        (moved_left && !jacked_left && left_moved_not_holding)
+            || (moved_right && !jacked_right && right_moved_not_holding);
+    if did_double_step && !prev_row_has_live_hold {
         DOUBLESTEP_WEIGHT
     } else {
         0.0
@@ -817,35 +840,17 @@ fn calc_big_movements_cost(
     cost
 }
 
-fn did_double_step(
-    initial: &State,
-    rows: &[Row],
-    row_idx: usize,
-    moved_left: bool,
-    jacked_left: bool,
-    moved_right: bool,
-    jacked_right: bool,
-) -> bool {
-    let ds0 =
-        (moved_left && !jacked_left && foot_moved_not_holding(initial, &LEFT_PAIR))
-        || (moved_right && !jacked_right && foot_moved_not_holding(initial, &RIGHT_PAIR));
-
-    if row_idx == 0 || !ds0 {
-        return ds0;
-    }
-
-    let last = &rows[row_idx - 1];
-    let start = last.beat;
-
-    let mut mask = last.hold_mask;
+#[inline(always)]
+fn row_has_live_hold(row: &Row) -> bool {
+    let mut mask = row.hold_mask;
     while mask != 0 {
         let idx = mask.trailing_zeros() as usize;
         mask &= mask - 1;
-        if last.hold_ends[idx] > start {
-            return false;
+        if row.hold_ends[idx] > row.beat {
+            return true;
         }
     }
-    true
+    false
 }
 
 // --- Generator ---
@@ -1043,16 +1048,21 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
         let row_second = g.rows[i].second;
         let elapsed = row_second - prev_second;
         prev_second = row_second;
+        let prev_row_has_live_hold = i > 0 && row_has_live_hold(&g.rows[i - 1]);
 
         let perms = parity_perms_for_row(g, i);
+        let estimate = g.prev_ids.len().saturating_mul(perms.len());
         g.next_ids.clear();
         g.state_map.clear();
-        g.state_map.reserve(perms.len());
+        g.next_ids.reserve(estimate);
+        g.state_map.reserve(estimate);
 
         for j in 0..g.prev_ids.len() {
             let init_id = g.prev_ids[j];
             let init_state = g.nodes[init_id].state;
             let init_cost = g.nodes[init_id].cost;
+            let left_moved_not_holding = foot_moved_not_holding(&init_state, &LEFT_PAIR);
+            let right_moved_not_holding = foot_moved_not_holding(&init_state, &RIGHT_PAIR);
             for perm in perms {
                 let (result, hit, key) = parity_result_state(g, &init_state, i, *perm);
                 let nc = init_cost
@@ -1066,6 +1076,9 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
                         i,
                         elapsed,
                         g.column_count,
+                        left_moved_not_holding,
+                        right_moved_not_holding,
+                        prev_row_has_live_hold,
                     );
                 let res_id = if let Some(&id) = g.state_map.get(&key) { id } else {
                     let id = parity_add_node(g, result);
