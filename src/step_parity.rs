@@ -1660,65 +1660,131 @@ fn parse_rows_from_arrays<const LANES: usize>(
     parsed
 }
 
+#[inline(always)]
+fn invalidate_hold(
+    notes: &mut [IntermediateNoteData],
+    hold_idx: &mut [usize; MAX_COLUMNS],
+    col: usize,
+) {
+    let idx = hold_idx[col];
+    if idx != usize::MAX {
+        notes[idx].note_type = TapNoteType::Empty;
+        hold_idx[col] = usize::MAX;
+    }
+}
+
+#[inline(always)]
+const fn note_new(
+    note_type: TapNoteType,
+    col: usize,
+    beat: f32,
+    second: f32,
+    hold_length: f32,
+    fake: bool,
+) -> IntermediateNoteData {
+    IntermediateNoteData {
+        note_type,
+        col,
+        beat,
+        hold_length,
+        fake,
+        second,
+    }
+}
+
+#[inline(always)]
+fn parse_note_char(
+    notes: &mut Vec<IntermediateNoteData>,
+    hold_idx: &mut [usize; MAX_COLUMNS],
+    hold_row: &mut [i32; MAX_COLUMNS],
+    ch: u8,
+    col: usize,
+    row: &ParsedRow,
+    row_fake: bool,
+) {
+    if matches!(ch, b'1' | b'M' | b'L' | b'F') {
+        invalidate_hold(notes, hold_idx, col);
+    }
+    match ch {
+        b'2' | b'4' => {
+            invalidate_hold(notes, hold_idx, col);
+            hold_idx[col] = notes.len();
+            hold_row[col] = row.row;
+            notes.push(note_new(
+                TapNoteType::HoldHead,
+                col,
+                row.beat,
+                row.second,
+                MISSING_HOLD_LENGTH_BEATS,
+                row_fake,
+            ));
+        }
+        b'3' => {
+            let idx = hold_idx[col];
+            if idx != usize::MAX {
+                notes[idx].hold_length = (row.row - hold_row[col]) as f32 / ROWS_PER_BEAT as f32;
+                hold_idx[col] = usize::MAX;
+            }
+        }
+        b'1' | b'K' | b'L' => notes.push(note_new(
+            TapNoteType::Tap,
+            col,
+            row.beat,
+            row.second,
+            0.0,
+            row_fake,
+        )),
+        b'M' => notes.push(note_new(
+            TapNoteType::Mine,
+            col,
+            row.beat,
+            row.second,
+            0.0,
+            row_fake,
+        )),
+        b'F' => notes.push(note_new(
+            TapNoteType::Fake,
+            col,
+            row.beat,
+            row.second,
+            0.0,
+            true,
+        )),
+        _ => {}
+    }
+}
+
 fn build_notes(rows: &[ParsedRow], timing: Option<&TimingData>) -> Vec<IntermediateNoteData> {
     let cols = rows.first().map_or(0, |r| r.columns as usize);
     if cols == 0 {
         return Vec::new();
     }
 
-    // Compute hold lengths
-    let mut hold_starts = vec![None; cols];
-    let mut lengths = vec![MISSING_HOLD_LENGTH_BEATS; rows.len() * cols];
+    let mut hold_idx = [usize::MAX; MAX_COLUMNS];
+    let mut hold_row = [0i32; MAX_COLUMNS];
+    let mut notes: Vec<IntermediateNoteData> = Vec::with_capacity(rows.len());
 
-    for (idx, row) in rows.iter().enumerate() {
-        for c in 0..cols {
-            match row.chars[c] {
-                b'1' | b'M' | b'L' | b'F' => hold_starts[c] = None,
-                b'2' | b'4' => hold_starts[c] = Some((idx, row.row)),
-                b'3' => {
-                    if let Some((si, sr)) = hold_starts[c] {
-                        lengths[si * cols + c] = (row.row - sr) as f32 / ROWS_PER_BEAT as f32;
-                        hold_starts[c] = None;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    let mut notes = Vec::new();
-    for (idx, row) in rows.iter().enumerate() {
+    for row in rows {
         let row_fake = timing.is_some_and(|t| is_fake_at_beat(t, f64::from(row.row)));
 
         for c in 0..cols {
-            let ch = row.chars[c];
-            let note_type = match ch {
-                b'1' | b'K' | b'L' => TapNoteType::Tap,
-                b'2' | b'4' => TapNoteType::HoldHead,
-                b'M' => TapNoteType::Mine,
-                b'F' => TapNoteType::Fake,
-                _ => continue,
-            };
-
-            let mut note = IntermediateNoteData {
-                note_type,
-                col: c,
-                beat: row.beat,
-                second: row.second,
-                fake: note_type == TapNoteType::Fake || row_fake,
-                ..Default::default()
-            };
-
-            if note_type == TapNoteType::HoldHead {
-                let len = lengths[idx * cols + c];
-                if len >= MISSING_HOLD_LENGTH_BEATS {
-                    continue;
-                }
-                note.hold_length = len;
-            }
-            notes.push(note);
+            parse_note_char(
+                &mut notes,
+                &mut hold_idx,
+                &mut hold_row,
+                row.chars[c],
+                c,
+                row,
+                row_fake,
+            );
         }
     }
+
+    notes.retain(|n| {
+        n.note_type != TapNoteType::Empty
+            && (n.note_type != TapNoteType::HoldHead
+                || n.hold_length < MISSING_HOLD_LENGTH_BEATS)
+    });
     notes
 }
 
