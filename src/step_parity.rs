@@ -450,7 +450,7 @@ fn calc_action_cost(
     layout: &StageLayout,
     initial: &State,
     result: &State,
-    placement: FootPlacement,
+    placement: &FootPlacement,
     hit: [i8; NUM_FEET],
     rows: &[Row],
     row_idx: usize,
@@ -732,7 +732,7 @@ fn calc_spin_cost(layout: &StageLayout, initial: &State, result: &State) -> f32 
 
 fn calc_footswitch_cost(
     initial: &State,
-    placement: FootPlacement,
+    placement: &FootPlacement,
     row: &Row,
     elapsed: f32,
     cols: usize,
@@ -764,7 +764,7 @@ fn calc_sideswitch_cost(
     layout: &StageLayout,
     initial: &State,
     result: &State,
-    placement: FootPlacement,
+    placement: &FootPlacement,
 ) -> f32 {
     let mut mask = layout.side_mask;
     let mut count = 0u32;
@@ -1046,7 +1046,9 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
 
     for i in 0..g.rows.len() {
         let row_second = g.rows[i].second;
+        let hold_mask = g.rows[i].hold_mask;
         let elapsed = row_second - prev_second;
+        let can_prune = elapsed >= 0.0;
         prev_second = row_second;
         let prev_row_has_live_hold = i > 0 && row_has_live_hold(&g.rows[i - 1]);
 
@@ -1064,13 +1066,24 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
             let left_moved_not_holding = foot_moved_not_holding(&init_state, &LEFT_PAIR);
             let right_moved_not_holding = foot_moved_not_holding(&init_state, &RIGHT_PAIR);
             for perm in perms {
-                let (result, hit, key) = parity_result_state(g, &init_state, i, *perm);
+                let (result, hit, key) = parity_result_state(&init_state, perm, g.column_count, hold_mask);
+                let res_id = if let Some(&id) = g.state_map.get(&key) {
+                    if can_prune && init_cost >= g.nodes[id].cost {
+                        continue;
+                    }
+                    id
+                } else {
+                    let id = parity_add_node(g, result);
+                    g.next_ids.push(id);
+                    g.state_map.insert(key, id);
+                    id
+                };
                 let nc = init_cost
                     + calc_action_cost(
                         g.layout,
                         &init_state,
                         &result,
-                        *perm,
+                        perm,
                         hit,
                         &g.rows,
                         i,
@@ -1080,13 +1093,6 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
                         right_moved_not_holding,
                         prev_row_has_live_hold,
                     );
-                let res_id = if let Some(&id) = g.state_map.get(&key) { id } else {
-                    let id = parity_add_node(g, result);
-                    g.next_ids.push(id);
-                    g.state_map.insert(key, id);
-                    id
-                };
-
                 let node = &mut g.nodes[res_id];
                 if nc < node.cost {
                     node.cost = nc;
@@ -1105,12 +1111,12 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
 }
 
 fn parity_result_state(
-    g: &StepParityGenerator,
     initial: &State,
-    row_idx: usize,
-    cols: FootPlacement,
+    cols: &FootPlacement,
+    col_count: usize,
+    hold_mask: u8,
 ) -> (State, [i8; NUM_FEET], u32) {
-    let (n, hold_mask) = (g.column_count, g.rows[row_idx].hold_mask);
+    let n = col_count;
     let (mut combined, mut hit) = ([Foot::None; MAX_COLUMNS], [INVALID_COLUMN; NUM_FEET]);
     let (mut moved_mask, mut holding_mask) = (0u8, 0u8);
     for i in 0..n {
