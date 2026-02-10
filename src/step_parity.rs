@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::OnceLock;
 
 use crate::timing::{ROWS_PER_BEAT, TimingData, beat_to_note_row_f32, get_time_for_beat_f32, is_fake_at_beat};
@@ -98,32 +96,93 @@ const RIGHT_PAIR: FootPair = FootPair {
     toe: Foot::RightToe,
 };
 
-#[derive(Default)]
-struct IdentityHasher(u64);
+const ROW_MAP_MIN_CAP: usize = 16;
 
-impl Hasher for IdentityHasher {
-    fn write(&mut self, bytes: &[u8]) {
-        let mut hash = 0u64;
-        for &b in bytes {
-            hash = hash.wrapping_mul(0x100_0000_01b3).wrapping_add(u64::from(b));
-        }
-        self.0 = hash;
-    }
-    fn write_usize(&mut self, v: usize) {
-        self.0 = v as u64;
-    }
-    fn write_u32(&mut self, v: u32) {
-        self.0 = u64::from(v);
-    }
-    fn write_u64(&mut self, v: u64) {
-        self.0 = v;
-    }
-    fn finish(&self) -> u64 {
-        self.0
+struct RowStateMap {
+    keys: Vec<u32>,
+    vals: Vec<usize>,
+    marks: Vec<u32>,
+    epoch: u32,
+    mask: usize,
+}
+
+const fn row_map_hash(mut x: u32) -> usize {
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7feb_352d);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x846c_a68b);
+    x ^= x >> 16;
+    x as usize
+}
+
+fn row_map_new() -> RowStateMap {
+    RowStateMap {
+        keys: Vec::new(),
+        vals: Vec::new(),
+        marks: Vec::new(),
+        epoch: 1,
+        mask: 0,
     }
 }
 
-type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<IdentityHasher>>;
+fn row_map_cap(expected: usize) -> usize {
+    let target = expected.saturating_mul(2).max(ROW_MAP_MIN_CAP);
+    let mut cap = ROW_MAP_MIN_CAP;
+    while cap < target && cap <= (usize::MAX >> 1) {
+        cap <<= 1;
+    }
+    cap
+}
+
+fn row_map_reset(map: &mut RowStateMap, expected: usize) {
+    let need = row_map_cap(expected);
+    if need > map.keys.len() {
+        map.keys.resize(need, 0);
+        map.vals.resize(need, 0);
+        map.marks.resize(need, 0);
+        map.mask = need - 1;
+    }
+    map.epoch = map.epoch.wrapping_add(1);
+    if map.epoch == 0 {
+        map.marks.fill(0);
+        map.epoch = 1;
+    }
+}
+
+#[inline(always)]
+fn row_map_get(map: &RowStateMap, key: u32) -> Option<usize> {
+    if map.mask == 0 {
+        return None;
+    }
+    let mut idx = row_map_hash(key) & map.mask;
+    loop {
+        if map.marks[idx] != map.epoch {
+            return None;
+        }
+        if map.keys[idx] == key {
+            return Some(map.vals[idx]);
+        }
+        idx = (idx + 1) & map.mask;
+    }
+}
+
+#[inline(always)]
+fn row_map_insert(map: &mut RowStateMap, key: u32, val: usize) {
+    let mut idx = row_map_hash(key) & map.mask;
+    loop {
+        if map.marks[idx] != map.epoch {
+            map.marks[idx] = map.epoch;
+            map.keys[idx] = key;
+            map.vals[idx] = val;
+            return;
+        }
+        if map.keys[idx] == key {
+            map.vals[idx] = val;
+            return;
+        }
+        idx = (idx + 1) & map.mask;
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 struct StagePoint {
@@ -865,7 +924,7 @@ struct StepParityGenerator {
     result_columns: Vec<FootPlacement>,
     prev_ids: Vec<usize>,
     next_ids: Vec<usize>,
-    state_map: FastMap<u32, usize>,
+    state_map: RowStateMap,
 }
 
 fn parity_gen(cache: &'static LayoutCache) -> StepParityGenerator {
@@ -879,7 +938,7 @@ fn parity_gen(cache: &'static LayoutCache) -> StepParityGenerator {
         result_columns: Vec::new(),
         prev_ids: Vec::new(),
         next_ids: Vec::new(),
-        state_map: FastMap::default(),
+        state_map: row_map_new(),
     }
 }
 
@@ -1040,7 +1099,6 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
     g.prev_ids.clear();
     g.prev_ids.push(start_id);
     g.next_ids.clear();
-    g.state_map.clear();
 
     let mut prev_second = g.rows.first().map_or(-1.0, |r| r.second - 1.0);
 
@@ -1055,9 +1113,8 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
         let perms = parity_perms_for_row(g, i);
         let estimate = g.prev_ids.len().saturating_mul(perms.len());
         g.next_ids.clear();
-        g.state_map.clear();
+        row_map_reset(&mut g.state_map, estimate);
         g.next_ids.reserve(estimate);
-        g.state_map.reserve(estimate);
 
         for j in 0..g.prev_ids.len() {
             let init_id = g.prev_ids[j];
@@ -1067,7 +1124,7 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
             let right_moved_not_holding = foot_moved_not_holding(&init_state, &RIGHT_PAIR);
             for perm in perms {
                 let (result, hit, key) = parity_result_state(&init_state, perm, g.column_count, hold_mask);
-                let res_id = if let Some(&id) = g.state_map.get(&key) {
+                let res_id = if let Some(id) = row_map_get(&g.state_map, key) {
                     if can_prune && init_cost >= g.nodes[id].cost {
                         continue;
                     }
@@ -1075,7 +1132,7 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
                 } else {
                     let id = parity_add_node(g, result);
                     g.next_ids.push(id);
-                    g.state_map.insert(key, id);
+                    row_map_insert(&mut g.state_map, key, id);
                     id
                 };
                 let nc = init_cost
