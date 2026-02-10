@@ -444,6 +444,7 @@ const fn row_new() -> Row {
 struct State {
     combined_columns: [Foot; MAX_COLUMNS],
     where_the_feet_are: [i8; NUM_FEET],
+    occupied_mask: u8,
     moved_mask: u8,
     holding_mask: u8,
 }
@@ -452,6 +453,7 @@ const fn state_new() -> State {
     State {
         combined_columns: [Foot::None; MAX_COLUMNS],
         where_the_feet_are: [INVALID_COLUMN; NUM_FEET],
+        occupied_mask: 0,
         moved_mask: 0,
         holding_mask: 0,
     }
@@ -552,7 +554,7 @@ fn calc_action_cost(
     );
 
     let mut cost = 0.0;
-    cost += calc_mine_cost(result, row, cols);
+    cost += calc_mine_cost(result, row);
     cost += calc_hold_switch_cost(layout, initial, result, row);
     cost += calc_bracket_tap_cost(initial, row, lh, lt, rh, rt, elapsed);
     cost +=
@@ -580,44 +582,32 @@ fn calc_action_cost(
     cost
 }
 
-fn calc_mine_cost(result: &State, row: &Row, cols: usize) -> f32 {
-    if row.mine_mask == 0 {
-        return 0.0;
+fn calc_mine_cost(result: &State, row: &Row) -> f32 {
+    if row.mine_mask & result.occupied_mask != 0 {
+        MINE_WEIGHT
+    } else {
+        0.0
     }
-    let mut mask = row.mine_mask;
-    while mask != 0 {
-        let idx = mask.trailing_zeros() as usize;
-        if idx < cols && result.combined_columns[idx] != Foot::None {
-            return MINE_WEIGHT;
-        }
-        mask &= mask - 1;
-    }
-    0.0
 }
 
 fn calc_hold_switch_cost(layout: &StageLayout, initial: &State, result: &State, row: &Row) -> f32 {
-    if row.hold_mask == 0 {
+    let mut mask = row.hold_mask & result.occupied_mask;
+    if mask == 0 {
         return 0.0;
     }
     let mut cost = 0.0;
-    let mut mask = row.hold_mask;
 
     while mask != 0 {
         let c = mask.trailing_zeros() as usize;
         mask &= mask - 1;
 
         let foot = result.combined_columns[c];
-        if foot == Foot::None {
-            continue;
-        }
-
-	        let initial_foot = initial.combined_columns[c];
-	        let switched =
-	            (foot_is_left(foot) && !foot_is_left(initial_foot))
-	                || (foot_is_right(foot) && !foot_is_right(initial_foot));
+        let initial_foot = initial.combined_columns[c];
+        let switched = (foot_is_left(foot) && !foot_is_left(initial_foot))
+            || (foot_is_right(foot) && !foot_is_right(initial_foot));
 
         if switched {
-	            let prev_col = initial.where_the_feet_are[foot_idx(foot)];
+            let prev_col = initial.where_the_feet_are[foot_idx(foot)];
             if prev_col == INVALID_COLUMN {
                 cost += HOLDSWITCH_WEIGHT;
             } else {
@@ -1196,7 +1186,8 @@ fn parity_result_state(
 
     let (moved_left, moved_right) =
         ((moved_mask & LEFT_FOOT_MASK) != 0, (moved_mask & RIGHT_FOOT_MASK) != 0);
-    let (mut where_the_feet_are, mut comb_p) = ([INVALID_COLUMN; NUM_FEET], 0u32);
+    let (mut where_the_feet_are, mut comb_p, mut occupied_mask) =
+        ([INVALID_COLUMN; NUM_FEET], 0u32, 0u8);
     for (i, slot) in combined.iter_mut().enumerate().take(n) {
         let foot = if *slot == Foot::None {
             let prev = initial.combined_columns[i];
@@ -1214,6 +1205,7 @@ fn parity_result_state(
         comb_p |= (foot as u32) << (i * 3);
         if foot != Foot::None {
             where_the_feet_are[foot_idx(foot)] = i as i8;
+            occupied_mask |= 1u8 << i;
         }
     }
 
@@ -1222,6 +1214,7 @@ fn parity_result_state(
         State {
             combined_columns: combined,
             where_the_feet_are,
+            occupied_mask,
             moved_mask,
             holding_mask,
         },
