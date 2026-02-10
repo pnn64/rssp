@@ -23,7 +23,15 @@ pub struct CourseFile {
     pub background: String,
     pub repeat: bool,
     pub lives: i32,
+    pub meters: [Option<i32>; 6],
     pub entries: Vec<CourseEntry>,
+}
+
+impl CourseFile {
+    #[inline(always)]
+    pub const fn meter_for(&self, difficulty: Difficulty) -> Option<i32> {
+        self.meters[difficulty as usize]
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -306,6 +314,31 @@ fn parse_song_entry(params: &[&[u8]]) -> CourseEntry {
     }
 }
 
+fn parse_course_meter_tag(value: &[u8], meters: &mut [Option<i32>; 6]) {
+    let params = split_unescaped(value, b':');
+    if params.is_empty() {
+        return;
+    }
+
+    if params.len() == 1 {
+        let meter = decode_trim(params[0]).parse::<i32>().unwrap_or(0).max(0);
+        meters[Difficulty::Medium as usize] = Some(meter);
+        return;
+    }
+
+    let mut i = 0usize;
+    while i + 1 < params.len() {
+        let diff_raw = decode_trim(params[i]);
+        let meter_raw = decode_trim(params[i + 1]);
+        if let Some(diff) = parse_course_difficulty(&diff_raw)
+            && let Ok(meter) = meter_raw.parse::<i32>()
+        {
+            meters[diff as usize] = Some(meter.max(0));
+        }
+        i += 2;
+    }
+}
+
 pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
     let mut out = CourseFile {
         name: String::new(),
@@ -316,6 +349,7 @@ pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
         background: String::new(),
         repeat: false,
         lives: -1,
+        meters: [None; 6],
         entries: Vec::new(),
     };
 
@@ -367,6 +401,10 @@ pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
         }
         if name_bytes.eq_ignore_ascii_case(b"LIVES") {
             out.lives = decode_trim(value).parse::<i32>().unwrap_or(0).max(0);
+            continue;
+        }
+        if name_bytes.eq_ignore_ascii_case(b"METER") {
+            parse_course_meter_tag(value, &mut out.meters);
             continue;
         }
         if name_bytes.eq_ignore_ascii_case(b"SONG") {
@@ -762,7 +800,11 @@ pub fn analyze_crs_path(
         add_course_chart(&mut total, chart);
     }
 
-    total.rating_str = avg_meter(&meters).to_string();
+    if let Some(meter) = course.meter_for(course_diff) {
+        total.rating_str = meter.to_string();
+    } else {
+        total.rating_str = avg_meter(&meters).to_string();
+    }
     total.mono_total = total.facing_left + total.facing_right;
     total.mono_percent = if total.stats.total_steps > 0 {
         (f64::from(total.mono_total) / f64::from(total.stats.total_steps)) * 100.0
