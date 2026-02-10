@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use crate::bpm::for_each_measure_bpm;
@@ -952,33 +952,69 @@ const fn get_density_multiplier(category: RunDensity) -> f64 {
     }
 }
 
+#[inline(always)]
+const fn density_code(category: RunDensity) -> u8 {
+    match category {
+        RunDensity::Run16 => 0,
+        RunDensity::Run20 => 1,
+        RunDensity::Run24 => 2,
+        RunDensity::Run32 => 3,
+        RunDensity::Break => u8::MAX,
+    }
+}
+
+#[inline(always)]
+const fn density_from_code(code: u8) -> RunDensity {
+    match code {
+        0 => RunDensity::Run16,
+        1 => RunDensity::Run20,
+        2 => RunDensity::Run24,
+        3 => RunDensity::Run32,
+        _ => RunDensity::Break,
+    }
+}
+
 /// Finds the maximum difficulty rating from stream sections.
 pub fn compute_matrix_rating(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> f64 {
     if measure_densities.is_empty() || bpm_map.is_empty() {
         return 0.0;
     }
 
-    let mut stream_counts: HashMap<(RunDensity, u64), usize> = HashMap::new();
+    let mut keys: Vec<(u8, u64)> = Vec::with_capacity(measure_densities.len());
 
     for_each_measure_bpm(measure_densities.len(), bpm_map, 4.0, |idx, bpm| {
         let density = measure_densities[idx];
-        let category = categorize_measure_density(density);
-        if category != RunDensity::Break && bpm > 0.0 {
-            *stream_counts.entry((category, bpm.to_bits())).or_insert(0) += 1;
+        let code = density_code(categorize_measure_density(density));
+        if code != u8::MAX && bpm > 0.0 {
+            keys.push((code, bpm.to_bits()));
         }
     });
 
-    stream_counts
-        .into_iter()
-        .filter_map(|((category, bpm_bits), count)| {
-            let bpm = f64::from_bits(bpm_bits);
-            let multiplier = get_density_multiplier(category);
-            let effective_bpm = bpm * multiplier;
-            if effective_bpm > 0.0 {
-                Some(get_difficulty(effective_bpm, count as f64))
-            } else {
-                None
-            }
-        })
-        .fold(0.0, f64::max)
+    if keys.is_empty() {
+        return 0.0;
+    }
+
+    keys.sort_unstable();
+
+    let mut best = 0.0f64;
+    let mut i = 0usize;
+    while i < keys.len() {
+        let (code, bpm_bits) = keys[i];
+        let mut count = 1usize;
+        i += 1;
+
+        while i < keys.len() && keys[i] == (code, bpm_bits) {
+            count += 1;
+            i += 1;
+        }
+
+        let bpm = f64::from_bits(bpm_bits);
+        let multiplier = get_density_multiplier(density_from_code(code));
+        let effective_bpm = bpm * multiplier;
+        if effective_bpm > 0.0 {
+            best = best.max(get_difficulty(effective_bpm, count as f64));
+        }
+    }
+
+    best
 }
