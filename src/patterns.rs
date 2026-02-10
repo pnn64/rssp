@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::sync::LazyLock;
 
 // ============================================================================
@@ -220,23 +220,6 @@ fn ac_build<T: Copy>(patterns: &[(T, &[u8])]) -> AcDfa<T> {
     }
 }
 
-/// Generic search returning a `HashMap` (for custom patterns or non-contiguous IDs)
-#[inline]
-fn ac_search_map<T: Copy + Eq + std::hash::Hash>(text: &[u8], dfa: &AcDfa<T>) -> HashMap<T, u32> {
-    let mut counts = HashMap::new();
-    let mut state = 0u32;
-
-    for &b in text {
-        let sym = (b & 0x0F) as usize;
-        state = dfa.goto[state as usize * AC_ALPHA + sym];
-        for &id in &dfa.output[state as usize] {
-            *counts.entry(id).or_insert(0) += 1;
-        }
-    }
-
-    counts
-}
-
 /// Specialized search returning a fixed-size array for `PatternVariant`
 #[inline]
 fn ac_search_array(text: &[u8], dfa: &AcDfa<PatternVariant>) -> PatternCounts {
@@ -249,6 +232,23 @@ fn ac_search_array(text: &[u8], dfa: &AcDfa<PatternVariant>) -> PatternCounts {
 
         for &id in &dfa.output[state as usize] {
             counts[id as usize] += 1;
+        }
+    }
+
+    counts
+}
+
+/// Specialized search returning a compact vector for contiguous usize IDs.
+#[inline]
+fn ac_search_vec(text: &[u8], dfa: &AcDfa<usize>, count: usize) -> Vec<u32> {
+    let mut counts = vec![0u32; count];
+    let mut state = 0u32;
+
+    for &b in text {
+        let sym = (b & 0x0F) as usize;
+        state = dfa.goto[state as usize * AC_ALPHA + sym];
+        for &id in &dfa.output[state as usize] {
+            counts[id] += 1;
         }
     }
 
@@ -476,7 +476,7 @@ pub(crate) fn detect_custom_patterns_compiled(
     bitmasks: &[u8],
     compiled: &CompiledCustomPatterns,
 ) -> Vec<CustomPatternSummary> {
-    let counts = ac_search_map(bitmasks, &compiled.dfa);
+    let counts = ac_search_vec(bitmasks, &compiled.dfa, compiled.patterns.len());
 
     compiled
         .patterns
@@ -484,7 +484,7 @@ pub(crate) fn detect_custom_patterns_compiled(
         .enumerate()
         .map(|(i, p)| CustomPatternSummary {
             pattern: p.pattern.clone(),
-            count: counts.get(&i).copied().unwrap_or(0),
+            count: counts[i],
         })
         .collect()
 }
