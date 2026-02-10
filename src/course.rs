@@ -34,6 +34,8 @@ impl CourseFile {
     }
 }
 
+const COURSE_BANNER_EXTS: [&str; 5] = ["png", "jpg", "jpeg", "bmp", "gif"];
+
 #[derive(Debug, Clone)]
 pub struct CourseEntry {
     pub song: CourseSong,
@@ -337,6 +339,62 @@ fn parse_course_meter_tag(value: &[u8], meters: &mut [Option<i32>; 6]) {
         }
         i += 2;
     }
+}
+
+#[inline(always)]
+fn has_banner_prefix(path: &Path, stem_lc: &str, ext: &str) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    let Some(path_ext) = path.extension().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    if !path_ext.eq_ignore_ascii_case(ext) {
+        return false;
+    }
+    let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    file_stem.to_ascii_lowercase().starts_with(stem_lc)
+}
+
+fn push_banner_ext_matches(dir: &Path, stem_lc: &str, ext: &str, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut matches: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| has_banner_prefix(p, stem_lc, ext))
+        .collect();
+    matches.sort_by_cached_key(|p| assets::lc_name(p));
+    out.extend(matches);
+}
+
+#[must_use]
+pub fn resolve_course_banner_path(course_path: &Path, banner_tag: &str) -> Option<PathBuf> {
+    let banner_tag = banner_tag.trim();
+    if !banner_tag.is_empty() {
+        let tag_path = Path::new(banner_tag);
+        if tag_path.is_absolute() {
+            return tag_path.is_file().then_some(tag_path.to_path_buf());
+        }
+        let parent = course_path.parent().unwrap_or_else(|| Path::new(""));
+        let joined = parent.join(tag_path);
+        return joined.is_file().then_some(joined);
+    }
+
+    let parent = course_path.parent().unwrap_or_else(|| Path::new(""));
+    let stem_lc = course_path.file_stem()?.to_string_lossy().to_ascii_lowercase();
+    if stem_lc.is_empty() {
+        return None;
+    }
+
+    let mut possible = Vec::new();
+    for ext in COURSE_BANNER_EXTS {
+        push_banner_ext_matches(parent, &stem_lc, ext, &mut possible);
+    }
+    possible.into_iter().next()
 }
 
 pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
