@@ -634,12 +634,16 @@ fn simfile_translit_full_title(data: &[u8], ext: &str) -> Option<String> {
     let title = parsed
         .title_translit
         .or(parsed.title)
-        .map(|b| clean_tag(&unescape_tag(decode_bytes(b).as_ref())))
+        .map(|b| {
+            let decoded = decode_bytes(b);
+            let unescaped = unescape_tag(decoded.as_ref());
+            clean_tag(unescaped.as_ref()).into_owned()
+        })
         .unwrap_or_default();
     let subtitle = parsed
         .subtitle_translit
         .or(parsed.subtitle)
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
         .unwrap_or_default();
 
     let title = title.trim();

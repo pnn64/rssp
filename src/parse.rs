@@ -4,7 +4,7 @@ use std::io;
 use crate::timing::{STEPFILE_VERSION_NUMBER, TimingFormat};
 
 #[must_use] 
-pub fn strip_title_tags(mut title: &str) -> String {
+pub fn strip_title_tags(mut title: &str) -> Cow<'_, str> {
     loop {
         let original = title;
         title = title.trim_start();
@@ -24,16 +24,32 @@ pub fn strip_title_tags(mut title: &str) -> String {
             break;
         }
     }
-    title.to_string()
+    Cow::Borrowed(title)
 }
 
 #[must_use] 
-pub fn clean_tag(tag: &str) -> String {
-    tag.chars().filter(|c| !c.is_control()).collect()
+pub fn clean_tag(tag: &str) -> Cow<'_, str> {
+    let mut iter = tag.char_indices();
+    while let Some((i, c)) = iter.next() {
+        if c.is_control() {
+            let mut out = String::with_capacity(tag.len());
+            out.push_str(&tag[..i]);
+            for (_, ch) in iter {
+                if !ch.is_control() {
+                    out.push(ch);
+                }
+            }
+            return Cow::Owned(out);
+        }
+    }
+    Cow::Borrowed(tag)
 }
 
 #[must_use] 
-pub fn unescape_tag(tag: &str) -> String {
+pub fn unescape_tag(tag: &str) -> Cow<'_, str> {
+    if !tag.as_bytes().contains(&b'\\') {
+        return Cow::Borrowed(tag);
+    }
     let mut out = String::with_capacity(tag.len());
     let mut chars = tag.chars();
     while let Some(c) = chars.next() {
@@ -43,14 +59,18 @@ pub fn unescape_tag(tag: &str) -> String {
             c
         });
     }
-    out
+    Cow::Owned(out)
 }
 
 #[must_use] 
 pub fn unescape_trim(tag: &str) -> String {
     let s = unescape_tag(tag);
     let t = s.trim();
-    if t.len() == s.len() { s } else { t.to_string() }
+    if t.len() == s.len() {
+        s.into_owned()
+    } else {
+        t.to_string()
+    }
 }
 
 const CP1252_MAP: [u16; 32] = [

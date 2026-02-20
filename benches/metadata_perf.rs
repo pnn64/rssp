@@ -18,9 +18,9 @@ fn bench_metadata_pipeline(c: &mut Criterion) {
             let mut title = parsed
                 .title
                 .map(|b| {
-                    rssp::parse::clean_tag(&rssp::parse::unescape_tag(
-                        rssp::parse::decode_bytes(b).as_ref(),
-                    ))
+                    let decoded = rssp::parse::decode_bytes(b);
+                    let unescaped = rssp::parse::unescape_tag(decoded.as_ref());
+                    rssp::parse::clean_tag(unescaped.as_ref()).into_owned()
                 })
                 .unwrap_or_else(|| "<invalid-title>".to_string());
             let trimmed_title = title.trim();
@@ -30,7 +30,7 @@ fn bench_metadata_pipeline(c: &mut Criterion) {
 
             let mut subtitle = parsed
                 .subtitle
-                .map(|b| rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()))
+                .map(|b| rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()).into_owned())
                 .unwrap_or_default();
             let trimmed_subtitle = subtitle.trim();
             if trimmed_subtitle.len() != subtitle.len() {
@@ -39,7 +39,7 @@ fn bench_metadata_pipeline(c: &mut Criterion) {
 
             let mut artist = parsed
                 .artist
-                .map(|b| rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()))
+                .map(|b| rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()).into_owned())
                 .unwrap_or_default();
             let trimmed_artist = artist.trim();
             if trimmed_artist.len() != artist.len() {
@@ -48,15 +48,15 @@ fn bench_metadata_pipeline(c: &mut Criterion) {
 
             let title_translit = parsed
                 .title_translit
-                .map(|b| rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()))
+                .map(|b| rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()).into_owned())
                 .unwrap_or_default();
             let subtitle_translit = parsed
                 .subtitle_translit
-                .map(|b| rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()))
+                .map(|b| rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()).into_owned())
                 .unwrap_or_default();
             let mut artist_translit = parsed
                 .artist_translit
-                .map(|b| rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()))
+                .map(|b| rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()).into_owned())
                 .unwrap_or_default();
 
             if artist.is_empty() && artist_translit.trim().is_empty() {
@@ -97,8 +97,8 @@ fn bench_metadata_pipeline(c: &mut Criterion) {
                     rssp::parse::unescape_trim(rssp::parse::decode_bytes(entry.fields[2]).as_ref());
                 let meter =
                     rssp::parse::unescape_trim(rssp::parse::decode_bytes(entry.fields[3]).as_ref());
-                let credit =
-                    rssp::parse::unescape_tag(rssp::parse::decode_bytes(entry.fields[4]).as_ref());
+                let credit_decoded = rssp::parse::decode_bytes(entry.fields[4]);
+                let credit = rssp::parse::unescape_tag(credit_decoded.as_ref());
 
                 chart_meta_bytes += step_type.len()
                     + description.len()

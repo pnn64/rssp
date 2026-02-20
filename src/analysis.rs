@@ -482,17 +482,18 @@ fn build_chart_summary(
         resolve_difficulty_label(&difficulty_raw, &description, &rating_raw, extension);
     let rating_str = rating_raw;
     let is_ssc = extension.eq_ignore_ascii_case("ssc");
-    let credit = if is_ssc {
-        unescape_tag(decode_bytes(fields[4]).as_ref())
+    let credit_decoded = if is_ssc {
+        decode_bytes(fields[4])
     } else {
-        String::new()
+        Cow::Borrowed("")
     };
+    let credit = unescape_tag(credit_decoded.as_ref());
+    let tech_notation_str = parse_tech_notation(credit.as_ref(), &description);
     let step_artist_str = if is_ssc {
-        credit.clone()
+        credit.into_owned()
     } else {
         description.clone()
     };
-    let tech_notation_str = parse_tech_notation(&credit, &description);
 
     let compute_patterns = lanes == 4 && options.compute_pattern_counts;
     let (mut minimized_chart, mut stats, measure_densities, row_to_beat, last_beat, bitmasks) =
@@ -574,7 +575,8 @@ fn build_chart_summary(
     let chart_labels = chart_labels_opt.and_then(|bytes| {
         let first_param = msd_first_param_bytes(bytes);
         let decoded = decode_bytes(first_param);
-        let cleaned = clean_tag(&unescape_tag(decoded.as_ref()));
+        let unescaped = unescape_tag(decoded.as_ref());
+        let cleaned = clean_tag(unescaped.as_ref());
         let trimmed = cleaned.trim();
         if trimmed.is_empty() {
             None
@@ -832,10 +834,19 @@ pub fn analyze(
 
     let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
 
-    let mut title_str = parsed_data
-        .title.map_or_else(|| "<invalid-title>".to_string(), |b| clean_tag(&unescape_tag(decode_bytes(b).as_ref())));
+    let mut title_str = parsed_data.title.map_or_else(
+        || "<invalid-title>".to_string(),
+        |b| {
+            let decoded = decode_bytes(b);
+            let unescaped = unescape_tag(decoded.as_ref());
+            clean_tag(unescaped.as_ref()).into_owned()
+        },
+    );
     if options.strip_tags {
-        title_str = strip_title_tags(&title_str);
+        let stripped = strip_title_tags(&title_str);
+        if stripped.as_ref() != title_str.as_str() {
+            title_str = stripped.into_owned();
+        }
     }
     let trimmed_title = title_str.trim();
     if trimmed_title.len() != title_str.len() {
@@ -844,7 +855,7 @@ pub fn analyze(
 
     let mut subtitle_str = parsed_data
         .subtitle
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
         .unwrap_or_default();
     let trimmed_subtitle = subtitle_str.trim();
     if trimmed_subtitle.len() != subtitle_str.len() {
@@ -852,7 +863,7 @@ pub fn analyze(
     }
     let mut artist_str = parsed_data
         .artist
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
         .unwrap_or_default();
     let trimmed_artist = artist_str.trim();
     if trimmed_artist.len() != artist_str.len() {
@@ -860,32 +871,32 @@ pub fn analyze(
     }
     let mut titletranslit_str = parsed_data
         .title_translit
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
         .unwrap_or_default();
     let mut subtitletranslit_str = parsed_data
         .subtitle_translit
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
         .unwrap_or_default();
     let mut artisttranslit_str = parsed_data
         .artist_translit
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
         .unwrap_or_default();
     let banner_path_str = parsed_data
         .banner
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
         .unwrap_or_default();
     let background_path_str = parsed_data
         .background
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
         .unwrap_or_default();
     let music_path_str = parsed_data
         .music
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
         .unwrap_or_default();
     let timing_format = timing_format_from_ext(extension);
     let display_bpm_str = parsed_data
         .display_bpm
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()))
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
         .unwrap_or_default();
 
     if options.translate_markers {
@@ -962,7 +973,8 @@ pub fn analyze(
         .map(|b| {
             let first_param = msd_first_param_bytes(b);
             let decoded = decode_bytes(first_param);
-            clean_tag(&unescape_tag(decoded.as_ref()))
+            let unescaped = unescape_tag(decoded.as_ref());
+            clean_tag(unescaped.as_ref()).into_owned()
         })
         .unwrap_or_default();
     let normalized_global_tickcounts = parsed_data
