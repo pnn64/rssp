@@ -111,7 +111,7 @@ const fn row_map_hash(x: u32) -> usize {
     x.wrapping_mul(0x9E3779B9) as usize
 }
 
-fn row_map_new() -> RowStateMap {
+const fn row_map_new() -> RowStateMap {
     RowStateMap {
         keys: Vec::new(),
         vals: Vec::new(),
