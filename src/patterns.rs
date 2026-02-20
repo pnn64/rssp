@@ -112,7 +112,17 @@ const AC_ALPHA: usize = 16;
 #[derive(Debug, Clone)]
 pub(crate) struct AcDfa<T> {
     goto: Vec<u32>,
-    output: Vec<Vec<T>>,
+    output_starts: Vec<u32>,
+    output_lens: Vec<u32>,
+    flat_outputs: Vec<T>,
+}
+
+#[inline(always)]
+fn ac_output_slice<T>(dfa: &AcDfa<T>, state: u32) -> &[T] {
+    let idx = state as usize;
+    let start = dfa.output_starts[idx] as usize;
+    let len = dfa.output_lens[idx] as usize;
+    &dfa.flat_outputs[start..start + len]
 }
 
 fn ac_build<T: Copy>(patterns: &[(T, &[u8])]) -> AcDfa<T> {
@@ -140,7 +150,9 @@ fn ac_build<T: Copy>(patterns: &[(T, &[u8])]) -> AcDfa<T> {
     if n == 1 {
         return AcDfa {
             goto: vec![0; AC_ALPHA],
-            output: vec![vec![]],
+            output_starts: vec![0],
+            output_lens: vec![0],
+            flat_outputs: Vec::new(),
         };
     }
 
@@ -214,9 +226,21 @@ fn ac_build<T: Copy>(patterns: &[(T, &[u8])]) -> AcDfa<T> {
         flat_goto.extend_from_slice(row);
     }
 
+    let output_count: usize = output.iter().map(Vec::len).sum();
+    let mut output_starts = Vec::with_capacity(output.len());
+    let mut output_lens = Vec::with_capacity(output.len());
+    let mut flat_outputs = Vec::with_capacity(output_count);
+    for state_output in output {
+        output_starts.push(flat_outputs.len() as u32);
+        output_lens.push(state_output.len() as u32);
+        flat_outputs.extend_from_slice(&state_output);
+    }
+
     AcDfa {
         goto: flat_goto,
-        output,
+        output_starts,
+        output_lens,
+        flat_outputs,
     }
 }
 
@@ -230,7 +254,7 @@ fn ac_search_array(text: &[u8], dfa: &AcDfa<PatternVariant>) -> PatternCounts {
         let sym = (b & 0x0F) as usize;
         state = dfa.goto[state as usize * AC_ALPHA + sym];
 
-        for &id in &dfa.output[state as usize] {
+        for &id in ac_output_slice(dfa, state) {
             counts[id as usize] += 1;
         }
     }
@@ -247,7 +271,7 @@ fn ac_search_vec(text: &[u8], dfa: &AcDfa<usize>, count: usize) -> Vec<u32> {
     for &b in text {
         let sym = (b & 0x0F) as usize;
         state = dfa.goto[state as usize * AC_ALPHA + sym];
-        for &id in &dfa.output[state as usize] {
+        for &id in ac_output_slice(dfa, state) {
             counts[id] += 1;
         }
     }
@@ -258,7 +282,9 @@ fn ac_search_vec(text: &[u8], dfa: &AcDfa<usize>, count: usize) -> Vec<u32> {
 fn ac_empty<T>() -> AcDfa<T> {
     AcDfa {
         goto: vec![0; AC_ALPHA],
-        output: vec![vec![]],
+        output_starts: vec![0],
+        output_lens: vec![0],
+        flat_outputs: Vec::new(),
     }
 }
 
