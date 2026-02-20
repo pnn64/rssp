@@ -106,13 +106,9 @@ struct RowStateMap {
     mask: usize,
 }
 
-const fn row_map_hash(mut x: u32) -> usize {
-    x ^= x >> 16;
-    x = x.wrapping_mul(0x7feb_352d);
-    x ^= x >> 15;
-    x = x.wrapping_mul(0x846c_a68b);
-    x ^= x >> 16;
-    x as usize
+const fn row_map_hash(x: u32) -> usize {
+    // 0x9E3779B9 is the 32-bit golden ratio prime
+    x.wrapping_mul(0x9E3779B9) as usize
 }
 
 fn row_map_new() -> RowStateMap {
