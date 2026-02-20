@@ -1,28 +1,28 @@
-use std::io::Write;
-
 const POW10: [f64; 19] = [
     1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9,
     1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18,
 ];
 
 #[inline(always)]
-fn round_sig_figs_6_fmt(value: f64, fallback: f64) -> f64 {
-    // 32 bytes is plenty for any f64 formatted with .5e
-    let mut buf = [0u8; 32];
-    let mut cursor = &mut buf[..];
+fn round_sig_figs_6_impl(value: f64, fallback: f64) -> f64 {
+    if value == 0.0 || !value.is_finite() {
+        return value;
+    }
+    let magnitude = value.abs().log10().floor() as i32;
+    let power = 5 - magnitude;
     
-    // Format directly into the stack buffer (ZERO heap allocations)
-    if write!(cursor, "{value:.5e}").is_ok() {
-        let len = 32 - cursor.len();
-        
-        // Validates the bytes are UTF-8. For ~15 bytes of ASCII, 
-        // this is practically instantaneous.
-        if let Ok(s) = std::str::from_utf8(&buf[..len]) {
-            return s.parse::<f64>().unwrap_or(fallback);
-        }
+    if !(-300..=300).contains(&power) {
+        return fallback;
     }
     
-    fallback
+    let scale = 10f64.powi(power);
+    let rounded = (value * scale).round_ties_even() / scale;
+    
+    if rounded.is_finite() {
+        rounded
+    } else {
+        fallback
+    }
 }
 
 #[inline(always)]
@@ -35,7 +35,6 @@ pub fn round_dp(value: f64, dp: usize) -> f64 {
         let scale = POW10[dp];
         (value * scale).round_ties_even() / scale
     } else {
-        // Fallback for dp >= 19 (rare)
         let scale = 10_f64.powi(i32::try_from(dp).unwrap_or(0));
         (value * scale).round_ties_even() / scale
     }
@@ -44,19 +43,13 @@ pub fn round_dp(value: f64, dp: usize) -> f64 {
 #[inline(always)]
 #[must_use] 
 pub fn round_sig_figs_6(value: f64) -> f64 {
-    if !value.is_finite() || value == 0.0 {
-        return value;
-    }
-    round_sig_figs_6_fmt(value, value)
+    round_sig_figs_6_impl(value, value)
 }
 
 #[inline(always)]
 #[must_use] 
 pub fn round_sig_figs_itg(value: f64) -> f64 {
-    if !value.is_finite() || value == 0.0 {
-        return value;
-    }
-    round_sig_figs_6_fmt(f64::from(value as f32), value)
+    round_sig_figs_6_impl(f64::from(value as f32), value)
 }
 
 #[inline(always)]

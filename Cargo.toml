@@ -1,6 +1,6 @@
 [package]
 name = "rssp"
-version = "0.3.25"
+version = "0.3.26"
 edition = "2024"
 authors = ["Patrik Nilsson <perfecttaste@pm.me>"]
 description = "A high-performance simfile parser for StepMania."
