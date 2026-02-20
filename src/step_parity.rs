@@ -99,11 +99,16 @@ const RIGHT_PAIR: FootPair = FootPair {
 const ROW_MAP_MIN_CAP: usize = 16;
 
 struct RowStateMap {
-    keys: Vec<u32>,
-    vals: Vec<usize>,
-    marks: Vec<u32>,
+    entries: Vec<RowMapEntry>,
     epoch: u32,
     mask: usize,
+}
+
+#[derive(Clone, Copy, Default)]
+struct RowMapEntry {
+    key: u32,
+    val: usize,
+    mark: u32,
 }
 
 const fn row_map_hash(x: u32) -> usize {
@@ -113,9 +118,7 @@ const fn row_map_hash(x: u32) -> usize {
 
 const fn row_map_new() -> RowStateMap {
     RowStateMap {
-        keys: Vec::new(),
-        vals: Vec::new(),
-        marks: Vec::new(),
+        entries: Vec::new(),
         epoch: 1,
         mask: 0,
     }
@@ -132,15 +135,15 @@ fn row_map_cap(expected: usize) -> usize {
 
 fn row_map_reset(map: &mut RowStateMap, expected: usize) {
     let need = row_map_cap(expected);
-    if need > map.keys.len() {
-        map.keys.resize(need, 0);
-        map.vals.resize(need, 0);
-        map.marks.resize(need, 0);
+    if need > map.entries.len() {
+        map.entries.resize(need, RowMapEntry::default());
         map.mask = need - 1;
     }
     map.epoch = map.epoch.wrapping_add(1);
     if map.epoch == 0 {
-        map.marks.fill(0);
+        for entry in &mut map.entries {
+            entry.mark = 0;
+        }
         map.epoch = 1;
     }
 }
@@ -152,11 +155,12 @@ fn row_map_get(map: &RowStateMap, key: u32) -> Option<usize> {
     }
     let mut idx = row_map_hash(key) & map.mask;
     loop {
-        if map.marks[idx] != map.epoch {
+        let entry = map.entries[idx];
+        if entry.mark != map.epoch {
             return None;
         }
-        if map.keys[idx] == key {
-            return Some(map.vals[idx]);
+        if entry.key == key {
+            return Some(entry.val);
         }
         idx = (idx + 1) & map.mask;
     }
@@ -166,14 +170,15 @@ fn row_map_get(map: &RowStateMap, key: u32) -> Option<usize> {
 fn row_map_insert(map: &mut RowStateMap, key: u32, val: usize) {
     let mut idx = row_map_hash(key) & map.mask;
     loop {
-        if map.marks[idx] != map.epoch {
-            map.marks[idx] = map.epoch;
-            map.keys[idx] = key;
-            map.vals[idx] = val;
+        let entry = &mut map.entries[idx];
+        if entry.mark != map.epoch {
+            entry.mark = map.epoch;
+            entry.key = key;
+            entry.val = val;
             return;
         }
-        if map.keys[idx] == key {
-            map.vals[idx] = val;
+        if entry.key == key {
+            entry.val = val;
             return;
         }
         idx = (idx + 1) & map.mask;
