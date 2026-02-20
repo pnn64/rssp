@@ -61,63 +61,109 @@ pub const fn categorize_measure_density(d: usize) -> RunDensity {
 
 const STREAM_THRESHOLD: usize = 16;
 
-#[must_use] 
-pub fn stream_sequences(measures: &[usize]) -> Vec<StreamSegment> {
-    let streams: Vec<_> = measures
-        .iter()
-        .enumerate()
-        .filter(|(_, n)| **n >= STREAM_THRESHOLD)
-        .map(|(i, _)| i + 1)
-        .collect();
+#[inline(always)]
+const fn is_stream_measure(d: usize) -> bool {
+    d >= STREAM_THRESHOLD
+}
 
-    if streams.is_empty() {
-        return Vec::new();
-    }
+#[inline]
+fn total_break_measures(measures: &[usize]) -> u32 {
+    let mut total = 0u32;
+    let mut i = 0usize;
+    let mut prev_stream_end = None;
 
-    let mut segs = Vec::new();
-    let first_break = streams[0].saturating_sub(1);
-    if first_break >= 2 {
-        segs.push(StreamSegment {
-            start: 0,
-            end: first_break,
-            is_break: true,
-        });
-    }
-
-    let (mut count, mut end) = (1, None);
-    for (i, &cur) in streams.iter().enumerate() {
-        let next = streams.get(i + 1).copied().unwrap_or(usize::MAX);
-
-        if cur + 1 == next {
-            count += 1;
-            end = Some(cur + 1);
+    while i < measures.len() {
+        if !is_stream_measure(measures[i]) {
+            i += 1;
             continue;
         }
 
-        let e = end.unwrap_or(cur);
+        let start = i;
+        while i + 1 < measures.len() && is_stream_measure(measures[i + 1]) {
+            i += 1;
+        }
+        let end = i + 1;
+
+        if let Some(prev_end) = prev_stream_end {
+            let gap = start - prev_end;
+            if gap >= 2 {
+                total += gap as u32;
+            }
+        } else if start >= 2 {
+            total += start as u32;
+        }
+        prev_stream_end = Some(end);
+        i += 1;
+    }
+
+    if let Some(last_end) = prev_stream_end {
+        let tail = measures.len() - last_end;
+        if tail >= 2 {
+            total += tail as u32;
+        }
+    }
+    total
+}
+
+#[must_use] 
+pub fn stream_sequences(measures: &[usize]) -> Vec<StreamSegment> {
+    let mut segs = Vec::with_capacity(measures.len() / 2 + 1);
+    let mut i = 0usize;
+    let mut prev_stream_end = None;
+
+    while i < measures.len() {
+        if !is_stream_measure(measures[i]) {
+            i += 1;
+            continue;
+        }
+
+        let start = i;
+        while i + 1 < measures.len() && is_stream_measure(measures[i + 1]) {
+            i += 1;
+        }
+        let end = i + 1;
+
+        match prev_stream_end {
+            Some(prev_end) => {
+                let gap = start - prev_end;
+                if gap >= 2 {
+                    segs.push(StreamSegment {
+                        start: prev_end,
+                        end: start,
+                        is_break: true,
+                    });
+                }
+            }
+            None if start >= 2 => {
+                segs.push(StreamSegment {
+                    start: 0,
+                    end: start,
+                    is_break: true,
+                });
+            }
+            _ => {}
+        }
+
         segs.push(StreamSegment {
-            start: e - count,
-            end: e,
+            start,
+            end,
             is_break: false,
         });
+        prev_stream_end = Some(end);
+        i += 1;
+    }
 
-        let bstart = cur;
-        let bend = if next == usize::MAX {
-            measures.len()
-        } else {
-            next - 1
-        };
-        if bend >= bstart + 2 {
+    if let Some(last_end) = prev_stream_end {
+        let tail = measures.len() - last_end;
+        if tail >= 2 {
             segs.push(StreamSegment {
-                start: bstart,
-                end: bend,
+                start: last_end,
+                end: measures.len(),
                 is_break: true,
             });
         }
-
-        count = 1;
-        end = None;
     }
+
     segs
 }
 
@@ -137,11 +183,7 @@ pub fn compute_stream_counts(measures: &[usize]) -> StreamCounts {
             RunDensity::Break => sc.sn_breaks += 1,
         }
     }
-    sc.total_breaks = stream_sequences(measures)
-        .iter()
-        .filter(|s| s.is_break)
-        .map(|s| (s.end - s.start) as u32)
-        .sum();
+    sc.total_breaks = total_break_measures(measures);
     sc
 }
 
@@ -181,12 +223,8 @@ pub fn generate_breakdown(measures: &[usize], mode: BreakdownMode) -> String {
 }
 
 fn active_range(m: &[usize]) -> Option<(usize, usize)> {
-    let s = m
-        .iter()
-        .position(|&d| categorize_measure_density(d) != RunDensity::Break)?;
-    let e = m
-        .iter()
-        .rposition(|&d| categorize_measure_density(d) != RunDensity::Break)?;
+    let s = m.iter().position(|&d| is_stream_measure(d))?;
+    let e = m.iter().rposition(|&d| is_stream_measure(d))?;
     Some((s, e))
 }
 
