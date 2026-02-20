@@ -1,3 +1,5 @@
+use std::io::Write;
+
 const POW10: [f64; 19] = [
     1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9,
     1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18,
@@ -5,8 +7,22 @@ const POW10: [f64; 19] = [
 
 #[inline(always)]
 fn round_sig_figs_6_fmt(value: f64, fallback: f64) -> f64 {
-    let formatted = format!("{value:.5e}");
-    formatted.parse::<f64>().unwrap_or(fallback)
+    // 32 bytes is plenty for any f64 formatted with .5e
+    let mut buf = [0u8; 32];
+    let mut cursor = &mut buf[..];
+    
+    // Format directly into the stack buffer (ZERO heap allocations)
+    if write!(cursor, "{value:.5e}").is_ok() {
+        let len = 32 - cursor.len();
+        
+        // Validates the bytes are UTF-8. For ~15 bytes of ASCII, 
+        // this is practically instantaneous.
+        if let Ok(s) = std::str::from_utf8(&buf[..len]) {
+            return s.parse::<f64>().unwrap_or(fallback);
+        }
+    }
+    
+    fallback
 }
 
 #[inline(always)]
