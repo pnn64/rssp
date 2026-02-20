@@ -222,6 +222,11 @@ fn scan_tag_end(slice: &[u8], allow_nl: bool) -> Option<(usize, usize)> {
     let mut bs = 0usize;
     while i < slice.len() {
         let b = slice[i];
+        if b > b';' && b != b'\\' {
+            bs = 0;
+            i += 1;
+            continue;
+        }
         let escaped = bs & 1 != 0;
         match b {
             b';' if !escaped => return Some((i, i + 1)),

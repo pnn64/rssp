@@ -73,7 +73,7 @@ const fn is_hold_blocker(ch: u8) -> bool {
 
 #[inline(always)]
 const fn is_note(ch: u8) -> bool {
-    matches!(ch, b'1' | b'2' | b'4')
+    ch == b'1' || ch == b'2' || ch == b'4'
 }
 
 #[inline(always)]
