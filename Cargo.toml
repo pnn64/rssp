@@ -85,6 +85,10 @@ path = "tests/fast_all_parity.rs"
 harness = false
 
 [[bench]]
+name = "throughput_perf"
+harness = false
+
+[[bench]]
 name = "hash_perf"
 harness = false
 
