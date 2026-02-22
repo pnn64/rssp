@@ -173,6 +173,8 @@ pub struct ParsedSimfileData<'a> {
     pub combos: Option<&'a [u8]>,
     pub banner: Option<&'a [u8]>,
     pub background: Option<&'a [u8]>,
+    pub cdtitle: Option<&'a [u8]>,
+    pub jacket: Option<&'a [u8]>,
     pub music: Option<&'a [u8]>,
     pub sample_start: Option<&'a [u8]>,
     pub sample_length: Option<&'a [u8]>,
@@ -452,6 +454,8 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
             || try_tag(s, b"#TICKCOUNTS:", &mut r.tickcounts, true)
             || try_tag(s, b"#BANNER:", &mut r.banner, true)
             || try_tag(s, b"#BACKGROUND:", &mut r.background, true)
+            || try_tag(s, b"#CDTITLE:", &mut r.cdtitle, true)
+            || try_tag(s, b"#JACKET:", &mut r.jacket, true)
             || try_tag(s, b"#MUSIC:", &mut r.music, true)
             || try_tag(s, b"#SAMPLESTART:", &mut r.sample_start, true)
             || try_tag(s, b"#SAMPLELENGTH:", &mut r.sample_length, true)

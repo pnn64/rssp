@@ -889,6 +889,14 @@ pub fn analyze(
         .background
         .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
         .unwrap_or_default();
+    let cdtitle_path_str = parsed_data
+        .cdtitle
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .unwrap_or_default();
+    let jacket_path_str = parsed_data
+        .jacket
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .unwrap_or_default();
     let music_path_str = parsed_data
         .music
         .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
@@ -1095,6 +1103,8 @@ pub fn analyze(
         timing_format,
         banner_path: banner_path_str,
         background_path: background_path_str,
+        cdtitle_path: cdtitle_path_str,
+        jacket_path: jacket_path_str,
         music_path: music_path_str,
         display_bpm_str,
         sample_start,
