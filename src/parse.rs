@@ -268,14 +268,20 @@ fn parse_tag_val(data: &[u8], tag_len: usize, allow_nl: bool) -> Option<(&[u8], 
 }
 
 #[inline(always)]
-fn try_tag<'a>(s: &'a [u8], tag: &[u8], out: &mut Option<&'a [u8]>, enabled: bool) -> bool {
-    if enabled && starts_with_ci(s, tag) {
-        if let Some((v, _)) = parse_tag_val(s, tag.len(), true) {
-            *out = Some(v);
-        }
-        true
+fn try_tag_step<'a>(
+    s: &'a [u8],
+    tag: &[u8],
+    out: &mut Option<&'a [u8]>,
+    enabled: bool,
+) -> Option<usize> {
+    if !enabled || !starts_with_ci(s, tag) {
+        return None;
+    }
+    if let Some((v, adv)) = parse_tag_val(s, tag.len(), true) {
+        *out = Some(v);
+        Some(adv)
     } else {
-        false
+        Some(1)
     }
 }
 
@@ -292,6 +298,12 @@ fn try_tag_adv<'a>(s: &'a [u8], tag: &[u8], nl: bool, out: &mut Option<&'a [u8]>
 macro_rules! try_tags {
     ($s:expr, $i:expr, $o:expr, [ $( ($tag:expr, $field:ident, $nl:expr) ),* $(,)? ]) => {
         $( if let Some(a) = try_tag_adv($s, $tag, $nl, &mut $o.$field) { $i += a; continue; } )*
+    };
+}
+
+macro_rules! try_header_tags {
+    ($s:expr, $i:expr, $o:expr, [ $( ($tag:expr, $field:ident, $on:expr) ),* $(,)? ]) => {
+        $( if let Some(a) = try_tag_step($s, $tag, &mut $o.$field, $on) { $i += a; continue; } )*
     };
 }
 
@@ -387,17 +399,19 @@ fn finalize_notedata_entry(f: NotedataFields<'_>) -> Option<ParsedChartEntry<'_>
 }
 
 pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfileData<'a>> {
-    let ext_lower = ext.to_lowercase();
-    if !matches!(ext_lower.as_str(), "sm" | "ssc") {
+    let ssc = if ext.eq_ignore_ascii_case("ssc") {
+        true
+    } else if ext.eq_ignore_ascii_case("sm") {
+        false
+    } else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "Unsupported file extension (must be .sm or .ssc)",
         ));
-    }
+    };
 
     let mut r = ParsedSimfileData::default();
     let mut i = 0;
-    let ssc = ext_lower == "ssc";
 
     while i < data.len() {
         let Some(pos) = data[i..].iter().position(|&b| b == b'#') else {
@@ -417,55 +431,69 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
         }
 
         // SM notes block
-        if !ssc && (starts_with_ci(s, b"#NOTES:") || starts_with_ci(s, b"#NOTES2:")) {
-            let tag_len = if starts_with_ci(s, b"#NOTES2:") { 8 } else { 7 };
-            let start = i + tag_len;
-            let end = data[start..]
-                .iter()
-                .position(|&b| b == b';')
-                .map_or(data.len(), |e| start + e);
-            let (field_count, fields, note_data) = split_notes6(&data[start..end]);
-            if field_count == 5 {
-                r.notes_list.push(ParsedChartEntry {
-                    field_count,
-                    fields,
-                    note_data,
-                    ..Default::default()
-                });
+        if !ssc {
+            let tag_len = if starts_with_ci(s, b"#NOTES2:") {
+                8
+            } else if starts_with_ci(s, b"#NOTES:") {
+                7
+            } else {
+                0
+            };
+            if tag_len != 0 {
+                let start = i + tag_len;
+                let end = data[start..]
+                    .iter()
+                    .position(|&b| b == b';')
+                    .map_or(data.len(), |e| start + e);
+                let (field_count, fields, note_data) = split_notes6(&data[start..end]);
+                if field_count == 5 {
+                    r.notes_list.push(ParsedChartEntry {
+                        field_count,
+                        fields,
+                        note_data,
+                        ..Default::default()
+                    });
+                }
+                i = end + 1;
+                continue;
             }
-            i = end + 1;
-            continue;
         }
 
-        // Header tags (chained for short-circuit evaluation)
-        let _ = try_tag(s, b"#TITLE:", &mut r.title, true)
-            || try_tag(s, b"#SUBTITLE:", &mut r.subtitle, true)
-            || try_tag(s, b"#ARTIST:", &mut r.artist, true)
-            || try_tag(s, b"#TITLETRANSLIT:", &mut r.title_translit, true)
-            || try_tag(s, b"#SUBTITLETRANSLIT:", &mut r.subtitle_translit, true)
-            || try_tag(s, b"#ARTISTTRANSLIT:", &mut r.artist_translit, true)
-            || try_tag(s, b"#VERSION:", &mut r.version, true)
-            || try_tag(s, b"#OFFSET:", &mut r.offset, true)
-            || try_tag(s, b"#BPMS:", &mut r.bpms, true)
-            || try_tag(s, b"#STOPS:", &mut r.stops, true)
-            || try_tag(s, b"#FREEZES:", &mut r.stops, true)
-            || try_tag(s, b"#DELAYS:", &mut r.delays, true)
-            || try_tag(s, b"#TIMESIGNATURES:", &mut r.time_signatures, true)
-            || try_tag(s, b"#TICKCOUNTS:", &mut r.tickcounts, true)
-            || try_tag(s, b"#BANNER:", &mut r.banner, true)
-            || try_tag(s, b"#BACKGROUND:", &mut r.background, true)
-            || try_tag(s, b"#CDTITLE:", &mut r.cdtitle, true)
-            || try_tag(s, b"#JACKET:", &mut r.jacket, true)
-            || try_tag(s, b"#MUSIC:", &mut r.music, true)
-            || try_tag(s, b"#SAMPLESTART:", &mut r.sample_start, true)
-            || try_tag(s, b"#SAMPLELENGTH:", &mut r.sample_length, true)
-            || try_tag(s, b"#DISPLAYBPM:", &mut r.display_bpm, true)
-            || try_tag(s, b"#FAKES:", &mut r.fakes, ssc)
-            || try_tag(s, b"#WARPS:", &mut r.warps, ssc)
-            || try_tag(s, b"#SPEEDS:", &mut r.speeds, ssc)
-            || try_tag(s, b"#SCROLLS:", &mut r.scrolls, ssc)
-            || try_tag(s, b"#LABELS:", &mut r.labels, ssc)
-            || try_tag(s, b"#COMBOS:", &mut r.combos, ssc);
+        try_header_tags!(
+            s,
+            i,
+            r,
+            [
+                (b"#TITLE:", title, true),
+                (b"#SUBTITLE:", subtitle, true),
+                (b"#ARTIST:", artist, true),
+                (b"#TITLETRANSLIT:", title_translit, true),
+                (b"#SUBTITLETRANSLIT:", subtitle_translit, true),
+                (b"#ARTISTTRANSLIT:", artist_translit, true),
+                (b"#VERSION:", version, true),
+                (b"#OFFSET:", offset, true),
+                (b"#BPMS:", bpms, true),
+                (b"#STOPS:", stops, true),
+                (b"#FREEZES:", stops, true),
+                (b"#DELAYS:", delays, true),
+                (b"#TIMESIGNATURES:", time_signatures, true),
+                (b"#TICKCOUNTS:", tickcounts, true),
+                (b"#BANNER:", banner, true),
+                (b"#BACKGROUND:", background, true),
+                (b"#CDTITLE:", cdtitle, true),
+                (b"#JACKET:", jacket, true),
+                (b"#MUSIC:", music, true),
+                (b"#SAMPLESTART:", sample_start, true),
+                (b"#SAMPLELENGTH:", sample_length, true),
+                (b"#DISPLAYBPM:", display_bpm, true),
+                (b"#FAKES:", fakes, ssc),
+                (b"#WARPS:", warps, ssc),
+                (b"#SPEEDS:", speeds, ssc),
+                (b"#SCROLLS:", scrolls, ssc),
+                (b"#LABELS:", labels, ssc),
+                (b"#COMBOS:", combos, ssc),
+            ]
+        );
         i += 1;
     }
     Ok(r)
