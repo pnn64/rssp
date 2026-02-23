@@ -509,26 +509,35 @@ pub(crate) fn minimize_chart_count_rows(
     data: &[u8],
     lanes: usize,
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
-    dispatch_lanes!(lanes, minimize_rows_impl(data))
+    dispatch_lanes!(lanes, minimize_rows_plain(data))
 }
 
-fn minimize_rows_impl<const L: usize>(
+fn minimize_rows_plain<const L: usize>(
     data: &[u8],
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
+    let (out, stats, dens, _rows, beats, last) = minimize_rows_typed::<L>(data);
+    (out, stats, dens, beats, last)
+}
+
+pub(crate) fn minimize_rows_typed<const L: usize>(
+    data: &[u8],
+) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<[u8; L]>, Vec<f32>, f64) {
     let mut beats = Vec::with_capacity(data.len() / (L + 1));
+    let mut rows = Vec::with_capacity(beats.capacity());
     let mut depths = [0u32; L];
     let (mut last_m, mut last_r, mut last_rows) = (None, 0, 0);
 
     let mut on_rows = |m, r| append_row_beats(&mut beats, m, r);
-    let mut on_line = |line: &[u8; L], m, r, rows| {
+    let mut on_line = |line: &[u8; L], m, r, row_count| {
+        rows.push(*line);
         if line_has_object::<L>(line, &mut depths) {
-            (last_m, last_r, last_rows) = (Some(m), r, rows);
+            (last_m, last_r, last_rows) = (Some(m), r, row_count);
         }
     };
 
     let (out, stats, dens) = process_chart::<L, _, _>(data, &mut on_rows, &mut on_line);
     let last = calc_last_beat(last_m, last_r, last_rows);
-    (out, stats, dens, beats, last)
+    (out, stats, dens, rows, beats, last)
 }
 
 #[inline(always)]
@@ -553,26 +562,28 @@ pub(crate) fn line_has_object<const L: usize>(line: &[u8], depths: &mut [u32; L]
 
 pub(crate) fn minimize_chart_rows_bits(
     data: &[u8],
-) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64, Vec<u8>) {
+) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<[u8; 4]>, Vec<f32>, f64, Vec<u8>) {
     let mut beats = Vec::with_capacity(data.len() / 5);
+    let mut rows = Vec::with_capacity(beats.capacity());
     let mut depths = [0u32; 4];
     let mut bits = Vec::with_capacity(beats.capacity());
     let (mut last_m, mut last_r, mut last_rows) = (None, 0, 0);
 
     let mut on_rows = |m, r| append_row_beats(&mut beats, m, r);
-    let mut on_line = |line: &[u8; 4], m, r, rows| {
+    let mut on_line = |line: &[u8; 4], m, r, row_count| {
+        rows.push(*line);
         let mask = (0..4).fold(0u8, |acc, i| {
             acc | if is_note(line[i]) { 1 << i } else { 0 }
         });
         bits.push(mask);
         if line_has_object::<4>(line, &mut depths) {
-            (last_m, last_r, last_rows) = (Some(m), r, rows);
+            (last_m, last_r, last_rows) = (Some(m), r, row_count);
         }
     };
 
     let (out, stats, dens) = process_chart::<4, _, _>(data, &mut on_rows, &mut on_line);
     let last = calc_last_beat(last_m, last_r, last_rows);
-    (out, stats, dens, beats, last, bits)
+    (out, stats, dens, rows, beats, last, bits)
 }
 
 #[must_use] 
@@ -594,9 +605,13 @@ fn minimize_hash_impl<const L: usize>(data: &[u8]) -> Vec<u8> {
 
 #[must_use] 
 pub fn compute_timing_aware_stats(data: &[u8], lanes: usize, timing: &TimingData) -> ArrowStats {
-    let (minimized, _stats, _densities, beats, _last_beat) =
-        minimize_chart_count_rows(data, lanes);
-    compute_timing_aware_stats_with_row_to_beat(&minimized, lanes, timing, &beats)
+    dispatch_lanes!(lanes, timing_stats_typed(data, timing))
+}
+
+fn timing_stats_typed<const L: usize>(data: &[u8], timing: &TimingData) -> ArrowStats {
+    let (_minimized, _stats, _densities, rows, beats, _last_beat) =
+        minimize_rows_typed::<L>(data);
+    compute_timing_aware_stats_from_rows_with_row_to_beat::<L>(&rows, timing, &beats)
 }
 
 pub(crate) fn compute_timing_aware_stats_with_row_to_beat(

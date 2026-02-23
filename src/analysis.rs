@@ -11,7 +11,7 @@ use crate::hash::compute_chart_hash;
 use crate::math::{round_dp, round_sig_figs_6};
 use crate::matrix::compute_matrix_rating;
 use crate::parse::{decode_bytes, ParsedChartEntry, unescape_trim, normalize_chart_desc, unescape_tag, clean_tag, extract_sections, strip_title_tags, parse_offset_seconds, parse_version};
-use crate::stats::{RADAR_CATEGORY_COUNT, StreamCounts, compute_stream_counts, generate_breakdown, BreakdownMode, stream_breakdown, StreamBreakdownLevel, minimize_chart_rows_bits, minimize_chart_count_rows, parse_minimized_rows, compute_timing_aware_stats_from_rows_with_row_to_beat, compute_timing_aware_stats_with_row_to_beat, minimize_chart_for_hash};
+use crate::stats::{RADAR_CATEGORY_COUNT, StreamCounts, compute_stream_counts, generate_breakdown, BreakdownMode, stream_breakdown, StreamBreakdownLevel, minimize_chart_rows_bits, minimize_rows_typed, compute_timing_aware_stats_from_rows_with_row_to_beat, compute_timing_aware_stats_with_row_to_beat, minimize_chart_for_hash};
 use crate::tech::parse_tech_notation;
 use crate::timing::{
     TimingFormat, compute_timing_segments, get_time_for_beat, steps_timing_allowed,
@@ -496,10 +496,12 @@ fn build_chart_summary(
     };
 
     let compute_patterns = lanes == 4 && options.compute_pattern_counts;
+    let (mut rows4, mut rows8) = (Vec::new(), Vec::new());
     let (mut minimized_chart, mut stats, measure_densities, row_to_beat, last_beat, bitmasks) =
         if compute_patterns {
-            let (chart, stats, densities, row_to_beat, last_beat, bitmasks) =
+            let (chart, stats, densities, rows, row_to_beat, last_beat, bitmasks) =
                 minimize_chart_rows_bits(chart_data);
+            rows4 = rows;
             (
                 chart,
                 stats,
@@ -508,9 +510,15 @@ fn build_chart_summary(
                 last_beat,
                 Some(bitmasks),
             )
+        } else if lanes == 8 {
+            let (chart, stats, densities, rows, row_to_beat, last_beat) =
+                minimize_rows_typed::<8>(chart_data);
+            rows8 = rows;
+            (chart, stats, densities, row_to_beat, last_beat, None)
         } else {
-            let (chart, stats, densities, row_to_beat, last_beat) =
-                minimize_chart_count_rows(chart_data, lanes);
+            let (chart, stats, densities, rows, row_to_beat, last_beat) =
+                minimize_rows_typed::<4>(chart_data);
+            rows4 = rows;
             (chart, stats, densities, row_to_beat, last_beat, None)
         };
     if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
@@ -701,15 +709,14 @@ fn build_chart_summary(
     let raw_holding = stats.holding;
     let (tech_counts, mut timing_stats) = match lanes {
         4 => {
-            let rows = parse_minimized_rows::<4>(&minimized_chart);
             let timing_stats = compute_timing_aware_stats_from_rows_with_row_to_beat::<4>(
-                &rows,
+                &rows4,
                 &timing,
                 &row_to_beat,
             );
             let tech_counts = if options.compute_tech_counts {
                 step_parity::analyze_timing_rows::<4>(
-                    &rows,
+                    &rows4,
                     &row_to_beat,
                     &timing,
                     &minimized_chart,
@@ -720,15 +727,14 @@ fn build_chart_summary(
             (tech_counts, timing_stats)
         }
         8 => {
-            let rows = parse_minimized_rows::<8>(&minimized_chart);
             let timing_stats = compute_timing_aware_stats_from_rows_with_row_to_beat::<8>(
-                &rows,
+                &rows8,
                 &timing,
                 &row_to_beat,
             );
             let tech_counts = if options.compute_tech_counts {
                 step_parity::analyze_timing_rows::<8>(
-                    &rows,
+                    &rows8,
                     &row_to_beat,
                     &timing,
                     &minimized_chart,
