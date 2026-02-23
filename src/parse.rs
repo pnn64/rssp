@@ -271,9 +271,37 @@ fn find_byte(slice: &[u8], needle: u8) -> Option<usize> {
     None
 }
 
+/// Finds the first unescaped `;` in `slice`.
+#[inline(always)]
+fn find_unescaped_semi(slice: &[u8]) -> Option<usize> {
+    let mut off = 0usize;
+    while off < slice.len() {
+        let rel = find_byte(&slice[off..], b';')?;
+        let idx = off + rel;
+        let mut bs = 0usize;
+        let mut i = idx;
+        while i > 0 && slice[i - 1] == b'\\' {
+            bs += 1;
+            i -= 1;
+        }
+        if bs & 1 == 0 {
+            return Some(idx);
+        }
+        off = idx + 1;
+    }
+    None
+}
+
 /// Returns (`value_end`, `next_position`) if terminator found.
 #[inline(always)]
 fn scan_tag_end(slice: &[u8], allow_nl: bool) -> Option<(usize, usize)> {
+    if allow_nl
+        && let Some(end) = find_unescaped_semi(slice)
+        && find_byte(&slice[..end], b'#').is_none()
+    {
+        return Some((end, end + 1));
+    }
+
     let mut i = 0;
     let mut bs_odd = false;
     while i < slice.len() {
