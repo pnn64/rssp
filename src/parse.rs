@@ -210,11 +210,50 @@ struct NotedataFields<'a> {
 
 #[inline(always)]
 fn starts_with_ci(slice: &[u8], tag: &[u8]) -> bool {
-    slice.len() >= tag.len()
-        && slice
-            .iter()
-            .zip(tag)
-            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+    slice
+        .get(..tag.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(tag))
+}
+
+#[inline(always)]
+fn find_byte(slice: &[u8], needle: u8) -> Option<usize> {
+    let mut i = 0usize;
+    let n = slice.len();
+    while i + 8 <= n {
+        let c = &slice[i..i + 8];
+        if c[0] == needle {
+            return Some(i);
+        }
+        if c[1] == needle {
+            return Some(i + 1);
+        }
+        if c[2] == needle {
+            return Some(i + 2);
+        }
+        if c[3] == needle {
+            return Some(i + 3);
+        }
+        if c[4] == needle {
+            return Some(i + 4);
+        }
+        if c[5] == needle {
+            return Some(i + 5);
+        }
+        if c[6] == needle {
+            return Some(i + 6);
+        }
+        if c[7] == needle {
+            return Some(i + 7);
+        }
+        i += 8;
+    }
+    while i < n {
+        if slice[i] == needle {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Returns (`value_end`, `next_position`) if terminator found.
@@ -312,7 +351,7 @@ fn parse_notedata_entry(data: &[u8], start: usize) -> (Option<ParsedChartEntry<'
     let mut i = start;
 
     while i < data.len() {
-        let Some(pos) = data[i..].iter().position(|&b| b == b'#') else {
+        let Some(pos) = find_byte(&data[i..], b'#') else {
             return (finalize_notedata_entry(out), data.len());
         };
         i += pos;
@@ -414,7 +453,7 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
     let mut i = 0;
 
     while i < data.len() {
-        let Some(pos) = data[i..].iter().position(|&b| b == b'#') else {
+        let Some(pos) = find_byte(&data[i..], b'#') else {
             break;
         };
         i += pos;
@@ -441,10 +480,7 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
             };
             if tag_len != 0 {
                 let start = i + tag_len;
-                let end = data[start..]
-                    .iter()
-                    .position(|&b| b == b';')
-                    .map_or(data.len(), |e| start + e);
+                let end = find_byte(&data[start..], b';').map_or(data.len(), |e| start + e);
                 let (field_count, fields, note_data) = split_notes6(&data[start..end]);
                 if field_count == 5 {
                     r.notes_list.push(ParsedChartEntry {
