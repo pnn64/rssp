@@ -933,13 +933,17 @@ fn parity_gen(cache: &'static LayoutCache) -> StepParityGenerator {
     }
 }
 
-fn parity_analyze(g: &mut StepParityGenerator, notes: Vec<IntermediateNoteData>, cols: usize) -> bool {
+#[inline(always)]
+fn parity_reset(g: &mut StepParityGenerator, cols: usize) {
     g.column_count = cols;
     g.perm_cache.fill(None);
     g.nodes.clear();
     g.rows.clear();
     g.result_columns.clear();
-    parity_create_rows(g, notes);
+}
+
+#[inline(always)]
+fn parity_finish(g: &mut StepParityGenerator) -> bool {
     if g.rows.is_empty() {
         return false;
     }
@@ -947,6 +951,12 @@ fn parity_analyze(g: &mut StepParityGenerator, notes: Vec<IntermediateNoteData>,
         return false;
     };
     parity_backtrack(g, best)
+}
+
+fn parity_analyze(g: &mut StepParityGenerator, notes: Vec<IntermediateNoteData>, cols: usize) -> bool {
+    parity_reset(g, cols);
+    parity_create_rows(g, notes);
+    parity_finish(g)
 }
 
 fn parity_create_rows(g: &mut StepParityGenerator, notes: Vec<IntermediateNoteData>) {
@@ -1021,6 +1031,179 @@ fn parity_create_rows(g: &mut StepParityGenerator, notes: Vec<IntermediateNoteDa
         }
     }
     parity_flush_row(g, &counter);
+}
+
+#[inline(always)]
+fn row_quantized(beat_raw: f32) -> (i32, f32) {
+    let row_i32 = beat_to_note_row_f32(beat_raw);
+    (row_i32, row_i32 as f32 / ROWS_PER_BEAT as f32)
+}
+
+fn hold_heads_from_arrays<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    cols: usize,
+) -> Vec<[f32; MAX_COLUMNS]> {
+    if cols == 0 || cols > 8 {
+        return Vec::new();
+    }
+    let copy_len = cols.min(LANES);
+    let mut out = vec![[HOLD_END_NONE; MAX_COLUMNS]; rows.len()];
+    let mut hold_start_idx = [usize::MAX; MAX_COLUMNS];
+    let mut hold_start_row = [0i32; MAX_COLUMNS];
+    let mut hold_start_beat = [0.0f32; MAX_COLUMNS];
+
+    for (idx, row) in rows.iter().enumerate() {
+        if !has_obj(&row[..copy_len]) {
+            continue;
+        }
+        let (row_i32, beat) = row_quantized(row_to_beat[idx]);
+        for c in 0..copy_len {
+            let ch = row[c];
+            if matches!(ch, b'1' | b'K' | b'L' | b'M' | b'F') {
+                hold_start_idx[c] = usize::MAX;
+            }
+            match ch {
+                b'2' | b'4' => {
+                    hold_start_idx[c] = idx;
+                    hold_start_row[c] = row_i32;
+                    hold_start_beat[c] = beat;
+                }
+                b'3' => {
+                    let start_idx = hold_start_idx[c];
+                    if start_idx != usize::MAX {
+                        let len = (row_i32 - hold_start_row[c]) as f32 / ROWS_PER_BEAT as f32;
+                        out[start_idx][c] = hold_start_beat[c] + len;
+                        hold_start_idx[c] = usize::MAX;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+#[inline(always)]
+fn parity_push_mine(
+    g: &mut StepParityGenerator,
+    counter: &mut RowCounter,
+    col: usize,
+    second: f32,
+    fake: bool,
+) {
+    let bit = 1u8 << col;
+    let mine_on = second != 0.0;
+    let mine_i32_on = (second as i32) != 0;
+
+    if second == counter.last_second && !g.rows.is_empty() {
+        if fake {
+            if mine_i32_on {
+                counter.next_fake_mine_mask |= bit;
+            } else {
+                counter.next_fake_mine_mask &= !bit;
+            }
+        } else {
+            if mine_on {
+                counter.next_mine_mask |= bit;
+            } else {
+                counter.next_mine_mask &= !bit;
+            }
+            if mine_i32_on {
+                counter.next_mine_i32_mask |= bit;
+            } else {
+                counter.next_mine_i32_mask &= !bit;
+            }
+        }
+    } else if fake {
+        if mine_i32_on {
+            counter.fake_mine_mask |= bit;
+        } else {
+            counter.fake_mine_mask &= !bit;
+        }
+    } else {
+        if mine_on {
+            counter.mine_mask |= bit;
+        } else {
+            counter.mine_mask &= !bit;
+        }
+        if mine_i32_on {
+            counter.mine_i32_mask |= bit;
+        } else {
+            counter.mine_i32_mask &= !bit;
+        }
+    }
+}
+
+#[inline(always)]
+fn parity_push_note(
+    g: &mut StepParityGenerator,
+    counter: &mut RowCounter,
+    col: usize,
+    beat: f32,
+    second: f32,
+    hold_end: f32,
+) {
+    if counter.last_second != second {
+        if counter.last_second != CLM_SECOND_INVALID {
+            parity_flush_row(g, counter);
+        }
+        row_counter_reset(counter, second, beat);
+    }
+    counter.note_mask |= 1u8 << col;
+    if hold_end != HOLD_END_NONE {
+        counter.hold_ends[col] = hold_end;
+    }
+}
+
+fn parity_create_rows_from_arrays<const LANES: usize>(
+    g: &mut StepParityGenerator,
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    cols: usize,
+) {
+    let mut counter = row_counter_new();
+    let hold_heads = hold_heads_from_arrays(rows, row_to_beat, cols);
+    let copy_len = cols.min(LANES);
+
+    for (idx, row) in rows.iter().enumerate() {
+        if !has_obj(&row[..copy_len]) {
+            continue;
+        }
+        let (row_i32, beat) = row_quantized(row_to_beat[idx]);
+        let second = get_time_for_beat_f32(timing, f64::from(beat)) as f32;
+        let row_fake = is_fake_at_beat(timing, f64::from(row_i32));
+
+        for c in 0..copy_len {
+            match row[c] {
+                b'M' => parity_push_mine(g, &mut counter, c, second, row_fake),
+                b'1' | b'K' | b'L' if !row_fake => {
+                    parity_push_note(g, &mut counter, c, beat, second, HOLD_END_NONE)
+                }
+                b'2' | b'4' if !row_fake => {
+                    let hold_end = hold_heads[idx][c];
+                    if hold_end != HOLD_END_NONE {
+                        parity_push_note(g, &mut counter, c, beat, second, hold_end);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    parity_flush_row(g, &counter);
+}
+
+fn parity_analyze_rows<const LANES: usize>(
+    g: &mut StepParityGenerator,
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    cols: usize,
+) -> bool {
+    parity_reset(g, cols);
+    parity_create_rows_from_arrays(g, rows, row_to_beat, timing, cols);
+    parity_finish(g)
 }
 
 fn parity_flush_row(g: &mut StepParityGenerator, counter: &RowCounter) {
@@ -1833,53 +2016,6 @@ fn build_notes(rows: &[ParsedRow], timing: Option<&TimingData>) -> Vec<Intermedi
     notes
 }
 
-fn build_notes_from_arrays<const LANES: usize>(
-    rows: &[[u8; LANES]],
-    row_to_beat: &[f32],
-    timing: &TimingData,
-    cols: usize,
-) -> Vec<IntermediateNoteData> {
-    if cols == 0 || cols > 8 {
-        return Vec::new();
-    }
-
-    let mut hold_idx = [usize::MAX; MAX_COLUMNS];
-    let mut hold_row = [0i32; MAX_COLUMNS];
-    let mut notes: Vec<IntermediateNoteData> = Vec::with_capacity(rows.len());
-    let copy_len = cols.min(LANES);
-
-    for (idx, row) in rows.iter().enumerate() {
-        if !has_obj(&row[..copy_len]) {
-            continue;
-        }
-
-        let beat_raw = row_to_beat[idx];
-        let row_i32 = beat_to_note_row_f32(beat_raw);
-        let beat = row_i32 as f32 / ROWS_PER_BEAT as f32;
-        let second = get_time_for_beat_f32(timing, f64::from(beat)) as f32;
-        let row_fake = is_fake_at_beat(timing, f64::from(row_i32));
-
-        for (c, &ch) in row.iter().take(copy_len).enumerate() {
-            parse_note_char(
-                &mut notes,
-                &mut hold_idx,
-                &mut hold_row,
-                ch,
-                c,
-                row_i32,
-                beat,
-                second,
-                row_fake,
-            );
-        }
-    }
-
-    for col in 0..cols {
-        invalidate_hold(&mut notes, &mut hold_idx, col);
-    }
-    notes
-}
-
 // --- Public API ---
 
 fn analyze_core<F>(
@@ -1944,10 +2080,9 @@ pub(crate) fn analyze_timing_rows<const LANES: usize>(
     };
 
     let cols = layout_cols(&cache.layout);
-    let notes = build_notes_from_arrays(rows, row_to_beat, timing, cols);
 
     let mut generator = parity_gen(cache);
-    if !parity_analyze(&mut generator, notes, cols) {
+    if !parity_analyze_rows(&mut generator, rows, row_to_beat, timing, cols) {
         return TechCounts::default();
     }
     calculate_tech_counts(&generator.rows, &generator.result_columns, generator.layout)
