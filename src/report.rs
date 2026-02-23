@@ -1,4 +1,5 @@
 use std::io::{self, Write};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
@@ -221,7 +222,7 @@ pub struct ChartSummary {
     pub measure_densities: Vec<usize>,
     pub measure_nps_vec: Vec<f64>,
     pub row_to_beat: Vec<f32>,
-    pub timing_segments: TimingSegments,
+    pub timing_segments: Arc<TimingSegments>,
     pub chart_offset_seconds: f64,
     pub chart_has_own_timing: bool,
     pub minimized_note_data: Vec<u8>,

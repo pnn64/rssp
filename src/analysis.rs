@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::duration::{self, TimingOffsets};
@@ -440,7 +441,7 @@ fn build_chart_summary(
     global_scrolls_raw: &str,
     global_fakes_raw: &str,
     global_bpms_norm: &str,
-    global_timing_segments: &TimingSegments,
+    global_timing_segments: &Arc<TimingSegments>,
     global_bpm_map: &[(f64, f64)],
     song_offset: f64,
     extension: &str,
@@ -639,9 +640,9 @@ fn build_chart_summary(
         parse_radar_values_bytes(chart_radar_values_opt, true)
     };
     let chart_has_own_timing = timing_src.chart_has_own_timing;
-    let (timing_segments, bpm_map): (TimingSegments, Cow<'_, [(f64, f64)]>) =
+    let (timing_segments, bpm_map): (Arc<TimingSegments>, Cow<'_, [(f64, f64)]>) =
         if chart_has_own_timing {
-            let timing_segments = compute_timing_segments(
+            let timing_segments = Arc::new(compute_timing_segments(
                 chart_bpms_timing,
                 timing_src.global_bpms,
                 chart_stops_timing,
@@ -658,7 +659,7 @@ fn build_chart_summary(
                 timing_src.global_fakes,
                 timing_format,
                 true,
-            );
+            ));
             let bpm_map = timing_segments
                 .bpms
                 .iter()
@@ -666,7 +667,7 @@ fn build_chart_summary(
                 .collect();
             (timing_segments, Cow::Owned(bpm_map))
         } else {
-            (global_timing_segments.clone(), Cow::Borrowed(global_bpm_map))
+            (Arc::clone(global_timing_segments), Cow::Borrowed(global_bpm_map))
         };
 
     let metrics = compute_derived_chart_metrics(
@@ -1020,7 +1021,7 @@ pub fn analyze(
         } else {
             compiled_custom_empty()
         };
-    let global_timing_segments = compute_timing_segments(
+    let global_timing_segments = Arc::new(compute_timing_segments(
         None,
         &cleaned_global_bpms,
         None,
@@ -1037,7 +1038,7 @@ pub fn analyze(
         &cleaned_global_fakes,
         timing_format,
         true,
-    );
+    ));
     let global_bpm_map: Vec<(f64, f64)> = global_timing_segments
         .bpms
         .iter()

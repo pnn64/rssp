@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::analysis::{AnalysisOptions, normalize_difficulty_label};
@@ -541,7 +542,7 @@ fn empty_course_chart(step_type: &str, course_difficulty: Difficulty, meter: i32
         measure_densities: Vec::new(),
         measure_nps_vec: Vec::new(),
         row_to_beat: Vec::new(),
-        timing_segments: empty_timing_segments(),
+        timing_segments: Arc::new(empty_timing_segments()),
         chart_offset_seconds: 0.0,
         chart_has_own_timing: false,
         minimized_note_data: Vec::new(),
