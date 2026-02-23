@@ -15,7 +15,7 @@ use crate::stats::{RADAR_CATEGORY_COUNT, StreamCounts, compute_stream_counts, ge
 use crate::tech::parse_tech_notation;
 use crate::timing::{
     TimingFormat, compute_timing_segments, get_time_for_beat, steps_timing_allowed,
-    timing_data_from_segments, timing_format_from_ext,
+    timing_data_from_segments, timing_format_from_ext, TimingSegments,
 };
 use crate::patterns::{
     compile_custom_patterns, compiled_custom_empty, compiled_custom_is_empty,
@@ -440,6 +440,8 @@ fn build_chart_summary(
     global_scrolls_raw: &str,
     global_fakes_raw: &str,
     global_bpms_norm: &str,
+    global_timing_segments: &TimingSegments,
+    global_bpm_map: &[(f64, f64)],
     song_offset: f64,
     extension: &str,
     timing_format: TimingFormat,
@@ -637,33 +639,42 @@ fn build_chart_summary(
         parse_radar_values_bytes(chart_radar_values_opt, true)
     };
     let chart_has_own_timing = timing_src.chart_has_own_timing;
-    let timing_segments = compute_timing_segments(
-        chart_bpms_timing,
-        timing_src.global_bpms,
-        chart_stops_timing,
-        timing_src.global_stops,
-        chart_delays_timing,
-        timing_src.global_delays,
-        chart_warps_timing,
-        timing_src.global_warps,
-        chart_speeds_timing,
-        timing_src.global_speeds,
-        chart_scrolls_timing,
-        timing_src.global_scrolls,
-        chart_fakes_timing,
-        timing_src.global_fakes,
-        timing_format,
-        true,
+    let (timing_segments, bpm_map): (TimingSegments, Cow<'_, [(f64, f64)]>) =
+        if chart_has_own_timing {
+            let timing_segments = compute_timing_segments(
+                chart_bpms_timing,
+                timing_src.global_bpms,
+                chart_stops_timing,
+                timing_src.global_stops,
+                chart_delays_timing,
+                timing_src.global_delays,
+                chart_warps_timing,
+                timing_src.global_warps,
+                chart_speeds_timing,
+                timing_src.global_speeds,
+                chart_scrolls_timing,
+                timing_src.global_scrolls,
+                chart_fakes_timing,
+                timing_src.global_fakes,
+                timing_format,
+                true,
+            );
+            let bpm_map = timing_segments
+                .bpms
+                .iter()
+                .map(|(beat, bpm)| (f64::from(*beat), f64::from(*bpm)))
+                .collect();
+            (timing_segments, Cow::Owned(bpm_map))
+        } else {
+            (global_timing_segments.clone(), Cow::Borrowed(global_bpm_map))
+        };
+
+    let metrics = compute_derived_chart_metrics(
+        &measure_densities,
+        bpm_map.as_ref(),
+        &minimized_chart,
+        &bpms_to_use,
     );
-
-    let bpm_map: Vec<(f64, f64)> = timing_segments
-        .bpms
-        .iter()
-        .map(|(beat, bpm)| (f64::from(*beat), f64::from(*bpm)))
-        .collect();
-
-    let metrics =
-        compute_derived_chart_metrics(&measure_densities, &bpm_map, &minimized_chart, &bpms_to_use);
 
     let (detected_patterns, (anchor_left, anchor_down, anchor_up, anchor_right)) =
         bitmasks.as_ref().map_or(
@@ -1064,6 +1075,8 @@ pub fn analyze(
             cleaned_global_scrolls_str,
             cleaned_global_fakes_str,
             normalized_global_bpms_str,
+            &global_timing_segments,
+            &global_bpm_map,
             offset,
             extension,
             timing_format,
