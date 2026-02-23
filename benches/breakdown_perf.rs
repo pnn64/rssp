@@ -50,7 +50,7 @@ fn bench_breakdown_pipeline(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(2));
     group.bench_function("analyze_breakdowns", |b| {
         b.iter(|| {
-            let summary = rssp::analyze(black_box(fixture), black_box(EXTENSION), options.clone())
+            let summary = rssp::analyze(black_box(fixture), black_box(EXTENSION), &options.clone())
                 .expect("analysis should succeed");
             let mut total_len = 0usize;
             for chart in &summary.charts {

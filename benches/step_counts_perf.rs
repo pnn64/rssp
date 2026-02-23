@@ -104,7 +104,7 @@ fn bench_step_counts_pipeline(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(2));
     group.bench_function("analyze_step_counts", |b| {
         b.iter(|| {
-            let summary = rssp::analyze(black_box(fixture), black_box("ssc"), options.clone())
+            let summary = rssp::analyze(black_box(fixture), black_box("ssc"), &options.clone())
                 .expect("analysis should succeed");
             let counts: Vec<_> = summary
                 .charts
