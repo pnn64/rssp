@@ -148,27 +148,16 @@ fn match_hold_ends<const L: usize>(rows: &[[u8; L]]) -> Vec<[Option<usize>; L]> 
         .collect()
 }
 
-fn has_phantoms<const L: usize>(data: &[u8]) -> bool {
-    let mut depths = [0u32; L];
-    for raw in data.split(|&b| b == b'\n') {
-        let line = trim_cr(raw);
-        if line.len() < L || matches!(line.first(), Some(b',' | b';') | None) {
-            continue;
-        }
-        for c in 0..L {
-            match line[c] {
-                ch if is_hold_blocker(ch) => {
-                    if depths[c] != 0 {
-                        return true;
-                    }
-                }
-                b'2' | b'4' => depths[c] += 1,
-                b'3' => depths[c] = depths[c].saturating_sub(1),
-                _ => {}
-            }
+#[inline(always)]
+fn scan_phantom_line<const L: usize>(line: &[u8; L], depths: &mut [u32; L], has: &mut bool) {
+    for c in 0..L {
+        match line[c] {
+            ch if is_hold_blocker(ch) => *has |= depths[c] != 0,
+            b'2' | b'4' => depths[c] = depths[c].saturating_add(1),
+            b'3' => depths[c] = depths[c].saturating_sub(1),
+            _ => {}
         }
     }
-    depths.iter().any(|&d| d != 0)
 }
 
 // ============================================================================
@@ -476,11 +465,17 @@ where
 {
     let mut stats = ArrowStats::default();
     let (mut holds, mut ends) = (0u32, 0u32);
-    let mut count = |line: &[u8; L]| count_line(line, &mut stats, &mut holds, &mut ends);
+    let mut phantom_depths = [0u32; L];
+    let mut has_phantom = false;
+    let mut count = |line: &[u8; L]| {
+        scan_phantom_line(line, &mut phantom_depths, &mut has_phantom);
+        count_line(line, &mut stats, &mut holds, &mut ends)
+    };
     let (output, densities) = minimize_chart_core(data, on_rows, on_line, &mut count);
+    has_phantom |= phantom_depths.iter().any(|&d| d != 0);
 
     // Fix phantom holds
-    if holds > 0 && (holds != ends || has_phantoms::<L>(&output)) {
+    if holds > 0 && (holds != ends || has_phantom) {
         let rows = parse_minimized_rows::<L>(&output);
         let hold_ends = match_hold_ends(&rows);
         let step_count = stats.total_steps;
