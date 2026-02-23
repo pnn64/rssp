@@ -79,6 +79,21 @@ const CP1252_MAP: [u16; 32] = [
     0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0xFFFD, 0x017E, 0x0178,
 ];
 
+const TAG_CH_BS: u8 = 1;
+const TAG_CH_SEMI: u8 = 1 << 1;
+const TAG_CH_COLON: u8 = 1 << 2;
+const TAG_CH_NL: u8 = 1 << 3;
+
+const TAG_CHAR_CLASS: [u8; 256] = {
+    let mut t = [0u8; 256];
+    t[b'\\' as usize] = TAG_CH_BS;
+    t[b';' as usize] = TAG_CH_SEMI;
+    t[b':' as usize] = TAG_CH_COLON;
+    t[b'\n' as usize] = TAG_CH_NL;
+    t[b'\r' as usize] = TAG_CH_NL;
+    t
+};
+
 fn decode_cp1252(bytes: &[u8]) -> String {
     bytes
         .iter()
@@ -260,39 +275,57 @@ fn find_byte(slice: &[u8], needle: u8) -> Option<usize> {
 #[inline(always)]
 fn scan_tag_end(slice: &[u8], allow_nl: bool) -> Option<(usize, usize)> {
     let mut i = 0;
-    let mut bs = 0usize;
+    let mut bs_odd = false;
     while i < slice.len() {
         let b = slice[i];
-        if b > b';' && b != b'\\' {
-            bs = 0;
+        let class = TAG_CHAR_CLASS[b as usize];
+        if class == 0 || (allow_nl && class == TAG_CH_COLON) {
+            bs_odd = false;
             i += 1;
             continue;
         }
-        let escaped = bs & 1 != 0;
-        match b {
-            b';' if !escaped => return Some((i, i + 1)),
-            b':' if !allow_nl && !escaped => return Some((i, i + 1)),
-            b'\n' | b'\r' => {
-                let mut j = i + 1;
-                if b == b'\r' && slice.get(j) == Some(&b'\n') {
-                    j += 1;
-                }
-                while j < slice.len()
-                    && slice[j].is_ascii_whitespace()
-                    && !matches!(slice[j], b'\n' | b'\r')
-                {
-                    j += 1;
-                }
-                if slice.get(j) == Some(&b'#') {
-                    return Some((i, j));
-                }
-                if !allow_nl && slice.get(j) != Some(&b';') {
-                    return None;
-                }
-            }
-            _ => {}
+
+        if class & TAG_CH_BS != 0 {
+            bs_odd = !bs_odd;
+            i += 1;
+            continue;
         }
-        bs = if b == b'\\' { bs + 1 } else { 0 };
+
+        let escaped = bs_odd;
+        bs_odd = false;
+
+        if class & TAG_CH_SEMI != 0 {
+            if !escaped {
+                return Some((i, i + 1));
+            }
+            i += 1;
+            continue;
+        }
+
+        if class & TAG_CH_COLON != 0 {
+            if !escaped {
+                return Some((i, i + 1));
+            }
+            i += 1;
+            continue;
+        }
+
+        let mut j = i + 1;
+        if b == b'\r' && slice.get(j) == Some(&b'\n') {
+            j += 1;
+        }
+        while j < slice.len()
+            && slice[j].is_ascii_whitespace()
+            && !matches!(slice[j], b'\n' | b'\r')
+        {
+            j += 1;
+        }
+        if slice.get(j) == Some(&b'#') {
+            return Some((i, j));
+        }
+        if !allow_nl && slice.get(j) != Some(&b';') {
+            return None;
+        }
         i += 1;
     }
     None
