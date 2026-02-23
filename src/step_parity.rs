@@ -1695,44 +1695,9 @@ where
     rows
 }
 
-fn parse_rows_from_arrays<const LANES: usize>(
-    rows: &[[u8; LANES]],
-    row_to_beat: &[f32],
-    timing: &TimingData,
-    cols: usize,
-) -> Vec<ParsedRow> {
-    let mut parsed = Vec::new();
-    if cols == 0 || cols > 8 {
-        return parsed;
-    }
-
-    let copy_len = cols.min(LANES);
-    for (idx, row) in rows.iter().enumerate() {
-        if !has_obj(&row[..copy_len]) {
-            continue;
-        }
-
-        let beat_raw = row_to_beat[idx];
-        let note_row = beat_to_note_row_f32(beat_raw);
-        let beat = note_row as f32 / ROWS_PER_BEAT as f32;
-        let second = get_time_for_beat_f32(timing, f64::from(beat)) as f32;
-
-        let mut chars = [b'0'; 8];
-        chars[..copy_len].copy_from_slice(&row[..copy_len]);
-        parsed.push(ParsedRow {
-            chars,
-            columns: cols as u8,
-            row: note_row,
-            beat,
-            second,
-        });
-    }
-    parsed
-}
-
 #[inline(always)]
 fn invalidate_hold(
-    notes: &mut [IntermediateNoteData],
+    notes: &mut Vec<IntermediateNoteData>,
     hold_idx: &mut [usize; MAX_COLUMNS],
     col: usize,
 ) {
@@ -1740,6 +1705,14 @@ fn invalidate_hold(
     if idx != usize::MAX {
         notes[idx].note_type = TapNoteType::Empty;
         hold_idx[col] = usize::MAX;
+        if idx + 1 == notes.len() {
+            while notes
+                .last()
+                .is_some_and(|n| n.note_type == TapNoteType::Empty)
+            {
+                notes.pop();
+            }
+        }
     }
 }
 
@@ -1769,7 +1742,9 @@ fn parse_note_char(
     hold_row: &mut [i32; MAX_COLUMNS],
     ch: u8,
     col: usize,
-    row: &ParsedRow,
+    row_i32: i32,
+    beat: f32,
+    second: f32,
     row_fake: bool,
 ) {
     if matches!(ch, b'1' | b'M' | b'L' | b'F') {
@@ -1779,12 +1754,12 @@ fn parse_note_char(
         b'2' | b'4' => {
             invalidate_hold(notes, hold_idx, col);
             hold_idx[col] = notes.len();
-            hold_row[col] = row.row;
+            hold_row[col] = row_i32;
             notes.push(note_new(
                 TapNoteType::HoldHead,
                 col,
-                row.beat,
-                row.second,
+                beat,
+                second,
                 MISSING_HOLD_LENGTH_BEATS,
                 row_fake,
             ));
@@ -1792,31 +1767,31 @@ fn parse_note_char(
         b'3' => {
             let idx = hold_idx[col];
             if idx != usize::MAX {
-                notes[idx].hold_length = (row.row - hold_row[col]) as f32 / ROWS_PER_BEAT as f32;
+                notes[idx].hold_length = (row_i32 - hold_row[col]) as f32 / ROWS_PER_BEAT as f32;
                 hold_idx[col] = usize::MAX;
             }
         }
         b'1' | b'K' | b'L' => notes.push(note_new(
             TapNoteType::Tap,
             col,
-            row.beat,
-            row.second,
+            beat,
+            second,
             0.0,
             row_fake,
         )),
         b'M' => notes.push(note_new(
             TapNoteType::Mine,
             col,
-            row.beat,
-            row.second,
+            beat,
+            second,
             0.0,
             row_fake,
         )),
         b'F' => notes.push(note_new(
             TapNoteType::Fake,
             col,
-            row.beat,
-            row.second,
+            beat,
+            second,
             0.0,
             true,
         )),
@@ -1844,17 +1819,64 @@ fn build_notes(rows: &[ParsedRow], timing: Option<&TimingData>) -> Vec<Intermedi
                 &mut hold_row,
                 row.chars[c],
                 c,
-                row,
+                row.row,
+                row.beat,
+                row.second,
                 row_fake,
             );
         }
     }
 
-    notes.retain(|n| {
-        n.note_type != TapNoteType::Empty
-            && (n.note_type != TapNoteType::HoldHead
-                || n.hold_length < MISSING_HOLD_LENGTH_BEATS)
-    });
+    for col in 0..cols {
+        invalidate_hold(&mut notes, &mut hold_idx, col);
+    }
+    notes
+}
+
+fn build_notes_from_arrays<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    cols: usize,
+) -> Vec<IntermediateNoteData> {
+    if cols == 0 || cols > 8 {
+        return Vec::new();
+    }
+
+    let mut hold_idx = [usize::MAX; MAX_COLUMNS];
+    let mut hold_row = [0i32; MAX_COLUMNS];
+    let mut notes: Vec<IntermediateNoteData> = Vec::with_capacity(rows.len());
+    let copy_len = cols.min(LANES);
+
+    for (idx, row) in rows.iter().enumerate() {
+        if !has_obj(&row[..copy_len]) {
+            continue;
+        }
+
+        let beat_raw = row_to_beat[idx];
+        let row_i32 = beat_to_note_row_f32(beat_raw);
+        let beat = row_i32 as f32 / ROWS_PER_BEAT as f32;
+        let second = get_time_for_beat_f32(timing, f64::from(beat)) as f32;
+        let row_fake = is_fake_at_beat(timing, f64::from(row_i32));
+
+        for (c, &ch) in row.iter().take(copy_len).enumerate() {
+            parse_note_char(
+                &mut notes,
+                &mut hold_idx,
+                &mut hold_row,
+                ch,
+                c,
+                row_i32,
+                beat,
+                second,
+                row_fake,
+            );
+        }
+    }
+
+    for col in 0..cols {
+        invalidate_hold(&mut notes, &mut hold_idx, col);
+    }
     notes
 }
 
@@ -1922,8 +1944,7 @@ pub(crate) fn analyze_timing_rows<const LANES: usize>(
     };
 
     let cols = layout_cols(&cache.layout);
-    let parsed = parse_rows_from_arrays(rows, row_to_beat, timing, cols);
-    let notes = build_notes(&parsed, Some(timing));
+    let notes = build_notes_from_arrays(rows, row_to_beat, timing, cols);
 
     let mut generator = parity_gen(cache);
     if !parity_analyze(&mut generator, notes, cols) {
