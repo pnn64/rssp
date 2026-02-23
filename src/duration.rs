@@ -16,19 +16,10 @@ pub struct ChartDuration {
     pub duration_seconds: f64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct TimingOffsets {
     pub global_offset_seconds: f64,
     pub group_offset_seconds: f64,
-}
-
-impl Default for TimingOffsets {
-    fn default() -> Self {
-        Self {
-            global_offset_seconds: 0.0,
-            group_offset_seconds: 0.0,
-        }
-    }
 }
 
 #[inline(always)]

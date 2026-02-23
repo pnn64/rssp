@@ -27,13 +27,6 @@ pub struct CourseFile {
     pub entries: Vec<CourseEntry>,
 }
 
-impl CourseFile {
-    #[inline(always)]
-    pub const fn meter_for(&self, difficulty: Difficulty) -> Option<i32> {
-        self.meters[difficulty as usize]
-    }
-}
-
 const COURSE_BANNER_EXTS: [&str; 5] = ["png", "jpg", "jpeg", "bmp", "gif"];
 
 #[derive(Debug, Clone)]
@@ -83,6 +76,11 @@ pub const fn difficulty_label(d: Difficulty) -> &'static str {
         Difficulty::Challenge => "Challenge",
         Difficulty::Edit => "Edit",
     }
+}
+
+#[inline(always)]
+const fn course_meter(meters: &[Option<i32>; 6], difficulty: Difficulty) -> Option<i32> {
+    meters[difficulty as usize]
 }
 
 #[derive(Debug, Clone)]
@@ -398,18 +396,16 @@ pub fn resolve_course_banner_path(course_path: &Path, banner_tag: &str) -> Optio
 }
 
 pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
-    let mut out = CourseFile {
-        name: String::new(),
-        name_translit: String::new(),
-        scripter: String::new(),
-        description: String::new(),
-        banner: String::new(),
-        background: String::new(),
-        repeat: false,
-        lives: -1,
-        meters: [None; 6],
-        entries: Vec::new(),
-    };
+    let mut name = String::new();
+    let mut name_translit = String::new();
+    let mut scripter = String::new();
+    let mut description = String::new();
+    let mut banner = String::new();
+    let mut background = String::new();
+    let mut repeat = false;
+    let mut lives = -1;
+    let mut meters = [None; 6];
+    let mut entries = Vec::new();
 
     let mut i = 0usize;
     while i < data.len() {
@@ -430,52 +426,63 @@ pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
         i += value_start + adv;
 
         if name_bytes.eq_ignore_ascii_case(b"COURSE") {
-            out.name = decode_trim(value);
+            name = decode_trim(value);
             continue;
         }
         if name_bytes.eq_ignore_ascii_case(b"COURSETRANSLIT") {
-            out.name_translit = decode_trim(value);
+            name_translit = decode_trim(value);
             continue;
         }
         if name_bytes.eq_ignore_ascii_case(b"SCRIPTER") {
-            out.scripter = decode_trim(value);
+            scripter = decode_trim(value);
             continue;
         }
         if name_bytes.eq_ignore_ascii_case(b"DESCRIPTION") {
-            out.description = decode_trim(value);
+            description = decode_trim(value);
             continue;
         }
         if name_bytes.eq_ignore_ascii_case(b"REPEAT") {
-            out.repeat = parse_repeat(&decode_trim(value));
+            repeat = parse_repeat(&decode_trim(value));
             continue;
         }
         if name_bytes.eq_ignore_ascii_case(b"BANNER") {
-            out.banner = decode_trim(value);
+            banner = decode_trim(value);
             continue;
         }
         if name_bytes.eq_ignore_ascii_case(b"BACKGROUND") {
-            out.background = decode_trim(value);
+            background = decode_trim(value);
             continue;
         }
         if name_bytes.eq_ignore_ascii_case(b"LIVES") {
-            out.lives = decode_trim(value).parse::<i32>().unwrap_or(0).max(0);
+            lives = decode_trim(value).parse::<i32>().unwrap_or(0).max(0);
             continue;
         }
         if name_bytes.eq_ignore_ascii_case(b"METER") {
-            parse_course_meter_tag(value, &mut out.meters);
+            parse_course_meter_tag(value, &mut meters);
             continue;
         }
         if name_bytes.eq_ignore_ascii_case(b"SONG") {
             let params = split_unescaped(value, b':');
-            out.entries.push(parse_song_entry(&params));
+            entries.push(parse_song_entry(&params));
         }
     }
 
-    if out.name.is_empty() {
+    if name.is_empty() {
         return Err("Missing #COURSE tag".to_string());
     }
 
-    Ok(out)
+    Ok(CourseFile {
+        name,
+        name_translit,
+        scripter,
+        description,
+        banner,
+        background,
+        repeat,
+        lives,
+        meters,
+        entries,
+    })
 }
 
 const fn empty_timing_segments() -> TimingSegments {
@@ -605,18 +612,22 @@ fn add_course_chart(total: &mut ChartSummary, chart: &ChartSummary) {
     }
 
     if !chart.custom_patterns.is_empty() {
-        let mut merged: HashMap<&str, u32> =
-            total.custom_patterns.iter().map(|c| (c.pattern.as_str(), c.count)).collect();
         for custom in &chart.custom_patterns {
-            *merged.entry(&custom.pattern).or_insert(0) += custom.count;
+            if let Some(existing) = total
+                .custom_patterns
+                .iter_mut()
+                .find(|x| x.pattern == custom.pattern)
+            {
+                existing.count += custom.count;
+            } else {
+                total
+                    .custom_patterns
+                    .push(crate::patterns::CustomPatternSummary {
+                        pattern: custom.pattern.clone(),
+                        count: custom.count,
+                    });
+            }
         }
-        total.custom_patterns = merged
-            .into_iter()
-            .map(|(pattern, count)| crate::patterns::CustomPatternSummary {
-                pattern: pattern.to_string(),
-                count,
-            })
-            .collect();
         total.custom_patterns.sort_by(|a, b| a.pattern.cmp(&b.pattern));
     }
 }
@@ -862,7 +873,7 @@ pub fn analyze_crs_path(
         add_course_chart(&mut total, chart);
     }
 
-    if let Some(meter) = course.meter_for(course_diff) {
+    if let Some(meter) = course_meter(&course.meters, course_diff) {
         total.rating_str = meter.to_string();
     } else {
         total.rating_str = avg_meter(&meters).to_string();

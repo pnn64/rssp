@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 
 use crate::assets;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DupPolicy {
+    #[default]
     First,
     Error,
 }
@@ -17,17 +18,9 @@ pub enum SyncPref {
     Itg,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ScanOpt {
     pub dup: DupPolicy,
-}
-
-impl Default for ScanOpt {
-    fn default() -> Self {
-        Self {
-            dup: DupPolicy::First,
-        }
-    }
 }
 
 #[derive(Debug)]
