@@ -511,6 +511,8 @@ fn calc_action_cost(
     rows: &[Row],
     row_idx: usize,
     elapsed: f32,
+    inv_elapsed: f32,
+    inv_elapsed64: f64,
     cols: usize,
     left_moved_not_holding: bool,
     right_moved_not_holding: bool,
@@ -551,7 +553,7 @@ fn calc_action_cost(
     let mut cost = 0.0;
     cost += calc_mine_cost(result, row);
     cost += calc_hold_switch_cost(layout, initial, result, row);
-    cost += calc_bracket_tap_cost(initial, row, lh, lt, rh, rt, elapsed);
+    cost += calc_bracket_tap_cost(initial, row, lh, lt, rh, rt, inv_elapsed);
     cost +=
         calc_bracket_jack_cost(result, moved_left, moved_right, jacked_left, jacked_right, did_jump);
     cost += calc_doublestep_cost(
@@ -569,11 +571,11 @@ fn calc_action_cost(
     cost += calc_twisted_foot_cost(layout, hit);
     cost += calc_facing_cost(layout, result);
     cost += calc_spin_cost(layout, initial, result);
-    cost += calc_footswitch_cost(initial, placement, row, elapsed, cols);
+    cost += calc_footswitch_cost(initial, placement, row, elapsed, inv_elapsed, cols);
     cost += calc_sideswitch_cost(layout, initial, result, placement);
     cost += calc_missed_footswitch_cost(row, jacked_left, jacked_right);
     cost += calc_jack_cost(moved_left, moved_right, jacked_left, jacked_right, elapsed);
-    cost += calc_big_movements_cost(layout, initial, result, hit, elapsed);
+    cost += calc_big_movements_cost(layout, initial, result, hit, inv_elapsed64);
     cost
 }
 
@@ -620,7 +622,7 @@ fn calc_bracket_tap_cost(
     lt: i8,
     rh: i8,
     rt: i8,
-    elapsed: f32,
+    inv_elapsed: f32,
 ) -> f32 {
     if row.hold_mask == 0 {
         return 0.0;
@@ -632,7 +634,7 @@ fn calc_bracket_tap_cost(
             return 0.0;
         }
         let jack_penalty = if foot_moved(initial, pair) {
-            1.0 / elapsed
+            inv_elapsed
         } else {
             1.0
         };
@@ -779,6 +781,7 @@ fn calc_footswitch_cost(
     placement: &FootPlacement,
     row: &Row,
     elapsed: f32,
+    inv_elapsed: f32,
     cols: usize,
 ) -> f32 {
     if !(SLOW_FOOTSWITCH_THRESHOLD..SLOW_FOOTSWITCH_IGNORE).contains(&elapsed) {
@@ -795,10 +798,7 @@ fn calc_footswitch_cost(
             continue;
         }
         if init != res && init != OTHER_PART_OF_FOOT[foot_idx(res)] {
-            let divisor = SLOW_FOOTSWITCH_THRESHOLD + time_scaled;
-            if divisor > 0.0 {
-                return (time_scaled / divisor) * FOOTSWITCH_WEIGHT;
-            }
+            return time_scaled * inv_elapsed * FOOTSWITCH_WEIGHT;
         }
     }
     0.0
@@ -855,7 +855,7 @@ fn calc_big_movements_cost(
     initial: &State,
     result: &State,
     hit: [i8; NUM_FEET],
-    elapsed: f32,
+    inv_elapsed64: f64,
 ) -> f32 {
 	    let mut cost = 0.0;
 	    for &foot in &FEET {
@@ -869,7 +869,7 @@ fn calc_big_movements_cost(
 
 	        let res_pos = hit[foot_idx(foot)];
 	        let dist = layout_dist_weighted(layout, init_pos as usize, res_pos as usize);
-	        let mut d = (dist / f64::from(elapsed)) as f32;
+	        let mut d = (dist * inv_elapsed64) as f32;
 
 	        let other = OTHER_PART_OF_FOOT[foot_idx(foot)];
 	        let other_pos = hit[foot_idx(other)];
@@ -880,8 +880,8 @@ fn calc_big_movements_cost(
             d *= 0.2;
         }
         cost += d;
-    }
-    cost
+	    }
+	    cost
 }
 
 #[inline(always)]
@@ -1274,6 +1274,8 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
         let row_second = g.rows[i].second;
         let hold_mask = g.rows[i].hold_mask;
         let elapsed = row_second - prev_second;
+        let inv_elapsed64 = 1.0 / f64::from(elapsed);
+        let inv_elapsed = inv_elapsed64 as f32;
         let can_prune = elapsed >= 0.0;
         prev_second = row_second;
         let prev_row_has_live_hold = i > 0 && row_has_live_hold(&g.rows[i - 1]);
@@ -1316,6 +1318,8 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
                         &g.rows,
                         i,
                         elapsed,
+                        inv_elapsed,
+                        inv_elapsed64,
                         g.column_count,
                         left_moved_not_holding,
                         right_moved_not_holding,
