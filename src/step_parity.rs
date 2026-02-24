@@ -97,7 +97,7 @@ const RIGHT_PAIR: FootPair = FootPair {
     toe: Foot::RightToe,
 };
 
-const ROW_MAP_MIN_CAP: usize = 16;
+const ROW_MAP_MIN_CAP: usize = 256;
 
 struct RowStateMap {
     entries: Vec<RowMapEntry>,
