@@ -180,23 +180,21 @@ pub fn compute_measure_nps_vec(densities: &[usize], bpms: &[(f64, f64)]) -> Vec<
 
 #[must_use] 
 pub fn compute_measure_nps_vec_with_timing(densities: &[usize], timing: &TimingData) -> Vec<f64> {
-    densities
-        .iter()
-        .enumerate()
-        .map(|(i, &d)| {
-            let beat = i as f64 * 4.0;
-            let (start, end) = (
-                get_time_for_beat_f32(timing, beat),
-                get_time_for_beat_f32(timing, beat + 4.0),
-            );
-            let dur = end - start;
-            if d == 0 || dur <= 0.12 {
-                0.0
-            } else {
-                d as f64 / dur
-            }
-        })
-        .collect()
+    let mut out = Vec::with_capacity(densities.len());
+    let mut start = get_time_for_beat_f32(timing, 0.0);
+
+    for (i, &d) in densities.iter().enumerate() {
+        let end = get_time_for_beat_f32(timing, (i as f64 + 1.0) * 4.0);
+        let dur = end - start;
+        out.push(if d == 0 || dur <= 0.12 {
+            0.0
+        } else {
+            d as f64 / dur
+        });
+        start = end;
+    }
+
+    out
 }
 
 fn compute_nps_iter<F: Fn(usize) -> f64>(densities: &[usize], get_bpm: F) -> Vec<f64> {
