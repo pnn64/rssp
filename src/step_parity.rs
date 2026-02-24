@@ -70,6 +70,7 @@ const FEET: [Foot; 4] = [
     Foot::RightToe,
 ];
 const FOOT_MASKS: [u8; NUM_FEET] = [0, 1, 2, 4, 8];
+const OTHER_FOOT_IDXS: [usize; NUM_FEET] = [0, 2, 1, 4, 3];
 const LEFT_FOOT_MASK: u8 = FOOT_MASKS[1] | FOOT_MASKS[2];
 const RIGHT_FOOT_MASK: u8 = FOOT_MASKS[3] | FOOT_MASKS[4];
 const PERM_CAP: [usize; 9] = [1, 4, 12, 24, 24, 0, 0, 0, 0];
@@ -855,22 +856,22 @@ fn calc_big_movements_cost(
     hit: [i8; NUM_FEET],
     inv_elapsed64: f64,
 ) -> f32 {
-	    let mut cost = 0.0;
-	    for &foot in &FEET {
-	        if (result.moved_mask & FOOT_MASKS[foot_idx(foot)]) == 0 {
-	            continue;
-	        }
-	        let init_pos = initial.where_the_feet_are[foot_idx(foot)];
-	        if init_pos == INVALID_COLUMN {
-	            continue;
-	        }
+    let mut cost = 0.0;
+    let mut moved_feet = result.moved_mask & (LEFT_FOOT_MASK | RIGHT_FOOT_MASK);
+    while moved_feet != 0 {
+        let fi = moved_feet.trailing_zeros() as usize + 1;
+        moved_feet &= moved_feet - 1;
 
-	        let res_pos = hit[foot_idx(foot)];
-	        let dist = layout_dist_weighted(layout, init_pos as usize, res_pos as usize);
-	        let mut d = (dist * inv_elapsed64) as f32;
+        let init_pos = initial.where_the_feet_are[fi];
+        if init_pos == INVALID_COLUMN {
+            continue;
+        }
 
-	        let other = OTHER_PART_OF_FOOT[foot_idx(foot)];
-	        let other_pos = hit[foot_idx(other)];
+        let res_pos = hit[fi];
+        let dist = layout_dist_weighted(layout, init_pos as usize, res_pos as usize);
+        let mut d = (dist * inv_elapsed64) as f32;
+
+        let other_pos = hit[OTHER_FOOT_IDXS[fi]];
         if other_pos != INVALID_COLUMN {
             if other_pos == init_pos {
                 continue;
@@ -878,8 +879,8 @@ fn calc_big_movements_cost(
             d *= 0.2;
         }
         cost += d;
-	    }
-	    cost
+    }
+    cost
 }
 
 #[inline(always)]
