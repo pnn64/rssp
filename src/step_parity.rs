@@ -508,8 +508,7 @@ fn calc_action_cost(
     result: &State,
     placement: &FootPlacement,
     hit: [i8; NUM_FEET],
-    rows: &[Row],
-    row_idx: usize,
+    row: &Row,
     elapsed: f32,
     inv_elapsed: f32,
     inv_elapsed64: f64,
@@ -518,7 +517,6 @@ fn calc_action_cost(
     right_moved_not_holding: bool,
     prev_row_has_live_hold: bool,
 ) -> f32 {
-    let row = &rows[row_idx];
     let (lh, lt, rh, rt) = (
         hit[foot_idx(Foot::LeftHeel)],
         hit[foot_idx(Foot::LeftToe)],
@@ -1204,8 +1202,7 @@ fn parity_flush_row(g: &mut StepParityGenerator, counter: &RowCounter) {
     if counter.last_second == CLM_SECOND_INVALID {
         return;
     }
-    let row = parity_build_row(g, counter);
-    g.rows.push(row);
+    g.rows.push(parity_build_row(g, counter));
 }
 
 fn parity_build_row(g: &StepParityGenerator, counter: &RowCounter) -> Row {
@@ -1285,6 +1282,7 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
         g.next_ids.clear();
         row_map_reset(&mut g.state_map, estimate);
         g.next_ids.reserve(estimate);
+        let row = g.rows[i].clone();
 
         for j in 0..g.prev_ids.len() {
             let init_id = g.prev_ids[j];
@@ -1315,8 +1313,7 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
                         &result,
                         perm,
                         hit,
-                        &g.rows,
-                        i,
+                        &row,
                         elapsed,
                         inv_elapsed,
                         inv_elapsed64,
