@@ -2069,23 +2069,32 @@ pub fn analyze_timing_lanes(minimized_note_data: &[u8], timing: &TimingData, lan
 	    })
 }
 
+pub(crate) struct TimingRowsScratch<const LANES: usize> {
+    generator: StepParityGenerator,
+}
+
+pub(crate) fn timing_rows_scratch<const LANES: usize>() -> Option<TimingRowsScratch<LANES>> {
+    let cache = layout_for_lanes(LANES)?;
+    Some(TimingRowsScratch {
+        generator: parity_gen(cache),
+    })
+}
+
 pub(crate) fn analyze_timing_rows<const LANES: usize>(
     rows: &[[u8; LANES]],
     row_to_beat: &[f32],
     timing: &TimingData,
-    _minimized_note_data: &[u8],
+    scratch: &mut TimingRowsScratch<LANES>,
 ) -> TechCounts {
-    let Some(cache) = layout_for_lanes(LANES) else {
-        return TechCounts::default();
-    };
-
-    let cols = layout_cols(&cache.layout);
-
-    let mut generator = parity_gen(cache);
-    if !parity_analyze_rows(&mut generator, rows, row_to_beat, timing, cols) {
+    let cols = layout_cols(scratch.generator.layout);
+    if !parity_analyze_rows(&mut scratch.generator, rows, row_to_beat, timing, cols) {
         return TechCounts::default();
     }
-    calculate_tech_counts(&generator.rows, &generator.result_columns, generator.layout)
+    calculate_tech_counts(
+        &scratch.generator.rows,
+        &scratch.generator.result_columns,
+        scratch.generator.layout,
+    )
 }
 
 fn time_between_beats(start: f32, end: f32, bpm_map: &[(f64, f64)]) -> f64 {

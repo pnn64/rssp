@@ -449,6 +449,8 @@ fn build_chart_summary(
     ssc_version: f32,
     allow_steps_timing: bool,
     compiled_custom_patterns: &CompiledCustomPatterns,
+    parity_scratch4: &mut step_parity::TimingRowsScratch<4>,
+    parity_scratch8: &mut step_parity::TimingRowsScratch<8>,
     options: &AnalysisOptions,
 ) -> Option<(ChartSummary, i32)> {
     let chart_start_time = Instant::now();
@@ -731,7 +733,7 @@ fn build_chart_summary(
                     &rows4,
                     &row_to_beat,
                     &timing,
-                    &minimized_chart,
+                    parity_scratch4,
                 )
             } else {
                 step_parity::TechCounts::default()
@@ -749,7 +751,7 @@ fn build_chart_summary(
                     &rows8,
                     &row_to_beat,
                     &timing,
-                    &minimized_chart,
+                    parity_scratch8,
                 )
             } else {
                 step_parity::TechCounts::default()
@@ -1063,6 +1065,12 @@ pub fn analyze(
     let entry_count = entries.len();
     let mut chart_summaries = Vec::with_capacity(entry_count);
     let mut total_length = 0i32;
+    let (Some(mut parity_scratch4), Some(mut parity_scratch8)) = (
+        step_parity::timing_rows_scratch::<4>(),
+        step_parity::timing_rows_scratch::<8>(),
+    ) else {
+        return Err("Unsupported lane layout for step parity".to_string());
+    };
     let options_ref = &options;
     let compiled_custom_patterns_ref = &compiled_custom_patterns;
     for entry in entries {
@@ -1084,6 +1092,8 @@ pub fn analyze(
             ssc_version,
             allow_steps_timing,
             compiled_custom_patterns_ref,
+            &mut parity_scratch4,
+            &mut parity_scratch8,
             options_ref,
         ) {
             if chart_length > total_length {
