@@ -111,6 +111,12 @@ struct RowMapEntry {
     mark: u32,
 }
 
+#[derive(Clone, Copy)]
+enum RowMapProbe {
+    Found(usize),
+    Vacant(usize),
+}
+
 const fn row_map_hash(x: u32) -> usize {
     // 0x9E3779B9 is the 32-bit golden ratio prime
     x.wrapping_mul(0x9E3779B9) as usize
@@ -149,40 +155,28 @@ fn row_map_reset(map: &mut RowStateMap, expected: usize) {
 }
 
 #[inline(always)]
-fn row_map_get(map: &RowStateMap, key: u32) -> Option<usize> {
-    if map.mask == 0 {
-        return None;
-    }
+fn row_map_probe(map: &RowStateMap, key: u32) -> RowMapProbe {
+    debug_assert!(map.mask != 0);
     let mut idx = row_map_hash(key) & map.mask;
     loop {
         let entry = map.entries[idx];
         if entry.mark != map.epoch {
-            return None;
+            return RowMapProbe::Vacant(idx);
         }
         if entry.key == key {
-            return Some(entry.val);
+            return RowMapProbe::Found(entry.val);
         }
         idx = (idx + 1) & map.mask;
     }
 }
 
 #[inline(always)]
-fn row_map_insert(map: &mut RowStateMap, key: u32, val: usize) {
-    let mut idx = row_map_hash(key) & map.mask;
-    loop {
-        let entry = &mut map.entries[idx];
-        if entry.mark != map.epoch {
-            entry.mark = map.epoch;
-            entry.key = key;
-            entry.val = val;
-            return;
-        }
-        if entry.key == key {
-            entry.val = val;
-            return;
-        }
-        idx = (idx + 1) & map.mask;
-    }
+fn row_map_insert_at(map: &mut RowStateMap, idx: usize, key: u32, val: usize) {
+    debug_assert!(idx < map.entries.len());
+    let entry = &mut map.entries[idx];
+    entry.mark = map.epoch;
+    entry.key = key;
+    entry.val = val;
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -1298,16 +1292,19 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
             let right_moved_not_holding = foot_moved_not_holding(&init_state, &RIGHT_PAIR);
             for perm in perms {
                 let (result, hit, key) = parity_result_state(&init_state, perm, g.column_count, hold_mask);
-                let res_id = if let Some(id) = row_map_get(&g.state_map, key) {
-                    if can_prune && init_cost >= g.nodes[id].cost {
-                        continue;
+                let res_id = match row_map_probe(&g.state_map, key) {
+                    RowMapProbe::Found(id) => {
+                        if can_prune && init_cost >= g.nodes[id].cost {
+                            continue;
+                        }
+                        id
                     }
-                    id
-                } else {
-                    let id = parity_add_node(g, result);
-                    g.next_ids.push(id);
-                    row_map_insert(&mut g.state_map, key, id);
-                    id
+                    RowMapProbe::Vacant(slot) => {
+                        let id = parity_add_node(g, result);
+                        g.next_ids.push(id);
+                        row_map_insert_at(&mut g.state_map, slot, key, id);
+                        id
+                    }
                 };
                 let nc = init_cost
                     + calc_action_cost(
