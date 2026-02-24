@@ -271,13 +271,61 @@ fn find_byte(slice: &[u8], needle: u8) -> Option<usize> {
     None
 }
 
-/// Finds the first unescaped `;` in `slice`.
 #[inline(always)]
-fn find_unescaped_semi(slice: &[u8]) -> Option<usize> {
+fn find_either_byte(slice: &[u8], a: u8, b: u8) -> Option<usize> {
+    let mut i = 0usize;
+    let n = slice.len();
+    while i + 8 <= n {
+        let c = &slice[i..i + 8];
+        if c[0] == a || c[0] == b {
+            return Some(i);
+        }
+        if c[1] == a || c[1] == b {
+            return Some(i + 1);
+        }
+        if c[2] == a || c[2] == b {
+            return Some(i + 2);
+        }
+        if c[3] == a || c[3] == b {
+            return Some(i + 3);
+        }
+        if c[4] == a || c[4] == b {
+            return Some(i + 4);
+        }
+        if c[5] == a || c[5] == b {
+            return Some(i + 5);
+        }
+        if c[6] == a || c[6] == b {
+            return Some(i + 6);
+        }
+        if c[7] == a || c[7] == b {
+            return Some(i + 7);
+        }
+        i += 8;
+    }
+    while i < n {
+        if slice[i] == a || slice[i] == b {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Finds the first unescaped `;` in `slice` when there is no `#` before it.
+#[inline(always)]
+fn find_unescaped_semi_no_hash(slice: &[u8]) -> Option<usize> {
     let mut off = 0usize;
+    let mut has_hash = false;
     while off < slice.len() {
-        let rel = find_byte(&slice[off..], b';')?;
+        let rel = find_either_byte(&slice[off..], b';', b'#')?;
         let idx = off + rel;
+        let b = slice[idx];
+        if b == b'#' {
+            has_hash = true;
+            off = idx + 1;
+            continue;
+        }
         let mut bs = 0usize;
         let mut i = idx;
         while i > 0 && slice[i - 1] == b'\\' {
@@ -285,7 +333,7 @@ fn find_unescaped_semi(slice: &[u8]) -> Option<usize> {
             i -= 1;
         }
         if bs & 1 == 0 {
-            return Some(idx);
+            return (!has_hash).then_some(idx);
         }
         off = idx + 1;
     }
@@ -295,10 +343,7 @@ fn find_unescaped_semi(slice: &[u8]) -> Option<usize> {
 /// Returns (`value_end`, `next_position`) if terminator found.
 #[inline(always)]
 fn scan_tag_end(slice: &[u8], allow_nl: bool) -> Option<(usize, usize)> {
-    if allow_nl
-        && let Some(end) = find_unescaped_semi(slice)
-        && find_byte(&slice[..end], b'#').is_none()
-    {
+    if allow_nl && let Some(end) = find_unescaped_semi_no_hash(slice) {
         return Some((end, end + 1));
     }
 
