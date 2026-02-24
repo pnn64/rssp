@@ -108,7 +108,7 @@ struct RowStateMap {
 #[derive(Clone, Copy, Default)]
 struct RowMapEntry {
     key: u32,
-    val: usize,
+    val: u32,
     mark: u32,
 }
 
@@ -165,7 +165,7 @@ fn row_map_probe(map: &RowStateMap, key: u32) -> RowMapProbe {
             return RowMapProbe::Vacant(idx);
         }
         if entry.key == key {
-            return RowMapProbe::Found(entry.val);
+            return RowMapProbe::Found(entry.val as usize);
         }
         idx = (idx + 1) & map.mask;
     }
@@ -174,10 +174,11 @@ fn row_map_probe(map: &RowStateMap, key: u32) -> RowMapProbe {
 #[inline(always)]
 fn row_map_insert_at(map: &mut RowStateMap, idx: usize, key: u32, val: usize) {
     debug_assert!(idx < map.entries.len());
+    debug_assert!(u32::try_from(val).is_ok());
     let entry = &mut map.entries[idx];
     entry.mark = map.epoch;
     entry.key = key;
-    entry.val = val;
+    entry.val = val as u32;
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -1409,18 +1410,17 @@ fn parity_result_state(
 fn parity_backtrack(g: &mut StepParityGenerator, mut cur: usize) -> bool {
     let rows = g.rows.len();
     g.result_columns.clear();
-    g.result_columns.resize(rows, [Foot::None; MAX_COLUMNS]);
+    g.result_columns.reserve(rows);
 
-    let mut write = rows;
-    while write != 0 {
-        write -= 1;
-        g.result_columns[write] = g.nodes[cur].state.combined_columns;
+    for _ in 0..rows {
+        g.result_columns.push(g.nodes[cur].state.combined_columns);
         let prev = g.nodes[cur].pred;
         if prev == u32::MAX {
             return false;
         }
         cur = prev as usize;
     }
+    g.result_columns.reverse();
 
     cur == 0
 }
