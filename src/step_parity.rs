@@ -2052,8 +2052,41 @@ pub fn analyze_lanes(
 
     let cols = layout_cols(&cache.layout);
     debug_assert!(!minimized_note_data.contains(&b';'));
+    let offset = offset as f32;
+    let mut bpm_idx = 0usize;
+    let mut bpm = bpm_map.first().map_or(60.0, |b| b.1);
+    let mut last_beat = 0.0f64;
+    let mut last_time = 0.0f64;
+    while bpm_idx < bpm_map.len() && bpm_map[bpm_idx].0 <= last_beat {
+        bpm = bpm_map[bpm_idx].1;
+        bpm_idx += 1;
+    }
     analyze_core(cache, minimized_note_data, cols, None, |beat| {
-        time_between_beats(0.0, beat, bpm_map) as f32 - offset as f32
+        let target = f64::from(beat);
+        if target < last_beat {
+            return time_between_beats(0.0, beat, bpm_map) as f32 - offset;
+        }
+
+        while bpm_idx < bpm_map.len() {
+            let (change_beat, change_bpm) = bpm_map[bpm_idx];
+            if change_beat <= last_beat {
+                bpm = change_bpm;
+                bpm_idx += 1;
+                continue;
+            }
+            if change_beat >= target {
+                break;
+            }
+            last_time += (change_beat - last_beat) * 60.0 / bpm;
+            last_beat = change_beat;
+            bpm = change_bpm;
+            bpm_idx += 1;
+        }
+        if target > last_beat {
+            last_time += (target - last_beat) * 60.0 / bpm;
+            last_beat = target;
+        }
+        last_time as f32 - offset
     })
 }
 
