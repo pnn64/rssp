@@ -160,7 +160,7 @@ fn row_map_probe(map: &RowStateMap, key: u32) -> RowMapProbe {
     debug_assert!(map.mask != 0);
     let mut idx = row_map_hash(key) & map.mask;
     loop {
-        let entry = map.entries[idx];
+        let entry = &map.entries[idx];
         if entry.mark != map.epoch {
             return RowMapProbe::Vacant(idx);
         }
@@ -410,7 +410,7 @@ struct IntermediateNoteData {
     second: f32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct Row {
     second: f32,
     beat: f32,
@@ -1284,7 +1284,7 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
         g.next_ids.clear();
         row_map_reset(&mut g.state_map, estimate);
         g.next_ids.reserve(estimate);
-        let row = g.rows[i].clone();
+        let row = g.rows[i];
 
         for j in 0..g.prev_ids.len() {
             let init_id = g.prev_ids[j];
@@ -1372,20 +1372,19 @@ fn parity_result_state(
         ((moved_mask & LEFT_FOOT_MASK) != 0, (moved_mask & RIGHT_FOOT_MASK) != 0);
     let (mut where_the_feet_are, mut comb_p, mut occupied_mask) =
         ([INVALID_COLUMN; NUM_FEET], 0u32, 0u8);
-    for (i, slot) in combined.iter_mut().enumerate().take(n) {
-        let foot = if *slot == Foot::None {
+    for i in 0..n {
+        let mut foot = combined[i];
+        if foot == Foot::None {
             let prev = initial.combined_columns[i];
-            match prev {
+            foot = match prev {
                 Foot::LeftHeel | Foot::RightHeel
                     if (moved_mask & FOOT_MASKS[foot_idx(prev)]) == 0 => prev,
                 Foot::LeftToe if !moved_left => prev,
                 Foot::RightToe if !moved_right => prev,
                 _ => Foot::None,
-            }
-        } else {
-            *slot
-        };
-        *slot = foot;
+            };
+        }
+        combined[i] = foot;
         comb_p |= (foot as u32) << (i * 3);
         if foot != Foot::None {
             where_the_feet_are[foot_idx(foot)] = i as i8;
