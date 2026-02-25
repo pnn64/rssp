@@ -1033,6 +1033,19 @@ fn row_quantized(beat_raw: f32) -> (i32, f32) {
     (row_i32, row_i32 as f32 / ROWS_PER_BEAT as f32)
 }
 
+#[inline(always)]
+fn row_nonzero_mask<const LANES: usize>(row: &[u8; LANES], cols: usize) -> u8 {
+    let mut mask = 0u8;
+    let mut c = 0usize;
+    while c < cols {
+        if row[c] != b'0' {
+            mask |= 1u8 << c;
+        }
+        c += 1;
+    }
+    mask
+}
+
 fn hold_heads_from_arrays<const LANES: usize>(
     rows: &[[u8; LANES]],
     row_to_beat: &[f32],
@@ -1048,11 +1061,14 @@ fn hold_heads_from_arrays<const LANES: usize>(
     let mut hold_start_beat = [0.0f32; MAX_COLUMNS];
 
     for (idx, row) in rows.iter().enumerate() {
-        if !has_obj(&row[..copy_len]) {
+        let mut nonzero_mask = row_nonzero_mask(row, copy_len);
+        if nonzero_mask == 0 {
             continue;
         }
         let (row_i32, beat) = row_quantized(row_to_beat[idx]);
-        for c in 0..copy_len {
+        while nonzero_mask != 0 {
+            let c = nonzero_mask.trailing_zeros() as usize;
+            nonzero_mask &= nonzero_mask - 1;
             let ch = row[c];
             if ch == b'1' {
                 hold_start_idx[c] = usize::MAX;
@@ -1165,14 +1181,17 @@ fn parity_create_rows_from_arrays<const LANES: usize>(
     let copy_len = cols.min(LANES);
 
     for (idx, row) in rows.iter().enumerate() {
-        if !has_obj(&row[..copy_len]) {
+        let mut nonzero_mask = row_nonzero_mask(row, copy_len);
+        if nonzero_mask == 0 {
             continue;
         }
         let (row_i32, beat) = row_quantized(row_to_beat[idx]);
         let second = get_time_for_beat_f32(timing, f64::from(beat)) as f32;
         let row_fake = is_fake_at_beat(timing, f64::from(row_i32));
 
-        for c in 0..copy_len {
+        while nonzero_mask != 0 {
+            let c = nonzero_mask.trailing_zeros() as usize;
+            nonzero_mask &= nonzero_mask - 1;
             let ch = row[c];
             if ch == b'1' {
                 if !row_fake {
@@ -1295,6 +1314,7 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
         row_map_reset(&mut g.state_map, estimate);
         g.next_ids.reserve(estimate);
         let row = g.rows[i];
+        let active_mask = row.note_mask | hold_mask;
 
         for j in 0..g.prev_ids.len() {
             let init_id = g.prev_ids[j];
@@ -1303,7 +1323,8 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
             let left_moved_not_holding = foot_moved_not_holding(&init_state, &LEFT_PAIR);
             let right_moved_not_holding = foot_moved_not_holding(&init_state, &RIGHT_PAIR);
             for perm in perms {
-                let (result, hit, key) = parity_result_state(&init_state, perm, g.column_count, hold_mask);
+                let (result, hit, key) =
+                    parity_result_state(&init_state, perm, g.column_count, hold_mask, active_mask);
                 let res_id = match row_map_probe(&g.state_map, key) {
                     RowMapProbe::Found(id) => {
                         if can_prune && init_cost >= g.nodes[id].cost {
@@ -1356,11 +1377,18 @@ fn parity_result_state(
     cols: &FootPlacement,
     col_count: usize,
     hold_mask: u8,
+    active_mask: u8,
 ) -> (State, [i8; NUM_FEET], u32) {
     let n = col_count;
     let (mut combined, mut hit) = ([Foot::None; MAX_COLUMNS], [INVALID_COLUMN; NUM_FEET]);
     let (mut moved_mask, mut holding_mask) = (0u8, 0u8);
-    for i in 0..n {
+    let mut mask = active_mask;
+    while mask != 0 {
+        let i = mask.trailing_zeros() as usize;
+        mask &= mask - 1;
+        if i >= n {
+            continue;
+        }
         let foot = cols[i];
         if foot == Foot::None {
             continue;
