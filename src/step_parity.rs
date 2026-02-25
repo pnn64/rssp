@@ -1054,24 +1054,27 @@ fn hold_heads_from_arrays<const LANES: usize>(
         let (row_i32, beat) = row_quantized(row_to_beat[idx]);
         for c in 0..copy_len {
             let ch = row[c];
-            if matches!(ch, b'1' | b'K' | b'L' | b'M' | b'F') {
+            if ch == b'1' {
                 hold_start_idx[c] = usize::MAX;
+                continue;
             }
-            match ch {
-                b'2' | b'4' => {
-                    hold_start_idx[c] = idx;
-                    hold_start_row[c] = row_i32;
-                    hold_start_beat[c] = beat;
+            if ch == b'2' || ch == b'4' {
+                hold_start_idx[c] = idx;
+                hold_start_row[c] = row_i32;
+                hold_start_beat[c] = beat;
+                continue;
+            }
+            if ch == b'3' {
+                let start_idx = hold_start_idx[c];
+                if start_idx != usize::MAX {
+                    let len = (row_i32 - hold_start_row[c]) as f32 / ROWS_PER_BEAT as f32;
+                    out[start_idx][c] = hold_start_beat[c] + len;
+                    hold_start_idx[c] = usize::MAX;
                 }
-                b'3' => {
-                    let start_idx = hold_start_idx[c];
-                    if start_idx != usize::MAX {
-                        let len = (row_i32 - hold_start_row[c]) as f32 / ROWS_PER_BEAT as f32;
-                        out[start_idx][c] = hold_start_beat[c] + len;
-                        hold_start_idx[c] = usize::MAX;
-                    }
-                }
-                _ => {}
+                continue;
+            }
+            if matches!(ch, b'K' | b'L' | b'M' | b'F') {
+                hold_start_idx[c] = usize::MAX;
             }
         }
     }
@@ -1170,9 +1173,16 @@ fn parity_create_rows_from_arrays<const LANES: usize>(
         let row_fake = is_fake_at_beat(timing, f64::from(row_i32));
 
         for c in 0..copy_len {
-            match row[c] {
+            let ch = row[c];
+            if ch == b'1' {
+                if !row_fake {
+                    parity_push_note(g, &mut counter, c, beat, second, HOLD_END_NONE);
+                }
+                continue;
+            }
+            match ch {
                 b'M' => parity_push_mine(g, &mut counter, c, second, row_fake),
-                b'1' | b'K' | b'L' if !row_fake => {
+                b'K' | b'L' if !row_fake => {
                     parity_push_note(g, &mut counter, c, beat, second, HOLD_END_NONE)
                 }
                 b'2' | b'4' if !row_fake => {
