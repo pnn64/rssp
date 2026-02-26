@@ -546,6 +546,7 @@ fn empty_course_chart(step_type: &str, course_difficulty: Difficulty, meter: i32
         chart_offset_seconds: 0.0,
         chart_has_own_timing: false,
         minimized_note_data: Vec::new(),
+        chart_attacks: None,
         chart_stops: None,
         chart_speeds: None,
         chart_scrolls: None,

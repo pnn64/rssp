@@ -433,6 +433,7 @@ fn compute_derived_chart_metrics(
 /// Processes a single chart's data to produce a `ChartSummary`.
 fn build_chart_summary(
     entry: &ParsedChartEntry<'_>,
+    global_attacks_opt: Option<&[u8]>,
     global_bpms_raw: &str,
     global_stops_raw: &str,
     global_delays_raw: &str,
@@ -463,6 +464,7 @@ fn build_chart_summary(
     let lanes = supported_stepstype_lanes_bytes(fields[0])?;
 
     let chart_bpms_opt = entry.chart_bpms.as_deref();
+    let chart_attacks_opt = entry.chart_attacks.as_deref().or(global_attacks_opt);
     let chart_delays_opt = entry.chart_delays.as_deref();
     let chart_warps_opt = entry.chart_warps.as_deref();
     let chart_stops_opt = entry.chart_stops.as_deref();
@@ -605,6 +607,13 @@ fn build_chart_summary(
             .map(str::to_string)
     });
     let chart_combos = chart_combos_opt.and_then(|bytes| {
+        std::str::from_utf8(bytes)
+            .ok()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    });
+    let chart_attacks = chart_attacks_opt.and_then(|bytes| {
         std::str::from_utf8(bytes)
             .ok()
             .map(str::trim)
@@ -827,6 +836,7 @@ fn build_chart_summary(
             chart_offset_seconds: chart_offset,
             chart_has_own_timing,
             minimized_note_data: minimized_chart,
+            chart_attacks,
             chart_stops,
             chart_speeds,
             chart_scrolls,
@@ -1060,6 +1070,7 @@ pub fn analyze(
     let cleaned_global_scrolls_str = cleaned_global_scrolls.as_str();
     let cleaned_global_fakes_str = cleaned_global_fakes.as_str();
     let normalized_global_bpms_str = normalized_global_bpms.as_str();
+    let global_attacks_opt = parsed_data.attacks;
 
     let entries = parsed_data.notes_list;
     let entry_count = entries.len();
@@ -1076,6 +1087,7 @@ pub fn analyze(
     for entry in entries {
         if let Some((summary, chart_length)) = build_chart_summary(
             &entry,
+            global_attacks_opt,
             cleaned_global_bpms_str,
             cleaned_global_stops_str,
             cleaned_global_delays_str,
