@@ -132,6 +132,56 @@ fn resolve_asset(song_dir: &Path, tag: &str) -> Option<PathBuf> {
     resolve_rel_ci(song_dir, tag)
 }
 
+const SOUND_EXTS: [&str; 1] = ["ogg"];
+
+#[inline(always)]
+fn is_sound_ext(path: &Path) -> bool {
+    path.extension()
+        .and_then(|s| s.to_str())
+        .is_some_and(|ext| SOUND_EXTS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
+}
+
+#[inline(always)]
+fn list_sound_files(song_dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(song_dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && is_sound_ext(p))
+        .collect();
+    files.sort_by_cached_key(|p| lc_name(p));
+    files
+}
+
+/// Resolves `#MUSIC` like ITGmania's Song::TidyUpData fallback behavior.
+///
+/// Order:
+/// 1. Try the tagged path in `#MUSIC` (case-insensitive within song dir).
+/// 2. If missing, pick the first sound file in the song directory.
+/// 3. If the first fallback starts with `intro` and another sound exists, use the second.
+#[must_use]
+pub fn resolve_music_path_like_itg(song_dir: &Path, music_tag: &str) -> Option<PathBuf> {
+    let tag = music_tag.trim();
+    if !tag.is_empty() && let Some(path) = resolve_asset(song_dir, tag) {
+        return Some(path);
+    }
+
+    let sounds = list_sound_files(song_dir);
+    if sounds.is_empty() {
+        return None;
+    }
+    if sounds.len() > 1
+        && sounds[0]
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().to_ascii_lowercase().starts_with("intro"))
+    {
+        return Some(sounds[1].clone());
+    }
+    Some(sounds[0].clone())
+}
+
 fn file_stem_lc(path: &Path) -> Option<String> {
     Some(path.file_stem()?.to_string_lossy().to_ascii_lowercase())
 }
