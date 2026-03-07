@@ -157,7 +157,7 @@ fn parse_metadata(simfile_data: &[u8], extension: &str) -> Result<ParsedMetadata
         translate_markers: true,
         ..AnalysisOptions::default()
     };
-    let summary = analyze(simfile_data, extension, options).map_err(|e| e)?;
+    let summary = analyze(simfile_data, extension, &options).map_err(|e| e)?;
     let title = summary.title_str;
     let subtitle = summary.subtitle_str;
     let artist = summary.artist_str;
@@ -193,7 +193,7 @@ fn parse_step_artists(
         translate_markers: true,
         ..AnalysisOptions::default()
     };
-    let summary = analyze(simfile_data, extension, options).map_err(|e| e)?;
+    let summary = analyze(simfile_data, extension, &options).map_err(|e| e)?;
     let mut results = Vec::with_capacity(summary.charts.len());
     for chart in summary.charts {
         let meter = chart.rating_str.trim().parse::<u32>().ok();

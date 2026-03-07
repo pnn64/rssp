@@ -75,7 +75,7 @@ fn compute_chart_tech_counts(
         mono_threshold: 6,
         ..AnalysisOptions::default()
     };
-    let summary = analyze(simfile_data, extension, options).map_err(|e| e)?;
+    let summary = analyze(simfile_data, extension, &options).map_err(|e| e)?;
     let mut results = Vec::with_capacity(summary.charts.len());
     for chart in summary.charts {
         let counts = chart.tech_counts;

@@ -118,7 +118,7 @@ fn compute_chart_breakdowns(
         compute_tech_counts: false,
         ..AnalysisOptions::default()
     };
-    let summary = analyze(simfile_data, extension, options).map_err(|e| e)?;
+    let summary = analyze(simfile_data, extension, &options).map_err(|e| e)?;
 
     let mut results = Vec::new();
     for chart in summary.charts {

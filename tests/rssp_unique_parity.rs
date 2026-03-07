@@ -253,7 +253,7 @@ fn compute_chart_values(
         translate_markers: false,
     };
 
-    let summary = analyze(simfile_data, extension, options).map_err(|e| e)?;
+    let summary = analyze(simfile_data, extension, &options).map_err(|e| e)?;
     let mut results = Vec::new();
 
     for chart in &summary.charts {

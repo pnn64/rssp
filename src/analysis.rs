@@ -11,7 +11,7 @@ use crate::bpm::{clean_timing_map, normalize_float_digits, clean_timing_map_cow,
 use crate::hash::compute_chart_hash;
 use crate::math::{round_dp, round_sig_figs_6};
 use crate::matrix::compute_matrix_rating;
-use crate::parse::{decode_bytes, ParsedChartEntry, unescape_trim, normalize_chart_desc, unescape_tag, clean_tag, extract_sections, strip_title_tags, parse_offset_seconds, parse_version};
+use crate::parse::{decode_bytes, ParsedChartEntry, unescape_trim, normalize_chart_desc, normalize_chart_name, unescape_tag, clean_tag, extract_sections, strip_title_tags, parse_offset_seconds, parse_version};
 use crate::stats::{RADAR_CATEGORY_COUNT, StreamCounts, compute_stream_counts, generate_breakdown, BreakdownMode, stream_breakdown, StreamBreakdownLevel, minimize_chart_rows_bits, minimize_rows_typed, compute_timing_aware_stats_from_rows_with_row_to_beat, compute_timing_aware_stats_with_row_to_beat, minimize_chart_for_hash};
 use crate::tech::parse_tech_notation;
 use crate::timing::{
@@ -482,7 +482,12 @@ fn build_chart_summary(
     let step_type_str = unescape_trim(decode_bytes(fields[0]).as_ref());
 
     let description_raw = unescape_trim(decode_bytes(fields[1]).as_ref());
-    let description = normalize_chart_desc(description_raw, timing_format, ssc_version);
+    let chart_name_raw = entry.chart_name.as_ref().map_or_else(String::new, |bytes| {
+        unescape_trim(decode_bytes(bytes).as_ref())
+    });
+    let description = normalize_chart_desc(description_raw.clone(), timing_format, ssc_version);
+    let chart_name =
+        normalize_chart_name(chart_name_raw, &description_raw, timing_format, ssc_version);
     let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
     let rating_raw = unescape_trim(decode_bytes(fields[3]).as_ref());
     let difficulty_str =
@@ -794,6 +799,7 @@ fn build_chart_summary(
             step_type_str,
             step_artist_str,
             description_str: description,
+            chart_name_str: chart_name,
             difficulty_str,
             rating_str,
             tech_notation_str,

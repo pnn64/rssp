@@ -504,6 +504,7 @@ fn empty_course_chart(step_type: &str, course_difficulty: Difficulty, meter: i32
         step_type_str: step_type.to_string(),
         step_artist_str: "course total".to_string(),
         description_str: String::new(),
+        chart_name_str: String::new(),
         difficulty_str: difficulty_label(course_difficulty).to_string(),
         rating_str: meter.to_string(),
         matrix_rating: 0.0,

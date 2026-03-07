@@ -212,7 +212,7 @@ fn compute_chart_timings(
     extension: &str,
 ) -> Result<Vec<ChartTimingInfo>, String> {
     let summary =
-        analyze(simfile_data, extension, AnalysisOptions::default()).map_err(|e| e)?;
+        analyze(simfile_data, extension, &AnalysisOptions::default()).map_err(|e| e)?;
 
     let mut results = Vec::new();
     for chart in &summary.charts {

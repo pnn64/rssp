@@ -142,12 +142,27 @@ pub fn normalize_chart_desc(desc: String, fmt: TimingFormat, ver: f32) -> String
     }
 }
 
+#[must_use]
+pub fn normalize_chart_name(
+    chart_name: String,
+    desc: &str,
+    fmt: TimingFormat,
+    ver: f32,
+) -> String {
+    if fmt == TimingFormat::Ssc && ver < SSC_VERSION_CHART_NAME_TAG {
+        desc.to_string()
+    } else {
+        chart_name
+    }
+}
+
 type TagBytes<'a> = Cow<'a, [u8]>;
 
 #[derive(Default)]
 pub struct ParsedChartEntry<'a> {
     pub field_count: u8,
     pub fields: [&'a [u8]; 5],
+    pub chart_name: Option<&'a [u8]>,
     pub note_data: &'a [u8],
     pub chart_attacks: Option<TagBytes<'a>>,
     pub chart_bpms: Option<TagBytes<'a>>,
@@ -202,6 +217,7 @@ pub struct ParsedSimfileData<'a> {
 #[derive(Default)]
 struct NotedataFields<'a> {
     step_type: Option<&'a [u8]>,
+    chart_name: Option<&'a [u8]>,
     description: Option<&'a [u8]>,
     credit: Option<&'a [u8]>,
     difficulty: Option<&'a [u8]>,
@@ -484,6 +500,7 @@ fn parse_notedata_entry(data: &[u8], start: usize) -> (Option<ParsedChartEntry<'
             out,
             [
                 (b"#STEPSTYPE:", step_type, false),
+                (b"#CHARTNAME:", chart_name, false),
                 (b"#DESCRIPTION:", description, false),
                 (b"#CREDIT:", credit, false),
                 (b"#DIFFICULTY:", difficulty, false),
@@ -524,6 +541,7 @@ fn build_chart_entry(f: NotedataFields<'_>) -> ParsedChartEntry<'_> {
             f.meter.unwrap_or_default(),
             f.credit.unwrap_or_default(),
         ],
+        chart_name: f.chart_name,
         note_data: f.notes.or(f.notes2).unwrap_or_default(),
         chart_attacks: f.chart_attacks.map(Cow::Borrowed),
         chart_bpms: f.chart_bpms.map(Cow::Borrowed),

@@ -65,7 +65,7 @@ fn compute_chart_nps(
         compute_pattern_counts: false,
         ..AnalysisOptions::default()
     };
-    let summary = analyze(simfile_data, extension, options).map_err(|e| e)?;
+    let summary = analyze(simfile_data, extension, &options).map_err(|e| e)?;
 
     Ok(summary
         .charts
