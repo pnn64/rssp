@@ -75,8 +75,9 @@ fn load_fixture_corpus() -> Vec<SimInput> {
 fn parse_only_loop(corpus: &[SimInput]) -> usize {
     let mut total = 0usize;
     for sim in corpus {
-        let parsed = rssp::parse::extract_sections(black_box(sim.raw.as_slice()), black_box(sim.ext))
-            .expect("fixture parse should succeed");
+        let parsed =
+            rssp::parse::extract_sections(black_box(sim.raw.as_slice()), black_box(sim.ext))
+                .expect("fixture parse should succeed");
         total += parsed.notes_list.len();
     }
     total

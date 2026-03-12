@@ -26,11 +26,14 @@ fn generate_graph_pixels(
     let color_gradient: Vec<[u8; 3]> = (0..height)
         .map(|y| {
             let frac = f64::from(height - 1 - y) / (f64::from(height) - 1.0);
-            let r = (f64::from(bottom_color[0]) + (f64::from(top_color[0]) - f64::from(bottom_color[0])) * frac)
+            let r = (f64::from(bottom_color[0])
+                + (f64::from(top_color[0]) - f64::from(bottom_color[0])) * frac)
                 .round() as u8;
-            let g = (f64::from(bottom_color[1]) + (f64::from(top_color[1]) - f64::from(bottom_color[1])) * frac)
+            let g = (f64::from(bottom_color[1])
+                + (f64::from(top_color[1]) - f64::from(bottom_color[1])) * frac)
                 .round() as u8;
-            let b = (f64::from(bottom_color[2]) + (f64::from(top_color[2]) - f64::from(bottom_color[2])) * frac)
+            let b = (f64::from(bottom_color[2])
+                + (f64::from(top_color[2]) - f64::from(bottom_color[2])) * frac)
                 .round() as u8;
             [r, g, b]
         })

@@ -387,7 +387,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             });
 
             let meter_label = expected
-                .meter.map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
+                .meter
+                .map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
             let desc_label = if description.is_empty() {
                 meter_label.clone()
             } else {
@@ -406,9 +407,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             }
 
             let expected_val = expected.step_artist.as_str();
-            let actual_val = actual
-                .as_ref()
-                .map_or("-", |a| a.step_artist.as_str());
+            let actual_val = actual.as_ref().map_or("-", |a| a.step_artist.as_str());
             let status = if expected_val == actual_val {
                 "....ok"
             } else {
@@ -496,7 +495,10 @@ fn main() {
 
     let mut tests = Vec::new();
 
-    for entry in WalkDir::new(&packs_dir).into_iter().filter_map(std::result::Result::ok) {
+    for entry in WalkDir::new(&packs_dir)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+    {
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -619,8 +621,6 @@ fn main() {
         return;
     }
 
-    println!(
-        "test result: FAILED. {num_passed} passed; {num_failed} failed"
-    );
+    println!("test result: FAILED. {num_passed} passed; {num_failed} failed");
     std::process::exit(101);
 }

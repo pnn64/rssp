@@ -258,9 +258,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
 
     for ((step_type, difficulty), expected_entries) in harness_entries {
         let Some(actual_entries) = rssp_map.get(&(step_type.clone(), difficulty.clone())) else {
-            println!(
-                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
-            );
+            println!("  {step_type} {difficulty}: baseline present, RSSP missing chart");
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
                 path.display(),
@@ -274,16 +272,14 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             let expected = expected_entries.get(idx);
             let actual = actual_entries.get(idx);
             let meter_label = expected
-                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
+                .and_then(|entry| entry.meter)
+                .map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
 
-            let expected_detail = expected
-                .map_or("-", |v| v.streams_breakdown.as_str());
+            let expected_detail = expected.map_or("-", |v| v.streams_breakdown.as_str());
             let actual_detail = actual.map_or("-", |v| v.streams.detailed.as_str());
-            let expected_partial = expected
-                .map_or("-", |v| v.streams_breakdown_level1.as_str());
+            let expected_partial = expected.map_or("-", |v| v.streams_breakdown_level1.as_str());
             let actual_partial = actual.map_or("-", |v| v.streams.partial.as_str());
-            let expected_simple = expected
-                .map_or("-", |v| v.streams_breakdown_level2.as_str());
+            let expected_simple = expected.map_or("-", |v| v.streams_breakdown_level2.as_str());
             let actual_simple = actual.map_or("-", |v| v.streams.simple.as_str());
             let expected_total_streams = expected.map(|v| v.total_stream_measures);
             let actual_total_streams = actual.map(|v| v.total_streams);
@@ -306,10 +302,14 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 && sequences_match;
             let status = if matches { "....ok" } else { "....MISMATCH" };
 
-            let expected_total_streams = expected_total_streams.map_or_else(|| "-".to_string(), |v| v.to_string());
-            let actual_total_streams = actual_total_streams.map_or_else(|| "-".to_string(), |v| v.to_string());
-            let expected_total_breaks = expected_total_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
-            let actual_total_breaks = actual_total_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let expected_total_streams =
+                expected_total_streams.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let actual_total_streams =
+                actual_total_streams.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let expected_total_breaks =
+                expected_total_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let actual_total_breaks =
+                actual_total_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
 
             println!(
                 "  {} {} [{}]: detailed {} -> {} | partial {} -> {} | simple {} -> {} | total_streams {} -> {} | total_breaks {} -> {} | sequences len {} -> {} {}",
@@ -413,9 +413,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
 
     for ((step_type, difficulty), expected_entries) in sn_entries {
         let Some(actual_entries) = rssp_map.get(&(step_type.clone(), difficulty.clone())) else {
-            println!(
-                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
-            );
+            println!("  {step_type} {difficulty}: baseline present, RSSP missing chart");
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
                 path.display(),
@@ -435,13 +433,12 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                     actual
                         .map(|entry| entry.rating.as_str())
                         .filter(|label| !label.is_empty())
-                }).map_or_else(|| (idx + 1).to_string(), std::string::ToString::to_string);
+                })
+                .map_or_else(|| (idx + 1).to_string(), std::string::ToString::to_string);
 
-            let expected_detail = expected
-                .map_or("-", |v| v.breakdown.detailed.as_str());
+            let expected_detail = expected.map_or("-", |v| v.breakdown.detailed.as_str());
             let actual_detail = actual.map_or("-", |v| v.sn.detailed.as_str());
-            let expected_partial = expected
-                .map_or("-", |v| v.breakdown.partial.as_str());
+            let expected_partial = expected.map_or("-", |v| v.breakdown.partial.as_str());
             let actual_partial = actual.map_or("-", |v| v.sn.partial.as_str());
             let expected_simple = expected.map_or("-", |v| v.breakdown.simple.as_str());
             let actual_simple = actual.map_or("-", |v| v.sn.simple.as_str());
@@ -456,8 +453,10 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 && expected_sn_breaks == actual_sn_breaks;
             let status = if matches { "....ok" } else { "....MISMATCH" };
 
-            let expected_sn_breaks = expected_sn_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
-            let actual_sn_breaks = actual_sn_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let expected_sn_breaks =
+                expected_sn_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let actual_sn_breaks =
+                actual_sn_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
 
             println!(
                 "  {step_type} {difficulty} [{meter_label}]: sn_detailed {expected_detail} -> {actual_detail} | sn_partial {expected_partial} -> {actual_partial} | sn_simple {expected_simple} -> {actual_simple} | sn_breaks {expected_sn_breaks} -> {actual_sn_breaks} {status}"
@@ -530,7 +529,10 @@ fn main() {
 
     let mut tests = Vec::new();
 
-    for entry in WalkDir::new(&packs_dir).into_iter().filter_map(std::result::Result::ok) {
+    for entry in WalkDir::new(&packs_dir)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+    {
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -653,8 +655,6 @@ fn main() {
         return;
     }
 
-    println!(
-        "test result: FAILED. {num_passed} passed; {num_failed} failed"
-    );
+    println!("test result: FAILED. {num_passed} passed; {num_failed} failed");
     std::process::exit(101);
 }

@@ -754,10 +754,15 @@ fn compare_step_artists(
             let expected = expected_indices.get(idx).map(|&i| &harness_charts[i]);
             let actual = actual_indices.get(idx).map(|&i| &actual_charts[i]);
             let meter_label = expected
-                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
+                .and_then(|entry| entry.meter)
+                .map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
             let desc_label = expected
                 .map(|entry| entry.description.trim())
-                .filter(|label| !label.is_empty()).map_or_else(|| meter_label.clone(), |label| format!("{meter_label} {label}"));
+                .filter(|label| !label.is_empty())
+                .map_or_else(
+                    || meter_label.clone(),
+                    |label| format!("{meter_label} {label}"),
+                );
 
             let expected_val = expected.map(|entry| entry.step_artist.as_str());
             let actual_val = actual.map(|entry| entry.chart_info.step_artists.as_str());
@@ -812,9 +817,7 @@ fn compare_bpm(
 ) -> Result<(), String> {
     for ((step_type, difficulty), expected_indices) in harness_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
-            println!(
-                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
-            );
+            println!("  {step_type} {difficulty}: baseline present, RSSP missing chart");
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
                 path.display(),
@@ -828,7 +831,8 @@ fn compare_bpm(
             let expected = expected_indices.get(idx).map(|&i| &harness_charts[i]);
             let actual = actual_indices.get(idx).map(|&i| &actual_charts[i]);
             let meter_label = expected
-                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
+                .and_then(|entry| entry.meter)
+                .map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
 
             let expected_hash = expected.map(|entry| entry.hash_bpms.as_str());
             let actual_hash = actual.and_then(|entry| entry.timing.hash_bpms.as_deref());
@@ -1003,9 +1007,7 @@ fn compare_hashes(
 ) -> Result<(), String> {
     for ((step_type, difficulty), expected_indices) in harness_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
-            println!(
-                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
-            );
+            println!("  {step_type} {difficulty}: baseline present, RSSP missing chart");
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
                 path.display(),
@@ -1019,7 +1021,8 @@ fn compare_hashes(
             let expected = expected_indices.get(idx).map(|&i| &harness_charts[i]);
             let actual = actual_indices.get(idx).map(|&i| &actual_charts[i]);
             let meter_label = expected
-                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
+                .and_then(|entry| entry.meter)
+                .map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
             let expected_hash = expected.map(|entry| entry.hash.as_str());
             let actual_hash = actual.map(|entry| entry.chart_info.sha1.as_str());
             let status = if expected_hash.is_some() && expected_hash == actual_hash {
@@ -1078,9 +1081,7 @@ fn compare_durations(
 ) -> Result<(), String> {
     for ((step_type, difficulty), expected_indices) in harness_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
-            println!(
-                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
-            );
+            println!("  {step_type} {difficulty}: baseline present, RSSP missing chart");
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
                 path.display(),
@@ -1094,7 +1095,8 @@ fn compare_durations(
             let expected = expected_indices.get(idx).map(|&i| &harness_charts[i]);
             let actual = actual_indices.get(idx).map(|&i| &actual_charts[i]);
             let meter_label = expected
-                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
+                .and_then(|entry| entry.meter)
+                .map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
 
             let expected_val = expected.map(|e| round_sig_figs_itg(e.duration_seconds));
             let actual_val = actual
@@ -1169,9 +1171,7 @@ fn compare_timing(
 ) -> Result<(), String> {
     for ((step_type, difficulty), expected_indices) in harness_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
-            println!(
-                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
-            );
+            println!("  {step_type} {difficulty}: baseline present, RSSP missing chart");
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
                 path.display(),
@@ -1185,7 +1185,8 @@ fn compare_timing(
             let expected = expected_indices.get(idx).map(|&i| &harness_charts[i]);
             let actual = actual_indices.get(idx).map(|&i| &actual_charts[i]);
             let meter_label = expected
-                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
+                .and_then(|entry| entry.meter)
+                .map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
 
             let expected_timing = expected.and_then(|entry| entry.timing.as_ref());
             let actual_timing = actual.map(|entry| &entry.timing);
@@ -1249,9 +1250,7 @@ fn compare_nps(
 ) -> Result<(), String> {
     for ((step_type, difficulty), expected_indices) in harness_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
-            println!(
-                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
-            );
+            println!("  {step_type} {difficulty}: baseline present, RSSP missing chart");
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
                 path.display(),
@@ -1265,7 +1264,8 @@ fn compare_nps(
             let expected = expected_indices.get(idx).map(|&i| &harness_charts[i]);
             let actual = actual_indices.get(idx).map(|&i| &actual_charts[i]);
             let meter_label = expected
-                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
+                .and_then(|entry| entry.meter)
+                .map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
 
             let expected_peak = expected.map(|e| e.peak_nps);
             let actual_peak = actual.map(|a| a.nps.max_nps);
@@ -1390,9 +1390,7 @@ fn compare_step_counts(
 ) -> Result<(), String> {
     for ((step_type, difficulty), expected_indices) in harness_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
-            println!(
-                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
-            );
+            println!("  {step_type} {difficulty}: baseline present, RSSP missing chart");
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
                 path.display(),
@@ -1406,7 +1404,8 @@ fn compare_step_counts(
             let expected = expected_indices.get(idx).map(|&i| &harness_charts[i]);
             let actual = actual_indices.get(idx).map(|&i| &actual_charts[i]);
             let meter_label = expected
-                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
+                .and_then(|entry| entry.meter)
+                .map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
 
             let mut all_match = true;
             let mut field = |label: &str, expected: Option<u32>, actual: Option<u32>| -> String {
@@ -1607,9 +1606,7 @@ fn compare_tech_counts(
 ) -> Result<(), String> {
     for ((step_type, difficulty), expected_indices) in harness_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
-            println!(
-                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
-            );
+            println!("  {step_type} {difficulty}: baseline present, RSSP missing chart");
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
                 path.display(),
@@ -1623,7 +1620,8 @@ fn compare_tech_counts(
             let expected = expected_indices.get(idx).map(|&i| &harness_charts[i]);
             let actual = actual_indices.get(idx).map(|&i| &actual_charts[i]);
             let meter_label = expected
-                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
+                .and_then(|entry| entry.meter)
+                .map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
 
             let expected_counts = expected.and_then(|entry| entry.tech_counts.as_ref());
             if expected.is_some() && expected_counts.is_none() {
@@ -1732,12 +1730,7 @@ fn compare_tech_counts(
                 .collect();
             let actual_jacks: Vec<u32> = actual_indices
                 .iter()
-                .map(|&i| {
-                    actual_charts[i]
-                        .tech_counts
-                        .as_ref()
-                        .map_or(0, |c| c.jacks)
-                })
+                .map(|&i| actual_charts[i].tech_counts.as_ref().map_or(0, |c| c.jacks))
                 .collect();
             let expected_brackets: Vec<u32> = expected_indices
                 .iter()
@@ -1804,9 +1797,7 @@ fn compare_stream_breakdown(
 ) -> Result<(), String> {
     for ((step_type, difficulty), expected_indices) in harness_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
-            println!(
-                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
-            );
+            println!("  {step_type} {difficulty}: baseline present, RSSP missing chart");
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
                 path.display(),
@@ -1820,20 +1811,18 @@ fn compare_stream_breakdown(
             let expected = expected_indices.get(idx).map(|&i| &harness_charts[i]);
             let actual = actual_indices.get(idx).map(|&i| &actual_charts[i]);
             let meter_label = expected
-                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
+                .and_then(|entry| entry.meter)
+                .map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
 
-            let expected_detail = expected
-                .map_or("-", |v| v.streams_breakdown.as_str());
-            let actual_detail = actual
-                .map_or("-", |v| v.stream_breakdown.detailed_breakdown.as_str());
-            let expected_partial = expected
-                .map_or("-", |v| v.streams_breakdown_level1.as_str());
-            let actual_partial = actual
-                .map_or("-", |v| v.stream_breakdown.partial_breakdown.as_str());
-            let expected_simple = expected
-                .map_or("-", |v| v.streams_breakdown_level2.as_str());
-            let actual_simple = actual
-                .map_or("-", |v| v.stream_breakdown.simple_breakdown.as_str());
+            let expected_detail = expected.map_or("-", |v| v.streams_breakdown.as_str());
+            let actual_detail =
+                actual.map_or("-", |v| v.stream_breakdown.detailed_breakdown.as_str());
+            let expected_partial = expected.map_or("-", |v| v.streams_breakdown_level1.as_str());
+            let actual_partial =
+                actual.map_or("-", |v| v.stream_breakdown.partial_breakdown.as_str());
+            let expected_simple = expected.map_or("-", |v| v.streams_breakdown_level2.as_str());
+            let actual_simple =
+                actual.map_or("-", |v| v.stream_breakdown.simple_breakdown.as_str());
             let expected_total_streams = expected.map(|v| v.total_stream_measures);
             let actual_total_streams = actual.map(|v| v.stream_info.total_streams);
             let expected_total_breaks = expected.map(|v| v.total_break_measures);
@@ -1855,10 +1844,14 @@ fn compare_stream_breakdown(
                 && sequences_match;
             let status = if matches { "....ok" } else { "....MISMATCH" };
 
-            let expected_total_streams = expected_total_streams.map_or_else(|| "-".to_string(), |v| v.to_string());
-            let actual_total_streams = actual_total_streams.map_or_else(|| "-".to_string(), |v| v.to_string());
-            let expected_total_breaks = expected_total_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
-            let actual_total_breaks = actual_total_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let expected_total_streams =
+                expected_total_streams.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let actual_total_streams =
+                actual_total_streams.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let expected_total_breaks =
+                expected_total_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let actual_total_breaks =
+                actual_total_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
 
             println!(
                 "  {} {} [{}]: detailed {} -> {} | partial {} -> {} | simple {} -> {} | total_streams {} -> {} | total_breaks {} -> {} | sequences len {} -> {} {}",
@@ -1980,9 +1973,7 @@ fn compare_sn_breakdown(
 ) -> Result<(), String> {
     for ((step_type, difficulty), expected_indices) in rssp_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
-            println!(
-                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
-            );
+            println!("  {step_type} {difficulty}: baseline present, RSSP missing chart");
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
                 path.display(),
@@ -2002,20 +1993,18 @@ fn compare_sn_breakdown(
                     actual
                         .map(|entry| entry.chart_info.rating.as_str())
                         .filter(|label| !label.is_empty())
-                }).map_or_else(|| (idx + 1).to_string(), std::string::ToString::to_string);
+                })
+                .map_or_else(|| (idx + 1).to_string(), std::string::ToString::to_string);
 
-            let expected_detail = expected
-                .map_or("-", |v| v.breakdown.sn_detailed_breakdown.as_str());
-            let actual_detail = actual
-                .map_or("-", |v| v.breakdown.sn_detailed_breakdown.as_str());
-            let expected_partial = expected
-                .map_or("-", |v| v.breakdown.sn_partial_breakdown.as_str());
-            let actual_partial = actual
-                .map_or("-", |v| v.breakdown.sn_partial_breakdown.as_str());
-            let expected_simple = expected
-                .map_or("-", |v| v.breakdown.sn_simple_breakdown.as_str());
-            let actual_simple = actual
-                .map_or("-", |v| v.breakdown.sn_simple_breakdown.as_str());
+            let expected_detail =
+                expected.map_or("-", |v| v.breakdown.sn_detailed_breakdown.as_str());
+            let actual_detail = actual.map_or("-", |v| v.breakdown.sn_detailed_breakdown.as_str());
+            let expected_partial =
+                expected.map_or("-", |v| v.breakdown.sn_partial_breakdown.as_str());
+            let actual_partial = actual.map_or("-", |v| v.breakdown.sn_partial_breakdown.as_str());
+            let expected_simple =
+                expected.map_or("-", |v| v.breakdown.sn_simple_breakdown.as_str());
+            let actual_simple = actual.map_or("-", |v| v.breakdown.sn_simple_breakdown.as_str());
             let expected_sn_breaks = expected.map(|v| v.stream_info.sn_breaks);
             let actual_sn_breaks = actual.map(|v| v.stream_info.sn_breaks);
 
@@ -2027,8 +2016,10 @@ fn compare_sn_breakdown(
                 && expected_sn_breaks == actual_sn_breaks;
             let status = if matches { "....ok" } else { "....MISMATCH" };
 
-            let expected_sn_breaks = expected_sn_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
-            let actual_sn_breaks = actual_sn_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let expected_sn_breaks =
+                expected_sn_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
+            let actual_sn_breaks =
+                actual_sn_breaks.map_or_else(|| "-".to_string(), |v| v.to_string());
 
             println!(
                 "  {step_type} {difficulty} [{meter_label}]: sn_detailed {expected_detail} -> {actual_detail} | sn_partial {expected_partial} -> {actual_partial} | sn_simple {expected_simple} -> {actual_simple} | sn_breaks {expected_sn_breaks} -> {actual_sn_breaks} {status}"
@@ -2217,9 +2208,7 @@ fn compare_rssp_unique(
 
     for ((step_type, difficulty), expected_indices) in rssp_entries {
         let Some(actual_indices) = actual_map.get(&(step_type.clone(), difficulty.clone())) else {
-            println!(
-                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
-            );
+            println!("  {step_type} {difficulty}: baseline present, RSSP missing chart");
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
                 path.display(),
@@ -2240,7 +2229,8 @@ fn compare_rssp_unique(
                     actual
                         .map(|entry| entry.chart_info.rating.as_str())
                         .filter(|label| !label.is_empty())
-                }).map_or_else(|| (idx + 1).to_string(), std::string::ToString::to_string);
+                })
+                .map_or_else(|| (idx + 1).to_string(), std::string::ToString::to_string);
 
             let expected_values = expected.map(|entry| unique_from_rssp(entry, compare_patterns));
             let actual_values = actual.map(|entry| unique_from_actual(entry, compare_patterns));
@@ -2525,7 +2515,10 @@ fn main() {
 
     let mut tests = Vec::new();
 
-    for entry in WalkDir::new(&packs_dir).into_iter().filter_map(std::result::Result::ok) {
+    for entry in WalkDir::new(&packs_dir)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+    {
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -2648,8 +2641,6 @@ fn main() {
         return;
     }
 
-    println!(
-        "test result: FAILED. {num_passed} passed; {num_failed} failed"
-    );
+    println!("test result: FAILED. {num_passed} passed; {num_failed} failed");
     std::process::exit(101);
 }

@@ -334,10 +334,22 @@ pub static DEFAULT_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock
 pub static EXTRA_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::new(|| {
     vec![
         // Staircases
-        (PatternVariant::StaircaseLeft, string_to_pattern_bits("LDUR")),
-        (PatternVariant::StaircaseRight, string_to_pattern_bits("RUDL")),
-        (PatternVariant::StaircaseInvLeft, string_to_pattern_bits("LUDR")),
-        (PatternVariant::StaircaseInvRight, string_to_pattern_bits("RDUL")),
+        (
+            PatternVariant::StaircaseLeft,
+            string_to_pattern_bits("LDUR"),
+        ),
+        (
+            PatternVariant::StaircaseRight,
+            string_to_pattern_bits("RUDL"),
+        ),
+        (
+            PatternVariant::StaircaseInvLeft,
+            string_to_pattern_bits("LUDR"),
+        ),
+        (
+            PatternVariant::StaircaseInvRight,
+            string_to_pattern_bits("RDUL"),
+        ),
         // Triangles
         (PatternVariant::TriangleRUR, string_to_pattern_bits("RUR")),
         (PatternVariant::TriangleLUL, string_to_pattern_bits("LUL")),
@@ -346,66 +358,192 @@ pub static EXTRA_PATTERNS: LazyLock<Vec<(PatternVariant, Vec<u8>)>> = LazyLock::
         // Doritos
         (PatternVariant::DoritoLeft, string_to_pattern_bits("LDUDL")),
         (PatternVariant::DoritoRight, string_to_pattern_bits("RUDUR")),
-        (PatternVariant::DoritoInvLeft, string_to_pattern_bits("LUDUL")),
-        (PatternVariant::DoritoInvRight, string_to_pattern_bits("RDUDR")),
+        (
+            PatternVariant::DoritoInvLeft,
+            string_to_pattern_bits("LUDUL"),
+        ),
+        (
+            PatternVariant::DoritoInvRight,
+            string_to_pattern_bits("RDUDR"),
+        ),
         // Sweeps
         (PatternVariant::SweepLeft, string_to_pattern_bits("LDURUDL")),
-        (PatternVariant::SweepRight, string_to_pattern_bits("RUDLDUR")),
-        (PatternVariant::SweepInvLeft, string_to_pattern_bits("LUDRDUL")),
-        (PatternVariant::SweepInvRight, string_to_pattern_bits("RDULUDR")),
+        (
+            PatternVariant::SweepRight,
+            string_to_pattern_bits("RUDLDUR"),
+        ),
+        (
+            PatternVariant::SweepInvLeft,
+            string_to_pattern_bits("LUDRDUL"),
+        ),
+        (
+            PatternVariant::SweepInvRight,
+            string_to_pattern_bits("RDULUDR"),
+        ),
         // Towers
         (PatternVariant::TowerLR, string_to_pattern_bits("LRLRL")),
         (PatternVariant::TowerLR, string_to_pattern_bits("RLRLR")),
         (PatternVariant::TowerUD, string_to_pattern_bits("UDUDU")),
         (PatternVariant::TowerUD, string_to_pattern_bits("DUDUD")),
-        (PatternVariant::TowerCornerLD, string_to_pattern_bits("LDLDL")),
-        (PatternVariant::TowerCornerLD, string_to_pattern_bits("DLDLD")),
-        (PatternVariant::TowerCornerLU, string_to_pattern_bits("LULUL")),
-        (PatternVariant::TowerCornerLU, string_to_pattern_bits("ULULU")),
-        (PatternVariant::TowerCornerRD, string_to_pattern_bits("RDRDR")),
-        (PatternVariant::TowerCornerRD, string_to_pattern_bits("DRDRD")),
-        (PatternVariant::TowerCornerRU, string_to_pattern_bits("RURUR")),
-        (PatternVariant::TowerCornerRU, string_to_pattern_bits("URURU")),
+        (
+            PatternVariant::TowerCornerLD,
+            string_to_pattern_bits("LDLDL"),
+        ),
+        (
+            PatternVariant::TowerCornerLD,
+            string_to_pattern_bits("DLDLD"),
+        ),
+        (
+            PatternVariant::TowerCornerLU,
+            string_to_pattern_bits("LULUL"),
+        ),
+        (
+            PatternVariant::TowerCornerLU,
+            string_to_pattern_bits("ULULU"),
+        ),
+        (
+            PatternVariant::TowerCornerRD,
+            string_to_pattern_bits("RDRDR"),
+        ),
+        (
+            PatternVariant::TowerCornerRD,
+            string_to_pattern_bits("DRDRD"),
+        ),
+        (
+            PatternVariant::TowerCornerRU,
+            string_to_pattern_bits("RURUR"),
+        ),
+        (
+            PatternVariant::TowerCornerRU,
+            string_to_pattern_bits("URURU"),
+        ),
         // Double staircases
-        (PatternVariant::DStaircaseLeft, string_to_pattern_bits("LUDRLUDR")),
-        (PatternVariant::DStaircaseRight, string_to_pattern_bits("RDULRDUL")),
-        (PatternVariant::DStaircaseInvLeft, string_to_pattern_bits("LDURLDUR")),
-        (PatternVariant::DStaircaseInvRight, string_to_pattern_bits("RDULRDUL")),
+        (
+            PatternVariant::DStaircaseLeft,
+            string_to_pattern_bits("LUDRLUDR"),
+        ),
+        (
+            PatternVariant::DStaircaseRight,
+            string_to_pattern_bits("RDULRDUL"),
+        ),
+        (
+            PatternVariant::DStaircaseInvLeft,
+            string_to_pattern_bits("LDURLDUR"),
+        ),
+        (
+            PatternVariant::DStaircaseInvRight,
+            string_to_pattern_bits("RDULRDUL"),
+        ),
         // Alternating staircases
-        (PatternVariant::AltStaircasesLeft, string_to_pattern_bits("LUDRLDUR")),
-        (PatternVariant::AltStaircasesRight, string_to_pattern_bits("RDULRUDL")),
-        (PatternVariant::AltStaircasesInvLeft, string_to_pattern_bits("LDURLUDR")),
-        (PatternVariant::AltStaircasesInvRight, string_to_pattern_bits("RUDLRDUL")),
+        (
+            PatternVariant::AltStaircasesLeft,
+            string_to_pattern_bits("LUDRLDUR"),
+        ),
+        (
+            PatternVariant::AltStaircasesRight,
+            string_to_pattern_bits("RDULRUDL"),
+        ),
+        (
+            PatternVariant::AltStaircasesInvLeft,
+            string_to_pattern_bits("LDURLUDR"),
+        ),
+        (
+            PatternVariant::AltStaircasesInvRight,
+            string_to_pattern_bits("RUDLRDUL"),
+        ),
         // Luchi
         (PatternVariant::LuchiLeftDU, string_to_pattern_bits("LDLUL")),
         (PatternVariant::LuchiLeftUD, string_to_pattern_bits("LULDL")),
-        (PatternVariant::LuchiRightUD, string_to_pattern_bits("RURDR")),
-        (PatternVariant::LuchiRightDU, string_to_pattern_bits("RDRUR")),
+        (
+            PatternVariant::LuchiRightUD,
+            string_to_pattern_bits("RURDR"),
+        ),
+        (
+            PatternVariant::LuchiRightDU,
+            string_to_pattern_bits("RDRUR"),
+        ),
         // Copters
-        (PatternVariant::CopterLeft, string_to_pattern_bits("LDURDULDUR")),
-        (PatternVariant::CopterRight, string_to_pattern_bits("RUDLUDRUDL")),
-        (PatternVariant::CopterInvLeft, string_to_pattern_bits("LUDRUDLUDR")),
-        (PatternVariant::CopterInvRight, string_to_pattern_bits("RDULDURDUL")),
+        (
+            PatternVariant::CopterLeft,
+            string_to_pattern_bits("LDURDULDUR"),
+        ),
+        (
+            PatternVariant::CopterRight,
+            string_to_pattern_bits("RUDLUDRUDL"),
+        ),
+        (
+            PatternVariant::CopterInvLeft,
+            string_to_pattern_bits("LUDRUDLUDR"),
+        ),
+        (
+            PatternVariant::CopterInvRight,
+            string_to_pattern_bits("RDULDURDUL"),
+        ),
         // Hip-Breakers
-        (PatternVariant::HipBreakerLeft, string_to_pattern_bits("LDUDLUDUL")),
-        (PatternVariant::HipBreakerRight, string_to_pattern_bits("RUDURDUDR")),
-        (PatternVariant::HipBreakerInvLeft, string_to_pattern_bits("LUDULDUDL")),
-        (PatternVariant::HipBreakerInvRight, string_to_pattern_bits("RDUDRUDUR")),
+        (
+            PatternVariant::HipBreakerLeft,
+            string_to_pattern_bits("LDUDLUDUL"),
+        ),
+        (
+            PatternVariant::HipBreakerRight,
+            string_to_pattern_bits("RUDURDUDR"),
+        ),
+        (
+            PatternVariant::HipBreakerInvLeft,
+            string_to_pattern_bits("LUDULDUDL"),
+        ),
+        (
+            PatternVariant::HipBreakerInvRight,
+            string_to_pattern_bits("RDUDRUDUR"),
+        ),
         // Spirals
         (PatternVariant::SpiralLeft, string_to_pattern_bits("LDURDR")),
-        (PatternVariant::SpiralRight, string_to_pattern_bits("RUDLUL")),
-        (PatternVariant::SpiralInvLeft, string_to_pattern_bits("LUDRUR")),
-        (PatternVariant::SpiralInvRight, string_to_pattern_bits("RDULDL")),
+        (
+            PatternVariant::SpiralRight,
+            string_to_pattern_bits("RUDLUL"),
+        ),
+        (
+            PatternVariant::SpiralInvLeft,
+            string_to_pattern_bits("LUDRUR"),
+        ),
+        (
+            PatternVariant::SpiralInvRight,
+            string_to_pattern_bits("RDULDL"),
+        ),
         // Turbo Candle
-        (PatternVariant::TurboCandleLeft, string_to_pattern_bits("LDLUDRUR")),
-        (PatternVariant::TurboCandleRight, string_to_pattern_bits("RURDULDL")),
-        (PatternVariant::TurboCandleInvLeft, string_to_pattern_bits("LULDURDR")),
-        (PatternVariant::TurboCandleInvRight, string_to_pattern_bits("RDRUDLUL")),
+        (
+            PatternVariant::TurboCandleLeft,
+            string_to_pattern_bits("LDLUDRUR"),
+        ),
+        (
+            PatternVariant::TurboCandleRight,
+            string_to_pattern_bits("RURDULDL"),
+        ),
+        (
+            PatternVariant::TurboCandleInvLeft,
+            string_to_pattern_bits("LULDURDR"),
+        ),
+        (
+            PatternVariant::TurboCandleInvRight,
+            string_to_pattern_bits("RDRUDLUL"),
+        ),
         // Sweeping Candle
-        (PatternVariant::SweepCandleLeft, string_to_pattern_bits("LDURDRUDL")),
-        (PatternVariant::SweepCandleRight, string_to_pattern_bits("RUDLULDUR")),
-        (PatternVariant::SweepCandleInvLeft, string_to_pattern_bits("LUDRURDUL")),
-        (PatternVariant::SweepCandleInvRight, string_to_pattern_bits("RDULDLUDR")),
+        (
+            PatternVariant::SweepCandleLeft,
+            string_to_pattern_bits("LDURDRUDL"),
+        ),
+        (
+            PatternVariant::SweepCandleRight,
+            string_to_pattern_bits("RUDLULDUR"),
+        ),
+        (
+            PatternVariant::SweepCandleInvLeft,
+            string_to_pattern_bits("LUDRURDUL"),
+        ),
+        (
+            PatternVariant::SweepCandleInvRight,
+            string_to_pattern_bits("RDULDLUDR"),
+        ),
     ]
 });
 
@@ -428,11 +566,8 @@ static PATTERN_DFA: LazyLock<AcDfa<PatternVariant>> = LazyLock::new(|| {
 // Pattern Detection Functions
 // ============================================================================
 
-#[must_use] 
-pub fn detect_patterns(
-    bitmasks: &[u8],
-    patterns: &[(PatternVariant, Vec<u8>)],
-) -> PatternCounts {
+#[must_use]
+pub fn detect_patterns(bitmasks: &[u8], patterns: &[(PatternVariant, Vec<u8>)]) -> PatternCounts {
     let pat_refs: Vec<(PatternVariant, &[u8])> = patterns
         .iter()
         .map(|(v, bits)| (*v, bits.as_slice()))
@@ -515,7 +650,7 @@ pub(crate) fn detect_custom_patterns_compiled(
         .collect()
 }
 
-#[must_use] 
+#[must_use]
 pub fn detect_custom_patterns(bitmasks: &[u8], patterns: &[String]) -> Vec<CustomPatternSummary> {
     let compiled = compile_custom_patterns(patterns);
     detect_custom_patterns_compiled(bitmasks, &compiled)
@@ -525,7 +660,7 @@ pub fn detect_custom_patterns(bitmasks: &[u8], patterns: &[String]) -> Vec<Custo
 // Anchor Counting
 // ============================================================================
 
-#[must_use] 
+#[must_use]
 pub fn count_anchors(bitmasks: &[u8]) -> (u32, u32, u32, u32) {
     let mut anchor_left = 0u32;
     let mut anchor_down = 0u32;
@@ -596,7 +731,7 @@ const fn map_bitmask_to_arrow(mask: u8) -> Option<Arrow> {
 
 #[inline(always)]
 const fn determine_direction(prev: Arrow, curr: Arrow) -> Option<Direction> {
-    use Arrow::{L, U, D, R};
+    use Arrow::{D, L, R, U};
     use Direction::{Left, Right};
     match (prev, curr) {
         (L, U) | (D, R) | (R, D) | (U, L) => Some(Left),
@@ -688,7 +823,7 @@ const fn finalize_segment(
     *state = FacingState::Waiting { count: 0 };
 }
 
-#[must_use] 
+#[must_use]
 pub fn count_facing_steps(bitmasks: &[u8], mono_threshold: usize) -> (u32, u32) {
     let mut final_left = 0_u32;
     let mut final_right = 0_u32;
@@ -755,12 +890,12 @@ pub fn count_facing_steps(bitmasks: &[u8], mono_threshold: usize) -> (u32, u32) 
 // ============================================================================
 
 #[inline(always)]
-#[must_use] 
+#[must_use]
 pub const fn count_pattern(counts: &PatternCounts, variant: PatternVariant) -> u32 {
     counts[variant as usize]
 }
 
-#[must_use] 
+#[must_use]
 pub const fn compute_box_counts(counts: &PatternCounts) -> BoxCounts {
     let lr = count_pattern(counts, PatternVariant::BoxLR);
     let ud = count_pattern(counts, PatternVariant::BoxUD);

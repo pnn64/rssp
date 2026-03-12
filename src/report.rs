@@ -6,7 +6,7 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use crate::bpm::{actual_bpm_range_raw, normalize_float_digits, resolve_display_bpm};
 use crate::math::{round_dp, round_sig_figs_6, round_sig_figs_itg, roundtrip_bpm_itg};
-use crate::patterns::{CustomPatternSummary, PatternVariant, PatternCounts};
+use crate::patterns::{CustomPatternSummary, PatternCounts, PatternVariant};
 use crate::stats::{
     ArrowStats, RADAR_CATEGORY_COUNT, StreamCounts, measure_equally_spaced, stream_sequences,
 };
@@ -366,7 +366,7 @@ pub fn write_course_reports<W: Write>(
 }
 
 #[inline(always)]
-#[must_use] 
+#[must_use]
 pub fn format_json_float(value: f64) -> String {
     format!("{value:.2}")
 }
@@ -637,9 +637,10 @@ fn chart_or_global<'a>(
 
     if allow_chart
         && let Some(s) = chart_value
-            && !s.is_empty() {
-                return Some(s.as_str());
-            }
+        && !s.is_empty()
+    {
+        return Some(s.as_str());
+    }
 
     if global_value.is_empty() {
         None
@@ -846,7 +847,7 @@ fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
         .collect()
 }
 
-#[must_use] 
+#[must_use]
 pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> TimingSnapshot {
     let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
     let timing = &chart.timing_segments;
@@ -1206,10 +1207,7 @@ fn write_pretty_chart<W: Write>(
         writer,
         "Total Stream: {total_stream} ({stream_percent:.2}%/{adjusted_stream_percent:.2}% Adj.)"
     )?;
-    writeln!(
-        writer,
-        "Total Break: {total_break} ({break_percent:.2}%)"
-    )?;
+    writeln!(writer, "Total Break: {total_break} ({break_percent:.2}%)")?;
 
     writeln!(writer, "\n--- Chart Info ---")?;
     writeln!(
@@ -1408,10 +1406,7 @@ fn write_full_chart<W: Write>(
         "    32nd_streams: {}",
         chart.stream_counts.run32_streams
     )?;
-    writeln!(
-        writer,
-        "Total Break: {total_break} ({break_percent:.2}%)"
-    )?;
+    writeln!(writer, "Total Break: {total_break} ({break_percent:.2}%)")?;
 
     writeln!(writer, "\n--- Chart Info ---")?;
     writeln!(
@@ -2398,9 +2393,16 @@ fn write_json_number_for_key<W: Write>(
         match key {
             None => write!(writer, "{f}"),
             Some("offset") => write!(writer, "{f:.3}"),
-            Some("beat0_offset_seconds" | "beat0_group_offset_seconds" |
-"duration_seconds" | "max_nps" | "bpm_min" | "bpm_max" | "display_bpm_min" |
-"display_bpm_max") => write!(writer, "{f}"),
+            Some(
+                "beat0_offset_seconds"
+                | "beat0_group_offset_seconds"
+                | "duration_seconds"
+                | "max_nps"
+                | "bpm_min"
+                | "bpm_max"
+                | "display_bpm_min"
+                | "display_bpm_max",
+            ) => write!(writer, "{f}"),
             Some("bpm") => write!(writer, "{f}"),
             _ => write!(writer, "{f:.2}"),
         }

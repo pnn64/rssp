@@ -33,7 +33,10 @@ fn main() {
     // 2. Collect all test cases
     let mut tests = Vec::new();
 
-    for entry in WalkDir::new(&packs_dir).into_iter().filter_map(std::result::Result::ok) {
+    for entry in WalkDir::new(&packs_dir)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+    {
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -164,9 +167,7 @@ fn main() {
         return;
     }
 
-    println!(
-        "test result: FAILED. {num_passed} passed; {num_failed} failed"
-    );
+    println!("test result: FAILED. {num_passed} passed; {num_failed} failed");
     std::process::exit(101);
 }
 
@@ -257,9 +258,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
 
     for ((step_type, difficulty), expected_entries) in golden_entries {
         let Some(actual_hashes) = rssp_map.remove(&(step_type.clone(), difficulty.clone())) else {
-            println!(
-                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
-            );
+            println!("  {step_type} {difficulty}: baseline present, RSSP missing chart");
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
                 path.display(),
@@ -274,7 +273,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             let actual = actual_hashes.get(idx).map(std::string::String::as_str);
             let meter_label = expected_entries
                 .get(idx)
-                .and_then(|(_, meter)| *meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
+                .and_then(|(_, meter)| *meter)
+                .map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
             let status = if expected.is_some() && expected == actual {
                 "....ok"
             } else {

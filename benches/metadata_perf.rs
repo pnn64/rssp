@@ -30,7 +30,9 @@ fn bench_metadata_pipeline(c: &mut Criterion) {
 
             let mut subtitle = parsed
                 .subtitle
-                .map(|b| rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()).into_owned())
+                .map(|b| {
+                    rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()).into_owned()
+                })
                 .unwrap_or_default();
             let trimmed_subtitle = subtitle.trim();
             if trimmed_subtitle.len() != subtitle.len() {
@@ -39,7 +41,9 @@ fn bench_metadata_pipeline(c: &mut Criterion) {
 
             let mut artist = parsed
                 .artist
-                .map(|b| rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()).into_owned())
+                .map(|b| {
+                    rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()).into_owned()
+                })
                 .unwrap_or_default();
             let trimmed_artist = artist.trim();
             if trimmed_artist.len() != artist.len() {
@@ -48,15 +52,21 @@ fn bench_metadata_pipeline(c: &mut Criterion) {
 
             let title_translit = parsed
                 .title_translit
-                .map(|b| rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()).into_owned())
+                .map(|b| {
+                    rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()).into_owned()
+                })
                 .unwrap_or_default();
             let subtitle_translit = parsed
                 .subtitle_translit
-                .map(|b| rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()).into_owned())
+                .map(|b| {
+                    rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()).into_owned()
+                })
                 .unwrap_or_default();
             let mut artist_translit = parsed
                 .artist_translit
-                .map(|b| rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()).into_owned())
+                .map(|b| {
+                    rssp::parse::unescape_tag(rssp::parse::decode_bytes(b).as_ref()).into_owned()
+                })
                 .unwrap_or_default();
 
             if artist.is_empty() && artist_translit.trim().is_empty() {

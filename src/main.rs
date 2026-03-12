@@ -55,9 +55,7 @@ fn main() -> io::Result<()> {
 
         if let (Some(bpm), Some(measures)) = (bpm_opt, measures_opt) {
             let rating = get_difficulty(bpm, measures);
-            println!(
-                "Matrix rating of {measures} measures @ {bpm} BPM is {rating:.4}"
-            );
+            println!("Matrix rating of {measures} measures @ {bpm} BPM is {rating:.4}");
             return Ok(());
         }
         eprintln!(

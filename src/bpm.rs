@@ -2,11 +2,12 @@ use std::borrow::Cow;
 
 use crate::math::{fmt_dec3_half_up, round_sig_figs_itg, roundtrip_bpm_itg};
 use crate::parse::{
-    decode_bytes, extract_sections, parse_version, unescape_trim, ParsedChartEntry, ParsedSimfileData,
+    ParsedChartEntry, ParsedSimfileData, decode_bytes, extract_sections, parse_version,
+    unescape_trim,
 };
 use crate::timing::{
-    compute_timing_segments, format_bpm_segments_like_itg, steps_timing_allowed, timing_format_from_ext,
-    TimingFormat, ROWS_PER_BEAT,
+    ROWS_PER_BEAT, TimingFormat, compute_timing_segments, format_bpm_segments_like_itg,
+    steps_timing_allowed, timing_format_from_ext,
 };
 
 const GIMMICK_BPM_THRESHOLD: f64 = 10000.0;
@@ -358,8 +359,8 @@ fn chart_bpm_snapshot(
 
     let r = resolve_chart_tags(&chart, global, use_chart);
     let segments = compute_timing_segments(
-        r[0].1, r[0].0, r[1].1, r[1].0, r[2].1, r[2].0, r[3].1, r[3].0, r[4].1, r[4].0,
-        r[5].1, r[5].0, r[6].1, r[6].0, fmt, true,
+        r[0].1, r[0].0, r[1].1, r[1].0, r[2].1, r[2].0, r[3].1, r[3].0, r[4].1, r[4].0, r[5].1,
+        r[5].0, r[6].1, r[6].0, fmt, true,
     );
 
     let bpms: Vec<_> = segments
@@ -639,16 +640,19 @@ pub fn compute_mines_nonfake(
         }
     };
 
-    u32::try_from(rows.iter()
-        .filter(|&&(m, r, mine)| {
-            if !mine {
-                return false;
-            }
-            let t = per_measure.get(m).copied().unwrap_or(1).max(1) as f64;
-            let beat = (m as f64).mul_add(4.0, 4.0 * (r as f64 / t));
-            !in_range(beat, warps) && !in_range(beat, fakes)
-        })
-        .count()).unwrap_or(u32::MAX)
+    u32::try_from(
+        rows.iter()
+            .filter(|&&(m, r, mine)| {
+                if !mine {
+                    return false;
+                }
+                let t = per_measure.get(m).copied().unwrap_or(1).max(1) as f64;
+                let beat = (m as f64).mul_add(4.0, 4.0 * (r as f64 / t));
+                !in_range(beat, warps) && !in_range(beat, fakes)
+            })
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
 }
 
 #[must_use]
@@ -656,7 +660,11 @@ pub fn compute_bpm_stats(values: &[f64]) -> (f64, f64) {
     if values.is_empty() {
         return (0.0, 0.0);
     }
-    let mut v: Vec<_> = values.iter().copied().filter(|&b| is_display_bpm(b)).collect();
+    let mut v: Vec<_> = values
+        .iter()
+        .copied()
+        .filter(|&b| is_display_bpm(b))
+        .collect();
     if v.is_empty() {
         v.extend_from_slice(values);
     }
@@ -670,7 +678,7 @@ pub fn compute_bpm_stats(values: &[f64]) -> (f64, f64) {
 }
 
 pub fn compute_tier_bpm(densities: &[usize], bpms: &[(f64, f64)], bpm: f64) -> f64 {
-    use crate::stats::{categorize_measure_density, RunDensity};
+    use crate::stats::{RunDensity, categorize_measure_density};
 
     let max_bpm = bpms
         .iter()
@@ -680,7 +688,9 @@ pub fn compute_tier_bpm(densities: &[usize], bpms: &[(f64, f64)], bpm: f64) -> f
     let max_bpm = if max_bpm.is_finite() {
         max_bpm
     } else {
-        bpms.iter().map(|&(_, b)| b).fold(f64::NEG_INFINITY, f64::max)
+        bpms.iter()
+            .map(|&(_, b)| b)
+            .fold(f64::NEG_INFINITY, f64::max)
     };
 
     let (mut max_e, mut cat, mut len, mut run_e) = (0.0f64, RunDensity::Break, 0usize, 0.0f64);

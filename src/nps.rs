@@ -7,8 +7,8 @@ use crate::parse::{
     unescape_trim,
 };
 use crate::timing::{
-    TimingData, compute_timing_segments, get_time_for_beat_f32,
-    steps_timing_allowed, timing_data_from_segments, timing_format_from_ext,
+    TimingData, compute_timing_segments, get_time_for_beat_f32, steps_timing_allowed,
+    timing_data_from_segments, timing_format_from_ext,
 };
 
 pub fn compute_chart_peak_nps(
@@ -169,7 +169,7 @@ pub fn compute_chart_peak_nps(
     Ok(results)
 }
 
-#[must_use] 
+#[must_use]
 pub fn compute_measure_nps_vec(densities: &[usize], bpms: &[(f64, f64)]) -> Vec<f64> {
     compute_nps_iter(densities, |i| {
         let beat = i as f64 * 4.0;
@@ -178,7 +178,7 @@ pub fn compute_measure_nps_vec(densities: &[usize], bpms: &[(f64, f64)]) -> Vec<
     })
 }
 
-#[must_use] 
+#[must_use]
 pub fn compute_measure_nps_vec_with_timing(densities: &[usize], timing: &TimingData) -> Vec<f64> {
     let mut out = Vec::with_capacity(densities.len());
     let mut start = get_time_for_beat_f32(timing, 0.0);
@@ -226,7 +226,7 @@ fn median(arr: &[f64]) -> f64 {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn get_nps_stats(nps: &[f64]) -> (f64, f64) {
     (
         nps.iter().fold(f64::MIN, |a, &b| a.max(b)).max(0.0),
@@ -234,7 +234,7 @@ pub fn get_nps_stats(nps: &[f64]) -> (f64, f64) {
     )
 }
 
-#[must_use] 
+#[must_use]
 pub fn measure_equally_spaced(data: &[u8], lanes: usize) -> Vec<bool> {
     let lanes = if lanes == 8 { 8 } else { 4 };
     let minimized = crate::stats::minimize_chart_for_hash(data, lanes);

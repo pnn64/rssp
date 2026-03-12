@@ -419,7 +419,9 @@ pub fn replace_markers_in_place(text: &mut String) {
     let mut offset = 0usize;
 
     while offset < len {
-        let start = if let Some(pos) = input[offset..].find('&') { offset + pos } else {
+        let start = if let Some(pos) = input[offset..].find('&') {
+            offset + pos
+        } else {
             out.push_str(&input[offset..]);
             *text = out;
             return;
@@ -463,7 +465,7 @@ pub fn replace_markers_in_place(text: &mut String) {
 }
 
 /// Replace &alias; markers and unicode markers, returning an updated string.
-#[must_use] 
+#[must_use]
 pub fn replace_markers(text: &str) -> String {
     let mut out = text.to_string();
     replace_markers_in_place(&mut out);

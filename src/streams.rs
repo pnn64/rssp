@@ -48,7 +48,7 @@ pub enum Token {
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub const fn categorize_measure_density(d: usize) -> RunDensity {
     match d {
         32.. => RunDensity::Run32,
@@ -105,7 +105,7 @@ fn total_break_measures(measures: &[usize]) -> u32 {
     total
 }
 
-#[must_use] 
+#[must_use]
 pub fn stream_sequences(measures: &[usize]) -> Vec<StreamSegment> {
     let mut segs = Vec::with_capacity(measures.len() / 2 + 1);
     let mut i = 0usize;
@@ -167,7 +167,7 @@ pub fn stream_sequences(measures: &[usize]) -> Vec<StreamSegment> {
     segs
 }
 
-#[must_use] 
+#[must_use]
 pub fn compute_stream_counts(measures: &[usize]) -> StreamCounts {
     let Some((start, end)) = active_range(measures) else {
         return StreamCounts::default();
@@ -187,7 +187,7 @@ pub fn compute_stream_counts(measures: &[usize]) -> StreamCounts {
     sc
 }
 
-#[must_use] 
+#[must_use]
 pub fn generate_breakdown(measures: &[usize], mode: BreakdownMode) -> String {
     let Some((start, end)) = active_range(measures) else {
         return String::new();
@@ -340,14 +340,14 @@ fn format_break(out: &mut String, n: usize, mode: BreakdownMode) {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn format_run_symbol(cat: RunDensity, len: usize, star: bool) -> String {
     let mut out = String::new();
     write_run(&mut out, cat, len, star);
     out
 }
 
-#[must_use] 
+#[must_use]
 pub fn stream_breakdown(measures: &[usize], level: StreamBreakdownLevel) -> String {
     if measures.is_empty() {
         return "No Streams!".into();

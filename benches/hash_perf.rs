@@ -87,8 +87,7 @@ fn bench_hash_inner(c: &mut Criterion) {
                     Cow::Borrowed(normalized_global_bpms.as_str())
                 };
 
-                let hash =
-                    rssp::hash::compute_chart_hash(&minimized_chart, bpms_to_use.as_ref());
+                let hash = rssp::hash::compute_chart_hash(&minimized_chart, bpms_to_use.as_ref());
                 hashes.push(hash);
             }
             black_box(hashes);

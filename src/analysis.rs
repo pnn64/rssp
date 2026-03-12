@@ -7,21 +7,33 @@ use crate::report::{ChartSummary, SimfileSummary};
 use crate::stats;
 use crate::step_parity;
 
-use crate::bpm::{clean_timing_map, normalize_float_digits, clean_timing_map_cow, compute_tier_bpm, compute_measure_nps_vec_with_timing, get_nps_stats, compute_bpm_range, compute_bpm_stats};
+use crate::bpm::{
+    clean_timing_map, clean_timing_map_cow, compute_bpm_range, compute_bpm_stats,
+    compute_measure_nps_vec_with_timing, compute_tier_bpm, get_nps_stats, normalize_float_digits,
+};
 use crate::hash::compute_chart_hash;
 use crate::math::{round_dp, round_sig_figs_6};
 use crate::matrix::compute_matrix_rating;
-use crate::parse::{decode_bytes, ParsedChartEntry, unescape_trim, normalize_chart_desc, normalize_chart_name, unescape_tag, clean_tag, extract_sections, strip_title_tags, parse_offset_seconds, parse_version};
-use crate::stats::{RADAR_CATEGORY_COUNT, StreamCounts, compute_stream_counts, generate_breakdown, BreakdownMode, stream_breakdown, StreamBreakdownLevel, minimize_chart_rows_bits, minimize_rows_typed, compute_timing_aware_stats_from_rows_with_row_to_beat, compute_timing_aware_stats_with_row_to_beat, minimize_chart_for_hash};
-use crate::tech::parse_tech_notation;
-use crate::timing::{
-    TimingFormat, compute_timing_segments, get_time_for_beat, steps_timing_allowed,
-    timing_data_from_segments, timing_format_from_ext, TimingSegments,
+use crate::parse::{
+    ParsedChartEntry, clean_tag, decode_bytes, extract_sections, normalize_chart_desc,
+    normalize_chart_name, parse_offset_seconds, parse_version, strip_title_tags, unescape_tag,
+    unescape_trim,
 };
 use crate::patterns::{
-    compile_custom_patterns, compiled_custom_empty, compiled_custom_is_empty,
-    detect_custom_patterns_compiled, detect_default_patterns, count_anchors,
-    count_facing_steps, PatternVariant, CompiledCustomPatterns, PatternCounts, PATTERN_COUNT,
+    CompiledCustomPatterns, PATTERN_COUNT, PatternCounts, PatternVariant, compile_custom_patterns,
+    compiled_custom_empty, compiled_custom_is_empty, count_anchors, count_facing_steps,
+    detect_custom_patterns_compiled, detect_default_patterns,
+};
+use crate::stats::{
+    BreakdownMode, RADAR_CATEGORY_COUNT, StreamBreakdownLevel, StreamCounts, compute_stream_counts,
+    compute_timing_aware_stats_from_rows_with_row_to_beat,
+    compute_timing_aware_stats_with_row_to_beat, generate_breakdown, minimize_chart_for_hash,
+    minimize_chart_rows_bits, minimize_rows_typed, stream_breakdown,
+};
+use crate::tech::parse_tech_notation;
+use crate::timing::{
+    TimingFormat, TimingSegments, compute_timing_segments, get_time_for_beat, steps_timing_allowed,
+    timing_data_from_segments, timing_format_from_ext,
 };
 
 /// Options for controlling simfile analysis.
@@ -101,7 +113,7 @@ fn parse_meter_for_difficulty(meter_str: &str, extension: &str) -> i32 {
     trimmed.parse::<i32>().unwrap_or(0)
 }
 
-#[must_use] 
+#[must_use]
 pub fn resolve_difficulty_label(
     raw_difficulty: &str,
     description: &str,
@@ -142,7 +154,7 @@ pub fn resolve_difficulty_label(
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn step_type_lanes(step_type: &str) -> usize {
     let normalized = step_type.trim().to_ascii_lowercase().replace('_', "-");
     match normalized.as_str() {
@@ -182,7 +194,7 @@ pub(crate) const fn supported_stepstype_lanes_bytes(raw: &[u8]) -> Option<usize>
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn display_metadata(
     title: &str,
     subtitle: &str,
@@ -324,9 +336,7 @@ fn parse_radar_values_str(raw: &str, split_players: bool) -> Option<[f32; RADAR_
 }
 
 /// Detects predefined patterns and counts anchors from note bitmasks.
-fn compute_pattern_and_anchor_stats(
-    bitmasks: &[u8],
-) -> (PatternCounts, (u32, u32, u32, u32)) {
+fn compute_pattern_and_anchor_stats(bitmasks: &[u8]) -> (PatternCounts, (u32, u32, u32, u32)) {
     let detected_patterns = detect_default_patterns(bitmasks);
     let anchors = count_anchors(bitmasks);
     (detected_patterns, anchors)
@@ -538,9 +548,7 @@ fn build_chart_summary(
     }
 
     let (chart_bpms, chart_bpms_norm) = chart_timing_tag_pair(chart_bpms_opt);
-    let bpms_to_use = chart_bpms_norm
-        
-        .unwrap_or_else(|| global_bpms_norm.to_string());
+    let bpms_to_use = chart_bpms_norm.unwrap_or_else(|| global_bpms_norm.to_string());
     let chart_stops = chart_timing_tag_raw(chart_stops_opt);
     let chart_speeds = chart_timing_tag_raw(chart_speeds_opt);
     let chart_delays = chart_timing_tag_raw(chart_delays_opt);
@@ -683,7 +691,10 @@ fn build_chart_summary(
                 .collect();
             (timing_segments, Cow::Owned(bpm_map))
         } else {
-            (Arc::clone(global_timing_segments), Cow::Borrowed(global_bpm_map))
+            (
+                Arc::clone(global_timing_segments),
+                Cow::Borrowed(global_bpm_map),
+            )
         };
 
     let metrics = compute_derived_chart_metrics(
@@ -693,21 +704,21 @@ fn build_chart_summary(
         &bpms_to_use,
     );
 
-    let (detected_patterns, (anchor_left, anchor_down, anchor_up, anchor_right)) =
-        bitmasks.as_ref().map_or(
-            ([0u32; PATTERN_COUNT], (0, 0, 0, 0)),
-            |bm| compute_pattern_and_anchor_stats(bm.as_slice()),
-        );
+    let (detected_patterns, (anchor_left, anchor_down, anchor_up, anchor_right)) = bitmasks
+        .as_ref()
+        .map_or(([0u32; PATTERN_COUNT], (0, 0, 0, 0)), |bm| {
+            compute_pattern_and_anchor_stats(bm.as_slice())
+        });
 
     let (facing_left, facing_right, mono_total, mono_percent_raw, candle_total, candle_percent_raw) =
-        bitmasks.as_ref().map_or(
-            (0, 0, 0, 0.0, 0, 0.0),
-            |bm| compute_mono_and_candle_stats(bm.as_slice(), &stats, &detected_patterns, options),
-        );
+        bitmasks.as_ref().map_or((0, 0, 0, 0.0, 0, 0.0), |bm| {
+            compute_mono_and_candle_stats(bm.as_slice(), &stats, &detected_patterns, options)
+        });
     let mono_percent = round_dp(mono_percent_raw, 2);
     let candle_percent = round_dp(candle_percent_raw, 2);
 
-    let custom_patterns = if compute_patterns && !compiled_custom_is_empty(compiled_custom_patterns) {
+    let custom_patterns = if compute_patterns && !compiled_custom_is_empty(compiled_custom_patterns)
+    {
         detect_custom_patterns_compiled(bitmasks.as_ref().unwrap(), compiled_custom_patterns)
     } else {
         Vec::new()

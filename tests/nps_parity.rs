@@ -118,8 +118,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     let golden_charts: Vec<GoldenChart> = serde_json::from_slice(&json_bytes)
         .map_err(|e| format!("Failed to parse baseline JSON: {e}"))?;
 
-    let rssp_charts = compute_chart_nps(&raw_bytes, extension)
-        .map_err(|e| format!("RSSP Parsing Error: {e}"))?;
+    let rssp_charts =
+        compute_chart_nps(&raw_bytes, extension).map_err(|e| format!("RSSP Parsing Error: {e}"))?;
 
     let mut golden_map: HashMap<(String, String), Vec<GoldenChart>> = HashMap::new();
     for golden in golden_charts {
@@ -149,9 +149,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
 
     for ((step_type, difficulty), expected_entries) in golden_entries {
         let Some(actual_entries) = rssp_map.remove(&(step_type.clone(), difficulty.clone())) else {
-            println!(
-                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
-            );
+            println!("  {step_type} {difficulty}: baseline present, RSSP missing chart");
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
                 path.display(),
@@ -165,7 +163,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             let expected = expected_entries.get(idx);
             let actual = actual_entries.get(idx);
             let meter_label = expected
-                .and_then(|entry| entry.meter).map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
+                .and_then(|entry| entry.meter)
+                .map_or_else(|| (idx + 1).to_string(), |meter| meter.to_string());
 
             let expected_val = expected.map(|e| e.peak_nps);
             let actual_val = actual.map(|a| a.peak_nps);
@@ -289,7 +288,10 @@ fn main() {
 
     let mut tests = Vec::new();
 
-    for entry in WalkDir::new(&packs_dir).into_iter().filter_map(std::result::Result::ok) {
+    for entry in WalkDir::new(&packs_dir)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+    {
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -412,8 +414,6 @@ fn main() {
         return;
     }
 
-    println!(
-        "test result: FAILED. {num_passed} passed; {num_failed} failed"
-    );
+    println!("test result: FAILED. {num_passed} passed; {num_failed} failed");
     std::process::exit(101);
 }

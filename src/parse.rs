@@ -3,7 +3,7 @@ use std::io;
 
 use crate::timing::{STEPFILE_VERSION_NUMBER, TimingFormat};
 
-#[must_use] 
+#[must_use]
 pub fn strip_title_tags(mut title: &str) -> Cow<'_, str> {
     loop {
         let original = title;
@@ -15,10 +15,11 @@ pub fn strip_title_tags(mut title: &str) -> Cow<'_, str> {
         }
 
         if let Some(pos) = title.find("- ")
-            && title[..pos].chars().all(|c| c.is_ascii_digit() || c == '.') {
-                title = title[pos + 2..].trim_start();
-                continue;
-            }
+            && title[..pos].chars().all(|c| c.is_ascii_digit() || c == '.')
+        {
+            title = title[pos + 2..].trim_start();
+            continue;
+        }
 
         if title == original {
             break;
@@ -27,7 +28,7 @@ pub fn strip_title_tags(mut title: &str) -> Cow<'_, str> {
     Cow::Borrowed(title)
 }
 
-#[must_use] 
+#[must_use]
 pub fn clean_tag(tag: &str) -> Cow<'_, str> {
     let mut iter = tag.char_indices();
     while let Some((i, c)) = iter.next() {
@@ -45,7 +46,7 @@ pub fn clean_tag(tag: &str) -> Cow<'_, str> {
     Cow::Borrowed(tag)
 }
 
-#[must_use] 
+#[must_use]
 pub fn unescape_tag(tag: &str) -> Cow<'_, str> {
     if !tag.as_bytes().contains(&b'\\') {
         return Cow::Borrowed(tag);
@@ -62,7 +63,7 @@ pub fn unescape_tag(tag: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-#[must_use] 
+#[must_use]
 pub fn unescape_trim(tag: &str) -> String {
     let s = unescape_tag(tag);
     let t = s.trim();
@@ -111,7 +112,7 @@ pub fn decode_bytes(bytes: &[u8]) -> Cow<'_, str> {
     std::str::from_utf8(bytes).map_or_else(|_| Cow::Owned(decode_cp1252(bytes)), Cow::Borrowed)
 }
 
-#[must_use] 
+#[must_use]
 pub fn parse_offset_seconds(offset: Option<&[u8]>) -> f64 {
     offset
         .and_then(|b| std::str::from_utf8(b).ok())
@@ -119,7 +120,7 @@ pub fn parse_offset_seconds(offset: Option<&[u8]>) -> f64 {
         .map_or(0.0, |f| f64::from(f as f32))
 }
 
-#[must_use] 
+#[must_use]
 pub fn parse_version(version: Option<&[u8]>, fmt: TimingFormat) -> f32 {
     version
         .and_then(|b| std::str::from_utf8(b).ok())
@@ -133,7 +134,7 @@ pub fn parse_version(version: Option<&[u8]>, fmt: TimingFormat) -> f32 {
 
 pub const SSC_VERSION_CHART_NAME_TAG: f32 = 0.74;
 
-#[must_use] 
+#[must_use]
 pub fn normalize_chart_desc(desc: String, fmt: TimingFormat, ver: f32) -> String {
     if fmt == TimingFormat::Ssc && ver < SSC_VERSION_CHART_NAME_TAG {
         String::new()
@@ -143,12 +144,7 @@ pub fn normalize_chart_desc(desc: String, fmt: TimingFormat, ver: f32) -> String
 }
 
 #[must_use]
-pub fn normalize_chart_name(
-    chart_name: String,
-    desc: &str,
-    fmt: TimingFormat,
-    ver: f32,
-) -> String {
+pub fn normalize_chart_name(chart_name: String, desc: &str, fmt: TimingFormat, ver: f32) -> String {
     if fmt == TimingFormat::Ssc && ver < SSC_VERSION_CHART_NAME_TAG {
         desc.to_string()
     } else {
@@ -665,7 +661,49 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
     Ok(r)
 }
 
-#[must_use] 
+#[inline(always)]
+fn bgchanges_tag_len(s: &[u8]) -> Option<usize> {
+    if starts_with_ci(s, b"#ANIMATIONS:") {
+        return Some(12);
+    }
+    if !starts_with_ci(s, b"#BGCHANGES") {
+        return None;
+    }
+    let mut i = 10usize;
+    while matches!(s.get(i), Some(b'0'..=b'9')) {
+        i += 1;
+    }
+    if s.get(i) != Some(&b':') {
+        return None;
+    }
+    let layer = &s[10..i];
+    (layer.is_empty() || layer == b"1").then_some(i + 1)
+}
+
+pub fn extract_bgchanges_values<'a>(data: &'a [u8]) -> Vec<&'a [u8]> {
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < data.len() {
+        let Some(pos) = find_byte(&data[i..], b'#') else {
+            break;
+        };
+        i += pos;
+        let s = &data[i..];
+        let Some(tag_len) = bgchanges_tag_len(s) else {
+            i += 1;
+            continue;
+        };
+        if let Some((value, adv)) = parse_tag_val(s, tag_len, true) {
+            out.push(value);
+            i += adv;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+#[must_use]
 pub fn split_notes_fields(block: &[u8]) -> (Vec<&[u8]>, &[u8]) {
     let (n, parts, note_data) = split_notes6(block);
     let mut fields = Vec::with_capacity(n as usize);

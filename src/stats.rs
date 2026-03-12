@@ -255,11 +255,7 @@ fn recalc_without_phantoms<const L: usize>(
 }
 
 #[inline(always)]
-fn count_line_masked<const L: usize>(
-    line: &[u8; L],
-    stats: &mut ArrowStats,
-    phantom_mask: u8,
-) {
+fn count_line_masked<const L: usize>(line: &[u8; L], stats: &mut ArrowStats, phantom_mask: u8) {
     let (mut note_mask, mut hold_mask, mut end_mask) = (0u8, 0u8, 0u8);
 
     for (i, &ch) in line.iter().enumerate() {
@@ -315,7 +311,8 @@ fn count_line_masked<const L: usize>(
 
 #[inline(always)]
 pub fn minimize_measure<const L: usize>(m: &mut Vec<[u8; L]>) {
-    while m.len() >= 2 && m.len().is_multiple_of(2) && m.iter().skip(1).step_by(2).all(is_all_zero) {
+    while m.len() >= 2 && m.len().is_multiple_of(2) && m.iter().skip(1).step_by(2).all(is_all_zero)
+    {
         let half = m.len() / 2;
         for i in 0..half {
             m[i] = m[i * 2];
@@ -486,7 +483,7 @@ where
     (output, stats, densities)
 }
 
-#[must_use] 
+#[must_use]
 pub fn minimize_chart_and_count_with_lanes(
     data: &[u8],
     lanes: usize,
@@ -557,7 +554,15 @@ pub(crate) fn line_has_object<const L: usize>(line: &[u8], depths: &mut [u32; L]
 
 pub(crate) fn minimize_chart_rows_bits(
     data: &[u8],
-) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<[u8; 4]>, Vec<f32>, f64, Vec<u8>) {
+) -> (
+    Vec<u8>,
+    ArrowStats,
+    Vec<usize>,
+    Vec<[u8; 4]>,
+    Vec<f32>,
+    f64,
+    Vec<u8>,
+) {
     let mut beats = Vec::with_capacity(data.len() / 5);
     let mut rows = Vec::with_capacity(beats.capacity());
     let mut depths = [0u32; 4];
@@ -581,7 +586,7 @@ pub(crate) fn minimize_chart_rows_bits(
     (out, stats, dens, rows, beats, last, bits)
 }
 
-#[must_use] 
+#[must_use]
 pub fn minimize_chart_for_hash(data: &[u8], lanes: usize) -> Vec<u8> {
     dispatch_lanes!(lanes, minimize_hash_impl(data))
 }
@@ -598,14 +603,13 @@ fn minimize_hash_impl<const L: usize>(data: &[u8]) -> Vec<u8> {
 // Timing-Aware Stats
 // ============================================================================
 
-#[must_use] 
+#[must_use]
 pub fn compute_timing_aware_stats(data: &[u8], lanes: usize, timing: &TimingData) -> ArrowStats {
     dispatch_lanes!(lanes, timing_stats_typed(data, timing))
 }
 
 fn timing_stats_typed<const L: usize>(data: &[u8], timing: &TimingData) -> ArrowStats {
-    let (_minimized, _stats, _densities, rows, beats, _last_beat) =
-        minimize_rows_typed::<L>(data);
+    let (_minimized, _stats, _densities, rows, beats, _last_beat) = minimize_rows_typed::<L>(data);
     compute_timing_aware_stats_from_rows_with_row_to_beat::<L>(&rows, timing, &beats)
 }
 
@@ -745,7 +749,7 @@ fn process_timing_row<const L: usize>(
 // Measure Density Analysis
 // ============================================================================
 
-#[must_use] 
+#[must_use]
 pub fn measure_densities(data: &[u8], lanes: usize) -> Vec<usize> {
     dispatch_lanes!(lanes, densities_impl(data))
 }

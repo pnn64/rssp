@@ -209,8 +209,9 @@ fn bench_bpm_inner(c: &mut Criterion) {
                     true,
                 );
 
-                let bpms_formatted =
-                    rssp::timing::format_bpm_segments_like_itg(&rssp::timing::bpm_segments(&timing));
+                let bpms_formatted = rssp::timing::format_bpm_segments_like_itg(
+                    &rssp::timing::bpm_segments(&timing),
+                );
                 outputs.push((hash_bpms, bpms_formatted));
             }
             black_box(outputs);

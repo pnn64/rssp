@@ -894,21 +894,20 @@ fn calculate_difficulty_for_bpm(measures: f64, bpm_data: &BTreeMap<i32, i32>) ->
 fn find_bounding_bpms(bpm: f64, table: &DifficultyTable) -> (i32, i32) {
     if let Some((&max_bpm, _)) = table.iter().next_back()
         && bpm > f64::from(max_bpm)
-            && let Some((&prev, _)) = table.range(..max_bpm).next_back() {
-                return (prev, max_bpm);
-            }
+        && let Some((&prev, _)) = table.range(..max_bpm).next_back()
+    {
+        return (prev, max_bpm);
+    }
 
     if let Some((&min_bpm, _)) = table.iter().next()
         && bpm < f64::from(min_bpm)
-            && let Some((&next, _)) = table.range(min_bpm + 1..).next() {
-                return (min_bpm, next);
-            }
+        && let Some((&next, _)) = table.range(min_bpm + 1..).next()
+    {
+        return (min_bpm, next);
+    }
 
     let bpm_i = bpm as i32;
-    let bpm1 = table
-        .range(..=bpm_i)
-        .next_back()
-        .map_or(0, |(&b, _)| b);
+    let bpm1 = table.range(..=bpm_i).next_back().map_or(0, |(&b, _)| b);
     let bpm2 = table.range(bpm_i..).next().map_or(bpm1, |(&b, _)| b);
     (bpm1, bpm2)
 }

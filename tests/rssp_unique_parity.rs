@@ -341,9 +341,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
 
     for ((step_type, difficulty), expected_entries) in golden_entries {
         let Some(actual_entries) = rssp_map.remove(&(step_type.clone(), difficulty.clone())) else {
-            println!(
-                "  {step_type} {difficulty}: baseline present, RSSP missing chart"
-            );
+            println!("  {step_type} {difficulty}: baseline present, RSSP missing chart");
             return Err(format!(
                 "\n\nMISSING CHART DETECTED\nFile: {}\nExpected: {} {}\n",
                 path.display(),
@@ -364,7 +362,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                     actual
                         .map(|entry| entry.rating.as_str())
                         .filter(|label| !label.is_empty())
-                }).map_or_else(|| (idx + 1).to_string(), std::string::ToString::to_string);
+                })
+                .map_or_else(|| (idx + 1).to_string(), std::string::ToString::to_string);
 
             let expected_values = expected.map(|entry| &entry.values);
             let actual_values = actual.map(|entry| &entry.values);
@@ -373,22 +372,20 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 && expected_values == actual_values;
             let status = if matches { "....ok" } else { "....MISMATCH" };
 
-            let expected_matrix = expected_values
-                .map_or("-", |v| v.matrix_rating.as_str());
-            let actual_matrix = actual_values
-                .map_or("-", |v| v.matrix_rating.as_str());
-            let expected_detail = expected_values
-                .map_or("-", |v| v.breakdown.sn_detailed_breakdown.as_str());
-            let actual_detail = actual_values
-                .map_or("-", |v| v.breakdown.sn_detailed_breakdown.as_str());
-            let expected_partial = expected_values
-                .map_or("-", |v| v.breakdown.sn_partial_breakdown.as_str());
-            let actual_partial = actual_values
-                .map_or("-", |v| v.breakdown.sn_partial_breakdown.as_str());
-            let expected_simple = expected_values
-                .map_or("-", |v| v.breakdown.sn_simple_breakdown.as_str());
-            let actual_simple = actual_values
-                .map_or("-", |v| v.breakdown.sn_simple_breakdown.as_str());
+            let expected_matrix = expected_values.map_or("-", |v| v.matrix_rating.as_str());
+            let actual_matrix = actual_values.map_or("-", |v| v.matrix_rating.as_str());
+            let expected_detail =
+                expected_values.map_or("-", |v| v.breakdown.sn_detailed_breakdown.as_str());
+            let actual_detail =
+                actual_values.map_or("-", |v| v.breakdown.sn_detailed_breakdown.as_str());
+            let expected_partial =
+                expected_values.map_or("-", |v| v.breakdown.sn_partial_breakdown.as_str());
+            let actual_partial =
+                actual_values.map_or("-", |v| v.breakdown.sn_partial_breakdown.as_str());
+            let expected_simple =
+                expected_values.map_or("-", |v| v.breakdown.sn_simple_breakdown.as_str());
+            let actual_simple =
+                actual_values.map_or("-", |v| v.breakdown.sn_simple_breakdown.as_str());
             let expected_candles = format_candles(expected_values.map(|v| &v.mono_candle_stats));
             let actual_candles = format_candles(actual_values.map(|v| &v.mono_candle_stats));
             let expected_mono = format_mono(expected_values.map(|v| &v.mono_candle_stats));
@@ -445,7 +442,10 @@ fn main() {
 
     let mut tests = Vec::new();
 
-    for entry in WalkDir::new(&packs_dir).into_iter().filter_map(std::result::Result::ok) {
+    for entry in WalkDir::new(&packs_dir)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+    {
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -568,8 +568,6 @@ fn main() {
         return;
     }
 
-    println!(
-        "test result: FAILED. {num_passed} passed; {num_failed} failed"
-    );
+    println!("test result: FAILED. {num_passed} passed; {num_failed} failed");
     std::process::exit(101);
 }

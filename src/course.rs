@@ -8,8 +8,8 @@ use crate::assets;
 use crate::math::{round_dp, round_sig_figs_6};
 use crate::nps::get_nps_stats;
 use crate::pack;
-use crate::patterns::PATTERN_COUNT;
 use crate::parse::{clean_tag, decode_bytes, extract_sections, unescape_tag};
+use crate::patterns::PATTERN_COUNT;
 use crate::report::{ChartSummary, CourseEntrySummary, CourseSummary, SimfileSummary};
 use crate::simfile;
 use crate::timing::TimingSegments;
@@ -67,7 +67,7 @@ pub enum Difficulty {
     Edit = 5,
 }
 
-#[must_use] 
+#[must_use]
 pub const fn difficulty_label(d: Difficulty) -> &'static str {
     match d {
         Difficulty::Beginner => "Beginner",
@@ -212,15 +212,29 @@ fn parse_song(raw: &str) -> (CourseSong, bool) {
 
     let normalized = raw.replace('\\', "/");
     if let Some(group) = normalized.strip_suffix("/*").map(str::trim)
-        && !group.is_empty() {
-            return (CourseSong::RandomWithinGroup { group: group.to_string() }, true);
-        }
+        && !group.is_empty()
+    {
+        return (
+            CourseSong::RandomWithinGroup {
+                group: group.to_string(),
+            },
+            true,
+        );
+    }
 
-    let mut parts = normalized.split('/').map(str::trim).filter(|s| !s.is_empty());
+    let mut parts = normalized
+        .split('/')
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let first = parts.next().unwrap_or_default();
     let second = parts.next();
     if parts.next().is_some() {
-        return (CourseSong::Unknown { raw: raw.to_string() }, false);
+        return (
+            CourseSong::Unknown {
+                raw: raw.to_string(),
+            },
+            false,
+        );
     }
     let song = second.map_or_else(|| first.to_string(), str::to_string);
     let group = second.map(|_| first.to_string());
@@ -256,7 +270,9 @@ fn parse_steps(raw: &str) -> StepsSpec {
     if let Some((low, high)) = parse_meter_range(raw) {
         return StepsSpec::MeterRange { low, high };
     }
-    StepsSpec::Unknown { raw: raw.to_string() }
+    StepsSpec::Unknown {
+        raw: raw.to_string(),
+    }
 }
 
 fn apply_song_mods(mut secret: bool, mods_raw: &str) -> (bool, bool, i32, String) {
@@ -384,7 +400,10 @@ pub fn resolve_course_banner_path(course_path: &Path, banner_tag: &str) -> Optio
     }
 
     let parent = course_path.parent().unwrap_or_else(|| Path::new(""));
-    let stem_lc = course_path.file_stem()?.to_string_lossy().to_ascii_lowercase();
+    let stem_lc = course_path
+        .file_stem()?
+        .to_string_lossy()
+        .to_ascii_lowercase();
     if stem_lc.is_empty() {
         return None;
     }
@@ -422,7 +441,8 @@ pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
 
         let name_bytes = &s[1..name_end];
         let value_start = name_end + 1;
-        let (value_end, adv) = scan_term(&s[value_start..]).unwrap_or((s.len() - value_start, s.len() - value_start));
+        let (value_end, adv) =
+            scan_term(&s[value_start..]).unwrap_or((s.len() - value_start, s.len() - value_start));
         let value = &s[value_start..value_start + value_end];
         i += value_start + adv;
 
@@ -631,7 +651,9 @@ fn add_course_chart(total: &mut ChartSummary, chart: &ChartSummary) {
                     });
             }
         }
-        total.custom_patterns.sort_by(|a, b| a.pattern.cmp(&b.pattern));
+        total
+            .custom_patterns
+            .sort_by(|a, b| a.pattern.cmp(&b.pattern));
     }
 }
 
@@ -703,7 +725,10 @@ fn resolve_song_dir(songs_dir: &Path, group: Option<&str>, song: &str) -> Option
             .map(|e| e.path())
             .filter(|p| p.is_dir())
             .collect();
-        subdirs.sort_by_cached_key(|p| p.file_name().map(|s| s.to_string_lossy().to_ascii_lowercase()));
+        subdirs.sort_by_cached_key(|p| {
+            p.file_name()
+                .map(|s| s.to_string_lossy().to_ascii_lowercase())
+        });
 
         for dir in subdirs {
             let scan = pack::scan_song_dir(&dir, pack::ScanOpt::default()).ok()??;
@@ -724,7 +749,10 @@ fn resolve_song_dir(songs_dir: &Path, group: Option<&str>, song: &str) -> Option
         .map(|e| e.path())
         .filter(|p| p.is_dir())
         .collect();
-    groups.sort_by_cached_key(|p| p.file_name().map(|s| s.to_string_lossy().to_ascii_lowercase()));
+    groups.sort_by_cached_key(|p| {
+        p.file_name()
+            .map(|s| s.to_string_lossy().to_ascii_lowercase())
+    });
 
     for group_dir in groups {
         if let Some(dir) = assets::is_dir_ci(&group_dir, song).or_else(|| {
@@ -762,7 +790,8 @@ fn select_chart<'a>(
 ) -> Option<&'a ChartSummary> {
     sim.charts.iter().find(|c| {
         normalize_stepstype(&c.step_type_str) == step_type
-            && c.difficulty_str.eq_ignore_ascii_case(difficulty_label(difficulty))
+            && c.difficulty_str
+                .eq_ignore_ascii_case(difficulty_label(difficulty))
     })
 }
 
@@ -821,10 +850,16 @@ pub fn analyze_crs_path(
 
     for entry in &course.entries {
         let CourseSong::Fixed { group, song } = &entry.song else {
-            return Err("Only fixed #SONG entries are supported (no RANDOM/BEST/WORST/SONGSELECT yet)".to_string());
+            return Err(
+                "Only fixed #SONG entries are supported (no RANDOM/BEST/WORST/SONGSELECT yet)"
+                    .to_string(),
+            );
         };
         let StepsSpec::Difficulty(base_diff) = entry.steps else {
-            return Err("Only difficulty-based #SONG entries are supported (no meter ranges yet)".to_string());
+            return Err(
+                "Only difficulty-based #SONG entries are supported (no meter ranges yet)"
+                    .to_string(),
+            );
         };
 
         let song_dir = resolve_song_dir(&base_songs_dir, group.as_deref(), song)
@@ -845,8 +880,14 @@ pub fn analyze_crs_path(
                 .ok_or_else(|| format!("Internal cache error for {}", scan.simfile.display()))?
         };
 
-        let base_chart = select_chart(sim, &step_type, base_diff)
-            .ok_or_else(|| format!("Chart not found for {} {} {}", song, step_type, difficulty_label(base_diff)))?;
+        let base_chart = select_chart(sim, &step_type, base_diff).ok_or_else(|| {
+            format!(
+                "Chart not found for {} {} {}",
+                song,
+                step_type,
+                difficulty_label(base_diff)
+            )
+        })?;
         let chart = if course_diff != Difficulty::Medium && !entry.no_difficult {
             let shifted = shift_diff(base_diff, course_diff);
             select_chart(sim, &step_type, shifted).unwrap_or(base_chart)

@@ -5,8 +5,8 @@ use crate::parse::{
     unescape_trim,
 };
 use crate::timing::{
-    TimingData, compute_timing_segments, get_time_for_beat_f32,
-    steps_timing_allowed, timing_data_from_segments, timing_format_from_ext,
+    TimingData, compute_timing_segments, get_time_for_beat_f32, steps_timing_allowed,
+    timing_data_from_segments, timing_format_from_ext,
 };
 
 #[derive(Debug, Clone)]

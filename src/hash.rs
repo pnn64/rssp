@@ -1,4 +1,10 @@
-const SHA1_INIT: [u32; 5] = [0x6745_2301, 0xefcd_ab89, 0x98ba_dcfe, 0x1032_5476, 0xc3d2_e1f0];
+const SHA1_INIT: [u32; 5] = [
+    0x6745_2301,
+    0xefcd_ab89,
+    0x98ba_dcfe,
+    0x1032_5476,
+    0xc3d2_e1f0,
+];
 
 const SHA1_K: [[u32; 4]; 4] = [
     [0x5a82_7999; 4],
@@ -349,7 +355,7 @@ const HEX_TABLE: [[u8; 2]; 256] = {
     table
 };
 
-#[must_use] 
+#[must_use]
 pub fn compute_chart_hash(chart_data: &[u8], normalized_bpms: &str) -> String {
     let digest = sha1_digest(chart_data, normalized_bpms.as_bytes());
     let mut out = String::with_capacity(16);

@@ -1,6 +1,8 @@
 use std::sync::OnceLock;
 
-use crate::timing::{ROWS_PER_BEAT, TimingData, beat_to_note_row_f32, get_time_for_beat_f32, is_fake_at_beat};
+use crate::timing::{
+    ROWS_PER_BEAT, TimingData, beat_to_note_row_f32, get_time_for_beat_f32, is_fake_at_beat,
+};
 
 const INVALID_COLUMN: i8 = -1;
 const CLM_SECOND_INVALID: f32 = -1.0;
@@ -525,7 +527,10 @@ fn calc_action_cost(
         hit[foot_idx(Foot::RightHeel)],
         hit[foot_idx(Foot::RightToe)],
     );
-    let (moved_left, moved_right) = (foot_moved(result, &LEFT_PAIR), foot_moved(result, &RIGHT_PAIR));
+    let (moved_left, moved_right) = (
+        foot_moved(result, &LEFT_PAIR),
+        foot_moved(result, &RIGHT_PAIR),
+    );
     let did_jump = left_moved_not_holding && right_moved_not_holding;
     let (jacked_left, jacked_right) = (
         did_jack(
@@ -554,8 +559,14 @@ fn calc_action_cost(
     cost += calc_mine_cost(result, row);
     cost += calc_hold_switch_cost(layout, initial, result, row);
     cost += calc_bracket_tap_cost(initial, row, lh, lt, rh, rt, inv_elapsed);
-    cost +=
-        calc_bracket_jack_cost(result, moved_left, moved_right, jacked_left, jacked_right, did_jump);
+    cost += calc_bracket_jack_cost(
+        result,
+        moved_left,
+        moved_right,
+        jacked_left,
+        jacked_right,
+        did_jump,
+    );
     cost += calc_doublestep_cost(
         moved_left,
         moved_right,
@@ -689,9 +700,8 @@ fn calc_doublestep_cost(
         return 0.0;
     }
 
-    let did_double_step =
-        (moved_left && !jacked_left && left_moved_not_holding)
-            || (moved_right && !jacked_right && right_moved_not_holding);
+    let did_double_step = (moved_left && !jacked_left && left_moved_not_holding)
+        || (moved_right && !jacked_right && right_moved_not_holding);
     if did_double_step && !prev_row_has_live_hold {
         DOUBLESTEP_WEIGHT
     } else {
@@ -751,8 +761,16 @@ fn calc_facing_cost(layout: &StageLayout, result: &State) -> f32 {
 fn calc_spin_cost(layout: &StageLayout, initial: &State, result: &State) -> f32 {
     let get = |s: &State, f: Foot| s.where_the_feet_are[foot_idx(f)];
 
-    let prev_left = layout_avg_point(layout, get(initial, Foot::LeftHeel), get(initial, Foot::LeftToe));
-    let prev_right = layout_avg_point(layout, get(initial, Foot::RightHeel), get(initial, Foot::RightToe));
+    let prev_left = layout_avg_point(
+        layout,
+        get(initial, Foot::LeftHeel),
+        get(initial, Foot::LeftToe),
+    );
+    let prev_right = layout_avg_point(
+        layout,
+        get(initial, Foot::RightHeel),
+        get(initial, Foot::RightToe),
+    );
 
     let mut lt = get(result, Foot::LeftToe);
     let mut rt = get(result, Foot::RightToe);
@@ -767,12 +785,13 @@ fn calc_spin_cost(layout: &StageLayout, initial: &State, result: &State) -> f32 
     let right = layout_avg_point(layout, get(result, Foot::RightHeel), rt);
 
     let mut cost = 0.0;
-    if right.x < left.x && prev_right.x < prev_left.x
+    if right.x < left.x
+        && prev_right.x < prev_left.x
         && ((right.y < left.y && prev_right.y > prev_left.y)
             || (right.y > left.y && prev_right.y < prev_left.y))
-        {
-            cost += SPIN_WEIGHT;
-        }
+    {
+        cost += SPIN_WEIGHT;
+    }
     cost
 }
 
@@ -815,13 +834,13 @@ fn calc_sideswitch_cost(
     while mask != 0 {
         let c = mask.trailing_zeros() as usize;
         mask &= mask - 1;
-	        if initial.combined_columns[c] != placement[c]
-	            && placement[c] != Foot::None
-	            && initial.combined_columns[c] != Foot::None
-	            && (result.moved_mask & FOOT_MASKS[foot_idx(initial.combined_columns[c])]) == 0
-	        {
-	            count += 1;
-	        }
+        if initial.combined_columns[c] != placement[c]
+            && placement[c] != Foot::None
+            && initial.combined_columns[c] != Foot::None
+            && (result.moved_mask & FOOT_MASKS[foot_idx(initial.combined_columns[c])]) == 0
+        {
+            count += 1;
+        }
     }
     count as f32 * SIDESWITCH_WEIGHT
 }
@@ -947,7 +966,11 @@ fn parity_finish(g: &mut StepParityGenerator) -> bool {
     parity_backtrack(g, best)
 }
 
-fn parity_analyze(g: &mut StepParityGenerator, notes: Vec<IntermediateNoteData>, cols: usize) -> bool {
+fn parity_analyze(
+    g: &mut StepParityGenerator,
+    notes: Vec<IntermediateNoteData>,
+    cols: usize,
+) -> bool {
     parity_reset(g, cols);
     parity_create_rows(g, notes);
     parity_finish(g)
@@ -1406,8 +1429,10 @@ fn parity_result_state(
         }
     }
 
-    let (moved_left, moved_right) =
-        ((moved_mask & LEFT_FOOT_MASK) != 0, (moved_mask & RIGHT_FOOT_MASK) != 0);
+    let (moved_left, moved_right) = (
+        (moved_mask & LEFT_FOOT_MASK) != 0,
+        (moved_mask & RIGHT_FOOT_MASK) != 0,
+    );
     let (mut where_the_feet_are, mut comb_p, mut occupied_mask) =
         ([INVALID_COLUMN; NUM_FEET], 0u32, 0u8);
     for i in 0..n {
@@ -1416,7 +1441,10 @@ fn parity_result_state(
             let prev = initial.combined_columns[i];
             foot = match prev {
                 Foot::LeftHeel | Foot::RightHeel
-                    if (moved_mask & FOOT_MASKS[foot_idx(prev)]) == 0 => prev,
+                    if (moved_mask & FOOT_MASKS[foot_idx(prev)]) == 0 =>
+                {
+                    prev
+                }
                 Foot::LeftToe if !moved_left => prev,
                 Foot::RightToe if !moved_right => prev,
                 _ => Foot::None,
@@ -1560,34 +1588,18 @@ fn permute_row(
 
     let active = (mask & (1u8 << col)) != 0;
 
-	    if active {
-	        for &foot in &FEET {
-	            let fm = FOOT_MASKS[foot_idx(foot)];
-	            if used & fm != 0 {
-	                continue;
-	            }
+    if active {
+        for &foot in &FEET {
+            let fm = FOOT_MASKS[foot_idx(foot)];
+            if used & fm != 0 {
+                continue;
+            }
             cols[col] = foot;
-            permute_row(
-                layout,
-                mask,
-                cols,
-                col + 1,
-                col_count,
-                used | fm,
-                out,
-            );
+            permute_row(layout, mask, cols, col + 1, col_count, used | fm, out);
             cols[col] = Foot::None;
         }
     } else {
-        permute_row(
-            layout,
-            mask,
-            cols,
-            col + 1,
-            col_count,
-            used,
-            out,
-        );
+        permute_row(layout, mask, cols, col + 1, col_count, used, out);
     }
 }
 
@@ -1607,7 +1619,11 @@ pub struct TechCounts {
     pub doublesteps: u32,
 }
 
-fn calculate_tech_counts(rows: &[Row], placements: &[FootPlacement], layout: &StageLayout) -> TechCounts {
+fn calculate_tech_counts(
+    rows: &[Row],
+    placements: &[FootPlacement],
+    layout: &StageLayout,
+) -> TechCounts {
     let mut out = TechCounts::default();
     if rows.len() < 2 || placements.len() != rows.len() {
         return out;
@@ -1990,14 +2006,9 @@ fn parse_note_char(
                 hold_idx[col] = usize::MAX;
             }
         }
-        b'1' | b'K' | b'L' => notes.push(note_new(
-            TapNoteType::Tap,
-            col,
-            beat,
-            second,
-            0.0,
-            row_fake,
-        )),
+        b'1' | b'K' | b'L' => {
+            notes.push(note_new(TapNoteType::Tap, col, beat, second, 0.0, row_fake))
+        }
         b'M' => notes.push(note_new(
             TapNoteType::Mine,
             col,
@@ -2006,14 +2017,7 @@ fn parse_note_char(
             0.0,
             row_fake,
         )),
-        b'F' => notes.push(note_new(
-            TapNoteType::Fake,
-            col,
-            beat,
-            second,
-            0.0,
-            true,
-        )),
+        b'F' => notes.push(note_new(TapNoteType::Fake, col, beat, second, 0.0, true)),
         _ => {}
     }
 }
@@ -2074,7 +2078,7 @@ where
     calculate_tech_counts(&generator.rows, &generator.result_columns, generator.layout)
 }
 
-#[must_use] 
+#[must_use]
 pub fn analyze_lanes(
     minimized_note_data: &[u8],
     bpm_map: &[(f64, f64)],
@@ -2125,17 +2129,21 @@ pub fn analyze_lanes(
     })
 }
 
-#[must_use] 
-pub fn analyze_timing_lanes(minimized_note_data: &[u8], timing: &TimingData, lanes: usize) -> TechCounts {
+#[must_use]
+pub fn analyze_timing_lanes(
+    minimized_note_data: &[u8],
+    timing: &TimingData,
+    lanes: usize,
+) -> TechCounts {
     let Some(cache) = layout_for_lanes(lanes) else {
         return TechCounts::default();
     };
 
     let cols = layout_cols(&cache.layout);
     debug_assert!(!minimized_note_data.contains(&b';'));
-	    analyze_core(cache, minimized_note_data, cols, Some(timing), |beat| {
-	        get_time_for_beat_f32(timing, f64::from(beat)) as f32
-	    })
+    analyze_core(cache, minimized_note_data, cols, Some(timing), |beat| {
+        get_time_for_beat_f32(timing, f64::from(beat)) as f32
+    })
 }
 
 pub(crate) struct TimingRowsScratch<const LANES: usize> {

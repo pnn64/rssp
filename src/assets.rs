@@ -3,6 +3,24 @@ use std::io;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use crate::parse::{decode_bytes, extract_bgchanges_values, unescape_tag};
+
+const RANDOM_BACKGROUND_FILE: &str = "-random-";
+const NO_SONG_BG_FILE: &str = "-nosongbg-";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BackgroundChangeTarget {
+    File(PathBuf),
+    NoSongBg,
+    Random,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedBackgroundChange {
+    pub start_beat: f32,
+    pub target: BackgroundChangeTarget,
+}
+
 pub(crate) fn lc_name(path: &Path) -> String {
     path.file_name()
         .map(|s| s.to_string_lossy().to_ascii_lowercase())
@@ -164,7 +182,9 @@ fn list_sound_files(song_dir: &Path) -> Vec<PathBuf> {
 #[must_use]
 pub fn resolve_music_path_like_itg(song_dir: &Path, music_tag: &str) -> Option<PathBuf> {
     let tag = music_tag.trim();
-    if !tag.is_empty() && let Some(path) = resolve_asset(song_dir, tag) {
+    if !tag.is_empty()
+        && let Some(path) = resolve_asset(song_dir, tag)
+    {
         return Some(path);
     }
 
@@ -173,9 +193,11 @@ pub fn resolve_music_path_like_itg(song_dir: &Path, music_tag: &str) -> Option<P
         return None;
     }
     if sounds.len() > 1
-        && sounds[0]
-            .file_name()
-            .is_some_and(|n| n.to_string_lossy().to_ascii_lowercase().starts_with("intro"))
+        && sounds[0].file_name().is_some_and(|n| {
+            n.to_string_lossy()
+                .to_ascii_lowercase()
+                .starts_with("intro")
+        })
     {
         return Some(sounds[1].clone());
     }
@@ -306,7 +328,7 @@ fn img_dims(path: &Path) -> Option<(u32, u32)> {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn resolve_song_assets(
     song_dir: &Path,
     banner_tag: &str,
@@ -357,4 +379,142 @@ pub fn resolve_song_assets(
     }
 
     (banner, background)
+}
+
+fn list_song_dir_rel_files(song_dir: &Path) -> Vec<String> {
+    let mut dirs = vec![song_dir.to_path_buf()];
+    let mut files = Vec::new();
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+                continue;
+            }
+            let Ok(rel) = path.strip_prefix(song_dir) else {
+                continue;
+            };
+            files.push(to_slash(&rel.to_string_lossy()));
+        }
+    }
+    files.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+    files
+}
+
+fn strip_newlines(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for line in s.lines() {
+        out.push_str(line);
+    }
+    out
+}
+
+fn match_bg_file<'a>(changes: &'a str, start: usize, files: &[String]) -> Option<&'a str> {
+    for file in files {
+        let Some(head) = changes.get(start..start + file.len()) else {
+            continue;
+        };
+        if !head.eq_ignore_ascii_case(file) {
+            continue;
+        }
+        let next = start + file.len();
+        if matches!(changes.as_bytes().get(next), None | Some(b'=') | Some(b',')) {
+            return Some(head);
+        }
+    }
+    None
+}
+
+fn split_bgchange_sets(changes: &str, files: &[String]) -> Vec<Vec<String>> {
+    let changes = strip_newlines(changes);
+    if changes.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<Vec<String>> = Vec::new();
+    let mut start = 0usize;
+    let mut pnum = 0u8;
+    while start <= changes.len() {
+        if matches!(pnum, 1 | 7)
+            && let Some(found) = match_bg_file(&changes, start, files)
+        {
+            out.last_mut().unwrap().push(found.to_string());
+            start += found.len();
+            if let Some(&delim) = changes.as_bytes().get(start) {
+                pnum = if delim == b'=' { pnum + 1 } else { 0 };
+                start += 1;
+            }
+            continue;
+        }
+        if pnum == 0 {
+            out.push(Vec::new());
+        }
+        let rem = &changes[start..];
+        let eq = rem.find('=').map(|i| start + i);
+        let comma = rem.find(',').map(|i| start + i);
+        let Some((end, next_pnum)) = eq
+            .zip(comma)
+            .map(|(e, c)| if e < c { (e, pnum + 1) } else { (c, 0) })
+            .or_else(|| eq.map(|e| (e, pnum + 1)))
+            .or_else(|| comma.map(|c| (c, 0)))
+        else {
+            out.last_mut().unwrap().push(changes[start..].to_string());
+            break;
+        };
+        out.last_mut()
+            .unwrap()
+            .push(changes[start..end].to_string());
+        start = end + 1;
+        pnum = next_pnum;
+    }
+    out
+}
+
+fn resolve_bgchange_target(song_dir: &Path, file1: &str) -> Option<BackgroundChangeTarget> {
+    let file1 = file1.trim();
+    if file1.is_empty() {
+        return None;
+    }
+    if file1.eq_ignore_ascii_case(NO_SONG_BG_FILE) {
+        return Some(BackgroundChangeTarget::NoSongBg);
+    }
+    if file1.eq_ignore_ascii_case(RANDOM_BACKGROUND_FILE) {
+        return Some(BackgroundChangeTarget::Random);
+    }
+    resolve_asset(song_dir, file1).map(BackgroundChangeTarget::File)
+}
+
+fn parse_bgchange_set(song_dir: &Path, fields: &[String]) -> Option<ResolvedBackgroundChange> {
+    let start_beat = fields.first()?.trim().parse::<f32>().unwrap_or(0.0);
+    let target = resolve_bgchange_target(song_dir, fields.get(1)?)?;
+    Some(ResolvedBackgroundChange { start_beat, target })
+}
+
+#[must_use]
+pub fn resolve_background_changes_like_itg(
+    song_dir: &Path,
+    simfile_data: &[u8],
+) -> Vec<ResolvedBackgroundChange> {
+    let files = list_song_dir_rel_files(song_dir);
+    let mut out: Vec<ResolvedBackgroundChange> = Vec::new();
+    for raw in extract_bgchanges_values(simfile_data) {
+        let text = unescape_tag(decode_bytes(raw).as_ref()).into_owned();
+        for fields in split_bgchange_sets(&text, &files) {
+            let Some(change) = parse_bgchange_set(song_dir, &fields) else {
+                continue;
+            };
+            if let Some(slot) = out
+                .iter_mut()
+                .find(|existing| existing.start_beat == change.start_beat)
+            {
+                *slot = change;
+            } else {
+                out.push(change);
+            }
+        }
+    }
+    out.sort_by(|a, b| a.start_beat.total_cmp(&b.start_beat));
+    out
 }

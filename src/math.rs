@@ -1,6 +1,6 @@
 const POW10: [f64; 19] = [
-    1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9,
-    1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18,
+    1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16,
+    1e17, 1e18,
 ];
 
 #[inline(always)]
@@ -10,14 +10,14 @@ fn round_sig_figs_6_impl(value: f64, fallback: f64) -> f64 {
     }
     let magnitude = value.abs().log10().floor() as i32;
     let power = 5 - magnitude;
-    
+
     if !(-300..=300).contains(&power) {
         return fallback;
     }
-    
+
     let scale = 10f64.powi(power);
     let rounded = (value * scale).round_ties_even() / scale;
-    
+
     if rounded.is_finite() {
         rounded
     } else {
@@ -26,7 +26,7 @@ fn round_sig_figs_6_impl(value: f64, fallback: f64) -> f64 {
 }
 
 #[inline(always)]
-#[must_use] 
+#[must_use]
 pub fn round_dp(value: f64, dp: usize) -> f64 {
     if !value.is_finite() {
         return value;
@@ -41,13 +41,13 @@ pub fn round_dp(value: f64, dp: usize) -> f64 {
 }
 
 #[inline(always)]
-#[must_use] 
+#[must_use]
 pub fn round_sig_figs_6(value: f64) -> f64 {
     round_sig_figs_6_impl(value, value)
 }
 
 #[inline(always)]
-#[must_use] 
+#[must_use]
 pub fn round_sig_figs_itg(value: f64) -> f64 {
     round_sig_figs_6_impl(f64::from(value as f32), value)
 }
@@ -63,20 +63,32 @@ pub(crate) fn fmt_dec3_half_up(value: f64) -> String {
 }
 
 #[inline(always)]
-#[must_use] 
+#[must_use]
 pub const fn lrint_f64(v: f64) -> f64 {
-    if v.is_finite() { v.round_ties_even() } else { 0.0 }
+    if v.is_finite() {
+        v.round_ties_even()
+    } else {
+        0.0
+    }
 }
 
 #[inline(always)]
-#[must_use] 
+#[must_use]
 pub const fn lrint_f32(v: f32) -> i32 {
-    if v.is_finite() { v.round_ties_even() as i32 } else { 0 }
+    if v.is_finite() {
+        v.round_ties_even() as i32
+    } else {
+        0
+    }
 }
 
 #[inline(always)]
-#[must_use] 
+#[must_use]
 pub fn roundtrip_bpm_itg(bpm: f64) -> f64 {
     let bpm_f = bpm as f32;
-    if bpm_f.is_finite() { f64::from(bpm_f / 60.0 * 60.0) } else { 0.0 }
+    if bpm_f.is_finite() {
+        f64::from(bpm_f / 60.0 * 60.0)
+    } else {
+        0.0
+    }
 }
