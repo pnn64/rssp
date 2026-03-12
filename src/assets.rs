@@ -151,12 +151,22 @@ fn resolve_asset(song_dir: &Path, tag: &str) -> Option<PathBuf> {
 }
 
 const SOUND_EXTS: [&str; 1] = ["ogg"];
+const MOVIE_EXTS: [&str; 11] = [
+    "avi", "f4v", "flv", "mkv", "mp4", "mpeg", "mpg", "mov", "ogv", "webm", "wmv",
+];
 
 #[inline(always)]
 fn is_sound_ext(path: &Path) -> bool {
     path.extension()
         .and_then(|s| s.to_str())
         .is_some_and(|ext| SOUND_EXTS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
+}
+
+#[inline(always)]
+fn is_movie_ext(path: &Path) -> bool {
+    path.extension()
+        .and_then(|s| s.to_str())
+        .is_some_and(|ext| MOVIE_EXTS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
 }
 
 #[inline(always)]
@@ -168,6 +178,20 @@ fn list_sound_files(song_dir: &Path) -> Vec<PathBuf> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.is_file() && is_sound_ext(p))
+        .collect();
+    files.sort_by_cached_key(|p| lc_name(p));
+    files
+}
+
+#[inline(always)]
+fn list_movie_files(song_dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(song_dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && is_movie_ext(p))
         .collect();
     files.sort_by_cached_key(|p| lc_name(p));
     files
@@ -513,6 +537,22 @@ pub fn resolve_background_changes_like_itg(
             } else {
                 out.push(change);
             }
+        }
+    }
+    let blocks_beat_zero = out.iter().any(|change| {
+        change.start_beat <= 0.0 && !matches!(change.target, BackgroundChangeTarget::File(_))
+    });
+    if !out
+        .iter()
+        .any(|change| matches!(change.target, BackgroundChangeTarget::File(_)))
+        && !blocks_beat_zero
+    {
+        let movies = list_movie_files(song_dir);
+        if movies.len() == 1 {
+            out.push(ResolvedBackgroundChange {
+                start_beat: 0.0,
+                target: BackgroundChangeTarget::File(movies[0].clone()),
+            });
         }
     }
     out.sort_by(|a, b| a.start_beat.total_cmp(&b.start_beat));
