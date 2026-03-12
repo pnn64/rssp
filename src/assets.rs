@@ -516,6 +516,18 @@ fn parse_bgchange_set(song_dir: &Path, fields: &[String]) -> Option<ResolvedBack
     Some(ResolvedBackgroundChange { start_beat, target })
 }
 
+#[inline(always)]
+fn upsert_bgchange(out: &mut Vec<ResolvedBackgroundChange>, change: ResolvedBackgroundChange) {
+    if let Some(slot) = out
+        .iter_mut()
+        .find(|existing| existing.start_beat == change.start_beat)
+    {
+        *slot = change;
+    } else {
+        out.push(change);
+    }
+}
+
 #[must_use]
 pub fn resolve_background_changes_like_itg(
     song_dir: &Path,
@@ -523,35 +535,60 @@ pub fn resolve_background_changes_like_itg(
 ) -> Vec<ResolvedBackgroundChange> {
     let files = list_song_dir_rel_files(song_dir);
     let mut out: Vec<ResolvedBackgroundChange> = Vec::new();
+    let mut saw_no_song_bg = false;
     for raw in extract_bgchanges_values(simfile_data) {
         let text = unescape_tag(decode_bytes(raw).as_ref()).into_owned();
         for fields in split_bgchange_sets(&text, &files) {
             let Some(change) = parse_bgchange_set(song_dir, &fields) else {
                 continue;
             };
-            if let Some(slot) = out
-                .iter_mut()
-                .find(|existing| existing.start_beat == change.start_beat)
-            {
-                *slot = change;
-            } else {
-                out.push(change);
+            if matches!(change.target, BackgroundChangeTarget::NoSongBg) {
+                saw_no_song_bg = true;
+                continue;
             }
+            upsert_bgchange(&mut out, change);
         }
     }
+    let has_explicit_movie = out.iter().any(|change| {
+        matches!(
+            change.target,
+            BackgroundChangeTarget::File(ref path) if is_movie_ext(path)
+        )
+    });
+    let beat_zero_still_ix = out
+        .iter()
+        .enumerate()
+        .filter(|(_, change)| {
+            change.start_beat <= 0.0
+                && matches!(
+                    change.target,
+                    BackgroundChangeTarget::File(ref path) if !is_movie_ext(path)
+                )
+        })
+        .map(|(ix, _)| ix)
+        .last();
     let blocks_beat_zero = out.iter().any(|change| {
         change.start_beat <= 0.0 && !matches!(change.target, BackgroundChangeTarget::File(_))
     });
-    if !out
+    let has_any_file = out
         .iter()
-        .any(|change| matches!(change.target, BackgroundChangeTarget::File(_)))
-        && !blocks_beat_zero
-    {
-        let movies = list_movie_files(song_dir);
-        if movies.len() == 1 {
+        .any(|change| matches!(change.target, BackgroundChangeTarget::File(_)));
+    let movies = list_movie_files(song_dir);
+    if movies.len() == 1 && !has_explicit_movie {
+        let movie = movies[0].clone();
+        if saw_no_song_bg {
+            if let Some(ix) = beat_zero_still_ix {
+                out[ix].target = BackgroundChangeTarget::File(movie);
+            } else if !blocks_beat_zero {
+                out.push(ResolvedBackgroundChange {
+                    start_beat: 0.0,
+                    target: BackgroundChangeTarget::File(movie),
+                });
+            }
+        } else if !has_any_file && !blocks_beat_zero {
             out.push(ResolvedBackgroundChange {
                 start_beat: 0.0,
-                target: BackgroundChangeTarget::File(movies[0].clone()),
+                target: BackgroundChangeTarget::File(movie),
             });
         }
     }
