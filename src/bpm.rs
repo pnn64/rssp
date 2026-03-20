@@ -537,7 +537,11 @@ fn elapsed_with_events(
         .chain(stops.iter().chain(delays).map(|&(b, v)| (b, 1, v)))
         .chain(warps.iter().map(|&(b, v)| (b, 2, v)))
         .collect();
-    events.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.cmp(&b.1)));
+    events.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.1.cmp(&b.1))
+    });
 
     let (mut time, mut beat, mut bpm, mut warp_end) = (
         0.0,
