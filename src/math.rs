@@ -53,8 +53,8 @@ pub fn round_sig_figs_itg(value: f64) -> f64 {
 }
 
 #[inline(always)]
-pub(crate) fn fmt_dec3_itg(value: f64) -> String {
-    format!("{:.3}", (value as f32 * 1000.0).round() / 1000.0)
+pub(crate) fn fmt_dec6_itg(value: f64) -> String {
+    format!("{:.6}", value as f32)
 }
 
 #[inline(always)]

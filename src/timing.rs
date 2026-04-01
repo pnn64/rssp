@@ -1,5 +1,5 @@
 use crate::bpm::{clean_timing_map_cow, parse_beat_or_row, parse_bpm_map};
-use crate::math::{fmt_dec3_itg, lrint_f32, lrint_f64, roundtrip_bpm_itg};
+use crate::math::{fmt_dec6_itg, lrint_f32, lrint_f64, roundtrip_bpm_itg};
 use crate::parse::parse_offset_seconds;
 use std::cmp::Ordering;
 
@@ -605,9 +605,9 @@ pub fn format_bpm_segments_like_itg(bpms: &[(f64, f64)]) -> String {
                 out.push(',');
             }
             let beat = f64::from(note_row_to_beat_f32(beat_to_note_row_f32(*beat as f32)));
-            out.push_str(&fmt_dec3_itg(beat));
+            out.push_str(&fmt_dec6_itg(beat));
             out.push('=');
-            out.push_str(&fmt_dec3_itg(roundtrip_bpm_itg(*bpm)));
+            out.push_str(&fmt_dec6_itg(roundtrip_bpm_itg(*bpm)));
             out
         })
 }
