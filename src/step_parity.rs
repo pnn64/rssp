@@ -397,6 +397,7 @@ enum TapNoteType {
     #[default]
     Empty,
     Tap,
+    Lift,
     HoldHead,
     Mine,
     Fake,
@@ -418,6 +419,7 @@ struct Row {
     beat: f32,
     note_count: u8,
     note_mask: u8,
+    tech_mask: u8,
     hold_mask: u8,
     hold_ends: [f32; MAX_COLUMNS],
     mine_mask: u8,
@@ -431,6 +433,7 @@ const fn row_new() -> Row {
         beat: 0.0,
         note_count: 0,
         note_mask: 0,
+        tech_mask: 0,
         hold_mask: 0,
         hold_ends: [HOLD_END_NONE; MAX_COLUMNS],
         mine_mask: 0,
@@ -1042,7 +1045,11 @@ fn parity_create_rows(g: &mut StepParityGenerator, notes: Vec<IntermediateNoteDa
 
         let col = note.col;
         let is_hold = note.note_type == TapNoteType::HoldHead;
-        counter.note_mask |= 1u8 << col;
+        counter.note_count = counter.note_count.saturating_add(1);
+        counter.tech_mask |= 1u8 << col;
+        if note.note_type != TapNoteType::Lift {
+            counter.note_mask |= 1u8 << col;
+        }
         if is_hold {
             counter.hold_ends[col] = note.beat + note.hold_length;
         }
@@ -1112,7 +1119,7 @@ fn hold_heads_from_arrays<const LANES: usize>(
                 }
                 continue;
             }
-            if matches!(ch, b'K' | b'L' | b'M' | b'F') {
+            if matches!(ch, b'L' | b'M' | b'F') {
                 hold_start_idx[c] = usize::MAX;
             }
         }
@@ -1179,6 +1186,7 @@ fn parity_push_note(
     beat: f32,
     second: f32,
     hold_end: f32,
+    counts_for_placement: bool,
 ) {
     if counter.last_second != second {
         if counter.last_second != CLM_SECOND_INVALID {
@@ -1186,7 +1194,11 @@ fn parity_push_note(
         }
         row_counter_reset(counter, second, beat);
     }
-    counter.note_mask |= 1u8 << col;
+    counter.note_count = counter.note_count.saturating_add(1);
+    counter.tech_mask |= 1u8 << col;
+    if counts_for_placement {
+        counter.note_mask |= 1u8 << col;
+    }
     if hold_end != HOLD_END_NONE {
         counter.hold_ends[col] = hold_end;
     }
@@ -1218,19 +1230,19 @@ fn parity_create_rows_from_arrays<const LANES: usize>(
             let ch = row[c];
             if ch == b'1' {
                 if !row_fake {
-                    parity_push_note(g, &mut counter, c, beat, second, HOLD_END_NONE);
+                    parity_push_note(g, &mut counter, c, beat, second, HOLD_END_NONE, true);
                 }
                 continue;
             }
             match ch {
                 b'M' => parity_push_mine(g, &mut counter, c, second, row_fake),
                 b'L' if !row_fake => {
-                    parity_push_note(g, &mut counter, c, beat, second, HOLD_END_NONE)
+                    parity_push_note(g, &mut counter, c, beat, second, HOLD_END_NONE, false)
                 }
                 b'2' | b'4' if !row_fake => {
                     let hold_end = hold_heads[idx][c];
                     if hold_end != HOLD_END_NONE {
-                        parity_push_note(g, &mut counter, c, beat, second, hold_end);
+                        parity_push_note(g, &mut counter, c, beat, second, hold_end, true);
                     }
                 }
                 _ => {}
@@ -1264,7 +1276,8 @@ fn parity_build_row(g: &StepParityGenerator, counter: &RowCounter) -> Row {
     row.second = counter.last_second;
     row.beat = counter.last_beat;
     row.note_mask = counter.note_mask;
-    row.note_count = row.note_mask.count_ones() as u8;
+    row.tech_mask = counter.tech_mask;
+    row.note_count = counter.note_count;
     row.mine_mask = counter.next_mine_mask;
     row.mine_i32_mask = counter.next_mine_i32_mask;
     row.fake_mine_mask = counter.next_fake_mine_mask;
@@ -1493,7 +1506,9 @@ fn parity_backtrack(g: &mut StepParityGenerator, mut cur: usize) -> bool {
 // --- RowCounter ---
 
 struct RowCounter {
+    note_count: u8,
     note_mask: u8,
+    tech_mask: u8,
     hold_ends: [f32; MAX_COLUMNS],
     mine_mask: u8,
     mine_i32_mask: u8,
@@ -1507,7 +1522,9 @@ struct RowCounter {
 
 const fn row_counter_new() -> RowCounter {
     RowCounter {
+        note_count: 0,
         note_mask: 0,
+        tech_mask: 0,
         hold_ends: [HOLD_END_NONE; MAX_COLUMNS],
         mine_mask: 0,
         mine_i32_mask: 0,
@@ -1526,7 +1543,9 @@ fn row_counter_reset(c: &mut RowCounter, second: f32, beat: f32) {
     c.next_mine_mask = c.mine_mask;
     c.next_mine_i32_mask = c.mine_i32_mask;
     c.next_fake_mine_mask = c.fake_mine_mask;
+    c.note_count = 0;
     c.note_mask = 0;
+    c.tech_mask = 0;
     c.hold_ends.fill(HOLD_END_NONE);
     c.mine_mask = 0;
     c.mine_i32_mask = 0;
@@ -1661,8 +1680,8 @@ fn calculate_tech_counts(
         let (curr_combined, prev_combined) = (&placements[i], &placements[i - 1]);
         let elapsed = curr.second - prev.second;
 
-        let curr_pos = hit_positions(curr_combined, curr.note_mask);
-        let prev_pos = hit_positions(prev_combined, prev.note_mask);
+        let curr_pos = hit_positions(curr_combined, curr.tech_mask);
+        let prev_pos = hit_positions(prev_combined, prev.tech_mask);
 
         // Jacks and doublesteps
         if curr.note_count == 1 && prev.note_count == 1 {
@@ -1692,8 +1711,8 @@ fn calculate_tech_counts(
         // Footswitches by arrow type
         let is_switch = |c: usize| -> bool {
             let (p, r) = (
-                col_foot(prev_combined, prev.note_mask, c),
-                col_foot(curr_combined, curr.note_mask, c),
+                col_foot(prev_combined, prev.tech_mask, c),
+                col_foot(curr_combined, curr.tech_mask, c),
             );
             p != Foot::None
                 && r != Foot::None
@@ -1750,7 +1769,7 @@ fn calculate_tech_counts(
             if right_pos.x < left_pos.x {
                 if i > 1 {
                     let prev_prev = &rows[i - 2];
-                    let prev_prev_pos = hit_positions(&placements[i - 2], prev_prev.note_mask);
+                    let prev_prev_pos = hit_positions(&placements[i - 2], prev_prev.tech_mask);
                     let prev_prev_rh = prev_prev_pos[foot_idx(Foot::RightHeel)];
                     if prev_prev_rh != INVALID_COLUMN && prev_prev_rh != right_heel {
                         let prev_prev_pos = layout.columns[prev_prev_rh as usize];
@@ -1776,7 +1795,7 @@ fn calculate_tech_counts(
             if right_pos.x < left_pos.x {
                 if i > 1 {
                     let prev_prev = &rows[i - 2];
-                    let prev_prev_pos = hit_positions(&placements[i - 2], prev_prev.note_mask);
+                    let prev_prev_pos = hit_positions(&placements[i - 2], prev_prev.tech_mask);
                     let prev_prev_lh = prev_prev_pos[foot_idx(Foot::LeftHeel)];
                     if prev_prev_lh != INVALID_COLUMN && prev_prev_lh != left_heel {
                         let prev_prev_pos = layout.columns[prev_prev_lh as usize];
@@ -2006,7 +2025,15 @@ fn parse_note_char(
                 hold_idx[col] = usize::MAX;
             }
         }
-        b'1' | b'L' => notes.push(note_new(TapNoteType::Tap, col, beat, second, 0.0, row_fake)),
+        b'1' => notes.push(note_new(TapNoteType::Tap, col, beat, second, 0.0, row_fake)),
+        b'L' => notes.push(note_new(
+            TapNoteType::Lift,
+            col,
+            beat,
+            second,
+            0.0,
+            row_fake,
+        )),
         b'M' => notes.push(note_new(
             TapNoteType::Mine,
             col,
