@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use crate::timing::{
-    ROWS_PER_BEAT, TimingData, beat_to_note_row_f32, get_time_for_beat_f32, is_fake_at_beat,
+    ROWS_PER_BEAT, TimingData, beat_to_note_row_f32, get_time_for_beat_f32, is_fake_at_row,
 };
 
 const INVALID_COLUMN: i8 = -1;
@@ -591,7 +591,7 @@ fn calc_action_cost(
 }
 
 fn calc_mine_cost(result: &State, row: &Row) -> f32 {
-    if row.mine_mask & result.occupied_mask != 0 {
+    if (row.mine_mask | row.fake_mine_mask) & result.occupied_mask != 0 {
         MINE_WEIGHT
     } else {
         0.0
@@ -806,7 +806,7 @@ fn calc_footswitch_cost(
     if !(SLOW_FOOTSWITCH_THRESHOLD..SLOW_FOOTSWITCH_IGNORE).contains(&elapsed) {
         return 0.0;
     }
-    if row.mine_i32_mask != 0 || row.fake_mine_mask != 0 {
+    if row.mine_mask != 0 || row.fake_mine_mask != 0 {
         return 0.0;
     }
 
@@ -846,7 +846,7 @@ fn calc_sideswitch_cost(
 }
 
 const fn calc_missed_footswitch_cost(row: &Row, jacked_left: bool, jacked_right: bool) -> f32 {
-    if (jacked_left || jacked_right) && (row.mine_i32_mask != 0 || row.fake_mine_mask != 0) {
+    if (jacked_left || jacked_right) && (row.mine_mask != 0 || row.fake_mine_mask != 0) {
         MISSED_FOOTSWITCH_WEIGHT
     } else {
         0.0
@@ -991,7 +991,7 @@ fn parity_create_rows(g: &mut StepParityGenerator, notes: Vec<IntermediateNoteDa
 
             if note.second == counter.last_second && !g.rows.is_empty() {
                 if note.fake {
-                    if mine_i32_on {
+                    if mine_on {
                         counter.next_fake_mine_mask |= bit;
                     } else {
                         counter.next_fake_mine_mask &= !bit;
@@ -1009,7 +1009,7 @@ fn parity_create_rows(g: &mut StepParityGenerator, notes: Vec<IntermediateNoteDa
                     }
                 }
             } else if note.fake {
-                if mine_i32_on {
+                if mine_on {
                     counter.fake_mine_mask |= bit;
                 } else {
                     counter.fake_mine_mask &= !bit;
@@ -1134,7 +1134,7 @@ fn parity_push_mine(
 
     if second == counter.last_second && !g.rows.is_empty() {
         if fake {
-            if mine_i32_on {
+            if mine_on {
                 counter.next_fake_mine_mask |= bit;
             } else {
                 counter.next_fake_mine_mask &= !bit;
@@ -1152,7 +1152,7 @@ fn parity_push_mine(
             }
         }
     } else if fake {
-        if mine_i32_on {
+        if mine_on {
             counter.fake_mine_mask |= bit;
         } else {
             counter.fake_mine_mask &= !bit;
@@ -1210,7 +1210,7 @@ fn parity_create_rows_from_arrays<const LANES: usize>(
         }
         let (row_i32, beat) = row_quantized(row_to_beat[idx]);
         let second = get_time_for_beat_f32(timing, f64::from(beat)) as f32;
-        let row_fake = is_fake_at_beat(timing, f64::from(row_i32));
+        let row_fake = is_fake_at_row(timing, row_i32);
 
         while nonzero_mask != 0 {
             let c = nonzero_mask.trailing_zeros() as usize;
@@ -1224,7 +1224,7 @@ fn parity_create_rows_from_arrays<const LANES: usize>(
             }
             match ch {
                 b'M' => parity_push_mine(g, &mut counter, c, second, row_fake),
-                b'K' | b'L' if !row_fake => {
+                b'L' if !row_fake => {
                     parity_push_note(g, &mut counter, c, beat, second, HOLD_END_NONE)
                 }
                 b'2' | b'4' if !row_fake => {
@@ -2006,9 +2006,7 @@ fn parse_note_char(
                 hold_idx[col] = usize::MAX;
             }
         }
-        b'1' | b'K' | b'L' => {
-            notes.push(note_new(TapNoteType::Tap, col, beat, second, 0.0, row_fake))
-        }
+        b'1' | b'L' => notes.push(note_new(TapNoteType::Tap, col, beat, second, 0.0, row_fake)),
         b'M' => notes.push(note_new(
             TapNoteType::Mine,
             col,
@@ -2033,7 +2031,7 @@ fn build_notes(rows: &[ParsedRow], timing: Option<&TimingData>) -> Vec<Intermedi
     let mut notes: Vec<IntermediateNoteData> = Vec::with_capacity(rows.len());
 
     for row in rows {
-        let row_fake = timing.is_some_and(|t| is_fake_at_beat(t, f64::from(row.row)));
+        let row_fake = timing.is_some_and(|t| is_fake_at_row(t, row.row));
 
         for c in 0..cols {
             parse_note_char(
