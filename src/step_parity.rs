@@ -201,7 +201,7 @@ struct StageLayout {
     facing_y_penalty: [f32; PAIR_LEN],
     bracket_ok: [bool; DIST_LEN],
     hold_switch_cost: [f32; DIST_LEN],
-    dist_weighted: [f64; DIST_LEN],
+    dist_weighted: [f32; DIST_LEN],
 }
 
 fn dance_single_layout() -> StageLayout {
@@ -252,7 +252,7 @@ fn layout_new(points: &[StagePoint], up_mask: u8, down_mask: u8, side_mask: u8) 
     let facing_penalty = |v: f32| -> f32 {
         let base = -(v.min(0.0));
         if base > 0.0 {
-            f64::from(base).powf(1.8) as f32 * 100.0 * FACING_WEIGHT
+            base.powf(1.8) * 100.0 * FACING_WEIGHT
         } else {
             0.0
         }
@@ -287,8 +287,8 @@ fn layout_new(points: &[StagePoint], up_mask: u8, down_mask: u8, side_mask: u8) 
             }
 
             let (dx, dy) = (
-                f64::from(columns[right].x - columns[left].x),
-                f64::from(columns[right].y - columns[left].y),
+                columns[right].x - columns[left].x,
+                columns[right].y - columns[left].y,
             );
             let dist = dx.hypot(dy);
             if dist == 0.0 {
@@ -298,7 +298,7 @@ fn layout_new(points: &[StagePoint], up_mask: u8, down_mask: u8, side_mask: u8) 
             let (ndx, ndy) = (dx / dist, dy / dist);
             let (adx, ady) = (ndx.abs(), ndy.abs());
             let (adx2, ady2) = (adx * adx, ady * ady);
-            let (mut xm, mut ym) = ((adx2 * adx2) as f32, (ady2 * ady2) as f32);
+            let (mut xm, mut ym) = (adx2 * adx2, ady2 * ady2);
             if ndx <= 0.0 {
                 xm = -xm;
             }
@@ -312,7 +312,7 @@ fn layout_new(points: &[StagePoint], up_mask: u8, down_mask: u8, side_mask: u8) 
 
     let mut bracket_ok = [false; DIST_LEN];
     let mut hold_switch_cost = [0.0f32; DIST_LEN];
-    let mut dist_weighted = [0.0f64; DIST_LEN];
+    let mut dist_weighted = [0.0f32; DIST_LEN];
 
     for l in 0..cols {
         for r in 0..cols {
@@ -320,9 +320,9 @@ fn layout_new(points: &[StagePoint], up_mask: u8, down_mask: u8, side_mask: u8) 
             let sq = dx.mul_add(dx, dy * dy);
             let idx = l * MAX_COLUMNS + r;
             bracket_ok[idx] = sq <= 2.0;
-            let dist = f64::from(sq).sqrt();
-            hold_switch_cost[idx] = dist as f32 * HOLDSWITCH_WEIGHT;
-            dist_weighted[idx] = dist * f64::from(DISTANCE_WEIGHT);
+            let dist = sq.sqrt();
+            hold_switch_cost[idx] = dist * HOLDSWITCH_WEIGHT;
+            dist_weighted[idx] = dist * DISTANCE_WEIGHT;
         }
     }
 
@@ -357,7 +357,7 @@ const fn layout_hold_switch_cost(layout: &StageLayout, c1: usize, c2: usize) -> 
 }
 
 #[inline(always)]
-const fn layout_dist_weighted(layout: &StageLayout, c1: usize, c2: usize) -> f64 {
+const fn layout_dist_weighted(layout: &StageLayout, c1: usize, c2: usize) -> f32 {
     layout.dist_weighted[c1 * MAX_COLUMNS + c2]
 }
 
@@ -518,7 +518,6 @@ fn calc_action_cost(
     row: &Row,
     elapsed: f32,
     inv_elapsed: f32,
-    inv_elapsed64: f64,
     cols: usize,
     left_moved_not_holding: bool,
     right_moved_not_holding: bool,
@@ -589,7 +588,7 @@ fn calc_action_cost(
     cost += calc_sideswitch_cost(layout, initial, result, placement);
     cost += calc_missed_footswitch_cost(row, jacked_left, jacked_right);
     cost += calc_jack_cost(moved_left, moved_right, jacked_left, jacked_right, elapsed);
-    cost += calc_big_movements_cost(layout, initial, result, hit, inv_elapsed64);
+    cost += calc_big_movements_cost(layout, initial, result, hit, inv_elapsed);
     cost
 }
 
@@ -877,7 +876,7 @@ fn calc_big_movements_cost(
     initial: &State,
     result: &State,
     hit: [i8; NUM_FEET],
-    inv_elapsed64: f64,
+    inv_elapsed: f32,
 ) -> f32 {
     let mut cost = 0.0;
     let mut moved_feet = result.moved_mask & (LEFT_FOOT_MASK | RIGHT_FOOT_MASK);
@@ -892,7 +891,7 @@ fn calc_big_movements_cost(
 
         let res_pos = hit[fi];
         let dist = layout_dist_weighted(layout, init_pos as usize, res_pos as usize);
-        let mut d = (dist * inv_elapsed64) as f32;
+        let mut d = dist * inv_elapsed;
 
         let other_pos = hit[OTHER_FOOT_IDXS[fi]];
         if other_pos != INVALID_COLUMN {
@@ -1338,8 +1337,7 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
         let row_second = g.rows[i].second;
         let hold_mask = g.rows[i].hold_mask;
         let elapsed = row_second - prev_second;
-        let inv_elapsed64 = 1.0 / f64::from(elapsed);
-        let inv_elapsed = inv_elapsed64 as f32;
+        let inv_elapsed = 1.0 / elapsed;
         let can_prune = elapsed >= 0.0;
         prev_second = row_second;
         let prev_row_has_live_hold = i > 0 && row_has_live_hold(&g.rows[i - 1]);
@@ -1385,7 +1383,6 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
                         &row,
                         elapsed,
                         inv_elapsed,
-                        inv_elapsed64,
                         g.column_count,
                         left_moved_not_holding,
                         right_moved_not_holding,
