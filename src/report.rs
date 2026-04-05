@@ -5,7 +5,9 @@ use std::time::Duration;
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use crate::bpm::{actual_bpm_range_raw, normalize_float_digits, resolve_display_bpm};
-use crate::math::{round_dp, round_sig_figs_6, round_sig_figs_itg, roundtrip_bpm_itg};
+use crate::math::{
+    fmt_dec6_itg, round_dp, round_sig_figs_6, round_sig_figs_itg, roundtrip_bpm_itg,
+};
 use crate::patterns::{CustomPatternSummary, PatternCounts, PatternVariant};
 use crate::stats::{
     ArrowStats, RADAR_CATEGORY_COUNT, StreamCounts, measure_equally_spaced, stream_sequences,
@@ -41,6 +43,13 @@ fn compute_stream_percentages(
         round_dp(adj_stream_percent, 2),
         round_dp(break_percent, 2),
     )
+}
+
+#[inline(always)]
+fn timing_fixed_6(value: f64) -> f64 {
+    fmt_dec6_itg(value)
+        .parse()
+        .expect("fixed 6-decimal timing formatting should always parse")
 }
 
 #[derive(Clone, Copy)]
@@ -851,7 +860,9 @@ fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
 pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> TimingSnapshot {
     let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
     let timing = &chart.timing_segments;
-    let finalize = |value: f64| round_sig_figs_6(round_sig_figs_itg(value));
+    // The local harness serializes timing tables as ITG float values with fixed
+    // six decimal places, not six significant digits.
+    let finalize = |value: f64| timing_fixed_6(value);
     let bpms_raw: Vec<(f64, f64)> = timing
         .bpms
         .iter()
@@ -859,7 +870,6 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         .collect();
     let bpms_formatted = format_bpm_segments_like_itg(&bpms_raw);
     let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw(&bpms_raw);
-    // Match itgmania-reference-harness default float precision (6 significant digits).
     let bpms: Vec<(f64, f64)> = bpms_raw
         .iter()
         .map(|(beat, bpm)| (finalize(*beat), finalize(*bpm)))
@@ -964,6 +974,19 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         speeds,
         scrolls,
         fakes,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::timing_fixed_6;
+
+    #[test]
+    fn timing_fixed_6_matches_harness_style_values() {
+        assert_eq!(timing_fixed_6(0.009), 0.009);
+        assert_eq!(timing_fixed_6(4231.5625), 4231.5625);
+        assert_eq!(timing_fixed_6(171.39500427246094), 171.395004);
+        assert_eq!(timing_fixed_6(159.7899932861328), 159.789993);
     }
 }
 
