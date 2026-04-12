@@ -488,6 +488,11 @@ fn build_chart_summary(
     let chart_display_bpm_opt = entry.chart_display_bpm.as_deref();
     let chart_offset_opt = entry.chart_offset.as_deref();
     let chart_radar_values_opt = entry.chart_radar_values.as_deref();
+    let chart_music_path = entry
+        .chart_music
+        .as_deref()
+        .map(|bytes| unescape_tag(decode_bytes(bytes).as_ref()).into_owned())
+        .unwrap_or_default();
 
     let step_type_str = unescape_trim(decode_bytes(fields[0]).as_ref());
 
@@ -853,6 +858,7 @@ fn build_chart_summary(
             chart_offset_seconds: chart_offset,
             chart_has_own_timing,
             minimized_note_data: minimized_chart,
+            music_path: chart_music_path,
             chart_attacks,
             chart_stops,
             chart_speeds,

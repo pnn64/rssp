@@ -236,6 +236,7 @@ pub struct ChartSummary {
     pub chart_offset_seconds: f64,
     pub chart_has_own_timing: bool,
     pub minimized_note_data: Vec<u8>,
+    pub music_path: String,
     pub chart_attacks: Option<String>,
     pub chart_stops: Option<String>,
     pub chart_speeds: Option<String>,
