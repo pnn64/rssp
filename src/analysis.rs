@@ -922,6 +922,14 @@ pub fn analyze(
     if trimmed_artist.len() != artist_str.len() {
         artist_str = trimmed_artist.to_string();
     }
+    let mut genre_str = parsed_data
+        .genre
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .unwrap_or_default();
+    let trimmed_genre = genre_str.trim();
+    if trimmed_genre.len() != genre_str.len() {
+        genre_str = trimmed_genre.to_string();
+    }
     let mut titletranslit_str = parsed_data
         .title_translit
         .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
@@ -1149,6 +1157,7 @@ pub fn analyze(
         title_str,
         subtitle_str,
         artist_str,
+        genre_str,
         titletranslit_str,
         subtitletranslit_str,
         artisttranslit_str,
