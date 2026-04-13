@@ -24,7 +24,15 @@ struct GoldenChart {
     hands: u32,
     total_steps: u32,
     #[serde(default)]
+    taps_and_holds: Option<u32>,
+    #[serde(default)]
     meter: Option<u32>,
+}
+
+impl GoldenChart {
+    fn expected_total_steps(&self) -> u32 {
+        self.taps_and_holds.unwrap_or(self.total_steps)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -193,7 +201,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             let hands = field("hands", expected.map(|e| e.hands), actual.map(|a| a.hands));
             let total_steps = field(
                 "total_steps",
-                expected.map(|e| e.total_steps),
+                expected.map(GoldenChart::expected_total_steps),
                 actual.map(|a| a.total_steps),
             );
 
@@ -214,12 +222,15 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                     && e.fakes == a.fakes
                     && e.jumps == a.jumps
                     && e.hands == a.hands
-                    && e.total_steps == a.total_steps
+                    && e.expected_total_steps() == a.total_steps
             });
         if !matches {
             let expected_notes: Vec<u32> = expected_entries.iter().map(|e| e.notes).collect();
             let actual_notes: Vec<u32> = actual_entries.iter().map(|a| a.notes).collect();
-            let expected_steps: Vec<u32> = expected_entries.iter().map(|e| e.total_steps).collect();
+            let expected_steps: Vec<u32> = expected_entries
+                .iter()
+                .map(GoldenChart::expected_total_steps)
+                .collect();
             let actual_steps: Vec<u32> = actual_entries.iter().map(|a| a.total_steps).collect();
             let expected_holds: Vec<u32> = expected_entries.iter().map(|e| e.holds).collect();
             let actual_holds: Vec<u32> = actual_entries.iter().map(|a| a.holds).collect();

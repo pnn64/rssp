@@ -108,6 +108,8 @@ struct HarnessChart {
     #[serde(default)]
     total_steps: u32,
     #[serde(default)]
+    taps_and_holds: Option<u32>,
+    #[serde(default)]
     title: String,
     #[serde(default)]
     subtitle: String,
@@ -125,6 +127,12 @@ struct HarnessChart {
     description: String,
     #[serde(default)]
     timing: Option<HarnessTiming>,
+}
+
+impl HarnessChart {
+    fn expected_total_steps(&self) -> u32 {
+        self.taps_and_holds.unwrap_or(self.total_steps)
+    }
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -1452,7 +1460,7 @@ fn compare_step_counts(
             );
             let total_steps = field(
                 "total_steps",
-                expected.map(|e| e.total_steps),
+                expected.map(HarnessChart::expected_total_steps),
                 actual.map(|a| a.arrow_stats.total_steps),
             );
             let status = if all_match { "....ok" } else { "....MISMATCH" };
@@ -1477,7 +1485,7 @@ fn compare_step_counts(
                         && expected.fakes == actual.gimmicks.fakes
                         && expected.jumps == actual.arrow_stats.jumps
                         && expected.hands == actual.arrow_stats.hands
-                        && expected.total_steps == actual.arrow_stats.total_steps
+                        && expected.expected_total_steps() == actual.arrow_stats.total_steps
                 });
         if !matches {
             let expected_holds: Vec<u32> = expected_indices
@@ -1546,7 +1554,7 @@ fn compare_step_counts(
                 .collect();
             let expected_total_steps: Vec<u32> = expected_indices
                 .iter()
-                .map(|&i| harness_charts[i].total_steps)
+                .map(|&i| harness_charts[i].expected_total_steps())
                 .collect();
             let actual_total_steps: Vec<u32> = actual_indices
                 .iter()

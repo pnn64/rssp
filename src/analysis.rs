@@ -749,7 +749,6 @@ fn build_chart_summary(
         .map(round_sig_figs_6)
         .collect();
 
-    let raw_total_steps = stats.total_steps;
     let raw_holding = stats.holding;
     let (tech_counts, mut timing_stats) = match lanes {
         4 => {
@@ -803,7 +802,6 @@ fn build_chart_summary(
             (tech_counts, timing_stats)
         }
     };
-    timing_stats.total_steps = raw_total_steps;
     timing_stats.holding = raw_holding;
     let mines_nonfake = timing_stats.mines;
     stats = timing_stats;
