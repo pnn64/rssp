@@ -1,6 +1,6 @@
 [package]
 name = "rssp-cli"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 authors = ["Patrik Nilsson <perfecttaste@pm.me>"]
 description = "Command-line tools for rssp."
