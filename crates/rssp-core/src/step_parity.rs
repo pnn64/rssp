@@ -2168,18 +2168,18 @@ pub fn analyze_timing_lanes(
     })
 }
 
-pub(crate) struct TimingRowsScratch<const LANES: usize> {
+pub struct TimingRowsScratch<const LANES: usize> {
     generator: StepParityGenerator,
 }
 
-pub(crate) fn timing_rows_scratch<const LANES: usize>() -> Option<TimingRowsScratch<LANES>> {
+pub fn timing_rows_scratch<const LANES: usize>() -> Option<TimingRowsScratch<LANES>> {
     let cache = layout_for_lanes(LANES)?;
     Some(TimingRowsScratch {
         generator: parity_gen(cache),
     })
 }
 
-pub(crate) fn analyze_timing_rows<const LANES: usize>(
+pub fn analyze_timing_rows<const LANES: usize>(
     rows: &[[u8; LANES]],
     row_to_beat: &[f32],
     timing: &TimingData,

@@ -7,13 +7,6 @@ pub enum ColorScheme {
     Alternative,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GraphImageData {
-    pub width: u32,
-    pub height: u32,
-    pub data: Vec<u8>,
-}
-
 fn generate_graph_pixels(
     measure_nps_vec: &[f64],
     max_nps: f64,
@@ -121,35 +114,4 @@ pub fn generate_density_graph_png(
     writer.write_image_data(&img_buffer_rgb)?;
 
     Ok(())
-}
-
-pub fn generate_density_graph_rgba_data(
-    measure_nps_vec: &[f64],
-    max_nps: f64,
-    width: u32,
-    height: u32,
-    bottom_color: [u8; 3],
-    top_color: [u8; 3],
-    bg_color: [u8; 3],
-) -> Result<GraphImageData, String> {
-    let rgb_data = generate_graph_pixels(
-        measure_nps_vec,
-        max_nps,
-        width,
-        height,
-        bottom_color,
-        top_color,
-        bg_color,
-    );
-
-    let rgba_data = rgb_data
-        .chunks_exact(3)
-        .flat_map(|rgb| [rgb[0], rgb[1], rgb[2], 255])
-        .collect();
-
-    Ok(GraphImageData {
-        width,
-        height,
-        data: rgba_data,
-    })
 }

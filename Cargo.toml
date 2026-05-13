@@ -1,128 +1,13 @@
-[package]
-name = "rssp"
-version = "0.3.69"
-edition = "2024"
-authors = ["Patrik Nilsson <perfecttaste@pm.me>"]
-description = "A high-performance simfile parser for StepMania."
-repository = "https://github.com/pnn64/rssp"
-license = "MIT"
-keywords = ["stepmania", "simfile", "parser", "rust", "rssp"]
+[workspace]
+members = [
+    "crates/rssp-core",
+    "crates/rssp",
+    "crates/rssp-cli",
+]
+resolver = "3"
 
-[dependencies]
-png = "0.18.0"
-serde_json = { version = "1.0.145", features = ["preserve_order"] }
-
-[features]
-profile = []
-
-[dev-dependencies]
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
-walkdir = "2.5.0"
-md5 = "0.8.0"
-libtest-mimic = "0.8.1"
-zstd = "0.13.3"
-criterion = "0.8.1"
-
-[[test]]
-name = "hash_parity"
-path = "tests/hash_parity.rs"
-harness = false
-
-[[test]]
-name = "bpm_parity"
-path = "tests/bpm_parity.rs"
-harness = false
-
-[[test]]
-name = "metadata_parity"
-path = "tests/metadata_parity.rs"
-harness = false
-
-[[test]]
-name = "step_counts_parity"
-path = "tests/step_counts_parity.rs"
-harness = false
-
-[[test]]
-name = "duration_parity"
-path = "tests/duration_parity.rs"
-harness = false
-
-[[test]]
-name = "nps_parity"
-path = "tests/nps_parity.rs"
-harness = false
-
-[[test]]
-name = "tech_counts_parity"
-path = "tests/tech_counts_parity.rs"
-harness = false
-
-[[test]]
-name = "timing_parity"
-path = "tests/timing_parity.rs"
-harness = false
-
-[[test]]
-name = "breakdown_parity"
-path = "tests/breakdown_parity.rs"
-harness = false
-
-[[test]]
-name = "rssp_unique_parity"
-path = "tests/rssp_unique_parity.rs"
-harness = false
-
-[[test]]
-name = "all_parity"
-path = "tests/all_parity.rs"
-harness = false
-
-[[test]]
-name = "fast_all_parity"
-path = "tests/fast_all_parity.rs"
-harness = false
-
-[[bench]]
-name = "throughput_perf"
-harness = false
-
-[[bench]]
-name = "hash_perf"
-harness = false
-
-[[bench]]
-name = "metadata_perf"
-harness = false
-
-[[bench]]
-name = "mono_perf"
-harness = false
-
-[[bench]]
-name = "bpm_perf"
-harness = false
-
-[[bench]]
-name = "step_counts_perf"
-harness = false
-
-[[bench]]
-name = "tech_counts_perf"
-harness = false
-
-[[bench]]
-name = "duration_perf"
-harness = false
-
-[[bench]]
-name = "nps_perf"
-harness = false
-
-[[bench]]
-name = "breakdown_perf"
-harness = false
+[workspace.dependencies]
+rssp-core = { path = "crates/rssp-core", version = "0.4.0" }
 
 [profile.release]
 lto = "fat"
@@ -132,8 +17,3 @@ strip = true
 
 [profile.bench]
 debug = true
-
-[lints.clippy]
-pedantic = "warn"
-
-inline_always = "allow"

@@ -23,11 +23,7 @@ pub struct TimingOffsets {
 }
 
 #[inline(always)]
-pub(crate) fn chart_duration_seconds(
-    last_beat: f64,
-    timing: &TimingData,
-    offsets: TimingOffsets,
-) -> f64 {
+pub fn chart_duration_seconds(last_beat: f64, timing: &TimingData, offsets: TimingOffsets) -> f64 {
     if last_beat <= 0.0 {
         return 0.0;
     }
@@ -92,7 +88,7 @@ pub fn compute_chart_durations(
         let fields = entry.fields;
         let chart_data = entry.note_data;
 
-        let Some(lanes) = crate::analysis::supported_stepstype_lanes_bytes(fields[0]) else {
+        let Some(lanes) = crate::supported_stepstype_lanes_bytes(fields[0]) else {
             continue;
         };
         let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());

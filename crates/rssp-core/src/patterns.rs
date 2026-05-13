@@ -576,7 +576,7 @@ pub fn detect_patterns(bitmasks: &[u8], patterns: &[(PatternVariant, Vec<u8>)]) 
     ac_search_array(bitmasks, &dfa)
 }
 
-pub(crate) fn detect_default_patterns(bitmasks: &[u8]) -> PatternCounts {
+pub fn detect_default_patterns(bitmasks: &[u8]) -> PatternCounts {
     ac_search_array(bitmasks, &PATTERN_DFA)
 }
 
@@ -585,14 +585,14 @@ pub(crate) fn detect_default_patterns(bitmasks: &[u8]) -> PatternCounts {
 // ============================================================================
 
 #[derive(Debug, Clone)]
-pub(crate) struct CompiledCustomPatterns {
-    pub patterns: Vec<CompiledPattern>,
-    pub dfa: AcDfa<usize>,
+pub struct CompiledCustomPatterns {
+    patterns: Vec<CompiledPattern>,
+    dfa: AcDfa<usize>,
 }
 
 /// Creates an empty compiled custom patterns structure
 #[inline]
-pub(crate) fn compiled_custom_empty() -> CompiledCustomPatterns {
+pub fn compiled_custom_empty() -> CompiledCustomPatterns {
     CompiledCustomPatterns {
         patterns: Vec::new(),
         dfa: ac_empty(),
@@ -601,11 +601,11 @@ pub(crate) fn compiled_custom_empty() -> CompiledCustomPatterns {
 
 /// Checks if compiled custom patterns is empty
 #[inline]
-pub(crate) const fn compiled_custom_is_empty(compiled: &CompiledCustomPatterns) -> bool {
+pub const fn compiled_custom_is_empty(compiled: &CompiledCustomPatterns) -> bool {
     compiled.patterns.is_empty()
 }
 
-pub(crate) fn compile_custom_patterns(patterns: &[String]) -> CompiledCustomPatterns {
+pub fn compile_custom_patterns(patterns: &[String]) -> CompiledCustomPatterns {
     let mut compiled = Vec::with_capacity(patterns.len());
     let mut seen = HashSet::with_capacity(patterns.len());
 
@@ -633,7 +633,7 @@ pub(crate) fn compile_custom_patterns(patterns: &[String]) -> CompiledCustomPatt
     }
 }
 
-pub(crate) fn detect_custom_patterns_compiled(
+pub fn detect_custom_patterns_compiled(
     bitmasks: &[u8],
     compiled: &CompiledCustomPatterns,
 ) -> Vec<CustomPatternSummary> {

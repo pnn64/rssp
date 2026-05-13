@@ -511,7 +511,7 @@ fn minimize_rows_plain<const L: usize>(
     (out, stats, dens, beats, last)
 }
 
-pub(crate) fn minimize_rows_typed<const L: usize>(
+pub fn minimize_rows_typed<const L: usize>(
     data: &[u8],
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<[u8; L]>, Vec<f32>, f64) {
     let mut beats = Vec::with_capacity(data.len() / (L + 1));
@@ -552,7 +552,7 @@ pub(crate) fn line_has_object<const L: usize>(line: &[u8], depths: &mut [u32; L]
     has
 }
 
-pub(crate) fn minimize_chart_rows_bits(
+pub fn minimize_chart_rows_bits(
     data: &[u8],
 ) -> (
     Vec<u8>,
@@ -613,7 +613,7 @@ fn timing_stats_typed<const L: usize>(data: &[u8], timing: &TimingData) -> Arrow
     compute_timing_aware_stats_from_rows_with_row_to_beat::<L>(&rows, timing, &beats)
 }
 
-pub(crate) fn compute_timing_aware_stats_with_row_to_beat(
+pub fn compute_timing_aware_stats_with_row_to_beat(
     data: &[u8],
     lanes: usize,
     timing: &TimingData,
@@ -628,7 +628,7 @@ pub(crate) fn compute_timing_aware_stats_with_row_to_beat(
     }
 }
 
-pub(crate) fn compute_timing_aware_stats_from_rows_with_row_to_beat<const L: usize>(
+pub fn compute_timing_aware_stats_from_rows_with_row_to_beat<const L: usize>(
     rows: &[[u8; L]],
     timing: &TimingData,
     beats: &[f32],

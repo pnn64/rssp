@@ -57,7 +57,7 @@ pub type ScrollSegment = Segment;
 
 // --- Core math ---
 #[inline(always)]
-pub(crate) fn note_row_to_beat(row: i32) -> f64 {
+pub fn note_row_to_beat(row: i32) -> f64 {
     f64::from(row) / f64::from(ROWS_PER_BEAT)
 }
 
@@ -67,7 +67,7 @@ fn note_row_to_beat_f32(row: i32) -> f32 {
 }
 
 #[inline(always)]
-pub(crate) fn beat_to_note_row(beat: f64) -> i32 {
+pub fn beat_to_note_row(beat: f64) -> i32 {
     lrint_f64(beat * f64::from(ROWS_PER_BEAT)) as i32
 }
 
@@ -93,7 +93,7 @@ pub fn steps_timing_allowed(version: f32, format: TimingFormat) -> bool {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct ChartTiming<'a> {
+pub struct ChartTiming<'a> {
     pub chart_offset_seconds: f64,
     pub chart_has_own_timing: bool,
     pub global_bpms: &'a str,
@@ -106,7 +106,7 @@ pub(crate) struct ChartTiming<'a> {
 }
 
 #[inline(always)]
-pub(crate) fn resolve_chart_timing<'a>(
+pub fn resolve_chart_timing<'a>(
     allow_steps_timing: bool,
     song_offset_seconds: f64,
     chart_offset: Option<&[u8]>,

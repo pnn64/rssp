@@ -194,6 +194,10 @@ fn pick_ini_img(pack_dir: &Path, hint: &str) -> Option<PathBuf> {
 }
 
 pub fn scan_song_dir(dir: &Path, opt: ScanOpt) -> Result<Option<SongScan>, ScanError> {
+    if assets::is_mac_resource_fork(dir) {
+        return Ok(None);
+    }
+
     let mut sms = Vec::new();
     let mut sscs = Vec::new();
 
@@ -202,6 +206,9 @@ pub fn scan_song_dir(dir: &Path, opt: ScanOpt) -> Result<Option<SongScan>, ScanE
             continue;
         };
         let path = entry.path();
+        if assets::is_mac_resource_fork(&path) {
+            continue;
+        }
         if !path.is_file() {
             continue;
         }
@@ -252,7 +259,7 @@ pub fn scan_song_dir(dir: &Path, opt: ScanOpt) -> Result<Option<SongScan>, ScanE
 }
 
 pub fn scan_pack_dir(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, ScanError> {
-    if !dir.is_dir() {
+    if assets::is_mac_resource_fork(dir) || !dir.is_dir() {
         return Ok(None);
     }
     let Some(group_name) = dir.file_name().and_then(|s| s.to_str()) else {
@@ -317,6 +324,9 @@ pub fn scan_pack_dir(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, ScanE
             continue;
         };
         let path = entry.path();
+        if assets::is_mac_resource_fork(&path) {
+            continue;
+        }
         if !path.is_dir() {
             continue;
         }
@@ -353,6 +363,9 @@ pub fn scan_songs_dir(dir: &Path, opt: ScanOpt) -> Result<Vec<PackScan>, ScanErr
             continue;
         };
         let path = entry.path();
+        if assets::is_mac_resource_fork(&path) {
+            continue;
+        }
         if let Some(pack) = scan_pack_dir(&path, opt)? {
             packs.push(pack);
         }
@@ -367,6 +380,9 @@ pub fn find_simfiles(root: &Path, opt: ScanOpt) -> Vec<PathBuf> {
     let mut stack = vec![root.to_path_buf()];
 
     while let Some(dir) = stack.pop() {
+        if assets::is_mac_resource_fork(&dir) {
+            continue;
+        }
         let Ok(song) = scan_song_dir(&dir, opt) else {
             continue;
         };
@@ -381,7 +397,7 @@ pub fn find_simfiles(root: &Path, opt: ScanOpt) -> Vec<PathBuf> {
         let mut subdirs: Vec<PathBuf> = entries
             .flatten()
             .map(|e| e.path())
-            .filter(|p| p.is_dir())
+            .filter(|p| !assets::is_mac_resource_fork(p) && p.is_dir())
             .collect();
         sort_paths_ci(&mut subdirs);
         for subdir in subdirs.into_iter().rev() {
@@ -390,4 +406,100 @@ pub fn find_simfiles(root: &Path, opt: ScanOpt) -> Vec<PathBuf> {
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ScanOpt, find_simfiles, scan_pack_dir, scan_song_dir, scan_songs_dir};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rssp-pack-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_file(path: &Path) {
+        fs::write(path, b"").unwrap();
+    }
+
+    #[test]
+    fn scan_song_dir_ignores_mac_resource_fork_simfiles() {
+        let root = test_dir("resource-fork-simfiles");
+        write_file(&root.join("._chart.ssc"));
+        write_file(&root.join("chart.ssc"));
+        write_file(&root.join("fallback.sm"));
+
+        let scan = scan_song_dir(&root, ScanOpt::default()).unwrap().unwrap();
+        assert_eq!(scan.simfile, root.join("chart.ssc"));
+        assert_eq!(scan.extension, "ssc");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scan_song_dir_returns_none_for_only_resource_forks() {
+        let root = test_dir("only-resource-forks");
+        write_file(&root.join("._chart.ssc"));
+        write_file(&root.join("._chart.sm"));
+
+        assert!(scan_song_dir(&root, ScanOpt::default()).unwrap().is_none());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scan_songs_dir_ignores_resource_fork_pack_and_song_dirs() {
+        let root = test_dir("resource-fork-dirs");
+        let ignored_pack_song = root.join("._Pack").join("Song");
+        fs::create_dir_all(&ignored_pack_song).unwrap();
+        write_file(&ignored_pack_song.join("song.ssc"));
+
+        let ignored_song = root.join("Pack").join("._Song");
+        fs::create_dir_all(&ignored_song).unwrap();
+        write_file(&ignored_song.join("song.ssc"));
+
+        write_file(&root.join("Pack").join("._banner.png"));
+        let banner = root.join("Pack").join("banner.png");
+        write_file(&banner);
+
+        let song = root.join("Pack").join("Song");
+        fs::create_dir_all(&song).unwrap();
+        write_file(&song.join("song.ssc"));
+
+        assert!(
+            scan_pack_dir(&root.join("._Pack"), ScanOpt::default())
+                .unwrap()
+                .is_none()
+        );
+
+        let packs = scan_songs_dir(&root, ScanOpt::default()).unwrap();
+        assert_eq!(packs.len(), 1);
+        assert_eq!(packs[0].group_name, "Pack");
+        assert_eq!(packs[0].banner_path, Some(banner));
+        assert_eq!(packs[0].songs.len(), 1);
+        assert_eq!(packs[0].songs[0].dir, song);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn find_simfiles_ignores_resource_fork_paths() {
+        let root = test_dir("find-simfiles-resource-forks");
+        let ignored = root.join("Pack").join("._Ignored");
+        fs::create_dir_all(&ignored).unwrap();
+        write_file(&ignored.join("song.ssc"));
+
+        let song = root.join("Pack").join("Song");
+        fs::create_dir_all(&song).unwrap();
+        write_file(&song.join("._song.ssc"));
+        write_file(&song.join("song.ssc"));
+
+        let files = find_simfiles(&root, ScanOpt::default());
+        assert_eq!(files, vec![song.join("song.ssc")]);
+
+        let _ = fs::remove_dir_all(root);
+    }
 }

@@ -1,0 +1,16 @@
+[package]
+name = "rssp-core"
+version = "0.4.0"
+edition = "2024"
+authors = ["Patrik Nilsson <perfecttaste@pm.me>"]
+description = "Core parser, timing, and chart analysis primitives for rssp."
+repository = "https://github.com/pnn64/rssp"
+license = "MIT"
+keywords = ["stepmania", "simfile", "parser", "rust", "rssp"]
+
+[dependencies]
+
+[lints.clippy]
+pedantic = "warn"
+
+inline_always = "allow"

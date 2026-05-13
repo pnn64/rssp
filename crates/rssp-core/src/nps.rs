@@ -1,6 +1,5 @@
 use std::cmp::Ordering;
 
-use crate::ChartNpsInfo;
 use crate::bpm::{clean_timing_map, is_display_bpm};
 use crate::parse::{
     decode_bytes, extract_sections, normalize_chart_desc, parse_offset_seconds, parse_version,
@@ -10,6 +9,13 @@ use crate::timing::{
     TimingData, compute_timing_segments, get_time_for_beat_f32, steps_timing_allowed,
     timing_data_from_segments, timing_format_from_ext,
 };
+
+#[derive(Debug, Clone)]
+pub struct ChartNpsInfo {
+    pub step_type: String,
+    pub difficulty: String,
+    pub peak_nps: f64,
+}
 
 pub fn compute_chart_peak_nps(
     simfile_data: &[u8],
@@ -64,7 +70,7 @@ pub fn compute_chart_peak_nps(
         let fields = entry.fields;
         let chart_data = entry.note_data;
 
-        let Some(lanes) = crate::analysis::supported_stepstype_lanes_bytes(fields[0]) else {
+        let Some(lanes) = crate::supported_stepstype_lanes_bytes(fields[0]) else {
             continue;
         };
         let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());

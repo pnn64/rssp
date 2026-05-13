@@ -27,6 +27,11 @@ pub(crate) fn lc_name(path: &Path) -> String {
         .unwrap_or_default()
 }
 
+pub(crate) fn is_mac_resource_fork(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.to_string_lossy().starts_with("._"))
+}
+
 pub(crate) const fn img_rank(ext: &str) -> Option<u8> {
     if ext.eq_ignore_ascii_case("png") {
         Some(0)
@@ -51,9 +56,13 @@ pub(crate) fn is_dir_ci(dir: &Path, name: &str) -> Option<PathBuf> {
     let want = name.to_ascii_lowercase();
     let entries = fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
+        let path = entry.path();
+        if is_mac_resource_fork(&path) {
+            continue;
+        }
         let fname = entry.file_name();
-        if fname.to_string_lossy().to_ascii_lowercase() == want && entry.path().is_dir() {
-            return Some(entry.path());
+        if fname.to_string_lossy().to_ascii_lowercase() == want && path.is_dir() {
+            return Some(path);
         }
     }
     None
@@ -63,9 +72,13 @@ pub(crate) fn is_file_ci(dir: &Path, name: &str) -> Option<PathBuf> {
     let want = name.to_ascii_lowercase();
     let entries = fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
+        let path = entry.path();
+        if is_mac_resource_fork(&path) {
+            continue;
+        }
         let fname = entry.file_name();
-        if fname.to_string_lossy().to_ascii_lowercase() == want && entry.path().is_file() {
-            return Some(entry.path());
+        if fname.to_string_lossy().to_ascii_lowercase() == want && path.is_file() {
+            return Some(path);
         }
     }
     None
@@ -99,7 +112,8 @@ pub(crate) fn list_img_files(dir: &Path) -> Vec<PathBuf> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| {
-            p.is_file()
+            !is_mac_resource_fork(p)
+                && p.is_file()
                 && p.extension()
                     .and_then(|s| s.to_str())
                     .is_some_and(|e| img_rank(e).is_some())
@@ -126,12 +140,12 @@ fn resolve_rel_ci(base: &Path, rel: &str) -> Option<PathBuf> {
     for seg in dirs {
         dir = is_dir_ci(&dir, seg).or_else(|| {
             let p = dir.join(seg);
-            p.is_dir().then_some(p)
+            (!is_mac_resource_fork(&p) && p.is_dir()).then_some(p)
         })?;
     }
     is_file_ci(&dir, file).or_else(|| {
         let p = dir.join(file);
-        p.is_file().then_some(p)
+        (!is_mac_resource_fork(&p) && p.is_file()).then_some(p)
     })
 }
 
@@ -141,7 +155,7 @@ fn resolve_asset(song_dir: &Path, tag: &str) -> Option<PathBuf> {
         return None;
     }
     let direct = song_dir.join(tag);
-    if direct.is_file() {
+    if !is_mac_resource_fork(&direct) && direct.is_file() {
         return Some(direct);
     }
     if !tag.contains(['/', '\\']) {
@@ -177,7 +191,7 @@ fn list_sound_files(song_dir: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.is_file() && is_sound_ext(p))
+        .filter(|p| !is_mac_resource_fork(p) && p.is_file() && is_sound_ext(p))
         .collect();
     files.sort_by_cached_key(|p| lc_name(p));
     files
@@ -191,7 +205,7 @@ fn list_movie_files(song_dir: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.is_file() && is_movie_ext(p))
+        .filter(|p| !is_mac_resource_fork(p) && p.is_file() && is_movie_ext(p))
         .collect();
     files.sort_by_cached_key(|p| lc_name(p));
     files

@@ -3,9 +3,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::analysis::{AnalysisOptions, normalize_difficulty_label};
+use crate::analysis::AnalysisOptions;
 use crate::assets;
 use crate::math::{round_dp, round_sig_figs_6};
+use crate::normalize_difficulty_label;
 use crate::nps::get_nps_stats;
 use crate::pack;
 use crate::parse::{clean_tag, decode_bytes, extract_sections, unescape_tag};

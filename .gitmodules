@@ -1,4 +1,4 @@
 [submodule "tests/data"]
-	path = tests/data
+	path = crates/rssp/tests/data
 	url = https://github.com/pnn64/rssp-tests
     update = none

@@ -94,6 +94,17 @@ pub fn clean_timing_map(param: &str) -> String {
     out
 }
 
+pub fn chart_timing_tag_raw(tag: Option<&[u8]>) -> Option<String> {
+    let bytes = tag?;
+    let text = std::str::from_utf8(bytes).ok()?;
+    let cleaned = clean_timing_map(text);
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
 #[must_use]
 pub fn clean_timing_map_cow(param: &str) -> Cow<'_, str> {
     if param.is_empty() {
@@ -203,7 +214,7 @@ fn parse_display_bpm(tag: &str) -> Option<(f64, f64)> {
     Some((min, max))
 }
 
-pub(crate) fn resolve_display_bpm(
+pub fn resolve_display_bpm(
     chart_tag: Option<&str>,
     actual_min: f64,
     actual_max: f64,
@@ -326,7 +337,7 @@ fn chart_metadata(fields: &[&[u8]], fmt: TimingFormat) -> Option<(String, String
     if fields.len() < 4 {
         return None;
     }
-    let _lanes = crate::analysis::supported_stepstype_lanes_bytes(fields[0])?;
+    let _lanes = crate::supported_stepstype_lanes_bytes(fields[0])?;
     let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());
     let desc = unescape_trim(decode_bytes(fields[1]).as_ref());
     let diff_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
@@ -458,7 +469,7 @@ pub fn compute_actual_bpm_range(map: &[(f64, f64)]) -> (f64, f64) {
     (round_sig_figs_itg(min), round_sig_figs_itg(max))
 }
 
-pub(crate) fn actual_bpm_range_raw(map: &[(f64, f64)]) -> (f64, f64) {
+pub fn actual_bpm_range_raw(map: &[(f64, f64)]) -> (f64, f64) {
     bpm_range_filtered(map, f64::is_finite, roundtrip_bpm_itg)
 }
 

@@ -3,9 +3,11 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
+mod graph;
+
+use graph::{ColorScheme, generate_density_graph_png};
 use rssp::AnalysisOptions;
 use rssp::analyze;
-use rssp::graph::{ColorScheme, generate_density_graph_png};
 use rssp::matrix::get_difficulty;
 use rssp::report::{OutputMode, SimfileSummary, write_course_reports, write_reports};
 

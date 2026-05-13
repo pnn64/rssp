@@ -3,10 +3,10 @@ use std::hint::black_box;
 use std::path::PathBuf;
 
 const FIXTURES: [(&str, &str); 4] = [
-    ("benches/fixtures/camellia_mix.ssc", "ssc"),
-    ("benches/fixtures/hash_fixture.ssc", "ssc"),
-    ("benches/fixtures/200000_step_challenge.sm", "sm"),
-    ("benches/fixtures/24h_of_100bpm_stream.sm", "sm"),
+    ("../rssp/benches/fixtures/camellia_mix.ssc", "ssc"),
+    ("../rssp/benches/fixtures/hash_fixture.ssc", "ssc"),
+    ("../rssp/benches/fixtures/200000_step_challenge.sm", "sm"),
+    ("../rssp/benches/fixtures/24h_of_100bpm_stream.sm", "sm"),
 ];
 
 struct SimInput {

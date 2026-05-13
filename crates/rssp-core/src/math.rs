@@ -53,7 +53,7 @@ pub fn round_sig_figs_itg(value: f64) -> f64 {
 }
 
 #[inline(always)]
-pub(crate) fn fmt_dec6_itg(value: f64) -> String {
+pub fn fmt_dec6_itg(value: f64) -> String {
     format!("{:.6}", value as f32)
 }
 
