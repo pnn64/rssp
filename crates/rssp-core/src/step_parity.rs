@@ -923,7 +923,6 @@ fn row_has_live_hold(row: &Row) -> bool {
 struct StepParityGenerator {
     layout: &'static StageLayout,
     perm_table: &'static [Box<[FootPlacement]>; 256],
-    perm_cache: [Option<&'static [FootPlacement]>; 256],
     column_count: usize,
     nodes: Vec<StepParityNode>,
     rows: Vec<Row>,
@@ -938,7 +937,6 @@ fn parity_gen(cache: &'static LayoutCache) -> StepParityGenerator {
         column_count: layout_cols(&cache.layout),
         layout: &cache.layout,
         perm_table: &cache.perm_table,
-        perm_cache: [None; 256],
         nodes: Vec::new(),
         rows: Vec::new(),
         result_columns: Vec::new(),
@@ -951,7 +949,6 @@ fn parity_gen(cache: &'static LayoutCache) -> StepParityGenerator {
 #[inline(always)]
 fn parity_reset(g: &mut StepParityGenerator, cols: usize) {
     g.column_count = cols;
-    g.perm_cache.fill(None);
     g.nodes.clear();
     g.rows.clear();
     g.result_columns.clear();
@@ -1307,20 +1304,13 @@ fn parity_add_node(g: &mut StepParityGenerator, state: State) -> usize {
 fn parity_perms_for_row(g: &mut StepParityGenerator, row_idx: usize) -> &'static [FootPlacement] {
     let row = &g.rows[row_idx];
     let key = (row.note_mask | row.hold_mask) as usize;
-    if let Some(perms) = g.perm_cache[key] {
-        return perms;
-    }
-
     let union = g.perm_table[key].as_ref();
-    let perms = if union.is_empty() {
+    if union.is_empty() {
         let note = g.perm_table[row.note_mask as usize].as_ref();
         if note.is_empty() { &NO_PERMS } else { note }
     } else {
         union
-    };
-
-    g.perm_cache[key] = Some(perms);
-    perms
+    }
 }
 
 fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
@@ -1337,7 +1327,6 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
         let row_second = g.rows[i].second;
         let hold_mask = g.rows[i].hold_mask;
         let elapsed = row_second - prev_second;
-        let can_prune = elapsed >= 0.0;
         prev_second = row_second;
         let prev_row_has_live_hold = i > 0 && row_has_live_hold(&g.rows[i - 1]);
 
@@ -1359,12 +1348,7 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
                 let (result, hit, key) =
                     parity_result_state(&init_state, perm, g.column_count, hold_mask, active_mask);
                 let res_id = match row_map_probe(&g.state_map, key) {
-                    RowMapProbe::Found(id) => {
-                        if can_prune && init_cost >= g.nodes[id].cost {
-                            continue;
-                        }
-                        id
-                    }
+                    RowMapProbe::Found(id) => id,
                     RowMapProbe::Vacant(slot) => {
                         let id = parity_add_node(g, result);
                         g.next_ids.push(id);
