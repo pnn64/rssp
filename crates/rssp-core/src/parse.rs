@@ -251,20 +251,19 @@ fn starts_with_ci(slice: &[u8], tag: &[u8]) -> bool {
 #[inline(always)]
 fn find_byte(slice: &[u8], needle: u8) -> Option<usize> {
     let mut i = 0usize;
-    let n = slice.len();
-    while i + 8 <= n {
-        let word = u64::from_le_bytes(slice[i..i + 8].try_into().expect("8-byte chunk"));
+    let (chunks, rem) = slice.as_chunks::<8>();
+    for chunk in chunks {
+        let word = u64::from_le_bytes(*chunk);
         let hits = byte_hits(word, needle);
         if hits != 0 {
             return Some(i + hits.trailing_zeros() as usize / 8);
         }
         i += 8;
     }
-    while i < n {
-        if slice[i] == needle {
-            return Some(i);
+    for (j, &b) in rem.iter().enumerate() {
+        if b == needle {
+            return Some(i + j);
         }
-        i += 1;
     }
     None
 }
@@ -272,20 +271,19 @@ fn find_byte(slice: &[u8], needle: u8) -> Option<usize> {
 #[inline(always)]
 fn find_either_byte(slice: &[u8], a: u8, b: u8) -> Option<usize> {
     let mut i = 0usize;
-    let n = slice.len();
-    while i + 8 <= n {
-        let word = u64::from_le_bytes(slice[i..i + 8].try_into().expect("8-byte chunk"));
+    let (chunks, rem) = slice.as_chunks::<8>();
+    for chunk in chunks {
+        let word = u64::from_le_bytes(*chunk);
         let hits = byte_hits(word, a) | byte_hits(word, b);
         if hits != 0 {
             return Some(i + hits.trailing_zeros() as usize / 8);
         }
         i += 8;
     }
-    while i < n {
-        if slice[i] == a || slice[i] == b {
-            return Some(i);
+    for (j, &x) in rem.iter().enumerate() {
+        if x == a || x == b {
+            return Some(i + j);
         }
-        i += 1;
     }
     None
 }
@@ -293,20 +291,19 @@ fn find_either_byte(slice: &[u8], a: u8, b: u8) -> Option<usize> {
 #[inline(always)]
 fn find_three_byte(slice: &[u8], a: u8, b: u8, c: u8) -> Option<usize> {
     let mut i = 0usize;
-    let n = slice.len();
-    while i + 8 <= n {
-        let word = u64::from_le_bytes(slice[i..i + 8].try_into().expect("8-byte chunk"));
+    let (chunks, rem) = slice.as_chunks::<8>();
+    for chunk in chunks {
+        let word = u64::from_le_bytes(*chunk);
         let hits = byte_hits(word, a) | byte_hits(word, b) | byte_hits(word, c);
         if hits != 0 {
             return Some(i + hits.trailing_zeros() as usize / 8);
         }
         i += 8;
     }
-    while i < n {
-        if slice[i] == a || slice[i] == b || slice[i] == c {
-            return Some(i);
+    for (j, &x) in rem.iter().enumerate() {
+        if x == a || x == b || x == c {
+            return Some(i + j);
         }
-        i += 1;
     }
     None
 }
