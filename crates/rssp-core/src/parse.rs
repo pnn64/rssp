@@ -253,30 +253,10 @@ fn find_byte(slice: &[u8], needle: u8) -> Option<usize> {
     let mut i = 0usize;
     let n = slice.len();
     while i + 8 <= n {
-        let c = &slice[i..i + 8];
-        if c[0] == needle {
-            return Some(i);
-        }
-        if c[1] == needle {
-            return Some(i + 1);
-        }
-        if c[2] == needle {
-            return Some(i + 2);
-        }
-        if c[3] == needle {
-            return Some(i + 3);
-        }
-        if c[4] == needle {
-            return Some(i + 4);
-        }
-        if c[5] == needle {
-            return Some(i + 5);
-        }
-        if c[6] == needle {
-            return Some(i + 6);
-        }
-        if c[7] == needle {
-            return Some(i + 7);
+        let word = u64::from_le_bytes(slice[i..i + 8].try_into().expect("8-byte chunk"));
+        let hits = byte_hits(word, needle);
+        if hits != 0 {
+            return Some(i + hits.trailing_zeros() as usize / 8);
         }
         i += 8;
     }
@@ -294,30 +274,10 @@ fn find_either_byte(slice: &[u8], a: u8, b: u8) -> Option<usize> {
     let mut i = 0usize;
     let n = slice.len();
     while i + 8 <= n {
-        let c = &slice[i..i + 8];
-        if c[0] == a || c[0] == b {
-            return Some(i);
-        }
-        if c[1] == a || c[1] == b {
-            return Some(i + 1);
-        }
-        if c[2] == a || c[2] == b {
-            return Some(i + 2);
-        }
-        if c[3] == a || c[3] == b {
-            return Some(i + 3);
-        }
-        if c[4] == a || c[4] == b {
-            return Some(i + 4);
-        }
-        if c[5] == a || c[5] == b {
-            return Some(i + 5);
-        }
-        if c[6] == a || c[6] == b {
-            return Some(i + 6);
-        }
-        if c[7] == a || c[7] == b {
-            return Some(i + 7);
+        let word = u64::from_le_bytes(slice[i..i + 8].try_into().expect("8-byte chunk"));
+        let hits = byte_hits(word, a) | byte_hits(word, b);
+        if hits != 0 {
+            return Some(i + hits.trailing_zeros() as usize / 8);
         }
         i += 8;
     }
@@ -335,30 +295,10 @@ fn find_three_byte(slice: &[u8], a: u8, b: u8, c: u8) -> Option<usize> {
     let mut i = 0usize;
     let n = slice.len();
     while i + 8 <= n {
-        let s = &slice[i..i + 8];
-        if s[0] == a || s[0] == b || s[0] == c {
-            return Some(i);
-        }
-        if s[1] == a || s[1] == b || s[1] == c {
-            return Some(i + 1);
-        }
-        if s[2] == a || s[2] == b || s[2] == c {
-            return Some(i + 2);
-        }
-        if s[3] == a || s[3] == b || s[3] == c {
-            return Some(i + 3);
-        }
-        if s[4] == a || s[4] == b || s[4] == c {
-            return Some(i + 4);
-        }
-        if s[5] == a || s[5] == b || s[5] == c {
-            return Some(i + 5);
-        }
-        if s[6] == a || s[6] == b || s[6] == c {
-            return Some(i + 6);
-        }
-        if s[7] == a || s[7] == b || s[7] == c {
-            return Some(i + 7);
+        let word = u64::from_le_bytes(slice[i..i + 8].try_into().expect("8-byte chunk"));
+        let hits = byte_hits(word, a) | byte_hits(word, b) | byte_hits(word, c);
+        if hits != 0 {
+            return Some(i + hits.trailing_zeros() as usize / 8);
         }
         i += 8;
     }
@@ -369,6 +309,15 @@ fn find_three_byte(slice: &[u8], a: u8, b: u8, c: u8) -> Option<usize> {
         i += 1;
     }
     None
+}
+
+#[inline(always)]
+fn byte_hits(word: u64, byte: u8) -> u64 {
+    // Marks the high bit of each byte lane equal to `byte`.
+    const LO: u64 = 0x0101_0101_0101_0101;
+    const HI: u64 = 0x8080_8080_8080_8080;
+    let x = word ^ (u64::from(byte) * LO);
+    x.wrapping_sub(LO) & !x & HI
 }
 
 /// Finds the first unescaped `;` in `slice` when there is no `#` before it.
