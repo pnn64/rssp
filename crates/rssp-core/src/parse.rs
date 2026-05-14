@@ -330,6 +330,47 @@ fn find_either_byte(slice: &[u8], a: u8, b: u8) -> Option<usize> {
     None
 }
 
+#[inline(always)]
+fn find_three_byte(slice: &[u8], a: u8, b: u8, c: u8) -> Option<usize> {
+    let mut i = 0usize;
+    let n = slice.len();
+    while i + 8 <= n {
+        let s = &slice[i..i + 8];
+        if s[0] == a || s[0] == b || s[0] == c {
+            return Some(i);
+        }
+        if s[1] == a || s[1] == b || s[1] == c {
+            return Some(i + 1);
+        }
+        if s[2] == a || s[2] == b || s[2] == c {
+            return Some(i + 2);
+        }
+        if s[3] == a || s[3] == b || s[3] == c {
+            return Some(i + 3);
+        }
+        if s[4] == a || s[4] == b || s[4] == c {
+            return Some(i + 4);
+        }
+        if s[5] == a || s[5] == b || s[5] == c {
+            return Some(i + 5);
+        }
+        if s[6] == a || s[6] == b || s[6] == c {
+            return Some(i + 6);
+        }
+        if s[7] == a || s[7] == b || s[7] == c {
+            return Some(i + 7);
+        }
+        i += 8;
+    }
+    while i < n {
+        if slice[i] == a || slice[i] == b || slice[i] == c {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Finds the first unescaped `;` in `slice` when there is no `#` before it.
 #[inline(always)]
 fn find_unescaped_semi_no_hash(slice: &[u8]) -> Option<usize> {
@@ -610,8 +651,7 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
             };
             if tag_len != 0 {
                 let start = i + tag_len;
-                let end = find_byte(&data[start..], b';').map_or(data.len(), |e| start + e);
-                let (field_count, fields, note_data) = split_notes6(&data[start..end]);
+                let (field_count, fields, note_data, next) = split_sm_notes(data, start);
                 if field_count == 5 {
                     r.notes_list.push(ParsedChartEntry {
                         field_count,
@@ -620,7 +660,7 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
                         ..Default::default()
                     });
                 }
-                i = end + 1;
+                i = next;
                 continue;
             }
         }
@@ -740,6 +780,87 @@ fn find_unescaped_colon(slice: &[u8]) -> Option<usize> {
         }
     }
     None
+}
+
+#[inline(always)]
+fn next_after_semi(data: &[u8], start: usize) -> usize {
+    find_byte(data.get(start..).unwrap_or(&[]), b';').map_or(data.len() + 1, |i| start + i + 1)
+}
+
+#[inline(always)]
+fn scan_sm_note_data(data: &[u8], start: usize) -> (usize, usize) {
+    let mut off = start;
+    while off < data.len() {
+        let Some(rel) = find_three_byte(&data[off..], b';', b'\\', b':') else {
+            return (data.len(), data.len() + 1);
+        };
+        let idx = off + rel;
+        match data[idx] {
+            b';' => return (idx, idx + 1),
+            b':' => {
+                let mut bs = 0usize;
+                let mut i = idx;
+                while i > start && data[i - 1] == b'\\' {
+                    bs += 1;
+                    i -= 1;
+                }
+                if bs & 1 == 0 {
+                    return (idx, next_after_semi(data, idx + 1));
+                }
+                off = idx + 1;
+            }
+            b'\\' => {
+                let run_start = idx;
+                let mut i = idx + 1;
+                while i < data.len() && data[i] == b'\\' {
+                    i += 1;
+                }
+                match data.get(i) {
+                    Some(b';') => return (i, i + 1),
+                    Some(b':') if (i - run_start) & 1 == 0 => {
+                        return (i, next_after_semi(data, i + 1));
+                    }
+                    Some(b':') => off = i + 1,
+                    _ => off = i,
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+    (data.len(), data.len() + 1)
+}
+
+fn split_sm_notes(data: &[u8], start: usize) -> (u8, [&[u8]; 5], &[u8], usize) {
+    let mut fields: [&[u8]; 5] = [&[]; 5];
+    let mut count = 0u8;
+    let mut field_start = start;
+    let mut bs_run = 0usize;
+    let mut i = start;
+
+    while i < data.len() {
+        let b = data[i];
+        if b == b';' {
+            return (count, fields, &[], i + 1);
+        }
+        if b == b'\\' {
+            bs_run += 1;
+            i += 1;
+            continue;
+        }
+        if b == b':' && bs_run & 1 == 0 {
+            fields[count as usize] = data.get(field_start..i).unwrap_or(&[]);
+            count += 1;
+            field_start = i + 1;
+            if count == 5 {
+                let (end, next) = scan_sm_note_data(data, field_start);
+                return (count, fields, &data[field_start..end], next);
+            }
+        }
+        bs_run = 0;
+        i += 1;
+    }
+
+    (count, fields, &[], data.len() + 1)
 }
 
 #[inline(always)]

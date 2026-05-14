@@ -1,6 +1,6 @@
 [package]
 name = "rssp-core"
-version = "0.4.10"
+version = "0.4.11"
 edition = "2024"
 authors = ["Patrik Nilsson <perfecttaste@pm.me>"]
 description = "Core parser, timing, and chart analysis primitives for rssp."
