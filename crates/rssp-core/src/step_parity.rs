@@ -1322,6 +1322,7 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
         let hold_mask = g.rows[i].hold_mask;
         let elapsed = row_second - prev_second;
         prev_second = row_second;
+        let costs_nonnegative = elapsed >= 0.0;
         let prev_row_has_live_hold = i > 0 && row_has_live_hold(&g.rows[i - 1]);
 
         let perms = parity_perms_for_row(g, i);
@@ -1350,6 +1351,10 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
                         id
                     }
                 };
+                // With nonnegative elapsed time, action costs cannot lower the path cost.
+                if costs_nonnegative && init_cost >= g.nodes[res_id].cost {
+                    continue;
+                }
                 let nc = init_cost
                     + calc_action_cost(
                         g.layout,
