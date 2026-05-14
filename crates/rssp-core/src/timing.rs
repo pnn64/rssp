@@ -1332,11 +1332,22 @@ pub fn get_time_for_beat(t: &TimingData, beat: f64) -> f64 {
 }
 
 pub(crate) fn get_time_for_beat_f32(t: &TimingData, target_beat: f64) -> f64 {
+    if t.beat_to_time.len() == 1
+        && t.beat_to_time[0].beat == 0.0
+        && t.stops.is_empty()
+        && t.delays.is_empty()
+        && t.warps.is_empty()
+    {
+        let start = (-t.beat0_offset_sec - t.global_offset_sec) as f32;
+        let row = beat_to_note_row_f32(target_beat as f32);
+        let bps = t.beat_to_time[0].bpm as f32 / 60.0;
+        return f64::from(start + note_row_to_beat_f32(row) / bps) - t.global_offset_sec;
+    }
+
     let mut state = GetBeatStateF32 {
         last_time: (-t.beat0_offset_sec - t.global_offset_sec) as f32,
         ..Default::default()
     };
-    state.last_time = (-t.beat0_offset_sec - t.global_offset_sec) as f32;
     get_elapsed_time_f32(t, &mut state, target_beat as f32);
     f64::from(state.last_time) - t.global_offset_sec
 }
