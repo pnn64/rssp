@@ -211,9 +211,9 @@ fn count_line<const L: usize>(
                 }
             }
             b'3' => end_mask |= 1 << i,
-            b'M' => stats.mines += 1,
-            b'L' => stats.lifts += 1,
-            b'F' => stats.fakes += 1,
+            b'M' | b'm' => stats.mines += 1,
+            b'L' | b'l' => stats.lifts += 1,
+            b'F' | b'f' => stats.fakes += 1,
             _ => {}
         }
     }
@@ -281,9 +281,9 @@ fn count_line_masked<const L: usize>(line: &[u8; L], stats: &mut ArrowStats, pha
                 }
             }
             b'3' => end_mask |= 1 << i,
-            b'M' => stats.mines += 1,
-            b'L' => stats.lifts += 1,
-            b'F' => stats.fakes += 1,
+            b'M' | b'm' => stats.mines += 1,
+            b'L' | b'l' => stats.lifts += 1,
+            b'F' | b'f' => stats.fakes += 1,
             _ => {}
         }
     }

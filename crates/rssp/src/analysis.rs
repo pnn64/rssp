@@ -33,8 +33,8 @@ use crate::stats::{
 };
 use crate::tech::parse_tech_notation;
 use crate::timing::{
-    TimingFormat, TimingSegments, compute_timing_segments, get_time_for_beat, steps_timing_allowed,
-    timing_data_from_segments, timing_format_from_ext,
+    TimingFormat, TimingSegments, compute_timing_segments, get_time_for_beat, has_nonjudgable_rows,
+    steps_timing_allowed, timing_data_from_segments, timing_format_from_ext,
 };
 use crate::{chart_timing_tag_raw, resolve_difficulty_label, supported_stepstype_lanes_bytes};
 
@@ -603,19 +603,23 @@ fn build_chart_summary(
         (time_chart_f64 + (song_offset - chart_offset)).floor() as i32
     };
 
-    let measure_nps_vec_raw = compute_measure_nps_vec_with_timing(&measure_densities, &timing);
-    let (max_nps_raw, median_nps_raw) = get_nps_stats(&measure_nps_vec_raw);
+    let mut measure_nps_vec = compute_measure_nps_vec_with_timing(&measure_densities, &timing);
+    let (max_nps_raw, median_nps_raw) = get_nps_stats(&measure_nps_vec);
     let max_nps = round_sig_figs_6(max_nps_raw);
     let median_nps = round_dp(median_nps_raw, 2);
-    let measure_nps_vec = measure_nps_vec_raw
-        .into_iter()
-        .map(round_sig_figs_6)
-        .collect();
+    for nps in &mut measure_nps_vec {
+        *nps = round_sig_figs_6(*nps);
+    }
 
     let raw_holding = stats.holding;
+    let reuse_base_stats =
+        stats.holds == 0 && stats.rolls == 0 && stats.lifts == 0 && !has_nonjudgable_rows(&timing);
+    let has_hold_notes = stats.holds != 0 || stats.rolls != 0;
     let (tech_counts, mut timing_stats) = match lanes {
         4 => {
-            let timing_stats = if stats.holds == 0 && stats.rolls == 0 {
+            let timing_stats = if reuse_base_stats {
+                stats.clone()
+            } else if stats.holds == 0 && stats.rolls == 0 {
                 compute_timing_aware_stats_no_holds_from_rows::<4>(&rows4, &timing, &row_to_beat)
             } else {
                 compute_timing_aware_stats_from_rows_with_row_to_beat::<4>(
@@ -625,10 +629,11 @@ fn build_chart_summary(
                 )
             };
             let tech_counts = if options.compute_tech_counts {
-                step_parity::analyze_timing_rows::<4>(
+                step_parity::analyze_timing_rows_known_holds::<4>(
                     &rows4,
                     &row_to_beat,
                     &timing,
+                    has_hold_notes,
                     parity_scratch4,
                 )
             } else {
@@ -637,7 +642,9 @@ fn build_chart_summary(
             (tech_counts, timing_stats)
         }
         8 => {
-            let timing_stats = if stats.holds == 0 && stats.rolls == 0 {
+            let timing_stats = if reuse_base_stats {
+                stats.clone()
+            } else if stats.holds == 0 && stats.rolls == 0 {
                 compute_timing_aware_stats_no_holds_from_rows::<8>(&rows8, &timing, &row_to_beat)
             } else {
                 compute_timing_aware_stats_from_rows_with_row_to_beat::<8>(
@@ -647,10 +654,11 @@ fn build_chart_summary(
                 )
             };
             let tech_counts = if options.compute_tech_counts {
-                step_parity::analyze_timing_rows::<8>(
+                step_parity::analyze_timing_rows_known_holds::<8>(
                     &rows8,
                     &row_to_beat,
                     &timing,
+                    has_hold_notes,
                     parity_scratch8,
                 )
             } else {
@@ -664,12 +672,16 @@ fn build_chart_summary(
             } else {
                 step_parity::TechCounts::default()
             };
-            let timing_stats = compute_timing_aware_stats_with_row_to_beat(
-                &minimized_chart,
-                lanes,
-                &timing,
-                &row_to_beat,
-            );
+            let timing_stats = if reuse_base_stats {
+                stats.clone()
+            } else {
+                compute_timing_aware_stats_with_row_to_beat(
+                    &minimized_chart,
+                    lanes,
+                    &timing,
+                    &row_to_beat,
+                )
+            };
             (tech_counts, timing_stats)
         }
     };

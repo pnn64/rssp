@@ -1,7 +1,8 @@
 use std::sync::OnceLock;
 
 use crate::timing::{
-    ROWS_PER_BEAT, TimingData, beat_to_note_row_f32, get_time_for_beat_f32, is_fake_at_row,
+    ROWS_PER_BEAT, TimingData, beat_to_note_row_f32, fakes as timing_fakes, get_time_for_beat_f32,
+    is_fake_at_row,
 };
 
 const INVALID_COLUMN: i8 = -1;
@@ -1200,10 +1201,17 @@ fn parity_create_rows_from_arrays<const LANES: usize>(
     row_to_beat: &[f32],
     timing: &TimingData,
     cols: usize,
+    has_holds: bool,
 ) {
+    if !has_holds {
+        parity_create_rows_no_holds(g, rows, row_to_beat, timing, cols);
+        return;
+    }
+
     let mut counter = row_counter_new();
     let hold_heads = hold_heads_from_arrays(rows, row_to_beat, cols);
     let copy_len = cols.min(LANES);
+    let has_fakes = !timing_fakes(timing).is_empty();
 
     for (idx, row) in rows.iter().enumerate() {
         let mut nonzero_mask = row_nonzero_mask(row, copy_len);
@@ -1212,7 +1220,7 @@ fn parity_create_rows_from_arrays<const LANES: usize>(
         }
         let (row_i32, beat) = row_quantized(row_to_beat[idx]);
         let second = get_time_for_beat_f32(timing, f64::from(beat)) as f32;
-        let row_fake = is_fake_at_row(timing, row_i32);
+        let row_fake = has_fakes && is_fake_at_row(timing, row_i32);
 
         while nonzero_mask != 0 {
             let c = nonzero_mask.trailing_zeros() as usize;
@@ -1242,15 +1250,63 @@ fn parity_create_rows_from_arrays<const LANES: usize>(
     parity_flush_row(g, &counter);
 }
 
+fn parity_create_rows_no_holds<const LANES: usize>(
+    g: &mut StepParityGenerator,
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    cols: usize,
+) {
+    let mut counter = row_counter_new();
+    let copy_len = cols.min(LANES);
+    let has_fakes = !timing_fakes(timing).is_empty();
+
+    for (idx, row) in rows.iter().enumerate() {
+        let mut nonzero_mask = row_nonzero_mask(row, copy_len);
+        if nonzero_mask == 0 {
+            continue;
+        }
+        let (row_i32, beat) = row_quantized(row_to_beat[idx]);
+        let second = get_time_for_beat_f32(timing, f64::from(beat)) as f32;
+        let row_fake = has_fakes && is_fake_at_row(timing, row_i32);
+
+        while nonzero_mask != 0 {
+            let c = nonzero_mask.trailing_zeros() as usize;
+            nonzero_mask &= nonzero_mask - 1;
+            match row[c] {
+                b'1' if !row_fake => {
+                    parity_push_note(g, &mut counter, c, beat, second, HOLD_END_NONE, true);
+                }
+                b'M' => parity_push_mine(g, &mut counter, c, second, row_fake),
+                b'L' if !row_fake => {
+                    parity_push_note(g, &mut counter, c, beat, second, HOLD_END_NONE, false);
+                }
+                _ => {}
+            }
+        }
+    }
+    parity_flush_row(g, &counter);
+}
+
+fn rows_have_holds<const LANES: usize>(rows: &[[u8; LANES]], cols: usize) -> bool {
+    let copy_len = cols.min(LANES);
+    rows.iter().any(|row| {
+        row.iter()
+            .take(copy_len)
+            .any(|&ch| matches!(ch, b'2' | b'4'))
+    })
+}
+
 fn parity_analyze_rows<const LANES: usize>(
     g: &mut StepParityGenerator,
     rows: &[[u8; LANES]],
     row_to_beat: &[f32],
     timing: &TimingData,
     cols: usize,
+    has_holds: bool,
 ) -> bool {
     parity_reset(g, cols);
-    parity_create_rows_from_arrays(g, rows, row_to_beat, timing, cols);
+    parity_create_rows_from_arrays(g, rows, row_to_beat, timing, cols, has_holds);
     parity_finish(g)
 }
 
@@ -2188,8 +2244,26 @@ pub fn analyze_timing_rows<const LANES: usize>(
     timing: &TimingData,
     scratch: &mut TimingRowsScratch<LANES>,
 ) -> TechCounts {
+    let has_holds = rows_have_holds(rows, layout_cols(scratch.generator.layout));
+    analyze_timing_rows_known_holds(rows, row_to_beat, timing, has_holds, scratch)
+}
+
+pub fn analyze_timing_rows_known_holds<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    has_holds: bool,
+    scratch: &mut TimingRowsScratch<LANES>,
+) -> TechCounts {
     let cols = layout_cols(scratch.generator.layout);
-    if !parity_analyze_rows(&mut scratch.generator, rows, row_to_beat, timing, cols) {
+    if !parity_analyze_rows(
+        &mut scratch.generator,
+        rows,
+        row_to_beat,
+        timing,
+        cols,
+        has_holds,
+    ) {
         return TechCounts::default();
     }
     calculate_tech_counts(
