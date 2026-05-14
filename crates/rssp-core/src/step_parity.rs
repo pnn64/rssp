@@ -249,10 +249,12 @@ fn layout_new(points: &[StagePoint], up_mask: u8, down_mask: u8, side_mask: u8) 
     let mut facing_x_penalty = [0.0f32; PAIR_LEN];
     let mut facing_y_penalty = [0.0f32; PAIR_LEN];
 
+    // ITGmania calls C++ pow on float inputs and narrows back to float.
+    // Matching that order keeps path costs stable on exact-tie charts.
     let facing_penalty = |v: f32| -> f32 {
         let base = -(v.min(0.0));
         if base > 0.0 {
-            base.powf(1.8) * 100.0 * FACING_WEIGHT
+            ((base as f64).powf(1.8) * 100.0) as f32
         } else {
             0.0
         }
@@ -296,7 +298,7 @@ fn layout_new(points: &[StagePoint], up_mask: u8, down_mask: u8, side_mask: u8) 
             }
 
             let (ndx, ndy) = (dx / dist, dy / dist);
-            let (mut xm, mut ym) = (ndx.powf(4.0), ndy.powf(4.0));
+            let (mut xm, mut ym) = ((ndx as f64).powf(4.0) as f32, (ndy as f64).powf(4.0) as f32);
             if ndx <= 0.0 {
                 xm = -xm;
             }
@@ -753,10 +755,11 @@ fn calc_facing_cost(layout: &StageLayout, result: &State) -> f32 {
         rt = rh;
     }
 
-    layout_facing_x(layout, lh, rh)
-        + layout_facing_x(layout, lt, rt)
-        + layout_facing_y(layout, lh, lt)
-        + layout_facing_y(layout, rh, rt)
+    let heel_facing = layout_facing_x(layout, lh, rh) * FACING_WEIGHT;
+    let toe_facing = layout_facing_x(layout, lt, rt) * FACING_WEIGHT;
+    let left_facing = layout_facing_y(layout, lh, lt) * FACING_WEIGHT;
+    let right_facing = layout_facing_y(layout, rh, rt) * FACING_WEIGHT;
+    heel_facing + toe_facing + left_facing + right_facing
 }
 
 fn calc_spin_cost(layout: &StageLayout, initial: &State, result: &State) -> f32 {
@@ -817,8 +820,7 @@ fn calc_footswitch_cost(
             continue;
         }
         if init != res && init != OTHER_PART_OF_FOOT[foot_idx(res)] {
-            return (time_scaled / (SLOW_FOOTSWITCH_THRESHOLD + time_scaled))
-                * FOOTSWITCH_WEIGHT;
+            return (time_scaled / (SLOW_FOOTSWITCH_THRESHOLD + time_scaled)) * FOOTSWITCH_WEIGHT;
         }
     }
     0.0
@@ -889,9 +891,9 @@ fn calc_big_movements_cost(
         }
 
         let res_pos = hit[fi];
-        let mut d =
-            (layout_distance(layout, init_pos as usize, res_pos as usize) * DISTANCE_WEIGHT)
-                / elapsed;
+        let mut d = (layout_distance(layout, init_pos as usize, res_pos as usize)
+            * DISTANCE_WEIGHT)
+            / elapsed;
 
         let other_pos = hit[OTHER_FOOT_IDXS[fi]];
         if other_pos != INVALID_COLUMN {
@@ -1041,11 +1043,7 @@ fn parity_create_rows(g: &mut StepParityGenerator, notes: Vec<IntermediateNoteDa
 
         let col = note.col;
         let is_hold = note.note_type == TapNoteType::HoldHead;
-        counter.note_count = counter.note_count.saturating_add(1);
-        counter.tech_mask |= 1u8 << col;
-        if note.note_type != TapNoteType::Lift {
-            counter.note_mask |= 1u8 << col;
-        }
+        row_counter_add_note(&mut counter, col, note.note_type != TapNoteType::Lift);
         if is_hold {
             counter.hold_ends[col] = note.beat + note.hold_length;
         }
@@ -1190,11 +1188,7 @@ fn parity_push_note(
         }
         row_counter_reset(counter, second, beat);
     }
-    counter.note_count = counter.note_count.saturating_add(1);
-    counter.tech_mask |= 1u8 << col;
-    if counts_for_placement {
-        counter.note_mask |= 1u8 << col;
-    }
+    row_counter_add_note(counter, col, counts_for_placement);
     if hold_end != HOLD_END_NONE {
         counter.hold_ends[col] = hold_end;
     }
@@ -1529,6 +1523,19 @@ fn row_counter_reset(c: &mut RowCounter, second: f32, beat: f32) {
     c.mine_mask = 0;
     c.mine_i32_mask = 0;
     c.fake_mine_mask = 0;
+}
+
+fn row_counter_add_note(c: &mut RowCounter, col: usize, counts_for_placement: bool) {
+    let bit = 1u8 << col;
+    // ITGmania stores one note per column in a parity row, so warp-collapsed
+    // same-column notes contribute one note count, not one count per event.
+    if c.tech_mask & bit == 0 {
+        c.note_count = c.note_count.saturating_add(1);
+    }
+    c.tech_mask |= bit;
+    if counts_for_placement {
+        c.note_mask |= bit;
+    }
 }
 
 // --- Permutation ---
