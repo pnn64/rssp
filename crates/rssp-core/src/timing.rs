@@ -1242,6 +1242,12 @@ pub fn fakes(t: &TimingData) -> &[Segment] {
     &t.fakes
 }
 
+#[inline(always)]
+#[must_use]
+pub fn has_nonjudgable_rows(t: &TimingData) -> bool {
+    !(t.warps.is_empty() && t.fakes.is_empty())
+}
+
 #[must_use]
 pub fn bpm_segments(t: &TimingData) -> Vec<(f64, f64)> {
     t.beat_to_time.iter().map(|p| (p.beat, p.bpm)).collect()

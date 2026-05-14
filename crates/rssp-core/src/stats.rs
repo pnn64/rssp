@@ -1,4 +1,6 @@
-use crate::timing::{TimingData, beat_to_note_row, is_judgable_at_beat, note_row_to_beat};
+use crate::timing::{
+    TimingData, beat_to_note_row, has_nonjudgable_rows, is_judgable_at_beat, note_row_to_beat,
+};
 
 pub use crate::nps::measure_equally_spaced;
 pub use crate::streams::{
@@ -637,6 +639,9 @@ pub fn compute_timing_aware_stats_from_rows_with_row_to_beat<const L: usize>(
         return ArrowStats::default();
     }
     let ends = scan_hold_ends(rows);
+    if !has_nonjudgable_rows(timing) {
+        return process_timing_rows_all_judgable::<L>(rows.iter(), &ends);
+    }
     process_timing_rows::<L>(rows.iter(), &ends, timing, beats)
 }
 
@@ -645,7 +650,20 @@ pub fn compute_timing_aware_stats_no_holds_from_rows<const L: usize>(
     timing: &TimingData,
     beats: &[f32],
 ) -> ArrowStats {
+    if !has_nonjudgable_rows(timing) {
+        return process_timing_rows_no_holds_all_judgable::<L>(rows.iter());
+    }
     process_timing_rows_no_holds::<L>(rows.iter(), timing, beats)
+}
+
+fn process_timing_rows_no_holds_all_judgable<'a, const L: usize>(
+    rows: impl Iterator<Item = &'a [u8; L]>,
+) -> ArrowStats {
+    let mut stats = ArrowStats::default();
+    for line in rows {
+        process_timing_row_no_holds_judgable(line, &mut stats);
+    }
+    stats
 }
 
 fn process_timing_rows_no_holds<'a, const L: usize>(
@@ -679,6 +697,11 @@ fn process_timing_row_no_holds<const L: usize>(
         return;
     }
 
+    process_timing_row_no_holds_judgable(line, stats);
+}
+
+#[inline(always)]
+fn process_timing_row_no_holds_judgable<const L: usize>(line: &[u8; L], stats: &mut ArrowStats) {
     let (mut notes, mut has_note) = (0u32, false);
     for (c, &ch) in line.iter().enumerate() {
         match ch {
@@ -716,6 +739,30 @@ fn process_timing_row_no_holds<const L: usize>(
     if has_note && notes >= 3 {
         stats.hands += 1;
     }
+}
+
+fn process_timing_rows_all_judgable<'a, const L: usize>(
+    rows: impl Iterator<Item = &'a [u8; L]>,
+    ends: &[[usize; L]],
+) -> ArrowStats {
+    let mut stats = ArrowStats::default();
+    let mut ends_per = vec![0u32; ends.len()];
+    let mut active = 0i32;
+
+    for (ridx, line) in rows.enumerate() {
+        if ridx > 0 {
+            active -= ends_per[ridx - 1] as i32;
+        }
+        process_timing_row::<L>(
+            line,
+            &ends[ridx],
+            true,
+            &mut stats,
+            &mut ends_per,
+            &mut active,
+        );
+    }
+    stats
 }
 
 fn process_timing_rows<'a, const L: usize>(
