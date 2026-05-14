@@ -1460,20 +1460,29 @@ fn parity_result_state(
 
 fn parity_backtrack(g: &mut StepParityGenerator, mut cur: usize) -> bool {
     let rows = g.rows.len();
-    g.result_columns.clear();
-    g.result_columns.reserve(rows);
+    if g.result_columns.len() < rows {
+        g.result_columns.resize(rows, [Foot::None; MAX_COLUMNS]);
+    } else {
+        g.result_columns.truncate(rows);
+    }
 
-    for _ in 0..rows {
-        g.result_columns.push(g.nodes[cur].state.combined_columns);
+    let mut write = rows;
+    while write > 0 {
+        write -= 1;
+        g.result_columns[write] = g.nodes[cur].state.combined_columns;
         let prev = g.nodes[cur].pred;
         if prev == u32::MAX {
+            g.result_columns.clear();
             return false;
         }
         cur = prev as usize;
     }
-    g.result_columns.reverse();
 
-    cur == 0
+    let ok = cur == 0;
+    if !ok {
+        g.result_columns.clear();
+    }
+    ok
 }
 
 // --- RowCounter ---
