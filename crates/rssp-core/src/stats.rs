@@ -640,6 +640,84 @@ pub fn compute_timing_aware_stats_from_rows_with_row_to_beat<const L: usize>(
     process_timing_rows::<L>(rows.iter(), &ends, timing, beats)
 }
 
+pub fn compute_timing_aware_stats_no_holds_from_rows<const L: usize>(
+    rows: &[[u8; L]],
+    timing: &TimingData,
+    beats: &[f32],
+) -> ArrowStats {
+    process_timing_rows_no_holds::<L>(rows.iter(), timing, beats)
+}
+
+fn process_timing_rows_no_holds<'a, const L: usize>(
+    rows: impl Iterator<Item = &'a [u8; L]>,
+    timing: &TimingData,
+    beats: &[f32],
+) -> ArrowStats {
+    let mut stats = ArrowStats::default();
+    for (ridx, line) in rows.enumerate() {
+        process_timing_row_no_holds(
+            line,
+            is_judgable_at_beat(timing, f64::from(beats[ridx])),
+            &mut stats,
+        );
+    }
+    stats
+}
+
+#[inline(always)]
+fn process_timing_row_no_holds<const L: usize>(
+    line: &[u8; L],
+    judgable: bool,
+    stats: &mut ArrowStats,
+) {
+    if !judgable {
+        for &ch in line {
+            if matches!(ch, b'1' | b'L' | b'l' | b'M' | b'm' | b'F' | b'f') {
+                stats.fakes += 1;
+            }
+        }
+        return;
+    }
+
+    let (mut notes, mut has_note) = (0u32, false);
+    for (c, &ch) in line.iter().enumerate() {
+        match ch {
+            b'1' => {
+                has_note = true;
+                notes += 1;
+                stats.total_arrows += 1;
+                bump_dir(stats, c);
+            }
+            b'L' | b'l' => {
+                has_note = true;
+                notes += 1;
+                stats.total_arrows += 1;
+                stats.lifts += 1;
+                bump_dir(stats, c);
+            }
+            b'M' | b'm' => {
+                has_note = true;
+                stats.mines += 1;
+            }
+            b'F' | b'f' => {
+                has_note = true;
+                stats.fakes += 1;
+            }
+            _ => {}
+        }
+    }
+
+    if notes > 0 {
+        stats.total_steps += 1;
+        if notes >= 2 {
+            stats.jumps += 1;
+        }
+    }
+    if has_note && notes >= 3 {
+        stats.hands += 1;
+    }
+}
+
 fn process_timing_rows<'a, const L: usize>(
     rows: impl Iterator<Item = &'a [u8; L]>,
     ends: &[[usize; L]],

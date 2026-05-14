@@ -27,8 +27,9 @@ use crate::patterns::{
 use crate::stats::{
     BreakdownMode, RADAR_CATEGORY_COUNT, StreamBreakdownLevel, StreamCounts, compute_stream_counts,
     compute_timing_aware_stats_from_rows_with_row_to_beat,
-    compute_timing_aware_stats_with_row_to_beat, generate_breakdown, minimize_chart_for_hash,
-    minimize_chart_rows_bits, minimize_rows_typed, stream_breakdown,
+    compute_timing_aware_stats_no_holds_from_rows, compute_timing_aware_stats_with_row_to_beat,
+    generate_breakdown, minimize_chart_for_hash, minimize_chart_rows_bits, minimize_rows_typed,
+    stream_breakdown,
 };
 use crate::tech::parse_tech_notation;
 use crate::timing::{
@@ -615,11 +616,15 @@ fn build_chart_summary(
     let raw_holding = stats.holding;
     let (tech_counts, mut timing_stats) = match lanes {
         4 => {
-            let timing_stats = compute_timing_aware_stats_from_rows_with_row_to_beat::<4>(
-                &rows4,
-                &timing,
-                &row_to_beat,
-            );
+            let timing_stats = if stats.holds == 0 && stats.rolls == 0 {
+                compute_timing_aware_stats_no_holds_from_rows::<4>(&rows4, &timing, &row_to_beat)
+            } else {
+                compute_timing_aware_stats_from_rows_with_row_to_beat::<4>(
+                    &rows4,
+                    &timing,
+                    &row_to_beat,
+                )
+            };
             let tech_counts = if options.compute_tech_counts {
                 step_parity::analyze_timing_rows::<4>(
                     &rows4,
@@ -633,11 +638,15 @@ fn build_chart_summary(
             (tech_counts, timing_stats)
         }
         8 => {
-            let timing_stats = compute_timing_aware_stats_from_rows_with_row_to_beat::<8>(
-                &rows8,
-                &timing,
-                &row_to_beat,
-            );
+            let timing_stats = if stats.holds == 0 && stats.rolls == 0 {
+                compute_timing_aware_stats_no_holds_from_rows::<8>(&rows8, &timing, &row_to_beat)
+            } else {
+                compute_timing_aware_stats_from_rows_with_row_to_beat::<8>(
+                    &rows8,
+                    &timing,
+                    &row_to_beat,
+                )
+            };
             let tech_counts = if options.compute_tech_counts {
                 step_parity::analyze_timing_rows::<8>(
                     &rows8,
