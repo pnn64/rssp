@@ -194,6 +194,24 @@ pub fn generate_breakdown(measures: &[usize], mode: BreakdownMode) -> String {
     };
 
     let tokens = tokenize(&measures[start..=end]);
+    format_breakdown_tokens(&tokens, mode)
+}
+
+#[must_use]
+pub fn generate_breakdowns(measures: &[usize]) -> (String, String, String) {
+    let Some((start, end)) = active_range(measures) else {
+        return (String::new(), String::new(), String::new());
+    };
+
+    let tokens = tokenize(&measures[start..=end]);
+    (
+        format_breakdown_tokens(&tokens, BreakdownMode::Detailed),
+        format_breakdown_tokens(&tokens, BreakdownMode::Partial),
+        format_breakdown_tokens(&tokens, BreakdownMode::Simplified),
+    )
+}
+
+fn format_breakdown_tokens(tokens: &[Token], mode: BreakdownMode) -> String {
     let threshold = match mode {
         BreakdownMode::Detailed => 0,
         BreakdownMode::Partial => 1,
@@ -206,7 +224,7 @@ pub fn generate_breakdown(measures: &[usize], mode: BreakdownMode) -> String {
     while i < tokens.len() {
         match tokens[i] {
             Token::Run(cat, _) => {
-                let (total, star, next) = merge_runs(&tokens, i, cat, threshold, mode);
+                let (total, star, next) = merge_runs(tokens, i, cat, threshold, mode);
                 if !out.is_empty() {
                     out.push(' ');
                 }
@@ -358,6 +376,36 @@ pub fn stream_breakdown(measures: &[usize], level: StreamBreakdownLevel) -> Stri
         return "No Streams!".into();
     }
 
+    format_stream_segments(&segs, level)
+}
+
+#[must_use]
+pub fn stream_breakdowns(measures: &[usize]) -> (String, String, String) {
+    if measures.is_empty() {
+        return no_streams3();
+    }
+
+    let segs = stream_sequences(measures);
+    if segs.is_empty() {
+        return no_streams3();
+    }
+
+    (
+        format_stream_segments(&segs, StreamBreakdownLevel::Detailed),
+        format_stream_segments(&segs, StreamBreakdownLevel::Partial),
+        format_stream_segments(&segs, StreamBreakdownLevel::Simple),
+    )
+}
+
+fn no_streams3() -> (String, String, String) {
+    (
+        "No Streams!".into(),
+        "No Streams!".into(),
+        "No Streams!".into(),
+    )
+}
+
+fn format_stream_segments(segs: &[StreamSegment], level: StreamBreakdownLevel) -> String {
     let mut out = String::new();
     let (mut sum, mut broken, mut total) = (0, false, 0);
 

@@ -25,11 +25,11 @@ use crate::patterns::{
     detect_custom_patterns_compiled, detect_default_patterns,
 };
 use crate::stats::{
-    BreakdownMode, RADAR_CATEGORY_COUNT, StreamBreakdownLevel, StreamCounts, compute_stream_counts,
+    RADAR_CATEGORY_COUNT, StreamCounts, compute_stream_counts,
     compute_timing_aware_stats_from_rows_with_row_to_beat,
     compute_timing_aware_stats_no_holds_from_rows, compute_timing_aware_stats_with_row_to_beat,
-    generate_breakdown, minimize_chart_for_hash, minimize_chart_rows_bits, minimize_rows_typed,
-    stream_breakdown,
+    generate_breakdowns, minimize_chart_for_hash, minimize_chart_rows_bits, minimize_rows_typed,
+    stream_breakdowns,
 };
 use crate::tech::parse_tech_notation;
 use crate::timing::{
@@ -275,13 +275,10 @@ fn compute_derived_chart_metrics(
         + stream_counts.run24_streams
         + stream_counts.run32_streams;
 
-    let sn_detailed_breakdown = generate_breakdown(measure_densities, BreakdownMode::Detailed);
-    let sn_partial_breakdown = generate_breakdown(measure_densities, BreakdownMode::Partial);
-    let sn_simple_breakdown = generate_breakdown(measure_densities, BreakdownMode::Simplified);
-
-    let detailed_breakdown = stream_breakdown(measure_densities, StreamBreakdownLevel::Detailed);
-    let partial_breakdown = stream_breakdown(measure_densities, StreamBreakdownLevel::Partial);
-    let simple_breakdown = stream_breakdown(measure_densities, StreamBreakdownLevel::Simple);
+    let (sn_detailed_breakdown, sn_partial_breakdown, sn_simple_breakdown) =
+        generate_breakdowns(measure_densities);
+    let (detailed_breakdown, partial_breakdown, simple_breakdown) =
+        stream_breakdowns(measure_densities);
 
     let (short_hash, bpm_neutral_hash) = compute_chart_hash_pair(minimized_chart, bpms_to_use);
     let tier_bpm = round_dp(compute_tier_bpm(measure_densities, bpm_map, 4.0), 2);

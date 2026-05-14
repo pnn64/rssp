@@ -6,7 +6,7 @@ pub use crate::nps::measure_equally_spaced;
 pub use crate::streams::{
     BreakdownMode, RunDensity, StreamBreakdownLevel, StreamCounts, StreamSegment, Token,
     categorize_measure_density, compute_stream_counts, format_run_symbol, generate_breakdown,
-    stream_breakdown, stream_sequences,
+    generate_breakdowns, stream_breakdown, stream_breakdowns, stream_sequences,
 };
 
 // ============================================================================
