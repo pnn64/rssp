@@ -343,6 +343,18 @@ fn sha1_digest(first: &[u8], second: &[u8]) -> [u8; 20] {
     sha1_finish(&mut state, &mut buf, buf_len, first.len() + second.len())
 }
 
+#[inline(always)]
+fn sha1_digest_suffix(
+    mut state: [u32; 5],
+    mut buf: [u8; 64],
+    mut buf_len: usize,
+    prefix_len: usize,
+    suffix: &[u8],
+) -> [u8; 20] {
+    sha1_update(&mut state, &mut buf, &mut buf_len, suffix);
+    sha1_finish(&mut state, &mut buf, buf_len, prefix_len + suffix.len())
+}
+
 const HEX_TABLE: [[u8; 2]; 256] = {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut table = [[0u8; 2]; 256];
@@ -355,9 +367,7 @@ const HEX_TABLE: [[u8; 2]; 256] = {
     table
 };
 
-#[must_use]
-pub fn compute_chart_hash(chart_data: &[u8], normalized_bpms: &str) -> String {
-    let digest = sha1_digest(chart_data, normalized_bpms.as_bytes());
+fn short_hex(digest: &[u8; 20]) -> String {
     let mut out = String::with_capacity(16);
     for &byte in &digest[..8] {
         let hex = HEX_TABLE[byte as usize];
@@ -365,4 +375,42 @@ pub fn compute_chart_hash(chart_data: &[u8], normalized_bpms: &str) -> String {
         out.push(hex[1] as char);
     }
     out
+}
+
+#[must_use]
+pub fn compute_chart_hash(chart_data: &[u8], normalized_bpms: &str) -> String {
+    short_hex(&sha1_digest(chart_data, normalized_bpms.as_bytes()))
+}
+
+#[must_use]
+pub fn compute_chart_hash_pair(chart_data: &[u8], normalized_bpms: &str) -> (String, String) {
+    let mut state = SHA1_INIT;
+    let mut buf = [0u8; 64];
+    let mut buf_len = 0usize;
+    sha1_update(&mut state, &mut buf, &mut buf_len, chart_data);
+
+    let hash = sha1_digest_suffix(
+        state,
+        buf,
+        buf_len,
+        chart_data.len(),
+        normalized_bpms.as_bytes(),
+    );
+    let neutral = sha1_digest_suffix(state, buf, buf_len, chart_data.len(), b"0.000=0.000");
+    (short_hex(&hash), short_hex(&neutral))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compute_chart_hash, compute_chart_hash_pair};
+
+    #[test]
+    fn chart_hash_pair_matches_individual_hashes() {
+        let chart = b"1000\n0100\n0010\n0001\n";
+        let bpms = "0.000=140.000,64.000=175.000";
+        let (hash, neutral) = compute_chart_hash_pair(chart, bpms);
+
+        assert_eq!(hash, compute_chart_hash(chart, bpms));
+        assert_eq!(neutral, compute_chart_hash(chart, "0.000=0.000"));
+    }
 }

@@ -11,7 +11,7 @@ use crate::bpm::{
     clean_timing_map, clean_timing_map_cow, compute_bpm_range, compute_bpm_stats,
     compute_measure_nps_vec_with_timing, compute_tier_bpm, get_nps_stats, normalize_float_digits,
 };
-use crate::hash::compute_chart_hash;
+use crate::hash::{compute_chart_hash, compute_chart_hash_pair};
 use crate::math::{round_dp, round_sig_figs_6};
 use crate::matrix::compute_matrix_rating;
 use crate::parse::{
@@ -283,8 +283,7 @@ fn compute_derived_chart_metrics(
     let partial_breakdown = stream_breakdown(measure_densities, StreamBreakdownLevel::Partial);
     let simple_breakdown = stream_breakdown(measure_densities, StreamBreakdownLevel::Simple);
 
-    let short_hash = compute_chart_hash(minimized_chart, bpms_to_use);
-    let bpm_neutral_hash = compute_chart_hash(minimized_chart, "0.000=0.000");
+    let (short_hash, bpm_neutral_hash) = compute_chart_hash_pair(minimized_chart, bpms_to_use);
     let tier_bpm = round_dp(compute_tier_bpm(measure_densities, bpm_map, 4.0), 2);
     let matrix_rating = round_dp(compute_matrix_rating(measure_densities, bpm_map), 2);
 
