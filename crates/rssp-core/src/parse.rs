@@ -718,6 +718,31 @@ pub fn split_notes_fields(block: &[u8]) -> (Vec<&[u8]>, &[u8]) {
 }
 
 #[inline(always)]
+fn find_unescaped_colon(slice: &[u8]) -> Option<usize> {
+    let mut off = 0usize;
+    while off < slice.len() {
+        let rel = find_either_byte(&slice[off..], b'\\', b':')?;
+        let idx = off + rel;
+        if slice[idx] == b':' {
+            return Some(idx);
+        }
+
+        let start = idx;
+        off = idx + 1;
+        while off < slice.len() && slice[off] == b'\\' {
+            off += 1;
+        }
+        if slice.get(off) == Some(&b':') {
+            if (off - start) & 1 == 0 {
+                return Some(off);
+            }
+            off += 1;
+        }
+    }
+    None
+}
+
+#[inline(always)]
 fn split_notes6(block: &[u8]) -> (u8, [&[u8]; 5], &[u8]) {
     let mut fields: [&[u8]; 5] = [&[]; 5];
     let mut count = 0u8;
@@ -741,19 +766,7 @@ fn split_notes6(block: &[u8]) -> (u8, [&[u8]; 5], &[u8]) {
     }
 
     let rest = block.get(start..).unwrap_or(&[]);
-    let mut end = rest.len();
-    bs_run = 0;
-    for (i, &b) in rest.iter().enumerate() {
-        if b == b'\\' {
-            bs_run += 1;
-            continue;
-        }
-        if b == b':' && bs_run & 1 == 0 {
-            end = i;
-            break;
-        }
-        bs_run = 0;
-    }
+    let end = find_unescaped_colon(rest).unwrap_or(rest.len());
 
     (count, fields, &rest[..end])
 }
