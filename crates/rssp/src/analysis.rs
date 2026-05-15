@@ -28,8 +28,8 @@ use crate::stats::{
     RADAR_CATEGORY_COUNT, StreamCounts, compute_stream_counts,
     compute_timing_aware_stats_from_rows_with_row_to_beat,
     compute_timing_aware_stats_no_holds_from_rows, compute_timing_aware_stats_with_row_to_beat,
-    generate_breakdowns, minimize_chart_for_hash, minimize_chart_rows_bits, minimize_rows_typed,
-    stream_breakdowns,
+    generate_breakdowns, minimize_chart_count_rows, minimize_chart_for_hash,
+    minimize_chart_rows_bits, minimize_rows_typed, stream_breakdowns,
 };
 use crate::tech::parse_tech_notation;
 use crate::timing::{
@@ -383,6 +383,7 @@ fn build_chart_summary(
     };
 
     let compute_patterns = lanes == 4 && options.compute_pattern_counts;
+    let rows_collected = compute_patterns || options.compute_tech_counts;
     let (mut rows4, mut rows8) = (Vec::new(), Vec::new());
     let (mut minimized_chart, mut stats, measure_densities, row_to_beat, last_beat, bitmasks) =
         if compute_patterns {
@@ -397,6 +398,10 @@ fn build_chart_summary(
                 last_beat,
                 Some(bitmasks),
             )
+        } else if !options.compute_tech_counts {
+            let (chart, stats, densities, row_to_beat, last_beat) =
+                minimize_chart_count_rows(chart_data, lanes);
+            (chart, stats, densities, row_to_beat, last_beat, None)
         } else if lanes == 8 {
             let (chart, stats, densities, rows, row_to_beat, last_beat) =
                 minimize_rows_typed::<8>(chart_data);
@@ -616,6 +621,13 @@ fn build_chart_summary(
         4 => {
             let timing_stats = if reuse_base_stats {
                 stats.clone()
+            } else if !rows_collected {
+                compute_timing_aware_stats_with_row_to_beat(
+                    &minimized_chart,
+                    lanes,
+                    &timing,
+                    &row_to_beat,
+                )
             } else if stats.holds == 0 && stats.rolls == 0 {
                 compute_timing_aware_stats_no_holds_from_rows::<4>(&rows4, &timing, &row_to_beat)
             } else {
@@ -641,6 +653,13 @@ fn build_chart_summary(
         8 => {
             let timing_stats = if reuse_base_stats {
                 stats.clone()
+            } else if !rows_collected {
+                compute_timing_aware_stats_with_row_to_beat(
+                    &minimized_chart,
+                    lanes,
+                    &timing,
+                    &row_to_beat,
+                )
             } else if stats.holds == 0 && stats.rolls == 0 {
                 compute_timing_aware_stats_no_holds_from_rows::<8>(&rows8, &timing, &row_to_beat)
             } else {

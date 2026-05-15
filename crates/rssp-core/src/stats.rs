@@ -98,6 +98,48 @@ fn has_step<const L: usize>(line: &[u8]) -> bool {
     line.iter().take(L).any(|&b| is_note(b))
 }
 
+#[inline(always)]
+fn byte_hits(word: u64, byte: u8) -> u64 {
+    const LO: u64 = 0x0101_0101_0101_0101;
+    const HI: u64 = 0x8080_8080_8080_8080;
+    let x = word ^ (u64::from(byte) * LO);
+    x.wrapping_sub(LO) & !x & HI
+}
+
+#[inline(always)]
+fn find_byte(slice: &[u8], needle: u8) -> Option<usize> {
+    let mut i = 0usize;
+    let (chunks, rem) = slice.as_chunks::<8>();
+    for chunk in chunks {
+        let hits = byte_hits(u64::from_le_bytes(*chunk), needle);
+        if hits != 0 {
+            return Some(i + hits.trailing_zeros() as usize / 8);
+        }
+        i += 8;
+    }
+    for (j, &b) in rem.iter().enumerate() {
+        if b == needle {
+            return Some(i + j);
+        }
+    }
+    None
+}
+
+#[inline(always)]
+fn next_line<'a>(data: &'a [u8], offset: &mut usize) -> Option<&'a [u8]> {
+    if *offset > data.len() {
+        return None;
+    }
+    let start = *offset;
+    let end = find_byte(&data[start..], b'\n').map_or(data.len(), |rel| start + rel);
+    *offset = if end == data.len() {
+        data.len() + 1
+    } else {
+        end + 1
+    };
+    Some(&data[start..end])
+}
+
 // ============================================================================
 // Unified Hold Tracking
 // ============================================================================
@@ -415,7 +457,8 @@ where
     let mut densities = Vec::new();
     let (mut midx, mut done) = (0usize, false);
 
-    for raw in data.split(|&b| b == b'\n') {
+    let mut line_off = 0usize;
+    while let Some(raw) = next_line(data, &mut line_off) {
         let line = skip_ws(raw);
         if line.is_empty() || line[0] == b'/' {
             continue;
@@ -524,7 +567,8 @@ pub fn minimize_chart_and_count_with_lanes(
     }
 }
 
-pub(crate) fn minimize_chart_count_rows(
+#[must_use]
+pub fn minimize_chart_count_rows(
     data: &[u8],
     lanes: usize,
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
@@ -534,7 +578,25 @@ pub(crate) fn minimize_chart_count_rows(
 fn minimize_rows_plain<const L: usize>(
     data: &[u8],
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
-    let (out, stats, dens, _rows, beats, last) = minimize_rows_typed::<L>(data);
+    minimize_rows_basic::<L>(data)
+}
+
+fn minimize_rows_basic<const L: usize>(
+    data: &[u8],
+) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
+    let mut beats = Vec::with_capacity(data.len() / (L + 1));
+    let mut depths = [0u32; L];
+    let (mut last_m, mut last_r, mut last_rows) = (None, 0, 0);
+
+    let mut on_rows = |m, r| append_row_beats(&mut beats, m, r);
+    let mut on_line = |line: &[u8; L], m, r, row_count| {
+        if line_has_object::<L>(line, &mut depths) {
+            (last_m, last_r, last_rows) = (Some(m), r, row_count);
+        }
+    };
+
+    let (out, stats, dens) = process_chart::<L, _, _>(data, &mut on_rows, &mut on_line);
+    let last = calc_last_beat(last_m, last_r, last_rows);
     (out, stats, dens, beats, last)
 }
 
