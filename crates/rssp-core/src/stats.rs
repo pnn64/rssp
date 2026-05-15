@@ -80,7 +80,7 @@ const fn is_note(ch: u8) -> bool {
 
 #[inline(always)]
 fn is_all_zero<const L: usize>(line: &[u8; L]) -> bool {
-    line.iter().all(|&b| b == b'0')
+    *line == [b'0'; L]
 }
 
 #[inline(always)]
@@ -321,14 +321,25 @@ fn count_line_masked<const L: usize>(line: &[u8; L], stats: &mut ArrowStats, pha
 
 #[inline(always)]
 pub fn minimize_measure<const L: usize>(m: &mut Vec<[u8; L]>) {
-    while m.len() >= 2 && m.len().is_multiple_of(2) && m.iter().skip(1).step_by(2).all(is_all_zero)
-    {
+    while m.len() >= 2 && m.len().is_multiple_of(2) && odd_rows_are_zero(m) {
         let half = m.len() / 2;
-        for i in 0..half {
+        for i in 1..half {
             m[i] = m[i * 2];
         }
         m.truncate(half);
     }
+}
+
+#[inline(always)]
+fn odd_rows_are_zero<const L: usize>(m: &[[u8; L]]) -> bool {
+    let mut i = 1usize;
+    while i < m.len() {
+        if !is_all_zero(&m[i]) {
+            return false;
+        }
+        i += 2;
+    }
+    true
 }
 
 #[inline(always)]
