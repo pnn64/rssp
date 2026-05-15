@@ -262,6 +262,20 @@ struct DerivedChartMetrics {
     matrix_rating: f64,
 }
 
+fn parity_scratch<const LANES: usize>(
+    scratch: &mut Option<step_parity::TimingRowsScratch<LANES>>,
+) -> &mut step_parity::TimingRowsScratch<LANES> {
+    if scratch.is_none() {
+        *scratch = Some(
+            step_parity::timing_rows_scratch::<LANES>()
+                .expect("4-lane and 8-lane parity layouts are compiled in"),
+        );
+    }
+    scratch
+        .as_mut()
+        .expect("parity scratch exists after initialization")
+}
+
 // Computes various metrics derived from measure densities and the BPM map.
 fn compute_derived_chart_metrics(
     measure_densities: &[usize],
@@ -320,8 +334,8 @@ fn build_chart_summary(
     ssc_version: f32,
     allow_steps_timing: bool,
     compiled_custom_patterns: &CompiledCustomPatterns,
-    parity_scratch4: &mut step_parity::TimingRowsScratch<4>,
-    parity_scratch8: &mut step_parity::TimingRowsScratch<8>,
+    parity_scratch4: &mut Option<step_parity::TimingRowsScratch<4>>,
+    parity_scratch8: &mut Option<step_parity::TimingRowsScratch<8>>,
     options: &AnalysisOptions,
 ) -> Option<(ChartSummary, i32)> {
     let chart_start_time = Instant::now();
@@ -638,12 +652,13 @@ fn build_chart_summary(
                 )
             };
             let tech_counts = if options.compute_tech_counts {
+                let scratch = parity_scratch(parity_scratch4);
                 step_parity::analyze_timing_rows_known_holds::<4>(
                     &rows4,
                     &row_to_beat,
                     &timing,
                     has_hold_notes,
-                    parity_scratch4,
+                    scratch,
                 )
             } else {
                 step_parity::TechCounts::default()
@@ -670,12 +685,13 @@ fn build_chart_summary(
                 )
             };
             let tech_counts = if options.compute_tech_counts {
+                let scratch = parity_scratch(parity_scratch8);
                 step_parity::analyze_timing_rows_known_holds::<8>(
                     &rows8,
                     &row_to_beat,
                     &timing,
                     has_hold_notes,
-                    parity_scratch8,
+                    scratch,
                 )
             } else {
                 step_parity::TechCounts::default()
@@ -1004,12 +1020,8 @@ pub fn analyze(
     let entry_count = entries.len();
     let mut chart_summaries = Vec::with_capacity(entry_count);
     let mut total_length = 0i32;
-    let (Some(mut parity_scratch4), Some(mut parity_scratch8)) = (
-        step_parity::timing_rows_scratch::<4>(),
-        step_parity::timing_rows_scratch::<8>(),
-    ) else {
-        return Err("Unsupported lane layout for step parity".to_string());
-    };
+    let mut parity_scratch4 = None;
+    let mut parity_scratch8 = None;
     let options_ref = &options;
     let compiled_custom_patterns_ref = &compiled_custom_patterns;
     for entry in entries {
