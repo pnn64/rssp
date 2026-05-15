@@ -691,192 +691,184 @@ pub fn count_anchors(bitmasks: &[u8]) -> (u32, u32, u32, u32) {
 // Facing Step Analysis
 // ============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Direction {
-    Left,
-    Right,
+const ARROW_NONE: u8 = 0;
+const ARROW_L: u8 = 1;
+const ARROW_D: u8 = 2;
+const ARROW_U: u8 = 3;
+const ARROW_R: u8 = 4;
+
+const FOOT_NONE: u8 = 0;
+const FOOT_LEFT: u8 = 1;
+const FOOT_RIGHT: u8 = 2;
+
+const FACE_WAIT: u8 = 0;
+const FACE_LEFT: u8 = 1;
+const FACE_RIGHT: u8 = 2;
+
+const DIR_NONE: u8 = 0;
+const DIR_LEFT: u8 = 1;
+const DIR_RIGHT: u8 = 2;
+
+const MASK_TO_ARROW: [u8; 16] = [
+    ARROW_NONE, ARROW_L, ARROW_D, ARROW_NONE, ARROW_U, ARROW_NONE, ARROW_NONE, ARROW_NONE, ARROW_R,
+    ARROW_NONE, ARROW_NONE, ARROW_NONE, ARROW_NONE, ARROW_NONE, ARROW_NONE, ARROW_NONE,
+];
+
+const FORCED_FOOT: [u8; 5] = [FOOT_NONE, FOOT_LEFT, FOOT_NONE, FOOT_NONE, FOOT_RIGHT];
+const OPPOSITE_FOOT: [u8; 3] = [FOOT_NONE, FOOT_RIGHT, FOOT_LEFT];
+
+const fn build_dir_table() -> [[u8; 5]; 5] {
+    let mut t = [[DIR_NONE; 5]; 5];
+    t[ARROW_L as usize][ARROW_U as usize] = DIR_LEFT;
+    t[ARROW_D as usize][ARROW_R as usize] = DIR_LEFT;
+    t[ARROW_R as usize][ARROW_D as usize] = DIR_LEFT;
+    t[ARROW_U as usize][ARROW_L as usize] = DIR_LEFT;
+    t[ARROW_L as usize][ARROW_D as usize] = DIR_RIGHT;
+    t[ARROW_U as usize][ARROW_R as usize] = DIR_RIGHT;
+    t[ARROW_R as usize][ARROW_U as usize] = DIR_RIGHT;
+    t[ARROW_D as usize][ARROW_L as usize] = DIR_RIGHT;
+    t
 }
 
-#[derive(Debug, Clone, Copy)]
-enum FacingState {
-    Waiting { count: usize },
-    Left { count: usize },
-    Right { count: usize },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Foot {
-    LeftFoot,
-    RightFoot,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Arrow {
-    L,
-    R,
-    U,
-    D,
-}
+const DIR_TABLE: [[u8; 5]; 5] = build_dir_table();
 
 #[inline(always)]
-const fn map_bitmask_to_arrow(mask: u8) -> Option<Arrow> {
-    match mask {
-        0b0001 => Some(Arrow::L),
-        0b0010 => Some(Arrow::D),
-        0b0100 => Some(Arrow::U),
-        0b1000 => Some(Arrow::R),
-        _ => None,
+const fn bitmask_arrow(mask: u8) -> u8 {
+    if mask < 16 {
+        MASK_TO_ARROW[mask as usize]
+    } else {
+        ARROW_NONE
     }
 }
 
 #[inline(always)]
-const fn determine_direction(prev: Arrow, curr: Arrow) -> Option<Direction> {
-    use Arrow::{D, L, R, U};
-    use Direction::{Left, Right};
-    match (prev, curr) {
-        (L, U) | (D, R) | (R, D) | (U, L) => Some(Left),
-        (L, D) | (U, R) | (R, U) | (D, L) => Some(Right),
-        _ => None,
-    }
-}
-
-#[inline(always)]
-const fn opposite_foot(f: Foot) -> Foot {
-    match f {
-        Foot::LeftFoot => Foot::RightFoot,
-        Foot::RightFoot => Foot::LeftFoot,
-    }
-}
-
-#[inline(always)]
-const fn forced_foot(arrow: Arrow) -> Option<Foot> {
-    match arrow {
-        Arrow::L => Some(Foot::LeftFoot),
-        Arrow::R => Some(Foot::RightFoot),
-        _ => None,
-    }
-}
-
-#[inline(always)]
-fn next_foot(prev_foot: Option<Foot>, curr_arrow: Arrow) -> (Option<Foot>, bool) {
-    let Some(prev) = prev_foot else {
-        return (forced_foot(curr_arrow), false);
-    };
-
-    forced_foot(curr_arrow).map_or_else(
-        || (Some(opposite_foot(prev)), false),
-        |forced| {
-            let expected = opposite_foot(prev);
-            let conflict = forced != expected;
-            (Some(forced), conflict)
-        },
-    )
-}
-
-#[inline(always)]
-const fn update_facing_state(
-    state: FacingState,
-    direction: Option<Direction>,
-    final_left: &mut u32,
-    final_right: &mut u32,
-    mono_threshold: usize,
-) -> FacingState {
-    match state {
-        FacingState::Waiting { count } => match direction {
-            Some(Direction::Left) => FacingState::Left { count: count + 1 },
-            Some(Direction::Right) => FacingState::Right { count: count + 1 },
-            None => FacingState::Waiting { count: count + 1 },
-        },
-        FacingState::Left { count } => match direction {
-            Some(Direction::Left) | None => FacingState::Left { count: count + 1 },
-            Some(Direction::Right) => {
-                if count >= mono_threshold {
-                    *final_left += count as u32;
-                }
-                FacingState::Right { count: 1 }
-            }
-        },
-        FacingState::Right { count } => match direction {
-            Some(Direction::Right) | None => FacingState::Right { count: count + 1 },
-            Some(Direction::Left) => {
-                if count >= mono_threshold {
-                    *final_right += count as u32;
-                }
-                FacingState::Left { count: 1 }
-            }
-        },
-    }
-}
-
-#[inline(always)]
-const fn finalize_segment(
-    state: &mut FacingState,
+const fn finalize_facing(
+    state: u8,
+    count: usize,
     final_left: &mut u32,
     final_right: &mut u32,
     mono_threshold: usize,
 ) {
-    match *state {
-        FacingState::Left { count } if count >= mono_threshold => *final_left += count as u32,
-        FacingState::Right { count } if count >= mono_threshold => *final_right += count as u32,
-        _ => {}
+    if count < mono_threshold {
+        return;
     }
-    *state = FacingState::Waiting { count: 0 };
+    if state == FACE_LEFT {
+        *final_left += count as u32;
+    } else if state == FACE_RIGHT {
+        *final_right += count as u32;
+    }
+}
+
+#[inline(always)]
+const fn step_facing(
+    state: u8,
+    count: usize,
+    direction: u8,
+    final_left: &mut u32,
+    final_right: &mut u32,
+    mono_threshold: usize,
+) -> (u8, usize) {
+    match state {
+        FACE_WAIT => match direction {
+            DIR_LEFT => (FACE_LEFT, count + 1),
+            DIR_RIGHT => (FACE_RIGHT, count + 1),
+            _ => (FACE_WAIT, count + 1),
+        },
+        FACE_LEFT => match direction {
+            DIR_RIGHT => {
+                finalize_facing(FACE_LEFT, count, final_left, final_right, mono_threshold);
+                (FACE_RIGHT, 1)
+            }
+            _ => (FACE_LEFT, count + 1),
+        },
+        _ => match direction {
+            DIR_LEFT => {
+                finalize_facing(FACE_RIGHT, count, final_left, final_right, mono_threshold);
+                (FACE_LEFT, 1)
+            }
+            _ => (FACE_RIGHT, count + 1),
+        },
+    }
+}
+
+#[inline(always)]
+const fn next_facing_foot(prev_foot: u8, curr_arrow: u8) -> (u8, bool) {
+    let forced = FORCED_FOOT[curr_arrow as usize];
+    if prev_foot == FOOT_NONE {
+        return (forced, false);
+    }
+    if forced == FOOT_NONE {
+        return (OPPOSITE_FOOT[prev_foot as usize], false);
+    }
+    let expected = OPPOSITE_FOOT[prev_foot as usize];
+    (forced, forced != expected)
 }
 
 #[must_use]
 pub fn count_facing_steps(bitmasks: &[u8], mono_threshold: usize) -> (u32, u32) {
     let mut final_left = 0_u32;
     let mut final_right = 0_u32;
-    let mut state = FacingState::Waiting { count: 0 };
-    let mut prev_arrow: Option<Arrow> = None;
-    let mut prev_foot: Option<Foot> = None;
+    let mut state = FACE_WAIT;
+    let mut count = 0usize;
+    let mut prev_arrow = ARROW_NONE;
+    let mut prev_foot = FOOT_NONE;
 
     for &mask in bitmasks {
-        let Some(curr_arrow) = map_bitmask_to_arrow(mask) else {
-            if prev_arrow.is_some() {
-                finalize_segment(
-                    &mut state,
+        let curr_arrow = bitmask_arrow(mask);
+        if curr_arrow == ARROW_NONE {
+            if prev_arrow != ARROW_NONE {
+                finalize_facing(
+                    state,
+                    count,
                     &mut final_left,
                     &mut final_right,
                     mono_threshold,
                 );
-                prev_arrow = None;
-                prev_foot = None;
+                state = FACE_WAIT;
+                count = 0;
+                prev_arrow = ARROW_NONE;
+                prev_foot = FOOT_NONE;
             }
             continue;
         };
 
-        let Some(prev_arrow_value) = prev_arrow else {
-            state = FacingState::Waiting { count: 1 };
-            prev_foot = forced_foot(curr_arrow);
-            prev_arrow = Some(curr_arrow);
+        if prev_arrow == ARROW_NONE {
+            state = FACE_WAIT;
+            count = 1;
+            prev_foot = FORCED_FOOT[curr_arrow as usize];
+            prev_arrow = curr_arrow;
             continue;
-        };
+        }
 
-        let direction = determine_direction(prev_arrow_value, curr_arrow);
-        let (new_foot, should_finalize) = next_foot(prev_foot, curr_arrow);
+        let direction = DIR_TABLE[prev_arrow as usize][curr_arrow as usize];
+        let (new_foot, should_finalize) = next_facing_foot(prev_foot, curr_arrow);
         if should_finalize {
-            finalize_segment(
-                &mut state,
+            finalize_facing(
+                state,
+                count,
                 &mut final_left,
                 &mut final_right,
                 mono_threshold,
             );
+            state = FACE_WAIT;
+            count = 0;
         }
         prev_foot = new_foot;
-        state = update_facing_state(
+        (state, count) = step_facing(
             state,
+            count,
             direction,
             &mut final_left,
             &mut final_right,
             mono_threshold,
         );
-        prev_arrow = Some(curr_arrow);
+        prev_arrow = curr_arrow;
     }
 
-    if prev_arrow.is_some() {
-        finalize_segment(
-            &mut state,
+    if prev_arrow != ARROW_NONE {
+        finalize_facing(
+            state,
+            count,
             &mut final_left,
             &mut final_right,
             mono_threshold,
