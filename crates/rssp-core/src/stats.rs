@@ -363,25 +363,39 @@ fn count_line_masked<const L: usize>(line: &[u8; L], stats: &mut ArrowStats, pha
 
 #[inline(always)]
 pub fn minimize_measure<const L: usize>(m: &mut Vec<[u8; L]>) {
-    while m.len() >= 2 && m.len().is_multiple_of(2) && odd_rows_are_zero(m) {
-        let half = m.len() / 2;
-        for i in 1..half {
-            m[i] = m[i * 2];
-        }
-        m.truncate(half);
+    let shift = measure_reduce_shift(m);
+    if shift == 0 {
+        return;
     }
+
+    let step = 1usize << shift;
+    let len = m.len() >> shift;
+    for i in 1..len {
+        m[i] = m[i * step];
+    }
+    m.truncate(len);
 }
 
 #[inline(always)]
-fn odd_rows_are_zero<const L: usize>(m: &[[u8; L]]) -> bool {
-    let mut i = 1usize;
-    while i < m.len() {
-        if !is_all_zero(&m[i]) {
-            return false;
-        }
-        i += 2;
+fn measure_reduce_shift<const L: usize>(m: &[[u8; L]]) -> usize {
+    if m.len() < 2 {
+        return 0;
     }
-    true
+
+    let mut shift = 0usize;
+    let mut step = 2usize;
+    for _ in 0..m.len().trailing_zeros() {
+        let mut i = step / 2;
+        while i < m.len() {
+            if !is_all_zero(&m[i]) {
+                return shift;
+            }
+            i += step;
+        }
+        shift += 1;
+        step <<= 1;
+    }
+    shift
 }
 
 #[inline(always)]
@@ -389,7 +403,6 @@ fn append_row_beats(beats: &mut Vec<f32>, midx: usize, rows: usize) {
     if rows == 0 {
         return;
     }
-    beats.reserve(rows);
     let (start, step) = (midx as f32 * 4.0, 4.0 / rows as f32);
     for r in 0..rows {
         beats.push((r as f32).mul_add(step, start));
@@ -426,7 +439,6 @@ fn finalize_measure<const L: usize, R, N, C>(
     }
     minimize_measure(m);
     on_rows(idx, m.len());
-    output.reserve(m.len() * (L + 1));
     let rows = m.len();
     let mut density = 0;
     for (i, line) in m.iter().enumerate() {
@@ -454,7 +466,7 @@ where
 {
     let mut output = Vec::with_capacity(data.len());
     let mut measure = Vec::with_capacity(64);
-    let mut densities = Vec::new();
+    let mut densities = Vec::with_capacity(data.len() / ((L + 1) * 4) + 1);
     let (mut midx, mut done) = (0usize, false);
 
     let mut line_off = 0usize;
