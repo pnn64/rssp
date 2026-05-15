@@ -525,6 +525,8 @@ fn calc_action_cost(
     right_moved_not_holding: bool,
     prev_row_has_live_hold: bool,
 ) -> f32 {
+    let active_mask = row.note_mask | row.hold_mask;
+    let multi_active = active_mask & (active_mask - 1) != 0;
     let (lh, lt, rh, rt) = (
         hit[foot_idx(Foot::LeftHeel)],
         hit[foot_idx(Foot::LeftToe)],
@@ -568,14 +570,16 @@ fn calc_action_cost(
         cost += calc_hold_switch_cost(layout, initial, result, row);
         cost += calc_bracket_tap_cost(initial, row, lh, lt, rh, rt, elapsed);
     }
-    cost += calc_bracket_jack_cost(
-        result,
-        moved_left,
-        moved_right,
-        jacked_left,
-        jacked_right,
-        did_jump,
-    );
+    if multi_active {
+        cost += calc_bracket_jack_cost(
+            result,
+            moved_left,
+            moved_right,
+            jacked_left,
+            jacked_right,
+            did_jump,
+        );
+    }
     cost += calc_doublestep_cost(
         moved_left,
         moved_right,
@@ -590,11 +594,15 @@ fn calc_action_cost(
     if row.note_count >= 2 {
         cost += calc_slow_bracket_cost(row, moved_left, moved_right, elapsed);
     }
-    cost += calc_twisted_foot_cost(layout, hit);
+    if multi_active {
+        cost += calc_twisted_foot_cost(layout, hit);
+    }
     cost += calc_facing_cost(layout, result);
     cost += calc_spin_cost(layout, initial, result);
     cost += calc_footswitch_cost(initial, placement, row, elapsed, cols);
-    cost += calc_sideswitch_cost(layout, initial, result, placement);
+    if active_mask & layout.side_mask != 0 {
+        cost += calc_sideswitch_cost(layout, initial, result, placement);
+    }
     if mine_mask != 0 {
         cost += calc_missed_footswitch_cost(row, jacked_left, jacked_right);
     }
@@ -1069,12 +1077,27 @@ fn row_quantized(beat_raw: f32) -> (i32, f32) {
 
 #[inline(always)]
 fn row_nonzero_mask<const LANES: usize>(row: &[u8; LANES], cols: usize) -> u8 {
+    if cols == 4 {
+        return u8::from(row[0] != b'0')
+            | (u8::from(row[1] != b'0') << 1)
+            | (u8::from(row[2] != b'0') << 2)
+            | (u8::from(row[3] != b'0') << 3);
+    }
+    if cols == 8 {
+        return u8::from(row[0] != b'0')
+            | (u8::from(row[1] != b'0') << 1)
+            | (u8::from(row[2] != b'0') << 2)
+            | (u8::from(row[3] != b'0') << 3)
+            | (u8::from(row[4] != b'0') << 4)
+            | (u8::from(row[5] != b'0') << 5)
+            | (u8::from(row[6] != b'0') << 6)
+            | (u8::from(row[7] != b'0') << 7);
+    }
+
     let mut mask = 0u8;
     let mut c = 0usize;
     while c < cols {
-        if row[c] != b'0' {
-            mask |= 1u8 << c;
-        }
+        mask |= u8::from(row[c] != b'0') << c;
         c += 1;
     }
     mask
@@ -1315,6 +1338,7 @@ fn parity_analyze_rows<const LANES: usize>(
     has_holds: bool,
 ) -> bool {
     parity_reset(g, cols);
+    g.rows.reserve(rows.len());
     parity_create_rows_from_arrays(g, rows, row_to_beat, timing, cols, has_holds);
     parity_finish(g)
 }
