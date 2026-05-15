@@ -560,9 +560,14 @@ fn calc_action_cost(
     );
 
     let mut cost = 0.0;
-    cost += calc_mine_cost(result, row);
-    cost += calc_hold_switch_cost(layout, initial, result, row);
-    cost += calc_bracket_tap_cost(initial, row, lh, lt, rh, rt, elapsed);
+    let mine_mask = row.mine_mask | row.fake_mine_mask;
+    if mine_mask != 0 {
+        cost += calc_mine_cost(result, row);
+    }
+    if row.hold_mask != 0 {
+        cost += calc_hold_switch_cost(layout, initial, result, row);
+        cost += calc_bracket_tap_cost(initial, row, lh, lt, rh, rt, elapsed);
+    }
     cost += calc_bracket_jack_cost(
         result,
         moved_left,
@@ -582,13 +587,17 @@ fn calc_action_cost(
         right_moved_not_holding,
         prev_row_has_live_hold,
     );
-    cost += calc_slow_bracket_cost(row, moved_left, moved_right, elapsed);
+    if row.note_count >= 2 {
+        cost += calc_slow_bracket_cost(row, moved_left, moved_right, elapsed);
+    }
     cost += calc_twisted_foot_cost(layout, hit);
     cost += calc_facing_cost(layout, result);
     cost += calc_spin_cost(layout, initial, result);
     cost += calc_footswitch_cost(initial, placement, row, elapsed, cols);
     cost += calc_sideswitch_cost(layout, initial, result, placement);
-    cost += calc_missed_footswitch_cost(row, jacked_left, jacked_right);
+    if mine_mask != 0 {
+        cost += calc_missed_footswitch_cost(row, jacked_left, jacked_right);
+    }
     cost += calc_jack_cost(moved_left, moved_right, jacked_left, jacked_right, elapsed);
     cost += calc_big_movements_cost(layout, initial, result, hit, elapsed);
     cost
@@ -1731,13 +1740,15 @@ fn calculate_tech_counts(
         }
     };
 
+    let mut prev_prev_pos = [INVALID_COLUMN; NUM_FEET];
+    let mut prev_pos = hit_positions(&placements[0], rows[0].tech_mask);
+
     for i in 1..rows.len() {
         let (curr, prev) = (&rows[i], &rows[i - 1]);
         let (curr_combined, prev_combined) = (&placements[i], &placements[i - 1]);
         let elapsed = curr.second - prev.second;
 
         let curr_pos = hit_positions(curr_combined, curr.tech_mask);
-        let prev_pos = hit_positions(prev_combined, prev.tech_mask);
 
         // Jacks and doublesteps
         if curr.note_count == 1 && prev.note_count == 1 {
@@ -1824,8 +1835,6 @@ fn calculate_tech_counts(
             let right_pos = layout_avg_point(layout, right_heel, right_toe);
             if right_pos.x < left_pos.x {
                 if i > 1 {
-                    let prev_prev = &rows[i - 2];
-                    let prev_prev_pos = hit_positions(&placements[i - 2], prev_prev.tech_mask);
                     let prev_prev_rh = prev_prev_pos[foot_idx(Foot::RightHeel)];
                     if prev_prev_rh != INVALID_COLUMN && prev_prev_rh != right_heel {
                         let prev_prev_pos = layout.columns[prev_prev_rh as usize];
@@ -1850,8 +1859,6 @@ fn calculate_tech_counts(
             let right_pos = layout_avg_point(layout, prev_right_heel, prev_right_toe);
             if right_pos.x < left_pos.x {
                 if i > 1 {
-                    let prev_prev = &rows[i - 2];
-                    let prev_prev_pos = hit_positions(&placements[i - 2], prev_prev.tech_mask);
                     let prev_prev_lh = prev_prev_pos[foot_idx(Foot::LeftHeel)];
                     if prev_prev_lh != INVALID_COLUMN && prev_prev_lh != left_heel {
                         let prev_prev_pos = layout.columns[prev_prev_lh as usize];
@@ -1868,6 +1875,9 @@ fn calculate_tech_counts(
                 }
             }
         }
+
+        prev_prev_pos = prev_pos;
+        prev_pos = curr_pos;
     }
     out
 }
