@@ -526,7 +526,7 @@ fn calc_action_cost(
     prev_row_has_live_hold: bool,
 ) -> f32 {
     let active_mask = row.note_mask | row.hold_mask;
-    let multi_active = active_mask & (active_mask - 1) != 0;
+    let multi_active = active_mask.count_ones() > 1;
     let (lh, lt, rh, rt) = (
         hit[foot_idx(Foot::LeftHeel)],
         hit[foot_idx(Foot::LeftToe)],
@@ -2328,4 +2328,28 @@ fn time_between_beats(start: f32, end: f32, bpm_map: &[(f64, f64)]) -> f64 {
         bpm = value;
     }
     time + (f64::from(end) - last) * 60.0 / bpm
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lift_only_row_does_not_panic() {
+        let Some(mut scratch) = timing_rows_scratch::<4>() else {
+            panic!("dance-single parity layout should exist");
+        };
+        let rows = [[b'0', b'L', b'0', b'0']];
+        let beats = [0.0];
+
+        let counts = analyze_timing_rows_known_holds(
+            &rows,
+            &beats,
+            &TimingData::default(),
+            false,
+            &mut scratch,
+        );
+
+        assert_eq!(counts, TechCounts::default());
+    }
 }
