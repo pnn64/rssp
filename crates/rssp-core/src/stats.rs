@@ -150,18 +150,6 @@ fn match_hold_ends<const L: usize>(rows: &[[u8; L]]) -> Vec<[Option<usize>; L]> 
         .collect()
 }
 
-#[inline(always)]
-fn scan_phantom_line<const L: usize>(line: &[u8; L], depths: &mut [u32; L], has: &mut bool) {
-    for c in 0..L {
-        match line[c] {
-            ch if is_hold_blocker(ch) => *has |= depths[c] != 0,
-            b'2' | b'4' => depths[c] = depths[c].saturating_add(1),
-            b'3' => depths[c] = depths[c].saturating_sub(1),
-            _ => {}
-        }
-    }
-}
-
 // ============================================================================
 // Row Parsing
 // ============================================================================
@@ -189,43 +177,64 @@ fn count_line<const L: usize>(
     stats: &mut ArrowStats,
     holds_started: &mut u32,
     ends_seen: &mut u32,
+    phantom_depths: &mut [u32; L],
+    has_phantom: &mut bool,
 ) -> bool {
-    let (mut note_mask, mut hold_mask, mut end_mask) = (0u8, 0u8, 0u8);
+    let (mut notes, mut new_holds, mut ends) = (0u32, 0i32, 0i32);
 
     for (i, &ch) in line.iter().enumerate() {
         match ch {
-            b'1' | b'2' | b'4' => {
-                note_mask |= 1 << i;
+            b'1' => {
+                *has_phantom |= phantom_depths[i] != 0;
+                notes += 1;
                 stats.total_arrows += 1;
                 bump_dir(stats, i);
-                match ch {
-                    b'2' => {
-                        hold_mask |= 1 << i;
-                        stats.holds += 1;
-                    }
-                    b'4' => {
-                        hold_mask |= 1 << i;
-                        stats.rolls += 1;
-                    }
-                    _ => {}
-                }
             }
-            b'3' => end_mask |= 1 << i,
-            b'M' | b'm' => stats.mines += 1,
-            b'L' | b'l' => stats.lifts += 1,
-            b'F' | b'f' => stats.fakes += 1,
+            b'2' => {
+                phantom_depths[i] = phantom_depths[i].saturating_add(1);
+                notes += 1;
+                new_holds += 1;
+                stats.total_arrows += 1;
+                stats.holds += 1;
+                bump_dir(stats, i);
+            }
+            b'4' => {
+                phantom_depths[i] = phantom_depths[i].saturating_add(1);
+                notes += 1;
+                new_holds += 1;
+                stats.total_arrows += 1;
+                stats.rolls += 1;
+                bump_dir(stats, i);
+            }
+            b'3' => {
+                phantom_depths[i] = phantom_depths[i].saturating_sub(1);
+                ends += 1;
+            }
+            b'M' => {
+                *has_phantom |= phantom_depths[i] != 0;
+                stats.mines += 1;
+            }
+            b'L' => {
+                *has_phantom |= phantom_depths[i] != 0;
+                stats.lifts += 1;
+            }
+            b'F' => {
+                *has_phantom |= phantom_depths[i] != 0;
+                stats.fakes += 1;
+            }
+            b'm' => stats.mines += 1,
+            b'l' => stats.lifts += 1,
+            b'f' => stats.fakes += 1,
             _ => {}
         }
     }
 
-    *holds_started += hold_mask.count_ones();
-    *ends_seen += end_mask.count_ones();
-
-    let notes = note_mask.count_ones();
+    *holds_started += new_holds as u32;
+    *ends_seen += ends as u32;
     let active = stats.holding;
 
     if notes == 0 {
-        stats.holding = (stats.holding - end_mask.count_ones() as i32).max(0);
+        stats.holding = (stats.holding - ends).max(0);
         return false;
     }
 
@@ -236,8 +245,7 @@ fn count_line<const L: usize>(
     if notes as i32 + active >= 3 {
         stats.hands += 1;
     }
-    stats.holding =
-        (stats.holding + hold_mask.count_ones() as i32 - end_mask.count_ones() as i32).max(0);
+    stats.holding = (stats.holding + new_holds - ends).max(0);
     true
 }
 
@@ -467,8 +475,14 @@ where
     let mut phantom_depths = [0u32; L];
     let mut has_phantom = false;
     let mut count = |line: &[u8; L]| {
-        scan_phantom_line(line, &mut phantom_depths, &mut has_phantom);
-        count_line(line, &mut stats, &mut holds, &mut ends)
+        count_line(
+            line,
+            &mut stats,
+            &mut holds,
+            &mut ends,
+            &mut phantom_depths,
+            &mut has_phantom,
+        )
     };
     let (output, densities) = minimize_chart_core(data, on_rows, on_line, &mut count);
     has_phantom |= phantom_depths.iter().any(|&d| d != 0);
