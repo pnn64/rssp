@@ -35,6 +35,12 @@ pub const RADAR_CATEGORY_COUNT: usize = 14;
 
 const HOLD_END_NONE: usize = usize::MAX;
 
+#[derive(Clone, Copy)]
+struct RowCount {
+    density: bool,
+    object: bool,
+}
+
 // ============================================================================
 // Lane Dispatch Macro
 // ============================================================================
@@ -221,18 +227,23 @@ fn count_line<const L: usize>(
     ends_seen: &mut u32,
     phantom_depths: &mut [u32; L],
     has_phantom: &mut bool,
-) -> bool {
+    object_depths: &mut [u32; L],
+) -> RowCount {
     let (mut notes, mut new_holds, mut ends) = (0u32, 0i32, 0i32);
+    let mut object = false;
 
     for (i, &ch) in line.iter().enumerate() {
         match ch {
             b'1' => {
+                object = true;
+                object_depths[i] = 0;
                 *has_phantom |= phantom_depths[i] != 0;
                 notes += 1;
                 stats.total_arrows += 1;
                 bump_dir(stats, i);
             }
             b'2' => {
+                object_depths[i] = object_depths[i].saturating_add(1);
                 phantom_depths[i] = phantom_depths[i].saturating_add(1);
                 notes += 1;
                 new_holds += 1;
@@ -241,6 +252,7 @@ fn count_line<const L: usize>(
                 bump_dir(stats, i);
             }
             b'4' => {
+                object_depths[i] = object_depths[i].saturating_add(1);
                 phantom_depths[i] = phantom_depths[i].saturating_add(1);
                 notes += 1;
                 new_holds += 1;
@@ -249,20 +261,34 @@ fn count_line<const L: usize>(
                 bump_dir(stats, i);
             }
             b'3' => {
+                if object_depths[i] > 0 {
+                    object_depths[i] -= 1;
+                    object = true;
+                }
                 phantom_depths[i] = phantom_depths[i].saturating_sub(1);
                 ends += 1;
             }
             b'M' => {
+                object = true;
+                object_depths[i] = 0;
                 *has_phantom |= phantom_depths[i] != 0;
                 stats.mines += 1;
             }
             b'L' => {
+                object = true;
+                object_depths[i] = 0;
                 *has_phantom |= phantom_depths[i] != 0;
                 stats.lifts += 1;
             }
             b'F' => {
+                object = true;
+                object_depths[i] = 0;
                 *has_phantom |= phantom_depths[i] != 0;
                 stats.fakes += 1;
+            }
+            b'K' => {
+                object = true;
+                object_depths[i] = 0;
             }
             b'm' => stats.mines += 1,
             b'l' => stats.lifts += 1,
@@ -277,7 +303,10 @@ fn count_line<const L: usize>(
 
     if notes == 0 {
         stats.holding = (stats.holding - ends).max(0);
-        return false;
+        return RowCount {
+            density: false,
+            object,
+        };
     }
 
     stats.total_steps += 1;
@@ -288,7 +317,10 @@ fn count_line<const L: usize>(
         stats.hands += 1;
     }
     stats.holding = (stats.holding + new_holds - ends).max(0);
-    true
+    RowCount {
+        density: true,
+        object,
+    }
 }
 
 fn recalc_without_phantoms<const L: usize>(
@@ -430,8 +462,8 @@ fn finalize_measure<const L: usize, R, N, C>(
     on_count: &mut C,
 ) where
     R: FnMut(usize, usize),
-    N: FnMut(&[u8; L], usize, usize, usize),
-    C: FnMut(&[u8; L]) -> bool,
+    N: FnMut(&[u8; L], usize, usize, usize, bool),
+    C: FnMut(&[u8; L]) -> RowCount,
 {
     if m.is_empty() {
         densities.push(0);
@@ -442,8 +474,9 @@ fn finalize_measure<const L: usize, R, N, C>(
     let rows = m.len();
     let mut density = 0;
     for (i, line) in m.iter().enumerate() {
-        on_line(line, idx, i, rows);
-        if on_count(line) {
+        let row_count = on_count(line);
+        on_line(line, idx, i, rows, row_count.object);
+        if row_count.density {
             density += 1;
         }
         output.extend_from_slice(line);
@@ -461,8 +494,8 @@ fn minimize_chart_core<const L: usize, R, N, C>(
 ) -> (Vec<u8>, Vec<usize>)
 where
     R: FnMut(usize, usize),
-    N: FnMut(&[u8; L], usize, usize, usize),
-    C: FnMut(&[u8; L]) -> bool,
+    N: FnMut(&[u8; L], usize, usize, usize, bool),
+    C: FnMut(&[u8; L]) -> RowCount,
 {
     let mut output = Vec::with_capacity(data.len());
     let mut measure = Vec::with_capacity(64);
@@ -534,11 +567,12 @@ fn process_chart<const L: usize, R, N>(
 ) -> (Vec<u8>, ArrowStats, Vec<usize>)
 where
     R: FnMut(usize, usize),
-    N: FnMut(&[u8; L], usize, usize, usize),
+    N: FnMut(&[u8; L], usize, usize, usize, bool),
 {
     let mut stats = ArrowStats::default();
     let (mut holds, mut ends) = (0u32, 0u32);
     let mut phantom_depths = [0u32; L];
+    let mut object_depths = [0u32; L];
     let mut has_phantom = false;
     let mut count = |line: &[u8; L]| {
         count_line(
@@ -548,6 +582,7 @@ where
             &mut ends,
             &mut phantom_depths,
             &mut has_phantom,
+            &mut object_depths,
         )
     };
     let (output, densities) = minimize_chart_core(data, on_rows, on_line, &mut count);
@@ -571,10 +606,10 @@ pub fn minimize_chart_and_count_with_lanes(
     lanes: usize,
 ) -> (Vec<u8>, ArrowStats, Vec<usize>) {
     if lanes == 8 {
-        let (mut nr, mut nl) = (|_, _| {}, |_: &[u8; 8], _, _, _| {});
+        let (mut nr, mut nl) = (|_, _| {}, |_: &[u8; 8], _, _, _, _| {});
         process_chart::<8, _, _>(data, &mut nr, &mut nl)
     } else {
-        let (mut nr, mut nl) = (|_, _| {}, |_: &[u8; 4], _, _, _| {});
+        let (mut nr, mut nl) = (|_, _| {}, |_: &[u8; 4], _, _, _, _| {});
         process_chart::<4, _, _>(data, &mut nr, &mut nl)
     }
 }
@@ -597,12 +632,11 @@ fn minimize_rows_basic<const L: usize>(
     data: &[u8],
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
     let mut beats = Vec::with_capacity(data.len() / (L + 1));
-    let mut depths = [0u32; L];
     let (mut last_m, mut last_r, mut last_rows) = (None, 0, 0);
 
     let mut on_rows = |m, r| append_row_beats(&mut beats, m, r);
-    let mut on_line = |line: &[u8; L], m, r, row_count| {
-        if line_has_object::<L>(line, &mut depths) {
+    let mut on_line = |_: &[u8; L], m, r, row_count, has_object| {
+        if has_object {
             (last_m, last_r, last_rows) = (Some(m), r, row_count);
         }
     };
@@ -617,13 +651,12 @@ pub fn minimize_rows_typed<const L: usize>(
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<[u8; L]>, Vec<f32>, f64) {
     let mut beats = Vec::with_capacity(data.len() / (L + 1));
     let mut rows = Vec::with_capacity(beats.capacity());
-    let mut depths = [0u32; L];
     let (mut last_m, mut last_r, mut last_rows) = (None, 0, 0);
 
     let mut on_rows = |m, r| append_row_beats(&mut beats, m, r);
-    let mut on_line = |line: &[u8; L], m, r, row_count| {
+    let mut on_line = |line: &[u8; L], m, r, row_count, has_object| {
         rows.push(*line);
-        if line_has_object::<L>(line, &mut depths) {
+        if has_object {
             (last_m, last_r, last_rows) = (Some(m), r, row_count);
         }
     };
@@ -631,26 +664,6 @@ pub fn minimize_rows_typed<const L: usize>(
     let (out, stats, dens) = process_chart::<L, _, _>(data, &mut on_rows, &mut on_line);
     let last = calc_last_beat(last_m, last_r, last_rows);
     (out, stats, dens, rows, beats, last)
-}
-
-#[inline(always)]
-pub(crate) fn line_has_object<const L: usize>(line: &[u8], depths: &mut [u32; L]) -> bool {
-    let mut has = false;
-    for c in 0..L {
-        match line[c] {
-            b'1' | b'M' | b'L' | b'F' | b'K' => {
-                has = true;
-                depths[c] = 0;
-            }
-            b'2' | b'4' => depths[c] = depths[c].saturating_add(1),
-            b'3' if depths[c] > 0 => {
-                depths[c] -= 1;
-                has = true;
-            }
-            _ => {}
-        }
-    }
-    has
 }
 
 pub fn minimize_chart_rows_bits(
@@ -666,18 +679,18 @@ pub fn minimize_chart_rows_bits(
 ) {
     let mut beats = Vec::with_capacity(data.len() / 5);
     let mut rows = Vec::with_capacity(beats.capacity());
-    let mut depths = [0u32; 4];
     let mut bits = Vec::with_capacity(beats.capacity());
     let (mut last_m, mut last_r, mut last_rows) = (None, 0, 0);
 
     let mut on_rows = |m, r| append_row_beats(&mut beats, m, r);
-    let mut on_line = |line: &[u8; 4], m, r, row_count| {
+    let mut on_line = |line: &[u8; 4], m, r, row_count, has_object| {
         rows.push(*line);
-        let mask = (0..4).fold(0u8, |acc, i| {
-            acc | if is_note(line[i]) { 1 << i } else { 0 }
-        });
+        let mask = u8::from(is_note(line[0]))
+            | (u8::from(is_note(line[1])) << 1)
+            | (u8::from(is_note(line[2])) << 2)
+            | (u8::from(is_note(line[3])) << 3);
         bits.push(mask);
-        if line_has_object::<4>(line, &mut depths) {
+        if has_object {
             (last_m, last_r, last_rows) = (Some(m), r, row_count);
         }
     };
@@ -694,8 +707,11 @@ pub fn minimize_chart_for_hash(data: &[u8], lanes: usize) -> Vec<u8> {
 
 fn minimize_hash_impl<const L: usize>(data: &[u8]) -> Vec<u8> {
     let mut on_rows = |_, _| {};
-    let mut on_line = |_: &[u8; L], _, _, _| {};
-    let mut on_count = |_: &[u8; L]| false;
+    let mut on_line = |_: &[u8; L], _, _, _, _| {};
+    let mut on_count = |_: &[u8; L]| RowCount {
+        density: false,
+        object: false,
+    };
     let (output, _) = minimize_chart_core(data, &mut on_rows, &mut on_line, &mut on_count);
     output
 }
@@ -980,8 +996,11 @@ pub fn measure_densities(data: &[u8], lanes: usize) -> Vec<usize> {
 
 fn densities_impl<const L: usize>(data: &[u8]) -> Vec<usize> {
     let mut on_rows = |_, _| {};
-    let mut on_line = |_: &[u8; L], _, _, _| {};
-    let mut on_count = |line: &[u8; L]| has_step::<L>(line);
+    let mut on_line = |_: &[u8; L], _, _, _, _| {};
+    let mut on_count = |line: &[u8; L]| RowCount {
+        density: has_step::<L>(line),
+        object: false,
+    };
     let (_, densities) = minimize_chart_core(data, &mut on_rows, &mut on_line, &mut on_count);
     densities
 }
