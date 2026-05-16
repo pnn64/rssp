@@ -7,7 +7,7 @@ members = [
 resolver = "3"
 
 [workspace.dependencies]
-rssp-core = { path = "crates/rssp-core", version = "0.4.32" }
+rssp-core = { path = "crates/rssp-core", version = "0.4.31" }
 
 [profile.release]
 lto = "fat"
