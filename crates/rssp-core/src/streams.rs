@@ -66,45 +66,6 @@ const fn is_stream_measure(d: usize) -> bool {
     d >= STREAM_THRESHOLD
 }
 
-#[inline]
-fn total_break_measures(measures: &[usize]) -> u32 {
-    let mut total = 0u32;
-    let mut i = 0usize;
-    let mut prev_stream_end = None;
-
-    while i < measures.len() {
-        if !is_stream_measure(measures[i]) {
-            i += 1;
-            continue;
-        }
-
-        let start = i;
-        while i + 1 < measures.len() && is_stream_measure(measures[i + 1]) {
-            i += 1;
-        }
-        let end = i + 1;
-
-        if let Some(prev_end) = prev_stream_end {
-            let gap = start - prev_end;
-            if gap >= 2 {
-                total += gap as u32;
-            }
-        } else if start >= 2 {
-            total += start as u32;
-        }
-        prev_stream_end = Some(end);
-        i += 1;
-    }
-
-    if let Some(last_end) = prev_stream_end {
-        let tail = measures.len() - last_end;
-        if tail >= 2 {
-            total += tail as u32;
-        }
-    }
-    total
-}
-
 #[must_use]
 pub fn stream_sequences(measures: &[usize]) -> Vec<StreamSegment> {
     let mut segs = Vec::with_capacity(measures.len() / 2 + 1);
@@ -169,21 +130,47 @@ pub fn stream_sequences(measures: &[usize]) -> Vec<StreamSegment> {
 
 #[must_use]
 pub fn compute_stream_counts(measures: &[usize]) -> StreamCounts {
-    let Some((start, end)) = active_range(measures) else {
-        return StreamCounts::default();
-    };
-
     let mut sc = StreamCounts::default();
-    for &d in &measures[start..=end] {
+    let (mut seen_stream, mut leading_breaks, mut pending_breaks) = (false, 0usize, 0usize);
+
+    for &d in measures {
         match categorize_measure_density(d) {
             RunDensity::Run16 => sc.run16_streams += 1,
             RunDensity::Run20 => sc.run20_streams += 1,
             RunDensity::Run24 => sc.run24_streams += 1,
             RunDensity::Run32 => sc.run32_streams += 1,
-            RunDensity::Break => sc.sn_breaks += 1,
+            RunDensity::Break => {
+                if seen_stream {
+                    pending_breaks += 1;
+                } else {
+                    leading_breaks += 1;
+                }
+                continue;
+            }
+        }
+
+        if seen_stream {
+            if pending_breaks != 0 {
+                sc.sn_breaks += pending_breaks as u32;
+                if pending_breaks >= 2 {
+                    sc.total_breaks += pending_breaks as u32;
+                }
+                pending_breaks = 0;
+            }
+        } else {
+            seen_stream = true;
+            if leading_breaks >= 2 {
+                sc.total_breaks += leading_breaks as u32;
+            }
         }
     }
-    sc.total_breaks = total_break_measures(measures);
+
+    if !seen_stream {
+        return StreamCounts::default();
+    }
+    if pending_breaks >= 2 {
+        sc.total_breaks += pending_breaks as u32;
+    }
     sc
 }
 
@@ -493,4 +480,40 @@ fn flush_stream(
 
     *sum = 0;
     *broken = false;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_counts(
+        measures: &[usize],
+        runs: (u32, u32, u32, u32),
+        total_breaks: u32,
+        sn_breaks: u32,
+    ) {
+        let counts = compute_stream_counts(measures);
+        assert_eq!(counts.run16_streams, runs.0);
+        assert_eq!(counts.run20_streams, runs.1);
+        assert_eq!(counts.run24_streams, runs.2);
+        assert_eq!(counts.run32_streams, runs.3);
+        assert_eq!(counts.total_breaks, total_breaks);
+        assert_eq!(counts.sn_breaks, sn_breaks);
+    }
+
+    #[test]
+    fn stream_counts_empty_without_streams() {
+        assert_counts(&[], (0, 0, 0, 0), 0, 0);
+        assert_counts(&[0, 12, 15, 0], (0, 0, 0, 0), 0, 0);
+    }
+
+    #[test]
+    fn stream_counts_match_break_rules() {
+        assert_counts(&[0, 0, 16, 20, 0, 24, 0, 0, 32, 0, 0], (1, 1, 1, 1), 6, 3);
+    }
+
+    #[test]
+    fn stream_counts_ignore_short_edge_breaks() {
+        assert_counts(&[0, 16, 17, 23, 24, 31, 32, 0], (2, 1, 2, 1), 0, 0);
+    }
 }
