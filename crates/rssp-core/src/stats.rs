@@ -651,6 +651,112 @@ fn minimize_rows_basic<const L: usize>(
     (out, stats, dens, beats, last)
 }
 
+#[must_use]
+pub(crate) fn chart_last_beat(data: &[u8], lanes: usize) -> f64 {
+    dispatch_lanes!(lanes, chart_last_beat_impl(data))
+}
+
+fn chart_last_beat_impl<const L: usize>(data: &[u8]) -> f64 {
+    let mut measure = Vec::with_capacity(64);
+    let mut object_depths = [0u32; L];
+    let (mut last_m, mut last_r, mut last_rows) = (None, 0usize, 0usize);
+    let (mut midx, mut done) = (0usize, false);
+
+    let mut line_off = 0usize;
+    while let Some(raw) = next_line(data, &mut line_off) {
+        let line = skip_ws(raw);
+        if line.is_empty() || line[0] == b'/' {
+            continue;
+        }
+
+        match line[0] {
+            b',' => {
+                scan_last_measure(
+                    &mut measure,
+                    midx,
+                    &mut object_depths,
+                    &mut last_m,
+                    &mut last_r,
+                    &mut last_rows,
+                );
+                midx += 1;
+            }
+            b';' => {
+                scan_last_measure(
+                    &mut measure,
+                    midx,
+                    &mut object_depths,
+                    &mut last_m,
+                    &mut last_r,
+                    &mut last_rows,
+                );
+                done = true;
+                break;
+            }
+            _ if line.len() >= L => {
+                let mut arr = [0u8; L];
+                arr.copy_from_slice(&line[..L]);
+                measure.push(arr);
+            }
+            _ => {}
+        }
+    }
+
+    if !done {
+        scan_last_measure(
+            &mut measure,
+            midx,
+            &mut object_depths,
+            &mut last_m,
+            &mut last_r,
+            &mut last_rows,
+        );
+    }
+
+    calc_last_beat(last_m, last_r, last_rows)
+}
+
+fn scan_last_measure<const L: usize>(
+    measure: &mut Vec<[u8; L]>,
+    midx: usize,
+    object_depths: &mut [u32; L],
+    last_m: &mut Option<usize>,
+    last_r: &mut usize,
+    last_rows: &mut usize,
+) {
+    if measure.is_empty() {
+        return;
+    }
+    minimize_measure(measure);
+    let rows = measure.len();
+    for (ridx, line) in measure.iter().enumerate() {
+        if row_has_object(line, object_depths) {
+            (*last_m, *last_r, *last_rows) = (Some(midx), ridx, rows);
+        }
+    }
+    measure.clear();
+}
+
+#[inline(always)]
+fn row_has_object<const L: usize>(line: &[u8; L], object_depths: &mut [u32; L]) -> bool {
+    let mut object = false;
+    for (i, &ch) in line.iter().enumerate() {
+        match ch {
+            b'1' | b'M' | b'L' | b'F' | b'K' => {
+                object_depths[i] = 0;
+                object = true;
+            }
+            b'2' | b'4' => object_depths[i] = object_depths[i].saturating_add(1),
+            b'3' if object_depths[i] > 0 => {
+                object_depths[i] -= 1;
+                object = true;
+            }
+            _ => {}
+        }
+    }
+    object
+}
+
 fn push_timing_measure<const L: usize>(
     measure: &mut Vec<[u8; L]>,
     midx: usize,
@@ -1131,6 +1237,46 @@ mod tests {
 ,
 ;";
         assert_eq!(minimize_chart_for_hash(data, 8), b"10000000\n,\n");
+    }
+
+    #[test]
+    fn chart_last_beat_matches_full_minimize() {
+        let cases: [(&[u8], usize); 4] = [
+            (
+                b"1000
+0000
+0000
+0000
+,
+0100
+0000
+0010
+0000
+;",
+                4,
+            ),
+            (
+                b"2000
+0000
+3000
+0000
+;",
+                4,
+            ),
+            (
+                b"10000000
+00000000
+00001000
+00000000",
+                8,
+            ),
+            (b",\n;\n", 4),
+        ];
+
+        for (data, lanes) in cases {
+            let (_, _, _, _, expected) = minimize_chart_count_rows(data, lanes);
+            assert_eq!(chart_last_beat(data, lanes), expected);
+        }
     }
 
     #[test]

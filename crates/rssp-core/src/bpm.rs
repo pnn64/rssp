@@ -592,8 +592,7 @@ fn elapsed_with_events(
 
 #[must_use]
 pub fn compute_last_beat(data: &[u8], lanes: usize) -> f64 {
-    let (_, _, _, _, last_beat) = crate::stats::minimize_chart_count_rows(data, lanes);
-    last_beat
+    crate::stats::chart_last_beat(data, lanes)
 }
 
 #[must_use]

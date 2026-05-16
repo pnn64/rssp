@@ -99,7 +99,7 @@ pub fn compute_chart_durations(
         let difficulty =
             crate::resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
 
-        let (_, _, _, _, last_beat) = crate::stats::minimize_chart_count_rows(chart_data, lanes);
+        let last_beat = crate::stats::chart_last_beat(chart_data, lanes);
 
         let timing_src = crate::timing::resolve_chart_timing(
             allow_steps_timing,
