@@ -886,14 +886,53 @@ pub fn minimize_chart_for_hash(data: &[u8], lanes: usize) -> Vec<u8> {
 }
 
 fn minimize_hash_impl<const L: usize>(data: &[u8]) -> Vec<u8> {
-    let mut on_rows = |_, _| {};
-    let mut on_line = |_: &[u8; L], _, _, _, _| {};
-    let mut on_count = |_: &[u8; L]| RowCount {
-        density: false,
-        object: false,
-    };
-    let (output, _) = minimize_chart_core(data, &mut on_rows, &mut on_line, &mut on_count);
+    let mut output = Vec::with_capacity(data.len());
+    let mut measure = Vec::with_capacity(64);
+    let mut done = false;
+
+    let mut line_off = 0usize;
+    while let Some(raw) = next_line(data, &mut line_off) {
+        let line = skip_ws(raw);
+        if line.is_empty() || line[0] == b'/' {
+            continue;
+        }
+
+        match line[0] {
+            b',' => {
+                push_hash_measure(&mut measure, &mut output);
+                output.extend_from_slice(b",\n");
+            }
+            b';' => {
+                push_hash_measure(&mut measure, &mut output);
+                done = true;
+                break;
+            }
+            _ if line.len() >= L => {
+                let mut arr = [0u8; L];
+                arr.copy_from_slice(&line[..L]);
+                measure.push(arr);
+            }
+            _ => {}
+        }
+    }
+
+    if !done {
+        push_hash_measure(&mut measure, &mut output);
+    }
+
     output
+}
+
+fn push_hash_measure<const L: usize>(measure: &mut Vec<[u8; L]>, output: &mut Vec<u8>) {
+    if measure.is_empty() {
+        return;
+    }
+    minimize_measure(measure);
+    for line in measure.iter() {
+        output.extend_from_slice(line);
+        output.push(b'\n');
+    }
+    measure.clear();
 }
 
 // ============================================================================
