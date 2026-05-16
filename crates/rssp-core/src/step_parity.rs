@@ -1,8 +1,8 @@
 use std::sync::OnceLock;
 
 use crate::timing::{
-    ROWS_PER_BEAT, TimingData, beat_to_note_row_f32, fakes as timing_fakes, get_time_for_beat_f32,
-    is_fake_at_row,
+    FixedTimingParts, ROWS_PER_BEAT, TimingData, beat_to_note_row_f32, fakes as timing_fakes,
+    fixed_time_for_beat, fixed_timing_parts, get_time_for_beat_f32, is_fake_at_row,
 };
 
 const INVALID_COLUMN: i8 = -1;
@@ -1236,14 +1236,32 @@ fn parity_create_rows_from_arrays<const LANES: usize>(
     has_holds: bool,
 ) {
     if !has_holds {
-        parity_create_rows_no_holds(g, rows, row_to_beat, timing, cols);
+        if timing_fakes(timing).is_empty() {
+            parity_create_rows_no_holds::<LANES, false>(g, rows, row_to_beat, timing, cols);
+        } else {
+            parity_create_rows_no_holds::<LANES, true>(g, rows, row_to_beat, timing, cols);
+        }
         return;
     }
 
+    if timing_fakes(timing).is_empty() {
+        parity_create_rows_holds::<LANES, false>(g, rows, row_to_beat, timing, cols);
+    } else {
+        parity_create_rows_holds::<LANES, true>(g, rows, row_to_beat, timing, cols);
+    }
+}
+
+fn parity_create_rows_holds<const LANES: usize, const HAS_FAKES: bool>(
+    g: &mut StepParityGenerator,
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    cols: usize,
+) {
     let mut counter = row_counter_new();
     let hold_heads = hold_heads_from_arrays(rows, row_to_beat, cols);
     let copy_len = cols.min(LANES);
-    let has_fakes = !timing_fakes(timing).is_empty();
+    let fixed = fixed_timing_parts(timing);
 
     for (idx, row) in rows.iter().enumerate() {
         let mut nonzero_mask = row_nonzero_mask(row, copy_len);
@@ -1251,8 +1269,8 @@ fn parity_create_rows_from_arrays<const LANES: usize>(
             continue;
         }
         let (row_i32, beat) = row_quantized(row_to_beat[idx]);
-        let second = get_time_for_beat_f32(timing, f64::from(beat)) as f32;
-        let row_fake = has_fakes && is_fake_at_row(timing, row_i32);
+        let second = time_for_parity_row(timing, fixed, beat);
+        let row_fake = HAS_FAKES && is_fake_at_row(timing, row_i32);
 
         while nonzero_mask != 0 {
             let c = nonzero_mask.trailing_zeros() as usize;
@@ -1282,7 +1300,7 @@ fn parity_create_rows_from_arrays<const LANES: usize>(
     parity_flush_row(g, &counter);
 }
 
-fn parity_create_rows_no_holds<const LANES: usize>(
+fn parity_create_rows_no_holds<const LANES: usize, const HAS_FAKES: bool>(
     g: &mut StepParityGenerator,
     rows: &[[u8; LANES]],
     row_to_beat: &[f32],
@@ -1291,7 +1309,7 @@ fn parity_create_rows_no_holds<const LANES: usize>(
 ) {
     let mut counter = row_counter_new();
     let copy_len = cols.min(LANES);
-    let has_fakes = !timing_fakes(timing).is_empty();
+    let fixed = fixed_timing_parts(timing);
 
     for (idx, row) in rows.iter().enumerate() {
         let mut nonzero_mask = row_nonzero_mask(row, copy_len);
@@ -1299,8 +1317,8 @@ fn parity_create_rows_no_holds<const LANES: usize>(
             continue;
         }
         let (row_i32, beat) = row_quantized(row_to_beat[idx]);
-        let second = get_time_for_beat_f32(timing, f64::from(beat)) as f32;
-        let row_fake = has_fakes && is_fake_at_row(timing, row_i32);
+        let second = time_for_parity_row(timing, fixed, beat);
+        let row_fake = HAS_FAKES && is_fake_at_row(timing, row_i32);
 
         while nonzero_mask != 0 {
             let c = nonzero_mask.trailing_zeros() as usize;
@@ -1318,6 +1336,14 @@ fn parity_create_rows_no_holds<const LANES: usize>(
         }
     }
     parity_flush_row(g, &counter);
+}
+
+#[inline(always)]
+fn time_for_parity_row(timing: &TimingData, fixed: Option<FixedTimingParts>, beat: f32) -> f32 {
+    fixed.map_or_else(
+        || get_time_for_beat_f32(timing, f64::from(beat)) as f32,
+        |parts| fixed_time_for_beat(parts, f64::from(beat)) as f32,
+    )
 }
 
 fn rows_have_holds<const LANES: usize>(rows: &[[u8; LANES]], cols: usize) -> bool {
@@ -2333,6 +2359,45 @@ fn time_between_beats(start: f32, end: f32, bpm_map: &[(f64, f64)]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stats::minimize_rows_typed;
+    use crate::timing::{TimingFormat, timing_data_from_chart_data};
+
+    fn basic_timing() -> TimingData {
+        timing_data_from_chart_data(
+            0.0,
+            0.0,
+            None,
+            "0.000=120.000",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "",
+            TimingFormat::Ssc,
+            true,
+        )
+    }
+
+    fn assert_rows_match_lanes(data: &[u8], has_holds: bool) {
+        let timing = basic_timing();
+        let (minimized, _stats, _densities, rows, row_to_beat, _last) =
+            minimize_rows_typed::<4>(data);
+        let Some(mut scratch) = timing_rows_scratch::<4>() else {
+            panic!("dance-single parity layout should exist");
+        };
+
+        assert_eq!(
+            analyze_timing_lanes(&minimized, &timing, 4),
+            analyze_timing_rows_known_holds(&rows, &row_to_beat, &timing, has_holds, &mut scratch)
+        );
+    }
 
     #[test]
     fn lift_only_row_does_not_panic() {
@@ -2351,5 +2416,39 @@ mod tests {
         );
 
         assert_eq!(counts, TechCounts::default());
+    }
+
+    #[test]
+    fn no_hold_rows_match_lanes_path() {
+        assert_rows_match_lanes(
+            b"1000
+0100
+0010
+0001
+,
+1100
+0011
+0000
+1000
+;",
+            false,
+        );
+    }
+
+    #[test]
+    fn hold_rows_match_lanes_path() {
+        assert_rows_match_lanes(
+            b"2000
+0100
+3000
+0001
+,
+0200
+0010
+0300
+1000
+;",
+            true,
+        );
     }
 }
