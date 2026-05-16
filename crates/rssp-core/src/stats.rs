@@ -100,11 +100,6 @@ const fn bump_dir(stats: &mut ArrowStats, col: usize) {
 }
 
 #[inline(always)]
-fn has_step<const L: usize>(line: &[u8]) -> bool {
-    line.iter().take(L).any(|&b| is_note(b))
-}
-
-#[inline(always)]
 fn byte_hits(word: u64, byte: u8) -> u64 {
     const LO: u64 = 0x0101_0101_0101_0101;
     const HI: u64 = 0x8080_8080_8080_8080;
@@ -218,6 +213,20 @@ pub(crate) fn parse_minimized_rows<const L: usize>(data: &[u8]) -> Vec<[u8; L]> 
 #[inline(always)]
 fn row_has_hold_head<const L: usize>(line: &[u8; L]) -> bool {
     line.iter().any(|&b| b == b'2' || b == b'4')
+}
+
+const DENSITY_ROW_ZERO: u8 = 1;
+const DENSITY_ROW_STEP: u8 = 1 << 1;
+
+#[inline(always)]
+fn density_row_flags<const L: usize>(line: &[u8]) -> u8 {
+    let mut all_zero = true;
+    let mut has_step = false;
+    for &b in &line[..L] {
+        all_zero &= b == b'0';
+        has_step |= is_note(b);
+    }
+    u8::from(all_zero) | (u8::from(has_step) << 1)
 }
 
 // ============================================================================
@@ -1172,6 +1181,7 @@ pub fn measure_densities(data: &[u8], lanes: usize) -> Vec<usize> {
 fn densities_impl<const L: usize>(data: &[u8]) -> Vec<usize> {
     let mut densities = Vec::with_capacity(data.len() / ((L + 1) * 4) + 1);
     let mut measure = Vec::with_capacity(64);
+    let mut measure_steps = 0usize;
     let mut done = false;
 
     let mut line_off = 0usize;
@@ -1182,40 +1192,72 @@ fn densities_impl<const L: usize>(data: &[u8]) -> Vec<usize> {
         }
 
         match line[0] {
-            b',' => push_density_measure(&mut measure, &mut densities),
+            b',' => push_density_measure(&mut measure, &mut measure_steps, &mut densities),
             b';' => {
-                push_density_measure(&mut measure, &mut densities);
+                push_density_measure(&mut measure, &mut measure_steps, &mut densities);
                 done = true;
                 break;
             }
             _ if line.len() >= L => {
-                let mut arr = [0u8; L];
-                arr.copy_from_slice(&line[..L]);
-                measure.push(arr);
+                let flags = density_row_flags::<L>(line);
+                measure_steps += usize::from((flags & DENSITY_ROW_STEP) != 0);
+                measure.push(flags);
             }
             _ => {}
         }
     }
 
     if !done {
-        push_density_measure(&mut measure, &mut densities);
+        push_density_measure(&mut measure, &mut measure_steps, &mut densities);
     }
 
     densities
 }
 
-fn push_density_measure<const L: usize>(measure: &mut Vec<[u8; L]>, densities: &mut Vec<usize>) {
+fn push_density_measure(
+    measure: &mut Vec<u8>,
+    measure_steps: &mut usize,
+    densities: &mut Vec<usize>,
+) {
     if measure.is_empty() {
         densities.push(0);
         return;
     }
-    minimize_measure(measure);
-    let mut density = 0usize;
-    for line in measure.iter() {
-        density += usize::from(has_step::<L>(line));
-    }
+    let shift = density_reduce_shift(measure);
+    let density = if shift == 0 {
+        *measure_steps
+    } else {
+        let step = 1usize << shift;
+        let len = measure.len() >> shift;
+        (0..len)
+            .map(|i| usize::from((measure[i * step] & DENSITY_ROW_STEP) != 0))
+            .sum()
+    };
     densities.push(density);
     measure.clear();
+    *measure_steps = 0;
+}
+
+#[inline(always)]
+fn density_reduce_shift(measure: &[u8]) -> usize {
+    if measure.len() < 2 {
+        return 0;
+    }
+
+    let mut shift = 0usize;
+    let mut step = 2usize;
+    for _ in 0..measure.len().trailing_zeros() {
+        let mut i = step / 2;
+        while i < measure.len() {
+            if (measure[i] & DENSITY_ROW_ZERO) == 0 {
+                return shift;
+            }
+            i += step;
+        }
+        shift += 1;
+        step <<= 1;
+    }
+    shift
 }
 
 #[cfg(test)]
