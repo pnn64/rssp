@@ -215,6 +215,11 @@ pub(crate) fn parse_minimized_rows<const L: usize>(data: &[u8]) -> Vec<[u8; L]> 
     rows
 }
 
+#[inline(always)]
+fn row_has_hold_head<const L: usize>(line: &[u8; L]) -> bool {
+    line.iter().any(|&b| b == b'2' || b == b'4')
+}
+
 // ============================================================================
 // Stats Counting
 // ============================================================================
@@ -646,6 +651,66 @@ fn minimize_rows_basic<const L: usize>(
     (out, stats, dens, beats, last)
 }
 
+fn push_timing_measure<const L: usize>(
+    measure: &mut Vec<[u8; L]>,
+    midx: usize,
+    rows: &mut Vec<[u8; L]>,
+    beats: &mut Vec<f32>,
+    has_holds: &mut bool,
+) {
+    if measure.is_empty() {
+        return;
+    }
+
+    minimize_measure(measure);
+    append_row_beats(beats, midx, measure.len());
+    for line in measure.drain(..) {
+        *has_holds |= row_has_hold_head(&line);
+        rows.push(line);
+    }
+}
+
+fn minimize_timing_rows<const L: usize>(data: &[u8]) -> (Vec<[u8; L]>, Vec<f32>, bool) {
+    let cap = data.len() / (L + 1);
+    let mut rows = Vec::with_capacity(cap);
+    let mut beats = Vec::with_capacity(cap);
+    let mut measure = Vec::with_capacity(64);
+    let mut has_holds = false;
+    let (mut midx, mut done) = (0usize, false);
+
+    let mut line_off = 0usize;
+    while let Some(raw) = next_line(data, &mut line_off) {
+        let line = skip_ws(raw);
+        if line.is_empty() || line[0] == b'/' {
+            continue;
+        }
+
+        match line[0] {
+            b',' => {
+                push_timing_measure(&mut measure, midx, &mut rows, &mut beats, &mut has_holds);
+                midx += 1;
+            }
+            b';' => {
+                push_timing_measure(&mut measure, midx, &mut rows, &mut beats, &mut has_holds);
+                done = true;
+                break;
+            }
+            _ if line.len() >= L => {
+                let mut arr = [0u8; L];
+                arr.copy_from_slice(&line[..L]);
+                measure.push(arr);
+            }
+            _ => {}
+        }
+    }
+
+    if !done {
+        push_timing_measure(&mut measure, midx, &mut rows, &mut beats, &mut has_holds);
+    }
+
+    (rows, beats, has_holds)
+}
+
 pub fn minimize_rows_typed<const L: usize>(
     data: &[u8],
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<[u8; L]>, Vec<f32>, f64) {
@@ -726,8 +791,12 @@ pub fn compute_timing_aware_stats(data: &[u8], lanes: usize, timing: &TimingData
 }
 
 fn timing_stats_typed<const L: usize>(data: &[u8], timing: &TimingData) -> ArrowStats {
-    let (_minimized, _stats, _densities, rows, beats, _last_beat) = minimize_rows_typed::<L>(data);
-    compute_timing_aware_stats_from_rows_with_row_to_beat::<L>(&rows, timing, &beats)
+    let (rows, beats, has_holds) = minimize_timing_rows::<L>(data);
+    if has_holds {
+        compute_timing_aware_stats_from_rows_with_row_to_beat::<L>(&rows, timing, &beats)
+    } else {
+        compute_timing_aware_stats_no_holds_from_rows::<L>(&rows, timing, &beats)
+    }
 }
 
 pub fn compute_timing_aware_stats_with_row_to_beat(
@@ -1003,4 +1072,81 @@ fn densities_impl<const L: usize>(data: &[u8]) -> Vec<usize> {
     };
     let (_, densities) = minimize_chart_core(data, &mut on_rows, &mut on_line, &mut on_count);
     densities
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::timing::{TimingFormat, timing_data_from_chart_data};
+
+    fn timing(fakes: Option<&str>) -> TimingData {
+        timing_data_from_chart_data(
+            0.0,
+            0.0,
+            None,
+            "0.000=120.000",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "",
+            fakes,
+            "",
+            TimingFormat::Ssc,
+            true,
+        )
+    }
+
+    fn stats_from_typed(data: &[u8], timing: &TimingData) -> ArrowStats {
+        let (_, _, _, rows, beats, _) = minimize_rows_typed::<4>(data);
+        compute_timing_aware_stats_from_rows_with_row_to_beat::<4>(&rows, timing, &beats)
+    }
+
+    #[test]
+    fn timing_stats_row_only_matches_typed_minimize() {
+        let data = b"0000
+1000
+0000
+0000
+,
+2000
+0000
+3000
+0000
+,
+1100
+0000
+0011
+0000
+;";
+        let timing = timing(None);
+        assert_eq!(
+            compute_timing_aware_stats(data, 4, &timing),
+            stats_from_typed(data, &timing)
+        );
+    }
+
+    #[test]
+    fn timing_stats_no_hold_fake_rows_match_typed_minimize() {
+        let data = b"1000
+0000
+0100
+0000
+,
+0010
+0000
+0001
+0000
+;";
+        let timing = timing(Some("4.000=4.000"));
+        assert_eq!(
+            compute_timing_aware_stats(data, 4, &timing),
+            stats_from_typed(data, &timing)
+        );
+    }
 }
