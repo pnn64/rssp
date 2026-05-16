@@ -1108,6 +1108,32 @@ mod tests {
     }
 
     #[test]
+    fn hash_minimize_reduces_measures() {
+        let data = b"1000
+0000
+0000
+0000
+,
+0100
+0000
+0010
+0000
+;";
+        assert_eq!(minimize_chart_for_hash(data, 4), b"1000\n,\n0100\n0010\n");
+    }
+
+    #[test]
+    fn hash_minimize_keeps_empty_measure_separator() {
+        let data = b"10000000
+00000000
+00000000
+00000000
+,
+;";
+        assert_eq!(minimize_chart_for_hash(data, 8), b"10000000\n,\n");
+    }
+
+    #[test]
     fn timing_stats_row_only_matches_typed_minimize() {
         let data = b"0000
 1000

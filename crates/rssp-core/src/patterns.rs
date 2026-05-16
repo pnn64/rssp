@@ -588,6 +588,8 @@ const MASK_TO_ARROW: [u8; 16] = [
 
 const FORCED_FOOT: [u8; 5] = [FOOT_NONE, FOOT_LEFT, FOOT_NONE, FOOT_NONE, FOOT_RIGHT];
 const OPPOSITE_FOOT: [u8; 3] = [FOOT_NONE, FOOT_RIGHT, FOOT_LEFT];
+const FOOT_CONFLICT: u8 = 1 << 2;
+const FOOT_MASK: u8 = 0b11;
 
 const fn build_dir_table() -> [[u8; 5]; 5] {
     let mut t = [[DIR_NONE; 5]; 5];
@@ -603,6 +605,32 @@ const fn build_dir_table() -> [[u8; 5]; 5] {
 }
 
 const DIR_TABLE: [[u8; 5]; 5] = build_dir_table();
+
+const fn build_foot_table() -> [[u8; 5]; 3] {
+    let mut t = [[FOOT_NONE; 5]; 3];
+    let mut prev = 0;
+    while prev < 3 {
+        let mut curr = 0;
+        while curr < 5 {
+            let forced = FORCED_FOOT[curr];
+            let expected = OPPOSITE_FOOT[prev];
+            t[prev][curr] = if prev == FOOT_NONE as usize {
+                forced
+            } else if forced == FOOT_NONE {
+                expected
+            } else if forced != expected {
+                forced | FOOT_CONFLICT
+            } else {
+                forced
+            };
+            curr += 1;
+        }
+        prev += 1;
+    }
+    t
+}
+
+const FOOT_TABLE: [[u8; 5]; 3] = build_foot_table();
 
 #[inline(always)]
 const fn bitmask_arrow(mask: u8) -> u8 {
@@ -665,15 +693,8 @@ const fn step_facing(
 
 #[inline(always)]
 const fn next_facing_foot(prev_foot: u8, curr_arrow: u8) -> (u8, bool) {
-    let forced = FORCED_FOOT[curr_arrow as usize];
-    if prev_foot == FOOT_NONE {
-        return (forced, false);
-    }
-    if forced == FOOT_NONE {
-        return (OPPOSITE_FOOT[prev_foot as usize], false);
-    }
-    let expected = OPPOSITE_FOOT[prev_foot as usize];
-    (forced, forced != expected)
+    let packed = FOOT_TABLE[prev_foot as usize][curr_arrow as usize];
+    (packed & FOOT_MASK, (packed & FOOT_CONFLICT) != 0)
 }
 
 #[must_use]
@@ -779,5 +800,31 @@ pub const fn compute_box_counts(counts: &PatternCounts) -> BoxCounts {
         lu_boxes: lu,
         rd_boxes: rd,
         ru_boxes: ru,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::count_facing_steps;
+
+    #[test]
+    fn facing_steps_count_left_and_right_runs() {
+        assert_eq!(
+            count_facing_steps(&[0b0001, 0b0100, 0b0001, 0b0100], 2),
+            (4, 0)
+        );
+        assert_eq!(
+            count_facing_steps(&[0b0001, 0b0010, 0b0001, 0b0010], 2),
+            (0, 4)
+        );
+    }
+
+    #[test]
+    fn facing_steps_split_on_empty_and_forced_foot_conflict() {
+        assert_eq!(
+            count_facing_steps(&[0b0001, 0b0100, 0, 0b0001, 0b0100], 2),
+            (4, 0)
+        );
+        assert_eq!(count_facing_steps(&[0b0001, 0b0100, 0b1000], 2), (2, 0));
     }
 }
