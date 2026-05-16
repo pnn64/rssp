@@ -8,6 +8,15 @@ fn round_sig_figs_6_impl(value: f64, fallback: f64) -> f64 {
     if value == 0.0 || !value.is_finite() {
         return value;
     }
+    if let Some(scale) = sig_figs_6_scale(value.abs()) {
+        let rounded = (value * scale).round_ties_even() / scale;
+        return if rounded.is_finite() {
+            rounded
+        } else {
+            fallback
+        };
+    }
+
     let magnitude = value.abs().log10().floor() as i32;
     let power = 5 - magnitude;
 
@@ -23,6 +32,26 @@ fn round_sig_figs_6_impl(value: f64, fallback: f64) -> f64 {
     } else {
         fallback
     }
+}
+
+#[inline(always)]
+fn sig_figs_6_scale(abs: f64) -> Option<f64> {
+    if !(1.0..1_000_000.0).contains(&abs) {
+        return None;
+    }
+    Some(if abs < 10.0 {
+        100_000.0
+    } else if abs < 100.0 {
+        10_000.0
+    } else if abs < 1_000.0 {
+        1_000.0
+    } else if abs < 10_000.0 {
+        100.0
+    } else if abs < 100_000.0 {
+        10.0
+    } else {
+        1.0
+    })
 }
 
 #[inline(always)]
@@ -90,5 +119,26 @@ pub fn roundtrip_bpm_itg(bpm: f64) -> f64 {
         f64::from(bpm_f / 60.0 * 60.0)
     } else {
         0.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::round_sig_figs_6;
+
+    #[test]
+    fn round_sig_figs_common_range() {
+        assert_eq!(round_sig_figs_6(1.2345678), 1.23457);
+        assert_eq!(round_sig_figs_6(12.345678), 12.3457);
+        assert_eq!(round_sig_figs_6(123.45678), 123.457);
+        assert_eq!(round_sig_figs_6(1234.5678), 1234.57);
+        assert_eq!(round_sig_figs_6(12345.678), 12345.7);
+        assert_eq!(round_sig_figs_6(123456.78), 123457.0);
+    }
+
+    #[test]
+    fn round_sig_figs_keeps_fallback_range() {
+        assert_eq!(round_sig_figs_6(0.12345678), 0.123457);
+        assert_eq!(round_sig_figs_6(1_234_567.8), 1_234_570.0);
     }
 }

@@ -6,8 +6,8 @@ use crate::parse::{
     unescape_trim,
 };
 use crate::timing::{
-    TimingData, compute_timing_segments, get_time_for_beat_f32, steps_timing_allowed,
-    timing_data_from_segments, timing_format_from_ext,
+    TimingData, compute_timing_segments, fixed_time_for_beat, fixed_timing_parts,
+    get_time_for_beat_f32, steps_timing_allowed, timing_data_from_segments, timing_format_from_ext,
 };
 
 #[derive(Debug, Clone)]
@@ -186,11 +186,36 @@ pub fn compute_measure_nps_vec(densities: &[usize], bpms: &[(f64, f64)]) -> Vec<
 
 #[must_use]
 pub fn compute_measure_nps_vec_with_timing(densities: &[usize], timing: &TimingData) -> Vec<f64> {
+    if let Some(parts) = fixed_timing_parts(timing) {
+        return compute_measure_nps_vec_fixed(densities, parts);
+    }
+
     let mut out = Vec::with_capacity(densities.len());
     let mut start = get_time_for_beat_f32(timing, 0.0);
 
     for (i, &d) in densities.iter().enumerate() {
         let end = get_time_for_beat_f32(timing, (i as f64 + 1.0) * 4.0);
+        let dur = end - start;
+        out.push(if d == 0 || dur <= 0.12 {
+            0.0
+        } else {
+            d as f64 / dur
+        });
+        start = end;
+    }
+
+    out
+}
+
+fn compute_measure_nps_vec_fixed(
+    densities: &[usize],
+    parts: crate::timing::FixedTimingParts,
+) -> Vec<f64> {
+    let mut out = Vec::with_capacity(densities.len());
+    let mut start = fixed_time_for_beat(parts, 0.0);
+
+    for (i, &d) in densities.iter().enumerate() {
+        let end = fixed_time_for_beat(parts, (i as f64 + 1.0) * 4.0);
         let dur = end - start;
         out.push(if d == 0 || dur <= 0.12 {
             0.0
@@ -303,4 +328,48 @@ fn equally_spaced_impl<const L: usize>(data: &[u8]) -> Vec<bool> {
     }
 
     results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compute_measure_nps_vec_with_timing, get_nps_stats};
+    use crate::timing::{TimingFormat, compute_timing_segments, timing_data_from_segments};
+
+    #[test]
+    fn nps_stats_empty() {
+        assert_eq!(get_nps_stats(&[]), (0.0, 0.0));
+    }
+
+    #[test]
+    fn nps_stats_even_median() {
+        assert_eq!(get_nps_stats(&[8.0, 2.0, 4.0, 16.0]), (16.0, 6.0));
+    }
+
+    #[test]
+    fn nps_fixed_timing_values() {
+        let segments = compute_timing_segments(
+            None,
+            "0.000=120.000",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "",
+            TimingFormat::Ssc,
+            true,
+        );
+        let timing = timing_data_from_segments(0.0, 0.0, &segments);
+
+        assert_eq!(
+            compute_measure_nps_vec_with_timing(&[16, 0, 32], &timing),
+            vec![8.0, 0.0, 16.0]
+        );
+    }
 }

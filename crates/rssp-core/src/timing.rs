@@ -1331,7 +1331,10 @@ pub fn get_time_for_beat(t: &TimingData, beat: f64) -> f64 {
     get_time_internal(t, beat) - t.global_offset_sec
 }
 
-pub(crate) fn get_time_for_beat_f32(t: &TimingData, target_beat: f64) -> f64 {
+pub(crate) type FixedTimingParts = (f32, f32, f64);
+
+#[inline(always)]
+pub(crate) fn fixed_timing_parts(t: &TimingData) -> Option<FixedTimingParts> {
     if t.beat_to_time.len() == 1
         && t.beat_to_time[0].beat == 0.0
         && t.stops.is_empty()
@@ -1339,9 +1342,23 @@ pub(crate) fn get_time_for_beat_f32(t: &TimingData, target_beat: f64) -> f64 {
         && t.warps.is_empty()
     {
         let start = (-t.beat0_offset_sec - t.global_offset_sec) as f32;
-        let row = beat_to_note_row_f32(target_beat as f32);
         let bps = t.beat_to_time[0].bpm as f32 / 60.0;
-        return f64::from(start + note_row_to_beat_f32(row) / bps) - t.global_offset_sec;
+        Some((start, bps, t.global_offset_sec))
+    } else {
+        None
+    }
+}
+
+#[inline(always)]
+pub(crate) fn fixed_time_for_beat(parts: FixedTimingParts, target_beat: f64) -> f64 {
+    let (start, bps, global_offset) = parts;
+    let row = beat_to_note_row_f32(target_beat as f32);
+    f64::from(start + note_row_to_beat_f32(row) / bps) - global_offset
+}
+
+pub(crate) fn get_time_for_beat_f32(t: &TimingData, target_beat: f64) -> f64 {
+    if let Some(parts) = fixed_timing_parts(t) {
+        return fixed_time_for_beat(parts, target_beat);
     }
 
     let mut state = GetBeatStateF32 {
