@@ -1439,4 +1439,29 @@ mod tests {
             stats_from_typed(data, &timing)
         );
     }
+
+    #[test]
+    fn all_judgable_hold_stats_match_base_count() {
+        let data = b"2000
+0000
+3000
+0000
+,
+0400
+0000
+0300
+0000
+,
+1100
+0000
+0011
+0000
+;";
+        let timing = timing(None);
+        let (_, stats, _, rows, beats, _) = minimize_rows_typed::<4>(data);
+        assert_eq!(
+            stats,
+            compute_timing_aware_stats_from_rows_with_row_to_beat::<4>(&rows, &timing, &beats)
+        );
+    }
 }

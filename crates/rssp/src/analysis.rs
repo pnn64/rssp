@@ -628,8 +628,7 @@ fn build_chart_summary(
     }
 
     let raw_holding = stats.holding;
-    let reuse_base_stats =
-        stats.holds == 0 && stats.rolls == 0 && stats.lifts == 0 && !has_nonjudgable_rows(&timing);
+    let reuse_base_stats = stats.lifts == 0 && !has_nonjudgable_rows(&timing);
     let has_hold_notes = stats.holds != 0 || stats.rolls != 0;
     let (tech_counts, mut timing_stats) = match lanes {
         4 => {
