@@ -1,5 +1,3 @@
-use std::fmt::Write;
-
 #[derive(Debug, Default)]
 pub struct StreamCounts {
     pub run16_streams: u32,
@@ -308,9 +306,29 @@ fn write_run(out: &mut String, cat: RunDensity, len: usize, star: bool) {
         RunDensity::Run32 => ("=", "="),
         RunDensity::Break => unreachable!(),
     };
-    let _ = write!(out, "{pre}{len}{suf}");
+    out.push_str(pre);
+    push_usize(out, len);
+    out.push_str(suf);
     if star {
         out.push('*');
+    }
+}
+
+fn push_usize(out: &mut String, mut n: usize) {
+    if n == 0 {
+        out.push('0');
+        return;
+    }
+
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    while n != 0 {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+    }
+    for &b in &buf[i..] {
+        out.push(char::from(b));
     }
 }
 
@@ -320,7 +338,9 @@ fn format_break(out: &mut String, n: usize, mode: BreakdownMode) {
             if !out.is_empty() {
                 out.push(' ');
             }
-            let _ = write!(out, "({n})");
+            out.push('(');
+            push_usize(out, n);
+            out.push(')');
             return;
         }
         BreakdownMode::Partial => match n {
@@ -417,7 +437,7 @@ fn format_stream_segments(segs: &[StreamSegment], level: StreamBreakdownLevel) -
                     if i > 0 && !segs[i - 1].is_break {
                         out.push('-');
                     }
-                    let _ = write!(out, "{size}");
+                    push_usize(&mut out, size);
                 }
             }
         }
@@ -426,7 +446,7 @@ fn format_stream_segments(segs: &[StreamSegment], level: StreamBreakdownLevel) -
     if sum != 0 {
         match level {
             StreamBreakdownLevel::Simple => {
-                let _ = write!(out, "{sum}");
+                push_usize(&mut out, sum);
                 if broken {
                     out.push('*');
                 }
@@ -437,7 +457,10 @@ fn format_stream_segments(segs: &[StreamSegment], level: StreamBreakdownLevel) -
     }
 
     if level == StreamBreakdownLevel::Total {
-        return format!("{total} Total");
+        let mut out = String::new();
+        push_usize(&mut out, total);
+        out.push_str(" Total");
+        return out;
     }
     if out.is_empty() {
         "No Streams!".into()
@@ -461,12 +484,14 @@ fn flush_stream(
     };
 
     if level == StreamBreakdownLevel::Detailed {
-        let _ = write!(out, " ({size}) ");
+        out.push_str(" (");
+        push_usize(out, size);
+        out.push_str(") ");
         return;
     }
 
     if *sum != 0 && level == StreamBreakdownLevel::Simple {
-        let _ = write!(out, "{}", *sum);
+        push_usize(out, *sum);
         if *broken {
             out.push('*');
         }
@@ -499,6 +524,26 @@ mod tests {
         assert_eq!(counts.run32_streams, runs.3);
         assert_eq!(counts.total_breaks, total_breaks);
         assert_eq!(counts.sn_breaks, sn_breaks);
+    }
+
+    #[test]
+    fn run_symbol_formatting() {
+        assert_eq!(format_run_symbol(RunDensity::Run16, 12, true), "12*");
+        assert_eq!(format_run_symbol(RunDensity::Run20, 12, true), "~12~*");
+        assert_eq!(format_run_symbol(RunDensity::Run24, 12, false), "\\12\\");
+        assert_eq!(format_run_symbol(RunDensity::Run32, 12, false), "=12=");
+    }
+
+    #[test]
+    fn generated_breakdowns_match_expected_strings() {
+        let measures = [
+            16, 16, 0, 16, 16, 0, 0, 20, 20, 20, 0, 24, 0, 0, 0, 32, 32, 32, 32, 32,
+        ];
+        let (detailed, partial, simple) = generate_breakdowns(&measures);
+
+        assert_eq!(detailed, "2 2 (2) ~3~ \\1\\ (3) =5=");
+        assert_eq!(partial, "5* - ~3~ \\1\\ - =5=");
+        assert_eq!(simple, "7* ~3~ \\4\\* =5=");
     }
 
     #[test]
