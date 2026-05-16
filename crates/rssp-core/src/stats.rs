@@ -1170,14 +1170,52 @@ pub fn measure_densities(data: &[u8], lanes: usize) -> Vec<usize> {
 }
 
 fn densities_impl<const L: usize>(data: &[u8]) -> Vec<usize> {
-    let mut on_rows = |_, _| {};
-    let mut on_line = |_: &[u8; L], _, _, _, _| {};
-    let mut on_count = |line: &[u8; L]| RowCount {
-        density: has_step::<L>(line),
-        object: false,
-    };
-    let (_, densities) = minimize_chart_core(data, &mut on_rows, &mut on_line, &mut on_count);
+    let mut densities = Vec::with_capacity(data.len() / ((L + 1) * 4) + 1);
+    let mut measure = Vec::with_capacity(64);
+    let mut done = false;
+
+    let mut line_off = 0usize;
+    while let Some(raw) = next_line(data, &mut line_off) {
+        let line = skip_ws(raw);
+        if line.is_empty() || line[0] == b'/' {
+            continue;
+        }
+
+        match line[0] {
+            b',' => push_density_measure(&mut measure, &mut densities),
+            b';' => {
+                push_density_measure(&mut measure, &mut densities);
+                done = true;
+                break;
+            }
+            _ if line.len() >= L => {
+                let mut arr = [0u8; L];
+                arr.copy_from_slice(&line[..L]);
+                measure.push(arr);
+            }
+            _ => {}
+        }
+    }
+
+    if !done {
+        push_density_measure(&mut measure, &mut densities);
+    }
+
     densities
+}
+
+fn push_density_measure<const L: usize>(measure: &mut Vec<[u8; L]>, densities: &mut Vec<usize>) {
+    if measure.is_empty() {
+        densities.push(0);
+        return;
+    }
+    minimize_measure(measure);
+    let mut density = 0usize;
+    for line in measure.iter() {
+        density += usize::from(has_step::<L>(line));
+    }
+    densities.push(density);
+    measure.clear();
 }
 
 #[cfg(test)]
@@ -1276,6 +1314,44 @@ mod tests {
         for (data, lanes) in cases {
             let (_, _, _, _, expected) = minimize_chart_count_rows(data, lanes);
             assert_eq!(chart_last_beat(data, lanes), expected);
+        }
+    }
+
+    #[test]
+    fn measure_densities_match_full_minimize() {
+        let cases: [(&[u8], usize); 2] = [
+            (
+                b"1000
+0000
+0000
+0000
+,
+1000
+0000
+0010
+0000
+,
+0000
+0000
+;",
+                4,
+            ),
+            (
+                b"10000000
+00000000
+00001000
+00000000
+,
+00000000
+00000000
+;",
+                8,
+            ),
+        ];
+
+        for (data, lanes) in cases {
+            let (_, _, expected) = minimize_chart_and_count_with_lanes(data, lanes);
+            assert_eq!(measure_densities(data, lanes), expected);
         }
     }
 

@@ -978,6 +978,9 @@ pub fn compute_matrix_rating(measure_densities: &[usize], bpm_map: &[(f64, f64)]
     if measure_densities.is_empty() || bpm_map.is_empty() {
         return 0.0;
     }
+    if bpm_map.len() == 1 {
+        return compute_matrix_fixed_bpm(measure_densities, bpm_map[0].1);
+    }
 
     let mut keys: Vec<(u8, u64)> = Vec::with_capacity(measure_densities.len());
 
@@ -1016,4 +1019,74 @@ pub fn compute_matrix_rating(measure_densities: &[usize], bpm_map: &[(f64, f64)]
     }
 
     best
+}
+
+fn compute_matrix_fixed_bpm(measure_densities: &[usize], bpm: f64) -> f64 {
+    if bpm <= 0.0 {
+        return 0.0;
+    }
+
+    let mut counts = [0usize; 4];
+    for &density in measure_densities {
+        let code = density_code(categorize_measure_density(density));
+        if code != u8::MAX {
+            counts[code as usize] += 1;
+        }
+    }
+
+    let mut best = 0.0f64;
+    for (code, count) in counts.into_iter().enumerate() {
+        if count == 0 {
+            continue;
+        }
+        let multiplier = get_density_multiplier(density_from_code(code as u8));
+        best = best.max(get_difficulty(bpm * multiplier, count as f64));
+    }
+    best
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn matrix_rating_generic(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> f64 {
+        let mut keys: Vec<(u8, u64)> = Vec::with_capacity(measure_densities.len());
+        for_each_measure_bpm(measure_densities.len(), bpm_map, 4.0, |idx, bpm| {
+            let code = density_code(categorize_measure_density(measure_densities[idx]));
+            if code != u8::MAX && bpm > 0.0 {
+                keys.push((code, bpm.to_bits()));
+            }
+        });
+
+        keys.sort_unstable();
+        let mut best = 0.0f64;
+        let mut i = 0usize;
+        while i < keys.len() {
+            let (code, bpm_bits) = keys[i];
+            let mut count = 1usize;
+            i += 1;
+            while i < keys.len() && keys[i] == (code, bpm_bits) {
+                count += 1;
+                i += 1;
+            }
+
+            let bpm = f64::from_bits(bpm_bits);
+            let multiplier = get_density_multiplier(density_from_code(code));
+            let effective_bpm = bpm * multiplier;
+            if effective_bpm > 0.0 {
+                best = best.max(get_difficulty(effective_bpm, count as f64));
+            }
+        }
+        best
+    }
+
+    #[test]
+    fn fixed_bpm_matrix_matches_generic_path() {
+        let densities = [0, 16, 17, 20, 23, 24, 31, 32, 48, 0, 12, 16];
+        let bpm_map = [(0.0, 180.0)];
+        assert_eq!(
+            compute_matrix_rating(&densities, &bpm_map),
+            matrix_rating_generic(&densities, &bpm_map)
+        );
+    }
 }
