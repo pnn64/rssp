@@ -100,6 +100,22 @@ const fn bump_dir(stats: &mut ArrowStats, col: usize) {
 }
 
 #[inline(always)]
+fn tap_mask4(line: &[u8]) -> Option<u8> {
+    let a = line[0].wrapping_sub(b'0');
+    let b = line[1].wrapping_sub(b'0');
+    let c = line[2].wrapping_sub(b'0');
+    let d = line[3].wrapping_sub(b'0');
+    ((a | b | c | d) <= 1).then_some(a | (b << 1) | (c << 2) | (d << 3))
+}
+
+#[inline(always)]
+fn tap_mask8(line: &[u8]) -> Option<u8> {
+    let lo = tap_mask4(line)?;
+    let hi = tap_mask4(&line[4..])?;
+    Some(lo | (hi << 4))
+}
+
+#[inline(always)]
 fn byte_hits(word: u64, byte: u8) -> u64 {
     const LO: u64 = 0x0101_0101_0101_0101;
     const HI: u64 = 0x8080_8080_8080_8080;
@@ -243,6 +259,11 @@ fn count_line<const L: usize>(
     has_phantom: &mut bool,
     object_depths: &mut [u32; L],
 ) -> RowCount {
+    if let Some(row_count) = count_tap_line(line, stats, phantom_depths, has_phantom, object_depths)
+    {
+        return row_count;
+    }
+
     let (mut notes, mut new_holds, mut ends) = (0u32, 0i32, 0i32);
     let mut object = false;
 
@@ -335,6 +356,54 @@ fn count_line<const L: usize>(
         density: true,
         object,
     }
+}
+
+#[inline(always)]
+fn count_tap_line<const L: usize>(
+    line: &[u8; L],
+    stats: &mut ArrowStats,
+    phantom_depths: &[u32; L],
+    has_phantom: &mut bool,
+    object_depths: &mut [u32; L],
+) -> Option<RowCount> {
+    let mask = match L {
+        4 => tap_mask4(line),
+        8 => tap_mask8(line),
+        _ => None,
+    }?;
+    if mask == 0 {
+        return Some(RowCount {
+            density: false,
+            object: false,
+        });
+    }
+
+    let notes = mask.count_ones();
+    let mut active_mask = mask;
+    while active_mask != 0 {
+        let c = active_mask.trailing_zeros() as usize;
+        object_depths[c] = 0;
+        *has_phantom |= phantom_depths[c] != 0;
+        active_mask &= active_mask - 1;
+    }
+
+    stats.total_arrows += notes;
+    stats.left += (mask & 0b0001_0001).count_ones();
+    stats.down += (mask & 0b0010_0010).count_ones();
+    stats.up += (mask & 0b0100_0100).count_ones();
+    stats.right += (mask & 0b1000_1000).count_ones();
+    stats.total_steps += 1;
+    if notes >= 2 {
+        stats.jumps += 1;
+    }
+    if notes as i32 + stats.holding >= 3 {
+        stats.hands += 1;
+    }
+
+    Some(RowCount {
+        density: true,
+        object: true,
+    })
 }
 
 fn recalc_without_phantoms<const L: usize>(

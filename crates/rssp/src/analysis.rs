@@ -432,7 +432,7 @@ fn build_chart_summary(
     }
 
     let (chart_bpms, chart_bpms_norm) = chart_timing_tag_pair(chart_bpms_opt);
-    let bpms_to_use = chart_bpms_norm.unwrap_or_else(|| global_bpms_norm.to_string());
+    let bpms_to_use = chart_bpms_norm.map_or(Cow::Borrowed(global_bpms_norm), Cow::Owned);
     let chart_stops = chart_timing_tag_raw(chart_stops_opt);
     let chart_speeds = chart_timing_tag_raw(chart_speeds_opt);
     let chart_delays = chart_timing_tag_raw(chart_delays_opt);
@@ -585,7 +585,7 @@ fn build_chart_summary(
         &measure_densities,
         bpm_map.as_ref(),
         &minimized_chart,
-        &bpms_to_use,
+        bpms_to_use.as_ref(),
     );
 
     let (detected_patterns, (anchor_left, anchor_down, anchor_up, anchor_right)) = bitmasks
