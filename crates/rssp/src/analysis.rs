@@ -290,8 +290,8 @@ fn compute_derived_chart_metrics(
         + stream_counts.run32_streams;
 
     let (short_hash, bpm_neutral_hash) = compute_chart_hash_pair(minimized_chart, bpms_to_use);
-    let tier_bpm = round_dp(compute_tier_bpm(measure_densities, bpm_map, 4.0), 2);
     if total_streams == 0 {
+        let tier_bpm = round_dp(compute_tier_bpm(&[], bpm_map, 4.0), 2);
         return DerivedChartMetrics {
             stream_counts,
             total_streams,
@@ -308,6 +308,7 @@ fn compute_derived_chart_metrics(
         };
     }
 
+    let tier_bpm = round_dp(compute_tier_bpm(measure_densities, bpm_map, 4.0), 2);
     let (sn_detailed_breakdown, sn_partial_breakdown, sn_simple_breakdown) =
         generate_breakdowns(measure_densities);
     let (detailed_breakdown, partial_breakdown, simple_breakdown) =
