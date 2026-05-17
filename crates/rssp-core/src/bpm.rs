@@ -447,6 +447,13 @@ pub(crate) fn for_each_measure_bpm<F: FnMut(usize, f64)>(
     if count == 0 || map.is_empty() {
         return;
     }
+    if map.len() == 1 {
+        let cur = map[0].1;
+        for i in 0..count {
+            f(i, cur);
+        }
+        return;
+    }
     let (mut idx, mut cur, mut next) = (0, map[0].1, map.get(1).map_or(f64::INFINITY, |m| m.0));
     for i in 0..count {
         let beat = i as f64 * bpm;

@@ -58,6 +58,16 @@ pub const fn categorize_measure_density(d: usize) -> RunDensity {
 }
 
 const STREAM_THRESHOLD: usize = 16;
+const BREAKDOWN_SCRATCH_CAP: usize = 1024;
+
+#[inline(always)]
+const fn scratch_cap(len: usize) -> usize {
+    if len < BREAKDOWN_SCRATCH_CAP {
+        len
+    } else {
+        BREAKDOWN_SCRATCH_CAP
+    }
+}
 
 #[inline(always)]
 const fn is_stream_measure(d: usize) -> bool {
@@ -66,7 +76,7 @@ const fn is_stream_measure(d: usize) -> bool {
 
 #[must_use]
 pub fn stream_sequences(measures: &[usize]) -> Vec<StreamSegment> {
-    let mut segs = Vec::with_capacity(measures.len() / 2 + 1);
+    let mut segs = Vec::with_capacity(scratch_cap(measures.len() / 2 + 1));
     let mut i = 0usize;
     let mut prev_stream_end = None;
 
@@ -236,7 +246,7 @@ fn tokenize(dens: &[usize]) -> Vec<Token> {
         return Vec::new();
     }
 
-    let mut tokens = Vec::with_capacity(dens.len());
+    let mut tokens = Vec::with_capacity(scratch_cap(dens.len()));
     let mut cur = categorize_measure_density(dens[0]);
     let mut count = 1;
 
