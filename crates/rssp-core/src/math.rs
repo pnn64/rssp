@@ -86,9 +86,52 @@ pub fn fmt_dec6_itg(value: f64) -> String {
     format!("{:.6}", value as f32)
 }
 
-#[inline(always)]
+#[inline]
 pub(crate) fn fmt_dec3_half_up(value: f64) -> String {
-    format!("{:.3}", (value.mul_add(1000.0, 0.5).floor()) / 1000.0)
+    let mut out = String::with_capacity(16);
+    push_dec3_half_up(&mut out, value);
+    out
+}
+
+pub(crate) fn push_dec3_half_up(out: &mut String, value: f64) {
+    let scaled = value.mul_add(1000.0, 0.5).floor();
+    if !scaled.is_finite() || scaled <= i64::MIN as f64 || scaled >= i64::MAX as f64 {
+        out.push_str(&format!("{:.3}", scaled / 1000.0));
+        return;
+    }
+
+    let n = scaled as i64;
+    let neg = n < 0;
+    let abs = if neg { (-n) as u64 } else { n as u64 };
+    let whole = abs / 1000;
+    let frac = abs % 1000;
+
+    if neg {
+        out.push('-');
+    }
+    push_u64(out, whole);
+    out.push('.');
+    out.push(char::from(b'0' + (frac / 100) as u8));
+    out.push(char::from(b'0' + ((frac / 10) % 10) as u8));
+    out.push(char::from(b'0' + (frac % 10) as u8));
+}
+
+fn push_u64(out: &mut String, mut n: u64) {
+    if n == 0 {
+        out.push('0');
+        return;
+    }
+
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    while n != 0 {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+    }
+    for &b in &buf[i..] {
+        out.push(char::from(b));
+    }
 }
 
 #[inline(always)]
@@ -124,7 +167,7 @@ pub fn roundtrip_bpm_itg(bpm: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::round_sig_figs_6;
+    use super::{fmt_dec3_half_up, round_sig_figs_6};
 
     #[test]
     fn round_sig_figs_common_range() {
@@ -140,5 +183,28 @@ mod tests {
     fn round_sig_figs_keeps_fallback_range() {
         assert_eq!(round_sig_figs_6(0.12345678), 0.123457);
         assert_eq!(round_sig_figs_6(1_234_567.8), 1_234_570.0);
+    }
+
+    #[test]
+    fn dec3_half_up_matches_format() {
+        let values: [f64; 12] = [
+            0.0,
+            -0.0,
+            0.0004,
+            0.0005,
+            -0.0004,
+            -0.0005,
+            1.2344,
+            1.2345,
+            -1.2344,
+            -1.2345,
+            12_345.6789,
+            -12_345.6789,
+        ];
+
+        for value in values {
+            let rounded = (value.mul_add(1000.0, 0.5).floor()) / 1000.0;
+            assert_eq!(fmt_dec3_half_up(value), format!("{rounded:.3}"));
+        }
     }
 }

@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::math::{fmt_dec3_half_up, round_sig_figs_itg, roundtrip_bpm_itg};
+use crate::math::{fmt_dec3_half_up, push_dec3_half_up, round_sig_figs_itg, roundtrip_bpm_itg};
 use crate::parse::{
     ParsedChartEntry, ParsedSimfileData, decode_bytes, extract_sections, parse_version,
     unescape_trim,
@@ -38,6 +38,10 @@ fn normalize_decimal(s: &str) -> Option<String> {
     Some(fmt_dec3_half_up(value))
 }
 
+fn parse_normalized_decimal(s: &str) -> Option<f64> {
+    strip_control(s).trim().parse().ok()
+}
+
 pub(crate) fn parse_beat_or_row(raw: &str) -> Option<f64> {
     let mut s = raw.trim();
     let is_row = s.strip_suffix(['r', 'R']).is_some_and(|r| {
@@ -61,14 +65,14 @@ pub fn normalize_float_digits(param: &str) -> String {
             continue;
         }
         if let Some((b, v)) = t.split_once('=')
-            && let (Some(b), Some(v)) = (normalize_decimal(b), normalize_decimal(v))
+            && let (Some(b), Some(v)) = (parse_normalized_decimal(b), parse_normalized_decimal(v))
         {
             if !out.is_empty() {
                 out.push(',');
             }
-            out.push_str(&b);
+            push_dec3_half_up(&mut out, b);
             out.push('=');
-            out.push_str(&v);
+            push_dec3_half_up(&mut out, v);
         }
     }
     out
@@ -798,4 +802,17 @@ pub fn normalize_and_tidy_bpms(param: &str) -> String {
         out.push_str(&vs);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_float_digits;
+
+    #[test]
+    fn normalize_float_digits_formats_pairs() {
+        assert_eq!(
+            normalize_float_digits("0=120, 4.0004 = 150.9995, bad, 8=175.1254"),
+            "0.000=120.000,4.000=151.000,8.000=175.125"
+        );
+    }
 }
