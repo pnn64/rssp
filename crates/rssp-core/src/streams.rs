@@ -59,6 +59,8 @@ pub const fn categorize_measure_density(d: usize) -> RunDensity {
 
 const STREAM_THRESHOLD: usize = 16;
 const BREAKDOWN_SCRATCH_CAP: usize = 1024;
+const TOKEN_TEXT_CAP: usize = 5;
+const SEGMENT_TEXT_CAP: usize = 6;
 
 #[inline(always)]
 const fn scratch_cap(len: usize) -> usize {
@@ -213,7 +215,7 @@ fn format_breakdown_tokens(tokens: &[Token], mode: BreakdownMode) -> String {
         BreakdownMode::Simplified => 4,
     };
 
-    let mut out = String::new();
+    let mut out = String::with_capacity(tokens.len().saturating_mul(TOKEN_TEXT_CAP));
     let mut i = 0;
 
     while i < tokens.len() {
@@ -423,7 +425,7 @@ fn no_streams3() -> (String, String, String) {
 }
 
 fn format_stream_segments(segs: &[StreamSegment], level: StreamBreakdownLevel) -> String {
-    let mut out = String::new();
+    let mut out = String::with_capacity(segs.len().saturating_mul(SEGMENT_TEXT_CAP));
     let (mut sum, mut broken, mut total) = (0, false, 0);
 
     for (i, seg) in segs.iter().enumerate() {

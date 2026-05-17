@@ -1,4 +1,3 @@
-use crate::bpm::for_each_measure_bpm;
 use crate::stats::{RunDensity, categorize_measure_density};
 
 /// Sorted difficulty table for efficient bound queries.
@@ -981,39 +980,61 @@ pub fn compute_matrix_rating(measure_densities: &[usize], bpm_map: &[(f64, f64)]
         return compute_matrix_fixed_bpm(measure_densities, bpm_map[0].1);
     }
 
-    let mut keys: Vec<(u8, u64)> = Vec::with_capacity(measure_densities.len());
+    compute_matrix_variable_bpm(measure_densities, bpm_map)
+}
 
-    for_each_measure_bpm(measure_densities.len(), bpm_map, 4.0, |idx, bpm| {
-        let density = measure_densities[idx];
-        let code = density_code(categorize_measure_density(density));
-        if code != u8::MAX && bpm > 0.0 {
-            keys.push((code, bpm.to_bits()));
+fn compute_matrix_variable_bpm(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> f64 {
+    let mut bpm_counts: Vec<(u64, [usize; 4])> = Vec::with_capacity(bpm_map.len());
+    let mut bpm_ids = Vec::with_capacity(bpm_map.len());
+
+    for &(_, bpm) in bpm_map {
+        if bpm <= 0.0 {
+            bpm_ids.push(usize::MAX);
+            continue;
         }
-    });
 
-    if keys.is_empty() {
+        let bits = bpm.to_bits();
+        let id = bpm_counts
+            .iter()
+            .position(|&(seen, _)| seen == bits)
+            .unwrap_or_else(|| {
+                bpm_counts.push((bits, [0; 4]));
+                bpm_counts.len() - 1
+            });
+        bpm_ids.push(id);
+    }
+
+    if bpm_counts.is_empty() {
         return 0.0;
     }
 
-    keys.sort_unstable();
-
-    let mut best = 0.0f64;
-    let mut i = 0usize;
-    while i < keys.len() {
-        let (code, bpm_bits) = keys[i];
-        let mut count = 1usize;
-        i += 1;
-
-        while i < keys.len() && keys[i] == (code, bpm_bits) {
-            count += 1;
-            i += 1;
+    let (mut bpm_idx, mut next_beat) = (0usize, bpm_map.get(1).map_or(f64::INFINITY, |m| m.0));
+    for (idx, &density) in measure_densities.iter().enumerate() {
+        let beat = idx as f64 * 4.0;
+        while beat >= next_beat {
+            bpm_idx += 1;
+            next_beat = bpm_map.get(bpm_idx + 1).map_or(f64::INFINITY, |m| m.0);
         }
 
+        let code = density_code(categorize_measure_density(density));
+        let bpm_id = bpm_ids[bpm_idx];
+        if code != u8::MAX && bpm_id != usize::MAX {
+            bpm_counts[bpm_id].1[code as usize] += 1;
+        }
+    }
+
+    let mut best = 0.0f64;
+    for (bpm_bits, counts) in bpm_counts {
         let bpm = f64::from_bits(bpm_bits);
-        let multiplier = get_density_multiplier(density_from_code(code));
-        let effective_bpm = bpm * multiplier;
-        if effective_bpm > 0.0 {
-            best = best.max(get_difficulty(effective_bpm, count as f64));
+        for (code, count) in counts.into_iter().enumerate() {
+            if count == 0 {
+                continue;
+            }
+            let multiplier = get_density_multiplier(density_from_code(code as u8));
+            let effective_bpm = bpm * multiplier;
+            if effective_bpm > 0.0 {
+                best = best.max(get_difficulty(effective_bpm, count as f64));
+            }
         }
     }
 
@@ -1047,6 +1068,7 @@ fn compute_matrix_fixed_bpm(measure_densities: &[usize], bpm: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bpm::for_each_measure_bpm;
 
     fn matrix_rating_generic(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> f64 {
         let mut keys: Vec<(u8, u64)> = Vec::with_capacity(measure_densities.len());
@@ -1083,6 +1105,22 @@ mod tests {
     fn fixed_bpm_matrix_matches_generic_path() {
         let densities = [0, 16, 17, 20, 23, 24, 31, 32, 48, 0, 12, 16];
         let bpm_map = [(0.0, 180.0)];
+        assert_eq!(
+            compute_matrix_rating(&densities, &bpm_map),
+            matrix_rating_generic(&densities, &bpm_map)
+        );
+    }
+
+    #[test]
+    fn variable_bpm_matrix_matches_generic_path() {
+        let densities = [0, 16, 20, 24, 32, 16, 20, 24, 32, 16, 0, 20, 24, 32, 48, 16];
+        let bpm_map = [
+            (0.0, 180.0),
+            (8.0, 220.0),
+            (16.0, 180.0),
+            (32.0, -10.0),
+            (48.0, 240.0),
+        ];
         assert_eq!(
             compute_matrix_rating(&densities, &bpm_map),
             matrix_rating_generic(&densities, &bpm_map)
