@@ -428,6 +428,15 @@ struct Row {
     fake_mine_mask: u8,
 }
 
+#[derive(Clone, Copy)]
+struct RowCostCtx {
+    active_mask: u8,
+    mine_mask: u8,
+    multi_active: bool,
+    has_hold: bool,
+    side_active: bool,
+}
+
 const fn row_new() -> Row {
     Row {
         second: 0.0,
@@ -440,6 +449,19 @@ const fn row_new() -> Row {
         mine_mask: 0,
         mine_i32_mask: 0,
         fake_mine_mask: 0,
+    }
+}
+
+#[inline(always)]
+const fn row_cost_ctx(row: &Row, layout: &StageLayout) -> RowCostCtx {
+    let active_mask = row.note_mask | row.hold_mask;
+    let mine_mask = row.mine_mask | row.fake_mine_mask;
+    RowCostCtx {
+        active_mask,
+        mine_mask,
+        multi_active: active_mask.count_ones() > 1,
+        has_hold: row.hold_mask != 0,
+        side_active: active_mask & layout.side_mask != 0,
     }
 }
 
@@ -519,14 +541,13 @@ fn calc_action_cost(
     placement: &FootPlacement,
     hit: [i8; NUM_FEET],
     row: &Row,
+    row_ctx: RowCostCtx,
     elapsed: f32,
     cols: usize,
     left_moved_not_holding: bool,
     right_moved_not_holding: bool,
     prev_row_has_live_hold: bool,
 ) -> f32 {
-    let active_mask = row.note_mask | row.hold_mask;
-    let multi_active = active_mask.count_ones() > 1;
     let (lh, lt, rh, rt) = (
         hit[foot_idx(Foot::LeftHeel)],
         hit[foot_idx(Foot::LeftToe)],
@@ -562,15 +583,14 @@ fn calc_action_cost(
     );
 
     let mut cost = 0.0;
-    let mine_mask = row.mine_mask | row.fake_mine_mask;
-    if mine_mask != 0 {
+    if row_ctx.mine_mask != 0 {
         cost += calc_mine_cost(result, row);
     }
-    if row.hold_mask != 0 {
+    if row_ctx.has_hold {
         cost += calc_hold_switch_cost(layout, initial, result, row);
         cost += calc_bracket_tap_cost(initial, row, lh, lt, rh, rt, elapsed);
     }
-    if multi_active {
+    if row_ctx.multi_active {
         cost += calc_bracket_jack_cost(
             result,
             moved_left,
@@ -594,16 +614,16 @@ fn calc_action_cost(
     if row.note_count >= 2 {
         cost += calc_slow_bracket_cost(row, moved_left, moved_right, elapsed);
     }
-    if multi_active {
+    if row_ctx.multi_active {
         cost += calc_twisted_foot_cost(layout, hit);
     }
     cost += calc_facing_cost(layout, result);
     cost += calc_spin_cost(layout, initial, result);
     cost += calc_footswitch_cost(initial, placement, row, elapsed, cols);
-    if active_mask & layout.side_mask != 0 {
+    if row_ctx.side_active {
         cost += calc_sideswitch_cost(layout, initial, result, placement);
     }
-    if mine_mask != 0 {
+    if row_ctx.mine_mask != 0 {
         cost += calc_missed_footswitch_cost(row, jacked_left, jacked_right);
     }
     cost += calc_jack_cost(moved_left, moved_right, jacked_left, jacked_right, elapsed);
@@ -1103,16 +1123,18 @@ fn row_nonzero_mask<const LANES: usize>(row: &[u8; LANES], cols: usize) -> u8 {
     mask
 }
 
-fn hold_heads_from_arrays<const LANES: usize>(
+fn fill_hold_heads_from_arrays<const LANES: usize>(
     rows: &[[u8; LANES]],
     row_to_beat: &[f32],
     cols: usize,
-) -> Vec<[f32; MAX_COLUMNS]> {
+    out: &mut Vec<[f32; MAX_COLUMNS]>,
+) {
+    out.clear();
     if cols == 0 || cols > 8 {
-        return Vec::new();
+        return;
     }
     let copy_len = cols.min(LANES);
-    let mut out = vec![[HOLD_END_NONE; MAX_COLUMNS]; rows.len()];
+    out.resize(rows.len(), [HOLD_END_NONE; MAX_COLUMNS]);
     let mut hold_start_idx = [usize::MAX; MAX_COLUMNS];
     let mut hold_start_row = [0i32; MAX_COLUMNS];
     let mut hold_start_beat = [0.0f32; MAX_COLUMNS];
@@ -1151,7 +1173,6 @@ fn hold_heads_from_arrays<const LANES: usize>(
             }
         }
     }
-    out
 }
 
 #[inline(always)]
@@ -1229,6 +1250,7 @@ fn parity_push_note(
 
 fn parity_create_rows_from_arrays<const LANES: usize>(
     g: &mut StepParityGenerator,
+    hold_heads: &mut Vec<[f32; MAX_COLUMNS]>,
     rows: &[[u8; LANES]],
     row_to_beat: &[f32],
     timing: &TimingData,
@@ -1236,6 +1258,7 @@ fn parity_create_rows_from_arrays<const LANES: usize>(
     has_holds: bool,
 ) {
     if !has_holds {
+        hold_heads.clear();
         if timing_fakes(timing).is_empty() {
             if let Some(fixed) = fixed_timing_parts(timing)
                 && parity_create_tap_rows_fixed(g, rows, row_to_beat, cols, fixed)
@@ -1250,9 +1273,9 @@ fn parity_create_rows_from_arrays<const LANES: usize>(
     }
 
     if timing_fakes(timing).is_empty() {
-        parity_create_rows_holds::<LANES, false>(g, rows, row_to_beat, timing, cols);
+        parity_create_rows_holds::<LANES, false>(g, hold_heads, rows, row_to_beat, timing, cols);
     } else {
-        parity_create_rows_holds::<LANES, true>(g, rows, row_to_beat, timing, cols);
+        parity_create_rows_holds::<LANES, true>(g, hold_heads, rows, row_to_beat, timing, cols);
     }
 }
 
@@ -1302,13 +1325,14 @@ fn parity_create_tap_rows_fixed<const LANES: usize>(
 
 fn parity_create_rows_holds<const LANES: usize, const HAS_FAKES: bool>(
     g: &mut StepParityGenerator,
+    hold_heads: &mut Vec<[f32; MAX_COLUMNS]>,
     rows: &[[u8; LANES]],
     row_to_beat: &[f32],
     timing: &TimingData,
     cols: usize,
 ) {
     let mut counter = row_counter_new();
-    let hold_heads = hold_heads_from_arrays(rows, row_to_beat, cols);
+    fill_hold_heads_from_arrays(rows, row_to_beat, cols, hold_heads);
     let copy_len = cols.min(LANES);
     let fixed = fixed_timing_parts(timing);
 
@@ -1336,9 +1360,9 @@ fn parity_create_rows_holds<const LANES: usize, const HAS_FAKES: bool>(
                 b'L' if !row_fake => {
                     parity_push_note(g, &mut counter, c, beat, second, HOLD_END_NONE, false)
                 }
-                b'2' | b'4' if !row_fake => {
+                b'2' | b'4' => {
                     let hold_end = hold_heads[idx][c];
-                    if hold_end != HOLD_END_NONE {
+                    if !row_fake && hold_end != HOLD_END_NONE {
                         parity_push_note(g, &mut counter, c, beat, second, hold_end, true);
                     }
                 }
@@ -1406,6 +1430,7 @@ fn rows_have_holds<const LANES: usize>(rows: &[[u8; LANES]], cols: usize) -> boo
 
 fn parity_analyze_rows<const LANES: usize>(
     g: &mut StepParityGenerator,
+    hold_heads: &mut Vec<[f32; MAX_COLUMNS]>,
     rows: &[[u8; LANES]],
     row_to_beat: &[f32],
     timing: &TimingData,
@@ -1414,7 +1439,7 @@ fn parity_analyze_rows<const LANES: usize>(
 ) -> bool {
     parity_reset(g, cols);
     g.rows.reserve(rows.len());
-    parity_create_rows_from_arrays(g, rows, row_to_beat, timing, cols, has_holds);
+    parity_create_rows_from_arrays(g, hold_heads, rows, row_to_beat, timing, cols, has_holds);
     parity_finish(g)
 }
 
@@ -1495,7 +1520,8 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
         row_map_reset(&mut g.state_map, estimate);
         g.next_ids.reserve(estimate);
         let row = g.rows[i];
-        let active_mask = row.note_mask | hold_mask;
+        let row_ctx = row_cost_ctx(&row, g.layout);
+        let active_mask = row_ctx.active_mask;
 
         for j in 0..g.prev_ids.len() {
             let init_id = g.prev_ids[j];
@@ -1527,6 +1553,7 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
                         perm,
                         hit,
                         &row,
+                        row_ctx,
                         elapsed,
                         g.column_count,
                         left_moved_not_holding,
@@ -2338,12 +2365,14 @@ pub fn analyze_timing_lanes(
 
 pub struct TimingRowsScratch<const LANES: usize> {
     generator: StepParityGenerator,
+    hold_heads: Vec<[f32; MAX_COLUMNS]>,
 }
 
 pub fn timing_rows_scratch<const LANES: usize>() -> Option<TimingRowsScratch<LANES>> {
     let cache = layout_for_lanes(LANES)?;
     Some(TimingRowsScratch {
         generator: parity_gen(cache),
+        hold_heads: Vec::new(),
     })
 }
 
@@ -2367,6 +2396,7 @@ pub fn analyze_timing_rows_known_holds<const LANES: usize>(
     let cols = layout_cols(scratch.generator.layout);
     if !parity_analyze_rows(
         &mut scratch.generator,
+        &mut scratch.hold_heads,
         rows,
         row_to_beat,
         timing,
@@ -2493,6 +2523,23 @@ mod tests {
 0001
 ,
 0200
+0010
+0300
+1000
+;",
+            true,
+        );
+    }
+
+    #[test]
+    fn invalid_hold_rows_match_lanes_path() {
+        assert_rows_match_lanes(
+            b"2000
+0100
+0001
+,
+0200
+0020
 0010
 0300
 1000
