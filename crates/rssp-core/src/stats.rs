@@ -976,10 +976,10 @@ pub fn compute_timing_aware_stats_from_rows_with_row_to_beat<const L: usize>(
     if rows.is_empty() {
         return ArrowStats::default();
     }
-    let ends = scan_hold_ends(rows);
     if !has_nonjudgable_rows(timing) {
-        return process_timing_rows_all_judgable::<L>(rows.iter(), &ends);
+        return process_rows_judgable(rows);
     }
+    let ends = scan_hold_ends(rows);
     process_timing_rows::<L>(rows.iter(), &ends, timing, beats)
 }
 
@@ -1018,6 +1018,120 @@ fn process_timing_rows_no_holds<'a, const L: usize>(
         );
     }
     stats
+}
+
+// Single-pass row state machine: keeping hold depth, active-hold hand counts,
+// and fallback triggers together avoids hold-end allocations on ordinary charts.
+fn process_rows_judgable<const L: usize>(rows: &[[u8; L]]) -> ArrowStats {
+    let mut stats = ArrowStats::default();
+    let mut depths = [0u8; L];
+    let mut active = 0i32;
+    let mut prev_ends = 0i32;
+
+    for line in rows {
+        active -= prev_ends;
+        prev_ends = 0;
+
+        let (mut notes, mut new_holds) = (0u32, 0i32);
+        let mut has_note = false;
+
+        for (c, &ch) in line.iter().enumerate() {
+            match ch {
+                b'1' => {
+                    if depths[c] != 0 {
+                        return process_rows_judgable_fallback(rows);
+                    }
+                    has_note = true;
+                    notes += 1;
+                    stats.total_arrows += 1;
+                    bump_dir(&mut stats, c);
+                }
+                b'2' | b'4' => {
+                    if depths[c] as usize == HOLD_STACK_CAP {
+                        return process_rows_judgable_fallback(rows);
+                    }
+                    depths[c] += 1;
+                    has_note = true;
+                    notes += 1;
+                    new_holds += 1;
+                    stats.total_arrows += 1;
+                    if ch == b'2' {
+                        stats.holds += 1;
+                    } else {
+                        stats.rolls += 1;
+                    }
+                    bump_dir(&mut stats, c);
+                }
+                b'3' => {
+                    if depths[c] != 0 {
+                        depths[c] -= 1;
+                        prev_ends += 1;
+                    }
+                }
+                b'L' => {
+                    if depths[c] != 0 {
+                        return process_rows_judgable_fallback(rows);
+                    }
+                    has_note = true;
+                    notes += 1;
+                    stats.total_arrows += 1;
+                    stats.lifts += 1;
+                    bump_dir(&mut stats, c);
+                }
+                b'l' => {
+                    has_note = true;
+                    notes += 1;
+                    stats.total_arrows += 1;
+                    stats.lifts += 1;
+                    bump_dir(&mut stats, c);
+                }
+                b'M' | b'F' => {
+                    if depths[c] != 0 {
+                        return process_rows_judgable_fallback(rows);
+                    }
+                    has_note = true;
+                    if ch == b'M' {
+                        stats.mines += 1;
+                    } else {
+                        stats.fakes += 1;
+                    }
+                }
+                b'm' => {
+                    has_note = true;
+                    stats.mines += 1;
+                }
+                b'f' => {
+                    has_note = true;
+                    stats.fakes += 1;
+                }
+                _ => {}
+            }
+        }
+
+        if notes > 0 {
+            stats.total_steps += 1;
+            if notes >= 2 {
+                stats.jumps += 1;
+            }
+        }
+
+        if has_note && notes as i32 + active >= 3 {
+            stats.hands += 1;
+        }
+
+        active += new_holds;
+    }
+
+    if depths.iter().any(|&d| d != 0) {
+        return process_rows_judgable_fallback(rows);
+    }
+
+    stats
+}
+
+fn process_rows_judgable_fallback<const L: usize>(rows: &[[u8; L]]) -> ArrowStats {
+    let ends = scan_hold_ends(rows);
+    process_timing_rows_all_judgable::<L>(rows.iter(), &ends)
 }
 
 #[inline(always)]
@@ -1477,5 +1591,37 @@ mod tests {
             compute_timing_aware_stats(data, 4, &timing),
             stats_from_typed(data, &timing)
         );
+    }
+
+    #[test]
+    fn timing_stats_counts_mine_hand_with_active_holds() {
+        let data = b"2220
+0000
+000M
+0000
+3330
+;";
+        let stats = compute_timing_aware_stats(data, 4, &timing(None));
+        assert_eq!(stats.holds, 3);
+        assert_eq!(stats.mines, 1);
+        assert_eq!(stats.total_arrows, 3);
+        assert_eq!(stats.total_steps, 1);
+        assert_eq!(stats.jumps, 1);
+        assert_eq!(stats.hands, 2);
+    }
+
+    #[test]
+    fn timing_stats_ignores_phantom_hold_before_blocker() {
+        let data = b"2000
+0000
+M000
+0000
+;";
+        let stats = compute_timing_aware_stats(data, 4, &timing(None));
+        assert_eq!(stats.holds, 0);
+        assert_eq!(stats.total_arrows, 0);
+        assert_eq!(stats.total_steps, 0);
+        assert_eq!(stats.mines, 1);
+        assert_eq!(stats.hands, 0);
     }
 }
