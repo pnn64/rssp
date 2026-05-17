@@ -1530,8 +1530,11 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
             let left_moved_not_holding = foot_moved_not_holding(&init_state, &LEFT_PAIR);
             let right_moved_not_holding = foot_moved_not_holding(&init_state, &RIGHT_PAIR);
             for perm in perms {
-                let (result, hit, key) =
-                    parity_result_state(&init_state, perm, g.column_count, hold_mask, active_mask);
+                let (result, hit, key) = if hold_mask == 0 {
+                    parity_result_state_no_holds(&init_state, perm, g.column_count, active_mask)
+                } else {
+                    parity_result_state(&init_state, perm, g.column_count, hold_mask, active_mask)
+                };
                 let res_id = match row_map_probe(&g.state_map, key) {
                     RowMapProbe::Found(id) => id,
                     RowMapProbe::Vacant(slot) => {
@@ -1648,6 +1651,75 @@ fn parity_result_state(
             occupied_mask,
             moved_mask,
             holding_mask,
+        },
+        hit,
+        key,
+    )
+}
+
+fn parity_result_state_no_holds(
+    initial: &State,
+    cols: &FootPlacement,
+    col_count: usize,
+    active_mask: u8,
+) -> (State, [i8; NUM_FEET], u32) {
+    let n = col_count;
+    let (mut combined, mut hit) = ([Foot::None; MAX_COLUMNS], [INVALID_COLUMN; NUM_FEET]);
+    let mut moved_mask = 0u8;
+    let mut mask = active_mask;
+    while mask != 0 {
+        let i = mask.trailing_zeros() as usize;
+        mask &= mask - 1;
+        if i >= n {
+            continue;
+        }
+        let foot = cols[i];
+        if foot == Foot::None {
+            continue;
+        }
+        combined[i] = foot;
+        let fi = foot_idx(foot);
+        hit[fi] = i as i8;
+        moved_mask |= FOOT_MASKS[fi];
+    }
+
+    let (moved_left, moved_right) = (
+        (moved_mask & LEFT_FOOT_MASK) != 0,
+        (moved_mask & RIGHT_FOOT_MASK) != 0,
+    );
+    let (mut where_the_feet_are, mut comb_p, mut occupied_mask) =
+        ([INVALID_COLUMN; NUM_FEET], 0u32, 0u8);
+    for i in 0..n {
+        let mut foot = combined[i];
+        if foot == Foot::None {
+            let prev = initial.combined_columns[i];
+            foot = match prev {
+                Foot::LeftHeel | Foot::RightHeel
+                    if (moved_mask & FOOT_MASKS[foot_idx(prev)]) == 0 =>
+                {
+                    prev
+                }
+                Foot::LeftToe if !moved_left => prev,
+                Foot::RightToe if !moved_right => prev,
+                _ => Foot::None,
+            };
+        }
+        combined[i] = foot;
+        comb_p |= (foot as u32) << (i * 3);
+        if foot != Foot::None {
+            where_the_feet_are[foot_idx(foot)] = i as i8;
+            occupied_mask |= 1u8 << i;
+        }
+    }
+
+    let key = comb_p | (u32::from(moved_mask) << 24);
+    (
+        State {
+            combined_columns: combined,
+            where_the_feet_are,
+            occupied_mask,
+            moved_mask,
+            holding_mask: 0,
         },
         hit,
         key,
