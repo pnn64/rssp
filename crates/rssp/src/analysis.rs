@@ -33,8 +33,8 @@ use crate::stats::{
 };
 use crate::tech::parse_tech_notation;
 use crate::timing::{
-    TimingFormat, TimingSegments, compute_timing_segments, get_time_for_beat, has_nonjudgable_rows,
-    steps_timing_allowed, timing_data_from_segments, timing_format_from_ext,
+    TimingData, TimingFormat, TimingSegments, compute_timing_segments, get_time_for_beat,
+    has_nonjudgable_rows, steps_timing_allowed, timing_data_from_segments, timing_format_from_ext,
 };
 use crate::{chart_timing_tag_raw, resolve_difficulty_label, supported_stepstype_lanes_bytes};
 
@@ -344,6 +344,7 @@ fn build_chart_summary(
     global_fakes_raw: &str,
     global_bpms_norm: &str,
     global_timing_segments: &Arc<TimingSegments>,
+    global_timing: &mut Option<TimingData>,
     global_bpm_map: &[(f64, f64)],
     song_offset: f64,
     extension: &str,
@@ -625,18 +626,26 @@ fn build_chart_summary(
         Vec::new()
     };
 
-    let timing = timing_data_from_segments(chart_offset, 0.0, &timing_segments);
+    let chart_timing;
+    let timing = if chart_has_own_timing {
+        chart_timing = timing_data_from_segments(chart_offset, 0.0, &timing_segments);
+        &chart_timing
+    } else {
+        global_timing.get_or_insert_with(|| {
+            timing_data_from_segments(song_offset, 0.0, global_timing_segments)
+        })
+    };
 
     let duration_seconds =
-        duration::chart_duration_seconds(last_beat, &timing, TimingOffsets::default());
+        duration::chart_duration_seconds(last_beat, timing, TimingOffsets::default());
     let chart_length = if last_beat <= 0.0 {
         0
     } else {
-        let time_chart_f64 = get_time_for_beat(&timing, last_beat);
+        let time_chart_f64 = get_time_for_beat(timing, last_beat);
         (time_chart_f64 + (song_offset - chart_offset)).floor() as i32
     };
 
-    let mut measure_nps_vec = compute_measure_nps_vec_with_timing(&measure_densities, &timing);
+    let mut measure_nps_vec = compute_measure_nps_vec_with_timing(&measure_densities, timing);
     let (max_nps_raw, median_nps_raw) = get_nps_stats(&measure_nps_vec);
     let max_nps = round_sig_figs_6(max_nps_raw);
     let median_nps = round_dp(median_nps_raw, 2);
@@ -646,7 +655,7 @@ fn build_chart_summary(
 
     let raw_holding = stats.holding;
     let reuse_base_stats =
-        stats.holds == 0 && stats.rolls == 0 && stats.lifts == 0 && !has_nonjudgable_rows(&timing);
+        stats.holds == 0 && stats.rolls == 0 && stats.lifts == 0 && !has_nonjudgable_rows(timing);
     let has_hold_notes = stats.holds != 0 || stats.rolls != 0;
     let (tech_counts, mut timing_stats) = match lanes {
         4 => {
@@ -656,15 +665,15 @@ fn build_chart_summary(
                 compute_timing_aware_stats_with_row_to_beat(
                     &minimized_chart,
                     lanes,
-                    &timing,
+                    timing,
                     &row_to_beat,
                 )
             } else if stats.holds == 0 && stats.rolls == 0 {
-                compute_timing_aware_stats_no_holds_from_rows::<4>(&rows4, &timing, &row_to_beat)
+                compute_timing_aware_stats_no_holds_from_rows::<4>(&rows4, timing, &row_to_beat)
             } else {
                 compute_timing_aware_stats_from_rows_with_row_to_beat::<4>(
                     &rows4,
-                    &timing,
+                    timing,
                     &row_to_beat,
                 )
             };
@@ -673,7 +682,7 @@ fn build_chart_summary(
                 step_parity::analyze_timing_rows_known_holds::<4>(
                     &rows4,
                     &row_to_beat,
-                    &timing,
+                    timing,
                     has_hold_notes,
                     scratch,
                 )
@@ -689,15 +698,15 @@ fn build_chart_summary(
                 compute_timing_aware_stats_with_row_to_beat(
                     &minimized_chart,
                     lanes,
-                    &timing,
+                    timing,
                     &row_to_beat,
                 )
             } else if stats.holds == 0 && stats.rolls == 0 {
-                compute_timing_aware_stats_no_holds_from_rows::<8>(&rows8, &timing, &row_to_beat)
+                compute_timing_aware_stats_no_holds_from_rows::<8>(&rows8, timing, &row_to_beat)
             } else {
                 compute_timing_aware_stats_from_rows_with_row_to_beat::<8>(
                     &rows8,
-                    &timing,
+                    timing,
                     &row_to_beat,
                 )
             };
@@ -706,7 +715,7 @@ fn build_chart_summary(
                 step_parity::analyze_timing_rows_known_holds::<8>(
                     &rows8,
                     &row_to_beat,
-                    &timing,
+                    timing,
                     has_hold_notes,
                     scratch,
                 )
@@ -717,7 +726,7 @@ fn build_chart_summary(
         }
         _ => {
             let tech_counts = if options.compute_tech_counts {
-                step_parity::analyze_timing_lanes(&minimized_chart, &timing, lanes)
+                step_parity::analyze_timing_lanes(&minimized_chart, timing, lanes)
             } else {
                 step_parity::TechCounts::default()
             };
@@ -727,7 +736,7 @@ fn build_chart_summary(
                 compute_timing_aware_stats_with_row_to_beat(
                     &minimized_chart,
                     lanes,
-                    &timing,
+                    timing,
                     &row_to_beat,
                 )
             };
@@ -1037,6 +1046,7 @@ pub fn analyze(
     let entry_count = entries.len();
     let mut chart_summaries = Vec::with_capacity(entry_count);
     let mut total_length = 0i32;
+    let mut global_timing = None;
     let mut parity_scratch4 = None;
     let mut parity_scratch8 = None;
     let options_ref = &options;
@@ -1054,6 +1064,7 @@ pub fn analyze(
             cleaned_global_fakes_str,
             normalized_global_bpms_str,
             &global_timing_segments,
+            &mut global_timing,
             &global_bpm_map,
             offset,
             extension,
