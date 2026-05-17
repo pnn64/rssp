@@ -1,6 +1,6 @@
 [package]
 name = "rssp"
-version = "0.4.35"
+version = "0.4.36"
 edition = "2024"
 authors = ["Patrik Nilsson <perfecttaste@pm.me>"]
 description = "A high-performance simfile parser for StepMania."
@@ -122,6 +122,10 @@ harness = false
 
 [[bench]]
 name = "breakdown_perf"
+harness = false
+
+[[bench]]
+name = "matrix_perf"
 harness = false
 
 [lints.clippy]
