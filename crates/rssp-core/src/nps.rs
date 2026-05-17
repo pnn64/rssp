@@ -10,6 +10,8 @@ use crate::timing::{
     get_time_for_beat_f32, steps_timing_allowed, timing_data_from_segments, timing_format_from_ext,
 };
 
+const NPS_MEDIAN_SCAN_MIN: usize = 64;
+
 #[derive(Debug, Clone)]
 pub struct ChartNpsInfo {
     pub step_type: String,
@@ -259,10 +261,33 @@ fn median(arr: &[f64]) -> f64 {
 
 #[must_use]
 pub fn get_nps_stats(nps: &[f64]) -> (f64, f64) {
-    (
-        nps.iter().fold(f64::MIN, |a, &b| a.max(b)).max(0.0),
-        median(nps),
-    )
+    if nps.is_empty() {
+        return (0.0, 0.0);
+    }
+    if nps.len() < NPS_MEDIAN_SCAN_MIN {
+        return (
+            nps.iter().fold(f64::MIN, |a, &b| a.max(b)).max(0.0),
+            median(nps),
+        );
+    }
+
+    let (mut max, mut zeros) = (f64::MIN, 0usize);
+    let (first, mut all_same, mut all_finite) = (nps[0], true, true);
+    for &v in nps {
+        max = max.max(v);
+        zeros += usize::from(v == 0.0);
+        all_same &= v == first;
+        all_finite &= v.is_finite();
+    }
+
+    let med = if all_same {
+        first
+    } else if all_finite && zeros > nps.len() / 2 {
+        0.0
+    } else {
+        median(nps)
+    };
+    (max.max(0.0), med)
 }
 
 #[must_use]
@@ -332,7 +357,7 @@ fn equally_spaced_impl<const L: usize>(data: &[u8]) -> Vec<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_measure_nps_vec_with_timing, get_nps_stats};
+    use super::{NPS_MEDIAN_SCAN_MIN, compute_measure_nps_vec_with_timing, get_nps_stats};
     use crate::timing::{TimingFormat, compute_timing_segments, timing_data_from_segments};
 
     #[test]
@@ -343,6 +368,24 @@ mod tests {
     #[test]
     fn nps_stats_even_median() {
         assert_eq!(get_nps_stats(&[8.0, 2.0, 4.0, 16.0]), (16.0, 6.0));
+    }
+
+    #[test]
+    fn nps_stats_constant_median() {
+        assert_eq!(get_nps_stats(&[7.5; NPS_MEDIAN_SCAN_MIN]), (7.5, 7.5));
+    }
+
+    #[test]
+    fn nps_stats_zero_majority_median() {
+        let mut nps = [0.0; NPS_MEDIAN_SCAN_MIN + 1];
+        nps[0] = 12.0;
+        nps[1] = 18.0;
+        assert_eq!(get_nps_stats(&nps), (18.0, 0.0));
+    }
+
+    #[test]
+    fn nps_stats_even_zero_half_median() {
+        assert_eq!(get_nps_stats(&[0.0, 0.0, 10.0, 20.0]), (20.0, 5.0));
     }
 
     #[test]

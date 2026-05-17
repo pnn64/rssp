@@ -1,6 +1,6 @@
 [package]
 name = "rssp-cli"
-version = "0.4.40"
+version = "0.4.41"
 edition = "2024"
 authors = ["Patrik Nilsson <perfecttaste@pm.me>"]
 description = "Command-line tools for rssp."
@@ -10,7 +10,7 @@ keywords = ["stepmania", "simfile", "parser", "rust", "rssp"]
 
 [dependencies]
 png = "0.18.0"
-rssp = { path = "../rssp", version = "0.4.40" }
+rssp = { path = "../rssp", version = "0.4.41" }
 
 [[bin]]
 name = "rssp"
