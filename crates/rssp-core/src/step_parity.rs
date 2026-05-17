@@ -1237,6 +1237,11 @@ fn parity_create_rows_from_arrays<const LANES: usize>(
 ) {
     if !has_holds {
         if timing_fakes(timing).is_empty() {
+            if let Some(fixed) = fixed_timing_parts(timing)
+                && parity_create_tap_rows_fixed(g, rows, row_to_beat, cols, fixed)
+            {
+                return;
+            }
             parity_create_rows_no_holds::<LANES, false>(g, rows, row_to_beat, timing, cols);
         } else {
             parity_create_rows_no_holds::<LANES, true>(g, rows, row_to_beat, timing, cols);
@@ -1249,6 +1254,50 @@ fn parity_create_rows_from_arrays<const LANES: usize>(
     } else {
         parity_create_rows_holds::<LANES, true>(g, rows, row_to_beat, timing, cols);
     }
+}
+
+#[inline(always)]
+fn tap_only_mask<const LANES: usize>(row: &[u8; LANES], cols: usize) -> Option<u8> {
+    let mut mask = 0u8;
+    let mut c = 0usize;
+    while c < cols {
+        match row[c] {
+            b'0' => {}
+            b'1' => mask |= 1u8 << c,
+            _ => return None,
+        }
+        c += 1;
+    }
+    Some(mask)
+}
+
+fn parity_create_tap_rows_fixed<const LANES: usize>(
+    g: &mut StepParityGenerator,
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    cols: usize,
+    fixed: FixedTimingParts,
+) -> bool {
+    let copy_len = cols.min(LANES);
+    for (idx, row) in rows.iter().enumerate() {
+        let Some(mask) = tap_only_mask(row, copy_len) else {
+            g.rows.clear();
+            return false;
+        };
+        if mask == 0 {
+            continue;
+        }
+
+        let (_row_i32, beat) = row_quantized(row_to_beat[idx]);
+        let mut out = row_new();
+        out.second = fixed_time_for_beat(fixed, f64::from(beat)) as f32;
+        out.beat = beat;
+        out.note_count = mask.count_ones() as u8;
+        out.note_mask = mask;
+        out.tech_mask = mask;
+        g.rows.push(out);
+    }
+    true
 }
 
 fn parity_create_rows_holds<const LANES: usize, const HAS_FAKES: bool>(

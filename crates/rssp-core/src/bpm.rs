@@ -705,6 +705,10 @@ pub fn compute_bpm_stats(values: &[f64]) -> (f64, f64) {
 pub fn compute_tier_bpm(densities: &[usize], bpms: &[(f64, f64)], bpm: f64) -> f64 {
     use crate::stats::{RunDensity, categorize_measure_density};
 
+    if bpms.len() == 1 {
+        return compute_tier_bpm_fixed(densities, bpms[0].1);
+    }
+
     let max_bpm = bpms
         .iter()
         .map(|&(_, b)| b)
@@ -747,6 +751,42 @@ pub fn compute_tier_bpm(densities: &[usize], bpms: &[(f64, f64)], bpm: f64) -> f
         max_e = max_e.max(run_e);
     }
     if max_e > 0.0 { max_e } else { max_bpm }
+}
+
+fn compute_tier_bpm_fixed(densities: &[usize], bpm: f64) -> f64 {
+    use crate::stats::{RunDensity, categorize_measure_density};
+
+    if !is_display_bpm(bpm) {
+        return bpm;
+    }
+
+    let (mut max_e, mut cat, mut len, mut run_e) = (0.0f64, RunDensity::Break, 0usize, 0.0f64);
+    for &density in densities {
+        let c = categorize_measure_density(density);
+        if c == RunDensity::Break {
+            if len >= 4 {
+                max_e = max_e.max(run_e);
+            }
+            cat = RunDensity::Break;
+            len = 0;
+            run_e = 0.0;
+        } else {
+            if len == 0 || c != cat {
+                if len >= 4 {
+                    max_e = max_e.max(run_e);
+                }
+                cat = c;
+                len = 0;
+                run_e = 0.0;
+            }
+            len += 1;
+            run_e = run_e.max(density as f64 * bpm / 16.0);
+        }
+    }
+    if len >= 4 {
+        max_e = max_e.max(run_e);
+    }
+    if max_e > 0.0 { max_e } else { bpm }
 }
 
 #[must_use]
@@ -806,13 +846,37 @@ pub fn normalize_and_tidy_bpms(param: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_float_digits;
+    use super::{compute_tier_bpm, normalize_float_digits};
 
     #[test]
     fn normalize_float_digits_formats_pairs() {
         assert_eq!(
             normalize_float_digits("0=120, 4.0004 = 150.9995, bad, 8=175.1254"),
             "0.000=120.000,4.000=151.000,8.000=175.125"
+        );
+    }
+
+    #[test]
+    fn fixed_tier_bpm_matches_generic_constant_bpm() {
+        let densities = [0, 16, 16, 16, 16, 0, 20, 20, 0, 24, 24, 24, 24, 32, 32];
+        let fixed = [(0.0, 180.0)];
+        let generic = [(0.0, 180.0), (10_000.0, 180.0)];
+
+        assert_eq!(
+            compute_tier_bpm(&densities, &fixed, 4.0),
+            compute_tier_bpm(&densities, &generic, 4.0)
+        );
+    }
+
+    #[test]
+    fn fixed_tier_bpm_keeps_gimmick_bpm_fallback() {
+        let densities = [16, 16, 16, 16, 20, 20, 20, 20];
+        let fixed = [(0.0, 20_000.0)];
+        let generic = [(0.0, 20_000.0), (10_000.0, 20_000.0)];
+
+        assert_eq!(
+            compute_tier_bpm(&densities, &fixed, 4.0),
+            compute_tier_bpm(&densities, &generic, 4.0)
         );
     }
 }
