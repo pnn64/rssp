@@ -432,9 +432,9 @@ struct Row {
 struct RowCostCtx {
     active_mask: u8,
     mine_mask: u8,
+    side_mask: u8,
     multi_active: bool,
     has_hold: bool,
-    side_active: bool,
 }
 
 const fn row_new() -> Row {
@@ -459,9 +459,9 @@ const fn row_cost_ctx(row: &Row, layout: &StageLayout) -> RowCostCtx {
     RowCostCtx {
         active_mask,
         mine_mask,
+        side_mask: active_mask & layout.side_mask,
         multi_active: active_mask.count_ones() > 1,
         has_hold: row.hold_mask != 0,
-        side_active: active_mask & layout.side_mask != 0,
     }
 }
 
@@ -543,7 +543,6 @@ fn calc_action_cost(
     row: &Row,
     row_ctx: RowCostCtx,
     elapsed: f32,
-    cols: usize,
     left_moved_not_holding: bool,
     right_moved_not_holding: bool,
     prev_row_has_live_hold: bool,
@@ -619,9 +618,13 @@ fn calc_action_cost(
     }
     cost += calc_facing_cost(layout, result);
     cost += calc_spin_cost(layout, initial, result);
-    cost += calc_footswitch_cost(initial, placement, row, elapsed, cols);
-    if row_ctx.side_active {
-        cost += calc_sideswitch_cost(layout, initial, result, placement);
+    if row_ctx.mine_mask == 0
+        && (SLOW_FOOTSWITCH_THRESHOLD..SLOW_FOOTSWITCH_IGNORE).contains(&elapsed)
+    {
+        cost += calc_footswitch_cost(initial, placement, row_ctx.active_mask, elapsed);
+    }
+    if row_ctx.side_mask != 0 {
+        cost += calc_sideswitch_cost(initial, result, placement, row_ctx.side_mask);
     }
     if row_ctx.mine_mask != 0 {
         cost += calc_missed_footswitch_cost(row, jacked_left, jacked_right);
@@ -840,19 +843,15 @@ fn calc_spin_cost(layout: &StageLayout, initial: &State, result: &State) -> f32 
 fn calc_footswitch_cost(
     initial: &State,
     placement: &FootPlacement,
-    row: &Row,
+    active_mask: u8,
     elapsed: f32,
-    cols: usize,
 ) -> f32 {
-    if !(SLOW_FOOTSWITCH_THRESHOLD..SLOW_FOOTSWITCH_IGNORE).contains(&elapsed) {
-        return 0.0;
-    }
-    if row.mine_mask != 0 || row.fake_mine_mask != 0 {
-        return 0.0;
-    }
-
     let time_scaled = elapsed - SLOW_FOOTSWITCH_THRESHOLD;
-    for (i, &res) in placement.iter().enumerate().take(cols) {
+    let mut mask = active_mask;
+    while mask != 0 {
+        let i = mask.trailing_zeros() as usize;
+        mask &= mask - 1;
+        let res = placement[i];
         let init = initial.combined_columns[i];
         if init == Foot::None || res == Foot::None {
             continue;
@@ -865,12 +864,12 @@ fn calc_footswitch_cost(
 }
 
 fn calc_sideswitch_cost(
-    layout: &StageLayout,
     initial: &State,
     result: &State,
     placement: &FootPlacement,
+    side_mask: u8,
 ) -> f32 {
-    let mut mask = layout.side_mask;
+    let mut mask = side_mask;
     let mut count = 0u32;
     while mask != 0 {
         let c = mask.trailing_zeros() as usize;
@@ -1569,7 +1568,6 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
                         &row,
                         row_ctx,
                         elapsed,
-                        g.column_count,
                         left_moved_not_holding,
                         right_moved_not_holding,
                         prev_row_has_live_hold,
