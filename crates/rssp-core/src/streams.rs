@@ -409,11 +409,7 @@ pub fn stream_breakdowns(measures: &[usize]) -> (String, String, String) {
         return no_streams3();
     }
 
-    (
-        format_stream_segments(&segs, StreamBreakdownLevel::Detailed),
-        format_stream_segments(&segs, StreamBreakdownLevel::Partial),
-        format_stream_segments(&segs, StreamBreakdownLevel::Simple),
-    )
+    format_segments3(&segs)
 }
 
 fn no_streams3() -> (String, String, String) {
@@ -481,6 +477,82 @@ fn format_stream_segments(segs: &[StreamSegment], level: StreamBreakdownLevel) -
     }
 }
 
+fn format_segments3(segs: &[StreamSegment]) -> (String, String, String) {
+    let cap = segs.len().saturating_mul(SEGMENT_TEXT_CAP);
+    let mut detailed = String::with_capacity(cap);
+    let mut partial = String::with_capacity(cap);
+    let mut simple = String::with_capacity(cap);
+    let (mut simple_sum, mut simple_broken) = (0usize, false);
+
+    for (i, seg) in segs.iter().enumerate() {
+        let size = seg.end - seg.start;
+        if seg.is_break {
+            if i != 0 && i + 1 != segs.len() {
+                flush_detailed(&mut detailed, size);
+                partial.push_str(break_symbol(size));
+                flush_simple(&mut simple, &mut simple_sum, &mut simple_broken, size);
+            }
+        } else {
+            if i > 0 && !segs[i - 1].is_break {
+                detailed.push('-');
+                partial.push('-');
+                simple_broken = true;
+                simple_sum += 1;
+            }
+            push_usize(&mut detailed, size);
+            push_usize(&mut partial, size);
+            simple_sum += size;
+        }
+    }
+
+    if simple_sum != 0 {
+        push_usize(&mut simple, simple_sum);
+        if simple_broken {
+            simple.push('*');
+        }
+    }
+
+    (
+        nonempty_stream(detailed),
+        nonempty_stream(partial),
+        nonempty_stream(simple),
+    )
+}
+
+fn nonempty_stream(out: String) -> String {
+    if out.is_empty() {
+        "No Streams!".into()
+    } else {
+        out
+    }
+}
+
+fn break_symbol(size: usize) -> &'static str {
+    match size {
+        1..=4 => "-",
+        5..=31 => "/",
+        _ => " | ",
+    }
+}
+
+fn flush_detailed(out: &mut String, size: usize) {
+    out.push_str(" (");
+    push_usize(out, size);
+    out.push_str(") ");
+}
+
+fn flush_simple(out: &mut String, sum: &mut usize, broken: &mut bool, size: usize) {
+    if *sum != 0 {
+        push_usize(out, *sum);
+        if *broken {
+            out.push('*');
+        }
+    }
+    out.push_str(break_symbol(size));
+    *sum = 0;
+    *broken = false;
+}
+
 fn flush_stream(
     out: &mut String,
     sum: &mut usize,
@@ -489,16 +561,8 @@ fn flush_stream(
     level: StreamBreakdownLevel,
     size: usize,
 ) {
-    let sym = match size {
-        1..=4 => "-",
-        5..=31 => "/",
-        _ => " | ",
-    };
-
     if level == StreamBreakdownLevel::Detailed {
-        out.push_str(" (");
-        push_usize(out, size);
-        out.push_str(") ");
+        flush_detailed(out, size);
         return;
     }
 
@@ -512,7 +576,7 @@ fn flush_stream(
     }
 
     if level != StreamBreakdownLevel::Total {
-        out.push_str(sym);
+        out.push_str(break_symbol(size));
     }
 
     *sum = 0;
@@ -556,6 +620,32 @@ mod tests {
         assert_eq!(detailed, "2 2 (2) ~3~ \\1\\ (3) =5=");
         assert_eq!(partial, "5* - ~3~ \\1\\ - =5=");
         assert_eq!(simple, "7* ~3~ \\4\\* =5=");
+    }
+
+    #[test]
+    fn breakdowns_match_levels() {
+        let cases: [&[usize]; 4] = [
+            &[],
+            &[0, 12, 15, 0],
+            &[0, 0, 16, 16, 0, 20, 0, 0, 24, 24, 24, 0],
+            &[16, 0, 16, 0, 0, 32, 32, 0, 0, 0, 0, 24, 0, 20],
+        ];
+
+        for measures in cases {
+            let (detailed, partial, simple) = stream_breakdowns(measures);
+            assert_eq!(
+                detailed,
+                stream_breakdown(measures, StreamBreakdownLevel::Detailed)
+            );
+            assert_eq!(
+                partial,
+                stream_breakdown(measures, StreamBreakdownLevel::Partial)
+            );
+            assert_eq!(
+                simple,
+                stream_breakdown(measures, StreamBreakdownLevel::Simple)
+            );
+        }
     }
 
     #[test]
