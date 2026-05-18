@@ -2086,6 +2086,7 @@ fn is_footswitch(prev: Foot, curr: Foot) -> bool {
 struct ParsedRow {
     chars: [u8; 8],
     columns: u8,
+    mask: u8,
     row: i32,
     beat: f32,
     second: f32,
@@ -2155,8 +2156,29 @@ const fn trim_ws(mut s: &[u8]) -> &[u8] {
 }
 
 #[inline(always)]
-fn has_obj(line: &[u8]) -> bool {
-    line.iter().any(|&b| b != b'0')
+fn obj_mask(line: &[u8]) -> u8 {
+    if line.len() == 4 {
+        return u8::from(line[0] != b'0')
+            | (u8::from(line[1] != b'0') << 1)
+            | (u8::from(line[2] != b'0') << 2)
+            | (u8::from(line[3] != b'0') << 3);
+    }
+    if line.len() == 8 {
+        return u8::from(line[0] != b'0')
+            | (u8::from(line[1] != b'0') << 1)
+            | (u8::from(line[2] != b'0') << 2)
+            | (u8::from(line[3] != b'0') << 3)
+            | (u8::from(line[4] != b'0') << 4)
+            | (u8::from(line[5] != b'0') << 5)
+            | (u8::from(line[6] != b'0') << 6)
+            | (u8::from(line[7] != b'0') << 7);
+    }
+
+    let mut mask = 0u8;
+    for (i, &b) in line.iter().enumerate() {
+        mask |= u8::from(b != b'0') << i;
+    }
+    mask
 }
 
 fn parse_rows<F>(data: &[u8], cols: usize, mut get_second: F) -> Vec<ParsedRow>
@@ -2189,7 +2211,8 @@ where
 
         for (j, &line) in lines.iter().enumerate() {
             let copy = line.len().min(cols);
-            if !has_obj(&line[..copy]) {
+            let mask = obj_mask(&line[..copy]);
+            if mask == 0 {
                 continue;
             }
 
@@ -2203,6 +2226,7 @@ where
             rows.push(ParsedRow {
                 chars,
                 columns: cols as u8,
+                mask,
                 row: note_row,
                 beat,
                 second,
@@ -2324,7 +2348,10 @@ fn build_notes(rows: &[ParsedRow], timing: Option<&TimingData>) -> Vec<Intermedi
     for row in rows {
         let row_fake = timing.is_some_and(|t| is_fake_at_row(t, row.row));
 
-        for c in 0..cols {
+        let mut mask = row.mask;
+        while mask != 0 {
+            let c = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
             parse_note_char(
                 &mut notes,
                 &mut hold_idx,
