@@ -144,19 +144,23 @@ pub fn compute_stream_counts(measures: &[usize]) -> StreamCounts {
     let (mut seen_stream, mut leading_breaks, mut pending_breaks) = (false, 0usize, 0usize);
 
     for &d in measures {
-        match categorize_measure_density(d) {
-            RunDensity::Run16 => sc.run16_streams += 1,
-            RunDensity::Run20 => sc.run20_streams += 1,
-            RunDensity::Run24 => sc.run24_streams += 1,
-            RunDensity::Run32 => sc.run32_streams += 1,
-            RunDensity::Break => {
-                if seen_stream {
-                    pending_breaks += 1;
-                } else {
-                    leading_breaks += 1;
-                }
-                continue;
+        if d < STREAM_THRESHOLD {
+            if seen_stream {
+                pending_breaks += 1;
+            } else {
+                leading_breaks += 1;
             }
+            continue;
+        }
+
+        if d >= 32 {
+            sc.run32_streams += 1;
+        } else if d >= 24 {
+            sc.run24_streams += 1;
+        } else if d >= 20 {
+            sc.run20_streams += 1;
+        } else {
+            sc.run16_streams += 1;
         }
 
         if seen_stream {
