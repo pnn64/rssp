@@ -1941,14 +1941,6 @@ fn calculate_tech_counts(
         pos
     };
 
-    let col_foot = |combined: &FootPlacement, mask: u8, c: usize| -> Foot {
-        if (mask & (1u8 << c)) != 0 {
-            combined[c]
-        } else {
-            Foot::None
-        }
-    };
-
     let mut prev_prev_pos = [INVALID_COLUMN; NUM_FEET];
     let mut prev_pos = hit_positions(&placements[0], rows[0].tech_mask);
 
@@ -1985,42 +1977,33 @@ fn calculate_tech_counts(
         }
 
         // Footswitches by arrow type
-        let is_switch = |c: usize| -> bool {
-            let (p, r) = (
-                col_foot(prev_combined, prev.tech_mask, c),
-                col_foot(curr_combined, curr.tech_mask, c),
-            );
-            p != Foot::None
-                && r != Foot::None
-                && p != r
-                && OTHER_PART_OF_FOOT[foot_idx(p)] != r
-                && elapsed < FOOTSWITCH_CUTOFF
-        };
-
-        let mut mask = layout.up_mask;
-        while mask != 0 {
-            let c = mask.trailing_zeros() as usize;
-            mask &= mask - 1;
-            if is_switch(c) {
-                out.up_footswitches += 1;
-                out.footswitches += 1;
+        if elapsed < FOOTSWITCH_CUTOFF {
+            let switch_mask = prev.tech_mask & curr.tech_mask;
+            let mut mask = layout.up_mask & switch_mask;
+            while mask != 0 {
+                let c = mask.trailing_zeros() as usize;
+                mask &= mask - 1;
+                if is_footswitch(prev_combined[c], curr_combined[c]) {
+                    out.up_footswitches += 1;
+                    out.footswitches += 1;
+                }
             }
-        }
-        mask = layout.down_mask;
-        while mask != 0 {
-            let c = mask.trailing_zeros() as usize;
-            mask &= mask - 1;
-            if is_switch(c) {
-                out.down_footswitches += 1;
-                out.footswitches += 1;
+            mask = layout.down_mask & switch_mask;
+            while mask != 0 {
+                let c = mask.trailing_zeros() as usize;
+                mask &= mask - 1;
+                if is_footswitch(prev_combined[c], curr_combined[c]) {
+                    out.down_footswitches += 1;
+                    out.footswitches += 1;
+                }
             }
-        }
-        mask = layout.side_mask;
-        while mask != 0 {
-            let c = mask.trailing_zeros() as usize;
-            mask &= mask - 1;
-            if is_switch(c) {
-                out.sideswitches += 1;
+            mask = layout.side_mask & switch_mask;
+            while mask != 0 {
+                let c = mask.trailing_zeros() as usize;
+                mask &= mask - 1;
+                if is_footswitch(prev_combined[c], curr_combined[c]) {
+                    out.sideswitches += 1;
+                }
             }
         }
 
@@ -2089,6 +2072,14 @@ fn calculate_tech_counts(
         prev_pos = curr_pos;
     }
     out
+}
+
+#[inline(always)]
+fn is_footswitch(prev: Foot, curr: Foot) -> bool {
+    prev != Foot::None
+        && curr != Foot::None
+        && prev != curr
+        && OTHER_PART_OF_FOOT[foot_idx(prev)] != curr
 }
 
 // --- Parsing ---
