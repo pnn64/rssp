@@ -1,13 +1,14 @@
 use std::cmp::Ordering;
 
 use crate::bpm::{clean_timing_map, is_display_bpm};
+use crate::math::lrint_f32;
 use crate::parse::{
     decode_bytes, extract_sections, normalize_chart_desc, parse_offset_seconds, parse_version,
     unescape_trim,
 };
 use crate::timing::{
-    TimingData, compute_timing_segments, fixed_time_for_beat, fixed_timing_parts,
-    get_time_for_beat_f32, steps_timing_allowed, timing_data_from_segments, timing_format_from_ext,
+    ROWS_PER_BEAT, TimingData, compute_timing_segments, fixed_timing_parts, get_time_for_beat_f32,
+    steps_timing_allowed, timing_data_from_segments, timing_format_from_ext,
 };
 
 const NPS_MEDIAN_SCAN_MIN: usize = 64;
@@ -214,10 +215,10 @@ fn compute_measure_nps_vec_fixed(
     parts: crate::timing::FixedTimingParts,
 ) -> Vec<f64> {
     let mut out = Vec::with_capacity(densities.len());
-    let mut start = fixed_time_for_beat(parts, 0.0);
+    let mut start = fixed_measure_time(parts, 0);
 
     for (i, &d) in densities.iter().enumerate() {
-        let end = fixed_time_for_beat(parts, (i as f64 + 1.0) * 4.0);
+        let end = fixed_measure_time(parts, i + 1);
         let dur = end - start;
         out.push(if d == 0 || dur <= 0.12 {
             0.0
@@ -228,6 +229,14 @@ fn compute_measure_nps_vec_fixed(
     }
 
     out
+}
+
+#[inline(always)]
+fn fixed_measure_time(parts: crate::timing::FixedTimingParts, measure: usize) -> f64 {
+    let (start, bps, global_offset) = parts;
+    let beat = measure as f64 * 4.0;
+    let row = lrint_f32(beat as f32 * ROWS_PER_BEAT as f32);
+    f64::from(start + (row as f32 / ROWS_PER_BEAT as f32) / bps) - global_offset
 }
 
 fn compute_nps_iter<F: Fn(usize) -> f64>(densities: &[usize], get_bpm: F) -> Vec<f64> {

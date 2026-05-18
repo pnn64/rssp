@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 use crate::timing::{
     FixedTimingParts, ROWS_PER_BEAT, TimingData, beat_to_note_row_f32, fakes as timing_fakes,
-    fixed_time_for_beat, fixed_timing_parts, get_time_for_beat_f32, is_fake_at_row,
+    fixed_timing_parts, get_time_for_beat_f32, is_fake_at_row,
 };
 
 const INVALID_COLUMN: i8 = -1;
@@ -1311,9 +1311,9 @@ fn parity_create_tap_rows_fixed<const LANES: usize>(
             continue;
         }
 
-        let (_row_i32, beat) = row_quantized(row_to_beat[idx]);
+        let (row_i32, beat) = row_quantized(row_to_beat[idx]);
         let mut out = row_new();
-        out.second = fixed_time_for_beat(fixed, f64::from(beat)) as f32;
+        out.second = fixed_row_time(fixed, row_i32);
         out.beat = beat;
         out.note_count = mask.count_ones() as u8;
         out.note_mask = mask;
@@ -1342,7 +1342,7 @@ fn parity_create_rows_holds<const LANES: usize, const HAS_FAKES: bool>(
             continue;
         }
         let (row_i32, beat) = row_quantized(row_to_beat[idx]);
-        let second = time_for_parity_row(timing, fixed, beat);
+        let second = time_for_parity_row(timing, fixed, row_i32, beat);
         let row_fake = HAS_FAKES && is_fake_at_row(timing, row_i32);
 
         while nonzero_mask != 0 {
@@ -1390,7 +1390,7 @@ fn parity_create_rows_no_holds<const LANES: usize, const HAS_FAKES: bool>(
             continue;
         }
         let (row_i32, beat) = row_quantized(row_to_beat[idx]);
-        let second = time_for_parity_row(timing, fixed, beat);
+        let second = time_for_parity_row(timing, fixed, row_i32, beat);
         let row_fake = HAS_FAKES && is_fake_at_row(timing, row_i32);
 
         while nonzero_mask != 0 {
@@ -1412,11 +1412,22 @@ fn parity_create_rows_no_holds<const LANES: usize, const HAS_FAKES: bool>(
 }
 
 #[inline(always)]
-fn time_for_parity_row(timing: &TimingData, fixed: Option<FixedTimingParts>, beat: f32) -> f32 {
+fn time_for_parity_row(
+    timing: &TimingData,
+    fixed: Option<FixedTimingParts>,
+    row: i32,
+    beat: f32,
+) -> f32 {
     fixed.map_or_else(
         || get_time_for_beat_f32(timing, f64::from(beat)) as f32,
-        |parts| fixed_time_for_beat(parts, f64::from(beat)) as f32,
+        |parts| fixed_row_time(parts, row),
     )
+}
+
+#[inline(always)]
+fn fixed_row_time(parts: FixedTimingParts, row: i32) -> f32 {
+    let (start, bps, global_offset) = parts;
+    (f64::from(start + (row as f32 / ROWS_PER_BEAT as f32) / bps) - global_offset) as f32
 }
 
 fn rows_have_holds<const LANES: usize>(rows: &[[u8; LANES]], cols: usize) -> bool {
