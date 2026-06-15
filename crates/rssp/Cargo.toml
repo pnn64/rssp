@@ -60,6 +60,11 @@ path = "tests/tech_counts_parity.rs"
 harness = false
 
 [[test]]
+name = "note_annotations_parity"
+path = "tests/note_annotations_parity.rs"
+harness = false
+
+[[test]]
 name = "timing_parity"
 path = "tests/timing_parity.rs"
 harness = false

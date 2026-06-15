@@ -557,6 +557,7 @@ fn empty_course_chart(step_type: &str, course_difficulty: Difficulty, meter: i32
         candle_total: 0,
         candle_percent: 0.0,
         tech_counts: crate::step_parity::TechCounts::default(),
+        note_annotations: None,
         custom_patterns: Vec::new(),
         short_hash: String::new(),
         bpm_neutral_hash: String::new(),

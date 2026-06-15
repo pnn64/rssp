@@ -249,6 +249,7 @@ fn compute_chart_values(
         mono_threshold: DEFAULT_MONO_THRESHOLD,
         custom_patterns: Vec::new(),
         compute_tech_counts: true,
+        compute_note_annotations: false,
         compute_pattern_counts: true,
         translate_markers: false,
     };

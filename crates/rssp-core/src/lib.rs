@@ -20,4 +20,4 @@ pub use meta::{
     supported_stepstype_lanes_bytes,
 };
 pub use nps::{ChartNpsInfo, compute_chart_peak_nps};
-pub use step_parity::TechCounts;
+pub use step_parity::{Foot, RowAnnotation, TechCounts};

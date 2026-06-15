@@ -45,6 +45,7 @@ pub struct AnalysisOptions {
     pub mono_threshold: usize,
     pub custom_patterns: Vec<String>,
     pub compute_tech_counts: bool,
+    pub compute_note_annotations: bool,
     pub compute_pattern_counts: bool,
     pub translate_markers: bool,
 }
@@ -56,6 +57,7 @@ impl Default for AnalysisOptions {
             mono_threshold: 0,
             custom_patterns: Vec::new(),
             compute_tech_counts: true,
+            compute_note_annotations: false,
             compute_pattern_counts: true,
             translate_markers: false,
         }
@@ -416,7 +418,8 @@ fn build_chart_summary(
     };
 
     let compute_patterns = lanes == 4 && options.compute_pattern_counts;
-    let rows_collected = compute_patterns || options.compute_tech_counts;
+    let want_parity_rows = options.compute_tech_counts || options.compute_note_annotations;
+    let rows_collected = compute_patterns || want_parity_rows;
     let (mut rows4, mut rows8) = (Vec::new(), Vec::new());
     let (mut minimized_chart, mut stats, measure_densities, row_to_beat, last_beat, bitmasks) =
         if compute_patterns {
@@ -431,7 +434,7 @@ fn build_chart_summary(
                 last_beat,
                 Some(bitmasks),
             )
-        } else if !options.compute_tech_counts {
+        } else if !want_parity_rows {
             let (chart, stats, densities, row_to_beat, last_beat) =
                 minimize_chart_count_rows(chart_data, lanes);
             (chart, stats, densities, row_to_beat, last_beat, None)
@@ -748,6 +751,35 @@ fn build_chart_summary(
     let mines_nonfake = timing_stats.mines;
     stats = timing_stats;
 
+    let note_annotations = if options.compute_note_annotations {
+        let annotated = match lanes {
+            4 => {
+                let scratch = parity_scratch(parity_scratch4);
+                step_parity::annotate_timing_rows_known_holds::<4>(
+                    &rows4,
+                    &row_to_beat,
+                    timing,
+                    has_hold_notes,
+                    scratch,
+                )
+            }
+            8 => {
+                let scratch = parity_scratch(parity_scratch8);
+                step_parity::annotate_timing_rows_known_holds::<8>(
+                    &rows8,
+                    &row_to_beat,
+                    timing,
+                    has_hold_notes,
+                    scratch,
+                )
+            }
+            _ => Vec::new(),
+        };
+        Some(annotated)
+    } else {
+        None
+    };
+
     let elapsed_chart = chart_start_time.elapsed();
 
     Some((
@@ -787,6 +819,7 @@ fn build_chart_summary(
             candle_total,
             candle_percent,
             tech_counts,
+            note_annotations,
             custom_patterns,
             short_hash: metrics.short_hash,
             bpm_neutral_hash: metrics.bpm_neutral_hash,

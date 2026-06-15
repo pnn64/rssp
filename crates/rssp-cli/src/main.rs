@@ -148,6 +148,7 @@ fn main() -> io::Result<()> {
         mono_threshold,
         custom_patterns,
         compute_tech_counts: !skip_tech,
+        compute_note_annotations: false,
         compute_pattern_counts: !skip_patterns,
         translate_markers: false,
     };

@@ -12,7 +12,7 @@ use crate::patterns::{CustomPatternSummary, PatternCounts, PatternVariant};
 use crate::stats::{
     ArrowStats, RADAR_CATEGORY_COUNT, StreamCounts, measure_equally_spaced, stream_sequences,
 };
-use crate::step_parity::TechCounts;
+use crate::step_parity::{RowAnnotation, TechCounts};
 use crate::timing::{
     SpeedUnit, TimingFormat, TimingSegments, beat_to_note_row, format_bpm_segments_like_itg,
     normalize_scrolls_like_itg, normalize_speeds_like_itg, note_row_to_beat, steps_timing_allowed,
@@ -225,6 +225,7 @@ pub struct ChartSummary {
     pub candle_total: u32,
     pub candle_percent: f64,
     pub tech_counts: TechCounts,
+    pub note_annotations: Option<Vec<RowAnnotation>>,
     pub custom_patterns: Vec<CustomPatternSummary>,
     pub short_hash: String,
     pub bpm_neutral_hash: String,
