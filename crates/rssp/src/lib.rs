@@ -26,5 +26,5 @@ pub(crate) use rssp_core::chart_timing_tag_raw;
 
 pub use report::{ChartSummary, SimfileSummary};
 pub use report::{CourseEntrySummary, CourseSummary};
-pub use rssp_core::{ChartDuration, ChartNpsInfo, TechCounts, TimingOffsets};
+pub use rssp_core::{ChartDuration, ChartNpsInfo, Foot, RowAnnotation, TechCounts, TimingOffsets};
 pub use rssp_core::{compute_chart_durations, compute_chart_peak_nps};

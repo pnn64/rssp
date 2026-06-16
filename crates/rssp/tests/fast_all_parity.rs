@@ -2146,6 +2146,7 @@ fn run_rssp_json(raw_bytes: &[u8], extension: &str) -> Result<RsspJsonFile, Stri
         mono_threshold: 6,
         custom_patterns: Vec::new(),
         compute_tech_counts: false,
+        compute_note_annotations: false,
         compute_pattern_counts: false,
         translate_markers: false,
     };

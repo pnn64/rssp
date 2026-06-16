@@ -1910,6 +1910,21 @@ pub struct TechCounts {
     pub doublesteps: u32,
 }
 
+impl core::ops::AddAssign for TechCounts {
+    fn add_assign(&mut self, o: Self) {
+        self.crossovers += o.crossovers;
+        self.half_crossovers += o.half_crossovers;
+        self.full_crossovers += o.full_crossovers;
+        self.footswitches += o.footswitches;
+        self.up_footswitches += o.up_footswitches;
+        self.down_footswitches += o.down_footswitches;
+        self.sideswitches += o.sideswitches;
+        self.jacks += o.jacks;
+        self.brackets += o.brackets;
+        self.doublesteps += o.doublesteps;
+    }
+}
+
 fn calculate_tech_counts(
     rows: &[Row],
     placements: &[FootPlacement],
@@ -1945,130 +1960,328 @@ fn calculate_tech_counts(
     for i in 1..rows.len() {
         let (curr, prev) = (&rows[i], &rows[i - 1]);
         let (curr_combined, prev_combined) = (&placements[i], &placements[i - 1]);
-        let elapsed = curr.second - prev.second;
 
         let curr_pos = hit_positions(curr_combined, curr.tech_mask);
 
-        // Jacks and doublesteps
-        if curr.note_count == 1 && prev.note_count == 1 {
-            for &foot in &FEET {
-                let (cc, pc) = (curr_pos[foot_idx(foot)], prev_pos[foot_idx(foot)]);
-                if cc == INVALID_COLUMN || pc == INVALID_COLUMN {
-                    continue;
-                }
-                if cc == pc && elapsed < JACK_CUTOFF {
-                    out.jacks += 1;
-                } else if cc != pc && elapsed < DOUBLESTEP_CUTOFF {
-                    out.doublesteps += 1;
-                }
-            }
-        }
-
-        // Brackets
-        if curr.note_count >= 2 {
-            if curr_pos[1] != INVALID_COLUMN && curr_pos[2] != INVALID_COLUMN {
-                out.brackets += 1;
-            }
-            if curr_pos[3] != INVALID_COLUMN && curr_pos[4] != INVALID_COLUMN {
-                out.brackets += 1;
-            }
-        }
-
-        // Footswitches by arrow type
-        if elapsed < FOOTSWITCH_CUTOFF {
-            let switch_mask = prev.tech_mask & curr.tech_mask;
-            let mut mask = layout.up_mask & switch_mask;
-            while mask != 0 {
-                let c = mask.trailing_zeros() as usize;
-                mask &= mask - 1;
-                if is_footswitch(prev_combined[c], curr_combined[c]) {
-                    out.up_footswitches += 1;
-                    out.footswitches += 1;
-                }
-            }
-            mask = layout.down_mask & switch_mask;
-            while mask != 0 {
-                let c = mask.trailing_zeros() as usize;
-                mask &= mask - 1;
-                if is_footswitch(prev_combined[c], curr_combined[c]) {
-                    out.down_footswitches += 1;
-                    out.footswitches += 1;
-                }
-            }
-            mask = layout.side_mask & switch_mask;
-            while mask != 0 {
-                let c = mask.trailing_zeros() as usize;
-                mask &= mask - 1;
-                if is_footswitch(prev_combined[c], curr_combined[c]) {
-                    out.sideswitches += 1;
-                }
-            }
-        }
-
-        // Crossovers - restored original logic with prev_prev checks
-        let left_heel = curr_pos[foot_idx(Foot::LeftHeel)];
-        let left_toe = curr_pos[foot_idx(Foot::LeftToe)];
-        let right_heel = curr_pos[foot_idx(Foot::RightHeel)];
-        let right_toe = curr_pos[foot_idx(Foot::RightToe)];
-
-        let prev_left_heel = prev_pos[foot_idx(Foot::LeftHeel)];
-        let prev_left_toe = prev_pos[foot_idx(Foot::LeftToe)];
-        let prev_right_heel = prev_pos[foot_idx(Foot::RightHeel)];
-        let prev_right_toe = prev_pos[foot_idx(Foot::RightToe)];
-
-        // Right foot crossing over left
-        if right_heel != INVALID_COLUMN
-            && prev_left_heel != INVALID_COLUMN
-            && prev_right_heel == INVALID_COLUMN
-        {
-            let left_pos = layout_avg_point(layout, prev_left_heel, prev_left_toe);
-            let right_pos = layout_avg_point(layout, right_heel, right_toe);
-            if right_pos.x < left_pos.x {
-                if i > 1 {
-                    let prev_prev_rh = prev_prev_pos[foot_idx(Foot::RightHeel)];
-                    if prev_prev_rh != INVALID_COLUMN && prev_prev_rh != right_heel {
-                        let prev_prev_pos = layout.columns[prev_prev_rh as usize];
-                        if prev_prev_pos.x > left_pos.x {
-                            out.full_crossovers += 1;
-                        } else {
-                            out.half_crossovers += 1;
-                        }
-                        out.crossovers += 1;
-                    }
-                } else {
-                    out.half_crossovers += 1;
-                    out.crossovers += 1;
-                }
-            }
-        // Left foot crossing over right
-        } else if left_heel != INVALID_COLUMN
-            && prev_right_heel != INVALID_COLUMN
-            && prev_left_heel == INVALID_COLUMN
-        {
-            let left_pos = layout_avg_point(layout, left_heel, left_toe);
-            let right_pos = layout_avg_point(layout, prev_right_heel, prev_right_toe);
-            if right_pos.x < left_pos.x {
-                if i > 1 {
-                    let prev_prev_lh = prev_prev_pos[foot_idx(Foot::LeftHeel)];
-                    if prev_prev_lh != INVALID_COLUMN && prev_prev_lh != left_heel {
-                        let prev_prev_pos = layout.columns[prev_prev_lh as usize];
-                        if right_pos.x > prev_prev_pos.x {
-                            out.full_crossovers += 1;
-                        } else {
-                            out.half_crossovers += 1;
-                        }
-                        out.crossovers += 1;
-                    }
-                } else {
-                    out.half_crossovers += 1;
-                    out.crossovers += 1;
-                }
-            }
-        }
+        // Per-row tech is computed by the shared classifier so the aggregate
+        // counts here and the per-row annotation flags never drift.
+        out += classify_row_tech(
+            layout,
+            curr,
+            prev,
+            curr_combined,
+            prev_combined,
+            &curr_pos,
+            &prev_pos,
+            &prev_prev_pos,
+            i,
+        );
 
         prev_prev_pos = prev_pos;
         prev_pos = curr_pos;
     }
+    out
+}
+
+/// Classify all tech categories triggered by a single judged row, returning
+/// them as per-row counts. This is the single source of truth shared by
+/// [`calculate_tech_counts`] (which accumulates the counts) and
+/// [`collect_annotations`] (which stores them per row). Summing the per-row
+/// results over a chart reproduces the aggregate [`TechCounts`], so the two can
+/// never drift apart.
+#[allow(clippy::too_many_arguments)]
+fn classify_row_tech(
+    layout: &StageLayout,
+    curr: &Row,
+    prev: &Row,
+    curr_combined: &FootPlacement,
+    prev_combined: &FootPlacement,
+    curr_pos: &[i8; NUM_FEET],
+    prev_pos: &[i8; NUM_FEET],
+    prev_prev_pos: &[i8; NUM_FEET],
+    i: usize,
+) -> TechCounts {
+    let mut out = TechCounts::default();
+    let elapsed = curr.second - prev.second;
+
+    // Jacks and doublesteps
+    if curr.note_count == 1 && prev.note_count == 1 {
+        for &foot in &FEET {
+            let (cc, pc) = (curr_pos[foot_idx(foot)], prev_pos[foot_idx(foot)]);
+            if cc == INVALID_COLUMN || pc == INVALID_COLUMN {
+                continue;
+            }
+            if cc == pc && elapsed < JACK_CUTOFF {
+                out.jacks += 1;
+            } else if cc != pc && elapsed < DOUBLESTEP_CUTOFF {
+                out.doublesteps += 1;
+            }
+        }
+    }
+
+    // Brackets
+    if curr.note_count >= 2 {
+        if curr_pos[1] != INVALID_COLUMN && curr_pos[2] != INVALID_COLUMN {
+            out.brackets += 1;
+        }
+        if curr_pos[3] != INVALID_COLUMN && curr_pos[4] != INVALID_COLUMN {
+            out.brackets += 1;
+        }
+    }
+
+    // Footswitches by arrow type
+    if elapsed < FOOTSWITCH_CUTOFF {
+        let switch_mask = prev.tech_mask & curr.tech_mask;
+        let mut mask = layout.up_mask & switch_mask;
+        while mask != 0 {
+            let c = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
+            if is_footswitch(prev_combined[c], curr_combined[c]) {
+                out.up_footswitches += 1;
+                out.footswitches += 1;
+            }
+        }
+        mask = layout.down_mask & switch_mask;
+        while mask != 0 {
+            let c = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
+            if is_footswitch(prev_combined[c], curr_combined[c]) {
+                out.down_footswitches += 1;
+                out.footswitches += 1;
+            }
+        }
+        mask = layout.side_mask & switch_mask;
+        while mask != 0 {
+            let c = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
+            if is_footswitch(prev_combined[c], curr_combined[c]) {
+                out.sideswitches += 1;
+            }
+        }
+    }
+
+    // Crossovers
+    match classify_crossover(layout, curr_pos, prev_pos, prev_prev_pos, i) {
+        CrossoverKind::Full => {
+            out.full_crossovers += 1;
+            out.crossovers += 1;
+        }
+        CrossoverKind::Half => {
+            out.half_crossovers += 1;
+            out.crossovers += 1;
+        }
+        CrossoverKind::None => {}
+    }
+
+    out
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CrossoverKind {
+    None,
+    Half,
+    Full,
+}
+
+/// Classify whether the current row is a crossover relative to the previous
+/// (and prev-prev) foot positions. This is the single source of truth shared by
+/// `calculate_tech_counts` (for aggregate counting) and `collect_annotations`
+/// (for per-row crossover cue annotations), so the two never drift apart.
+fn classify_crossover(
+    layout: &StageLayout,
+    curr_pos: &[i8; NUM_FEET],
+    prev_pos: &[i8; NUM_FEET],
+    prev_prev_pos: &[i8; NUM_FEET],
+    i: usize,
+) -> CrossoverKind {
+    let left_heel = curr_pos[foot_idx(Foot::LeftHeel)];
+    let left_toe = curr_pos[foot_idx(Foot::LeftToe)];
+    let right_heel = curr_pos[foot_idx(Foot::RightHeel)];
+    let right_toe = curr_pos[foot_idx(Foot::RightToe)];
+
+    let prev_left_heel = prev_pos[foot_idx(Foot::LeftHeel)];
+    let prev_left_toe = prev_pos[foot_idx(Foot::LeftToe)];
+    let prev_right_heel = prev_pos[foot_idx(Foot::RightHeel)];
+    let prev_right_toe = prev_pos[foot_idx(Foot::RightToe)];
+
+    // Right foot crossing over left
+    if right_heel != INVALID_COLUMN
+        && prev_left_heel != INVALID_COLUMN
+        && prev_right_heel == INVALID_COLUMN
+    {
+        let left_pos = layout_avg_point(layout, prev_left_heel, prev_left_toe);
+        let right_pos = layout_avg_point(layout, right_heel, right_toe);
+        if right_pos.x < left_pos.x {
+            if i > 1 {
+                let prev_prev_rh = prev_prev_pos[foot_idx(Foot::RightHeel)];
+                if prev_prev_rh != INVALID_COLUMN && prev_prev_rh != right_heel {
+                    let prev_prev_point = layout.columns[prev_prev_rh as usize];
+                    return if prev_prev_point.x > left_pos.x {
+                        CrossoverKind::Full
+                    } else {
+                        CrossoverKind::Half
+                    };
+                }
+            } else {
+                return CrossoverKind::Half;
+            }
+        }
+    // Left foot crossing over right
+    } else if left_heel != INVALID_COLUMN
+        && prev_right_heel != INVALID_COLUMN
+        && prev_left_heel == INVALID_COLUMN
+    {
+        let left_pos = layout_avg_point(layout, left_heel, left_toe);
+        let right_pos = layout_avg_point(layout, prev_right_heel, prev_right_toe);
+        if right_pos.x < left_pos.x {
+            if i > 1 {
+                let prev_prev_lh = prev_prev_pos[foot_idx(Foot::LeftHeel)];
+                if prev_prev_lh != INVALID_COLUMN && prev_prev_lh != left_heel {
+                    let prev_prev_point = layout.columns[prev_prev_lh as usize];
+                    return if right_pos.x > prev_prev_point.x {
+                        CrossoverKind::Full
+                    } else {
+                        CrossoverKind::Half
+                    };
+                }
+            } else {
+                return CrossoverKind::Half;
+            }
+        }
+    }
+
+    CrossoverKind::None
+}
+
+/// Per-row StepParity annotation, mirroring the full data the engine's
+/// `GetNoteAnnotations()` exposes (and Simply Love's `CrossoverCues.lua` reads):
+/// the beat, the elapsed second, the set of foot-bearing columns
+/// (`column_mask`, equivalent to `footPlacement` keys), the foot assigned to
+/// each column (via [`foot`](Self::foot) / [`feet`](Self::feet)), and the full
+/// per-row tech classification (`row_tech`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct RowAnnotation {
+    pub beat: f32,
+    pub second: f32,
+    /// Occupancy bitmask of the foot-bearing columns this row (0-indexed) — the
+    /// bitset form of [`feet`](Self::feet). Equivalent to the engine's
+    /// `footPlacement` keys.
+    pub column_mask: u8,
+    /// Foot assigned to each column (`Foot::None` where no foot steps this row).
+    /// Private so the storage width is not part of the public API; read it via
+    /// [`foot`](Self::foot) / [`feet`](Self::feet).
+    feet: [Foot; MAX_COLUMNS],
+    /// Full per-row tech classification (per-category counts for this row). The
+    /// per-row counts sum to the chart's aggregate [`TechCounts`].
+    pub row_tech: TechCounts,
+}
+
+impl RowAnnotation {
+    /// Number of feet placed on this row (`== column_mask.count_ones()`).
+    #[inline]
+    pub fn foot_count(&self) -> u32 {
+        self.column_mask.count_ones()
+    }
+
+    /// Foot assigned to `column` (`Foot::None` if no foot steps there or the
+    /// column is out of range).
+    #[inline]
+    pub fn foot(&self, column: usize) -> Foot {
+        self.feet.get(column).copied().unwrap_or(Foot::None)
+    }
+
+    /// Per-column foot assignment, indexed by column (`Foot::None` where no foot
+    /// steps). Only the columns in `column_mask` are set.
+    #[inline]
+    pub fn feet(&self) -> &[Foot] {
+        &self.feet
+    }
+}
+
+fn collect_annotations(
+    rows: &[Row],
+    placements: &[FootPlacement],
+    layout: &StageLayout,
+) -> Vec<RowAnnotation> {
+    let n = rows.len();
+    let mut out = Vec::with_capacity(n);
+    if n == 0 || placements.len() != n {
+        return out;
+    }
+
+    let cols = layout_cols(layout).min(MAX_COLUMNS);
+
+    let hit_positions = |combined: &FootPlacement, mask: u8| -> [i8; NUM_FEET] {
+        let mut pos = [INVALID_COLUMN; NUM_FEET];
+        let mut m = mask;
+        while m != 0 {
+            let c = m.trailing_zeros() as usize;
+            m &= m - 1;
+            if c >= cols {
+                continue;
+            }
+            let foot = combined[c];
+            if foot != Foot::None {
+                pos[foot_idx(foot)] = c as i8;
+            }
+        }
+        pos
+    };
+
+    // Foot assigned to each foot-bearing column (`Foot::None` elsewhere).
+    let feet_of = |combined: &FootPlacement, mask: u8| -> [Foot; MAX_COLUMNS] {
+        let mut feet = [Foot::None; MAX_COLUMNS];
+        let mut m = mask;
+        while m != 0 {
+            let c = m.trailing_zeros() as usize;
+            m &= m - 1;
+            if c < cols {
+                feet[c] = combined[c];
+            }
+        }
+        feet
+    };
+
+    out.push(RowAnnotation {
+        beat: rows[0].beat,
+        second: rows[0].second,
+        column_mask: rows[0].tech_mask,
+        feet: feet_of(&placements[0], rows[0].tech_mask),
+        row_tech: TechCounts::default(),
+    });
+
+    let mut prev_prev_pos = [INVALID_COLUMN; NUM_FEET];
+    let mut prev_pos = hit_positions(&placements[0], rows[0].tech_mask);
+
+    for i in 1..n {
+        let (curr, prev) = (&rows[i], &rows[i - 1]);
+        let (curr_combined, prev_combined) = (&placements[i], &placements[i - 1]);
+        let curr_pos = hit_positions(curr_combined, curr.tech_mask);
+
+        let tech = classify_row_tech(
+            layout,
+            curr,
+            prev,
+            curr_combined,
+            prev_combined,
+            &curr_pos,
+            &prev_pos,
+            &prev_prev_pos,
+            i,
+        );
+
+        out.push(RowAnnotation {
+            beat: curr.beat,
+            second: curr.second,
+            column_mask: curr.tech_mask,
+            feet: feet_of(curr_combined, curr.tech_mask),
+            row_tech: tech,
+        });
+
+        prev_prev_pos = prev_pos;
+        prev_pos = curr_pos;
+    }
+
     out
 }
 
@@ -2511,6 +2724,47 @@ pub fn analyze_timing_rows_known_holds<const LANES: usize>(
     )
 }
 
+/// Per-row crossover annotations for the given row arrays, mirroring
+/// [`analyze_timing_rows`] but returning [`RowAnnotation`] for every judged
+/// parity row instead of aggregate [`TechCounts`]. Intended for gameplay
+/// features (e.g. crossover cues) that need to know which rows are crossovers
+/// and where the feet land.
+pub fn annotate_timing_rows<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    scratch: &mut TimingRowsScratch<LANES>,
+) -> Vec<RowAnnotation> {
+    let has_holds = rows_have_holds(rows, layout_cols(scratch.generator.layout));
+    annotate_timing_rows_known_holds(rows, row_to_beat, timing, has_holds, scratch)
+}
+
+pub fn annotate_timing_rows_known_holds<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    has_holds: bool,
+    scratch: &mut TimingRowsScratch<LANES>,
+) -> Vec<RowAnnotation> {
+    let cols = layout_cols(scratch.generator.layout);
+    if !parity_analyze_rows(
+        &mut scratch.generator,
+        &mut scratch.hold_heads,
+        rows,
+        row_to_beat,
+        timing,
+        cols,
+        has_holds,
+    ) {
+        return Vec::new();
+    }
+    collect_annotations(
+        &scratch.generator.rows,
+        &scratch.generator.result_columns,
+        scratch.generator.layout,
+    )
+}
+
 fn time_between_beats(start: f32, end: f32, bpm_map: &[(f64, f64)]) -> f64 {
     if end <= start {
         return 0.0;
@@ -2645,5 +2899,105 @@ mod tests {
 ;",
             true,
         );
+    }
+
+    fn annotations_for(data: &[u8]) -> (TechCounts, Vec<RowAnnotation>) {
+        let timing = basic_timing();
+        let (minimized, _stats, _densities, rows, row_to_beat, _last) =
+            minimize_rows_typed::<4>(data);
+        let counts = analyze_timing_lanes(&minimized, &timing, 4);
+        let mut scratch = timing_rows_scratch::<4>().expect("dance-single layout");
+        let has_holds = rows_have_holds(&rows, 4);
+        let annotations =
+            annotate_timing_rows_known_holds(&rows, &row_to_beat, &timing, has_holds, &mut scratch);
+        (counts, annotations)
+    }
+
+    #[test]
+    fn annotation_crossover_count_matches_tech_counts() {
+        // A crossover-heavy candle/crossover stream in dance-single.
+        let data = b"1000
+0010
+0001
+0010
+1000
+0010
+0001
+0010
+1000
+;";
+        let (counts, annotations) = annotations_for(data);
+        let annotated_crossovers =
+            annotations.iter().filter(|a| a.row_tech.crossovers > 0).count() as u32;
+        assert_eq!(annotated_crossovers, counts.crossovers);
+        // The pattern is designed to actually contain crossovers, so this
+        // guards against the annotation path silently classifying nothing.
+        assert!(counts.crossovers > 0, "expected the test pattern to crossover");
+    }
+
+    #[test]
+    fn per_row_tech_sums_to_aggregate() {
+        // Every per-row tech category, summed over the chart, must reproduce the
+        // aggregate TechCounts (computed independently). This guards the shared
+        // classify_row_tech invariant for the whole tech vector, not just
+        // crossovers.
+        let data = b"1000
+0010
+0001
+0010
+1000
+0010
+0001
+0010
+1000
+;";
+        let (counts, annotations) = annotations_for(data);
+        let mut summed = TechCounts::default();
+        for a in &annotations {
+            summed += a.row_tech;
+        }
+        assert_eq!(summed, counts);
+    }
+
+    #[test]
+    fn annotation_rows_align_with_parity_rows() {
+        let data = b"1000
+0100
+0010
+0001
+,
+1100
+0011
+0000
+1000
+;";
+        let (_counts, annotations) = annotations_for(data);
+        assert!(!annotations.is_empty());
+        // Beats are strictly non-decreasing and every annotated row carries at
+        // least one foot-bearing column.
+        let mut prev_beat = f32::NEG_INFINITY;
+        for ann in &annotations {
+            assert!(ann.beat >= prev_beat, "annotation beats must be ordered");
+            prev_beat = ann.beat;
+            assert!(ann.column_mask != 0, "annotated row should have notes");
+            assert_eq!(ann.foot_count(), ann.column_mask.count_ones());
+        }
+        // The first row can never be a crossover (no predecessor).
+        assert_eq!(annotations[0].row_tech.crossovers, 0);
+    }
+
+    #[test]
+    fn annotation_empty_for_no_rows() {
+        let mut scratch = timing_rows_scratch::<4>().expect("dance-single layout");
+        let rows: [[u8; 4]; 0] = [];
+        let beats: [f32; 0] = [];
+        let annotations = annotate_timing_rows_known_holds(
+            &rows,
+            &beats,
+            &TimingData::default(),
+            false,
+            &mut scratch,
+        );
+        assert!(annotations.is_empty());
     }
 }
