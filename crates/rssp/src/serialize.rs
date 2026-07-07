@@ -178,7 +178,6 @@ pub fn serialize_simfile(
                 written_bytes += serialize_sm_chart_field(&chart.description_str, out)?;
                 written_bytes += serialize_sm_chart_field(&chart.difficulty_str, out)?;
                 written_bytes += serialize_sm_chart_field(&chart.rating_str, out)?;
-                // TODO: verify whether this actually mirrors the "description" field
                 written_bytes +=
                     serialize_sm_chart_field(&format_radar_values(chart.cached_radar_values), out)?;
                 written_bytes += out.write(&chart.minimized_note_data)?;
