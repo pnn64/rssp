@@ -3,6 +3,7 @@ pub mod assets;
 pub mod course;
 pub mod pack;
 pub mod report;
+pub mod serialize;
 pub mod simfile;
 pub mod translate;
 
