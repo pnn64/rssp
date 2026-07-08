@@ -24,6 +24,7 @@ md5 = "0.8.0"
 libtest-mimic = "0.8.1"
 zstd = "0.13.3"
 criterion = "0.8.1"
+pretty_assertions = "1.4.1"
 
 [[test]]
 name = "hash_parity"
