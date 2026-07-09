@@ -489,6 +489,68 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn serialize_simfile_with_sm() -> io::Result<()> {
+        let mut summary = simfile_summary_with_all_fields();
+        summary.charts.push(chart_summary_with_all_fields(false));
+        summary.charts.push(chart_summary_with_all_fields(true));
+        let mut buffer = vec![];
+        {
+            let mut cursor = io::Cursor::new(&mut buffer);
+            super::serialize_simfile(&summary, "sm", &mut cursor)?;
+            cursor.get_ref()
+        };
+
+        let output = String::from_utf8(buffer).unwrap();
+
+        let expected = "#TITLE:Title;\n\
+        #SUBTITLE:Subtitle;\n\
+        #ARTIST:Artist;\n\
+        #TITLETRANSLIT:Title translit;\n\
+        #SUBTITLETRANSLIT:Subtitle translit;\n\
+        #ARTISTTRANSLIT:Artist translit;\n\
+        #GENRE:Genre;\n\
+        #ORIGIN:;\n\
+        #CREDIT:;\n\
+        #BANNER:banner.png;\n\
+        #BACKGROUND:background.png;\n\
+        #LYRICSPATH:;\n\
+        #CDTITLE:cdtitle.png;\n\
+        #MUSIC:music.ogg;\n\
+        #OFFSET:0.123000;\n\
+        #SAMPLESTART:10.000000;\n\
+        #SAMPLELENGTH:16.000000;\n\
+        #SELECTABLE:YES;\n\
+        #DISPLAYBPM:150;\n\
+        #BPMS:0.000=120.000,\n\
+        16.000=240.000,\n\
+        48.000=120.000;\n\
+        #STOPS:1.000=1.250,\n\
+        1.500=1.750;\n\
+        #BGCHANGES:;\n\
+        #KEYSOUNDS:;\n\
+        #ATTACKS:;\n\
+        \n\
+        #NOTES:\n     dance-single:\n     Description:\n     Challenge:\n     17:\n     0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140:\n\
+        0000\n\
+        0000\n\
+        0000\n\
+        0000\n\
+        ;\n\
+        \n\
+        #NOTES:\n     dance-single:\n     Description:\n     Challenge:\n     17:\n     0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140:\n\
+        0000\n\
+        0000\n\
+        0000\n\
+        0000\n\
+        ;\n\
+        \n";
+
+        assert_eq!(expected, output);
+
+        Ok(())
+    }
+
     fn simfile_summary_with_all_fields() -> crate::SimfileSummary {
         crate::SimfileSummary {
             title_str: String::from("Title"),
