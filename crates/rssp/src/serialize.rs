@@ -70,15 +70,15 @@ fn format_dot6_f64(value: f64) -> String {
 }
 
 #[inline(always)]
-fn format_dot6_f32(value: f32) -> String {
-    format!("{:.6}", value)
+fn format_dot3_f32(value: f32) -> String {
+    format!("{:.3}", value)
 }
 
 fn format_radar_values(radar_values: Option<[f32; RADAR_CATEGORY_COUNT]>) -> String {
     match radar_values {
         Some(radar_values) => radar_values
             .iter()
-            .map(|&f| format_dot6_f32(f))
+            .map(|&f| format_dot3_f32(f))
             .collect::<Vec<String>>()
             .join(","),
         None => String::from(""),
@@ -428,7 +428,7 @@ mod tests {
             #CHARTSTYLE:;\n\
             #DIFFICULTY:Challenge;\n\
             #METER:17;\n\
-            #RADARVALUES:0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000;\n\
+            #RADARVALUES:0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140;\n\
             #CREDIT:Step artist;\n\
             #NOTES:\n\
             0000\n\
@@ -444,7 +444,7 @@ mod tests {
             #CHARTSTYLE:;\n\
             #DIFFICULTY:Challenge;\n\
             #METER:17;\n\
-            #RADARVALUES:0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000;\n\
+            #RADARVALUES:0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140;\n\
             #CREDIT:Step artist;\n\
             #OFFSET:0.000000;\n\
             #BPMS:0.000=120.000,\n\
