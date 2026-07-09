@@ -158,9 +158,9 @@ pub fn serialize_simfile(
         (b"ATTACKS", "", true, List),   // TODO
     ];
 
-    for property in properties {
-        if property.2 {
-            written_bytes += write_prop(property.0, property.1.as_bytes(), property.3, out)?;
+    for (key, value, is_included, value_writer) in properties {
+        if is_included {
+            written_bytes += write_prop(key, value.as_bytes(), value_writer, out)?;
         }
     }
 
@@ -336,9 +336,9 @@ fn serialize_ssc_chart_timing_fields(
         ),
     ];
 
-    for property in chart_timing_properties {
-        if property.3 {
-            written_bytes += write_prop(property.0, property.1.as_bytes(), property.2, out)?;
+    for (key, value, value_writer, is_included) in chart_timing_properties {
+        if is_included {
+            written_bytes += write_prop(key, value.as_bytes(), value_writer, out)?;
         }
     }
 
