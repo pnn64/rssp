@@ -431,6 +431,10 @@ mod tests {
             #RADARVALUES:0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000;\n\
             #CREDIT:Step artist;\n\
             #NOTES:\n\
+            0000\n\
+            0000\n\
+            0000\n\
+            0000\n\
             ;\n\
             \n\
             #NOTEDATA:;\n\
@@ -473,6 +477,10 @@ mod tests {
             16.000=Speedup;\n\
             #DISPLAYBPM:150;\n\
             #NOTES:\n\
+            0000\n\
+            0000\n\
+            0000\n\
+            0000\n\
             ;\n\
             \n";
 
@@ -543,7 +551,7 @@ mod tests {
                 0.130, 0.140,
             ]),
             tech_notation_str: String::from("BR FS XO"),
-            minimized_note_data: Default::default(), // TODO
+            minimized_note_data: b"0000\n0000\n0000\n0000\n".to_vec(), // TODO
 
             // Timing fields
             chart_has_own_timing: has_own_timing,
