@@ -14,9 +14,20 @@ enum ValueWriter {
     List,
 }
 
+/// Call `write_all` and, on success, return the input's size in bytes
 macro_rules! write_all {
     ($out:expr, $value:expr) => {
         $out.write_all($value).map(|_| $value.len())
+    };
+}
+
+/// Unwrap `Some(String)` to `&str`, or `None` to `""`
+macro_rules! slice_or_default {
+    ($e: expr) => {
+        $e.as_deref().unwrap_or_default()
+    };
+    ($e: expr, $default: expr) => {
+        $e.as_deref().unwrap_or_else(|| $default)
     };
 }
 
@@ -74,6 +85,14 @@ fn format_dot3_f32(value: f32) -> String {
     format!("{:.3}", value)
 }
 
+#[inline(always)]
+fn format_selectable(value: bool) -> String {
+    match value {
+        true => String::from("YES"),
+        false => String::from("NO"),
+    }
+}
+
 fn format_radar_values(radar_values: Option<[f32; RADAR_CATEGORY_COUNT]>) -> String {
     match radar_values {
         Some(radar_values) => radar_values
@@ -100,6 +119,7 @@ pub fn serialize_simfile(
     let formatted_offset = format_dot6_f64(summary.offset);
     let formatted_sample_start = format_dot6_f64(summary.sample_start);
     let formatted_sample_length = format_dot6_f64(summary.sample_length);
+    let formatted_selectable = format_selectable(summary.selectable);
 
     // (key, value, is_included, value_writer)
     let properties: Vec<(&[u8], &str, bool, ValueWriter)> = vec![
@@ -116,21 +136,21 @@ pub fn serialize_simfile(
         ),
         (b"ARTISTTRANSLIT", &summary.artisttranslit_str, true, Plain),
         (b"GENRE", &summary.genre_str, true, Plain),
-        (b"ORIGIN", "", true, Plain), // TODO
-        (b"CREDIT", "", true, Plain), // TODO
+        (b"ORIGIN", &summary.origin_str, ssc, Plain),
+        (b"CREDIT", &summary.credit_str, true, Plain),
         (b"BANNER", &summary.banner_path, true, Plain),
         (b"BACKGROUND", &summary.background_path, true, Plain),
-        (b"PREVIEWVID", "", ssc, Plain), // TODO
+        (b"PREVIEWVID", &summary.previewvid_path, ssc, Plain),
         (b"JACKET", &summary.jacket_path, ssc, Plain),
-        (b"CDIMAGE", "", ssc, Plain),     // TODO
-        (b"DISCIMAGE", "", ssc, Plain),   // TODO
-        (b"LYRICSPATH", "", true, Plain), // TODO
+        (b"CDIMAGE", &summary.cdimage_path, ssc, Plain),
+        (b"DISCIMAGE", &summary.discimage_path, ssc, Plain),
+        (b"LYRICSPATH", &summary.lyrics_path, true, Plain),
         (b"CDTITLE", &summary.cdtitle_path, true, Plain),
         (b"MUSIC", &summary.music_path, true, Plain),
         (b"OFFSET", &formatted_offset, true, Plain),
         (b"SAMPLESTART", &formatted_sample_start, true, Plain),
         (b"SAMPLELENGTH", &formatted_sample_length, true, Plain),
-        (b"SELECTABLE", "YES", true, Plain), // TODO
+        (b"SELECTABLE", &formatted_selectable, true, Plain),
         (
             b"DISPLAYBPM",
             &summary.display_bpm_str,
@@ -153,9 +173,16 @@ pub fn serialize_simfile(
         (b"SCROLLS", &summary.normalized_scrolls, ssc, List),
         (b"FAKES", &summary.normalized_fakes, ssc, List),
         (b"LABELS", &summary.normalized_labels, ssc, List),
-        (b"BGCHANGES", "", true, List), // TODO
-        (b"KEYSOUNDS", "", true, List), // TODO
-        (b"ATTACKS", "", true, List),   // TODO
+        (b"BGCHANGES", &summary.normalized_bgchanges, true, List),
+        (
+            b"FGCHANGES",
+            &summary.normalized_fgchanges,
+            !summary.normalized_fgchanges.is_empty(),
+            List,
+        ),
+        (b"KEYSOUNDS", &summary.normalized_keysounds, true, List),
+        // TODO: make sure the implementation for this meshes well with the original ATTACKS implementation
+        (b"ATTACKS", &summary.normalized_attacks, true, List),
     ];
 
     for (key, value, is_included, value_writer) in properties {
@@ -211,8 +238,7 @@ fn serialize_ssc_chart(
         (b"CHARTNAME", &chart.chart_name_str),
         (b"STEPSTYPE", &chart.step_type_str),
         (b"DESCRIPTION", &chart.description_str),
-        // TODO: store chart_style_str on ChartSummary
-        (b"CHARTSTYLE", ""),
+        (b"CHARTSTYLE", &chart.chart_style_str),
         (b"DIFFICULTY", &chart.difficulty_str),
         (b"METER", &chart.rating_str),
         (b"RADARVALUES", &formatted_radar_values),
@@ -246,88 +272,49 @@ fn serialize_ssc_chart_timing_fields(
         (b"OFFSET", &formatted_chart_offset, Plain, true),
         (
             b"BPMS",
-            &chart.chart_bpms.as_deref().unwrap_or_else(|| DEFAULT_BPMS),
+            slice_or_default!(chart.chart_bpms, DEFAULT_BPMS),
             List,
             true,
         ),
-        (
-            b"STOPS",
-            chart.chart_stops.as_deref().unwrap_or_default(),
-            List,
-            true,
-        ),
-        (
-            b"DELAYS",
-            chart.chart_delays.as_deref().unwrap_or_default(),
-            List,
-            true,
-        ),
-        (
-            b"WARPS",
-            chart.chart_warps.as_deref().unwrap_or_default(),
-            List,
-            true,
-        ),
+        (b"STOPS", slice_or_default!(chart.chart_stops), List, true),
+        (b"DELAYS", slice_or_default!(chart.chart_delays), List, true),
+        (b"WARPS", slice_or_default!(chart.chart_warps), List, true),
         (
             b"TIMESIGNATURES",
-            chart
-                .chart_time_signatures
-                .as_deref()
-                .unwrap_or_else(|| DEFAULT_TIME_SIGNATURES),
+            slice_or_default!(chart.chart_time_signatures, DEFAULT_TIME_SIGNATURES),
             List,
             true,
         ),
         (
             b"TICKCOUNTS",
-            chart.chart_tickcounts.as_deref().unwrap_or_default(),
+            slice_or_default!(chart.chart_tickcounts),
             List,
             true,
         ),
-        (
-            b"COMBOS",
-            chart.chart_combos.as_deref().unwrap_or_default(),
-            List,
-            true,
-        ),
+        (b"COMBOS", slice_or_default!(chart.chart_combos), List, true),
         (
             b"SPEEDS",
-            chart
-                .chart_speeds
-                .as_deref()
-                .unwrap_or_else(|| DEFAULT_SPEEDS),
+            slice_or_default!(chart.chart_speeds, DEFAULT_SPEEDS),
             List,
             true,
         ),
         (
             b"SCROLLS",
-            chart
-                .chart_scrolls
-                .as_deref()
-                .unwrap_or_else(|| DEFAULT_SCROLLS),
+            slice_or_default!(chart.chart_scrolls, DEFAULT_SCROLLS),
             List,
             true,
         ),
-        (
-            b"FAKES",
-            chart.chart_fakes.as_deref().unwrap_or_default(),
-            List,
-            true,
-        ),
-        (
-            b"LABELS",
-            chart.chart_labels.as_deref().unwrap_or_default(),
-            List,
-            true,
-        ),
+        (b"FAKES", slice_or_default!(chart.chart_fakes), List, true),
+        (b"LABELS", slice_or_default!(chart.chart_labels), List, true),
         (
             b"ATTACKS",
-            chart.chart_attacks.as_deref().unwrap_or_default(),
+            slice_or_default!(chart.chart_attacks),
             List,
             !chart.chart_attacks.as_ref().is_none_or(|v| v.is_empty()),
         ),
         (
             b"DISPLAYBPM",
-            chart.chart_display_bpm.as_deref().unwrap_or_default(),
+            slice_or_default!(chart.chart_display_bpm),
             Plain,
             !chart
                 .chart_display_bpm
@@ -373,15 +360,15 @@ mod tests {
             #SUBTITLETRANSLIT:Subtitle translit;\n\
             #ARTISTTRANSLIT:Artist translit;\n\
             #GENRE:Genre;\n\
-            #ORIGIN:;\n\
-            #CREDIT:;\n\
+            #ORIGIN:Origin;\n\
+            #CREDIT:Credit;\n\
             #BANNER:banner.png;\n\
             #BACKGROUND:background.png;\n\
-            #PREVIEWVID:;\n\
+            #PREVIEWVID:previewvid.mov;\n\
             #JACKET:jacket.png;\n\
-            #CDIMAGE:;\n\
-            #DISCIMAGE:;\n\
-            #LYRICSPATH:;\n\
+            #CDIMAGE:cdimage.png;\n\
+            #DISCIMAGE:discimage.png;\n\
+            #LYRICSPATH:lyrics.lrc;\n\
             #CDTITLE:cdtitle.png;\n\
             #MUSIC:music.ogg;\n\
             #OFFSET:0.123000;\n\
@@ -425,7 +412,7 @@ mod tests {
             #CHARTNAME:Chart name;\n\
             #STEPSTYPE:dance-single;\n\
             #DESCRIPTION:Description;\n\
-            #CHARTSTYLE:;\n\
+            #CHARTSTYLE:Chart style;\n\
             #DIFFICULTY:Challenge;\n\
             #METER:17;\n\
             #RADARVALUES:0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140;\n\
@@ -441,7 +428,7 @@ mod tests {
             #CHARTNAME:Chart name;\n\
             #STEPSTYPE:dance-single;\n\
             #DESCRIPTION:Description;\n\
-            #CHARTSTYLE:;\n\
+            #CHARTSTYLE:Chart style;\n\
             #DIFFICULTY:Challenge;\n\
             #METER:17;\n\
             #RADARVALUES:0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140;\n\
@@ -510,11 +497,10 @@ mod tests {
         #SUBTITLETRANSLIT:Subtitle translit;\n\
         #ARTISTTRANSLIT:Artist translit;\n\
         #GENRE:Genre;\n\
-        #ORIGIN:;\n\
-        #CREDIT:;\n\
+        #CREDIT:Credit;\n\
         #BANNER:banner.png;\n\
         #BACKGROUND:background.png;\n\
-        #LYRICSPATH:;\n\
+        #LYRICSPATH:lyrics.lrc;\n\
         #CDTITLE:cdtitle.png;\n\
         #MUSIC:music.ogg;\n\
         #OFFSET:0.123000;\n\
@@ -584,6 +570,17 @@ mod tests {
             display_bpm_str: String::from("150"),
             sample_start: 10.0,
             sample_length: 16.0,
+            origin_str: String::from("Origin"),
+            credit_str: String::from("Credit"),
+            normalized_bgchanges: Default::default(), // TODO
+            normalized_fgchanges: Default::default(), // TODO
+            normalized_keysounds: Default::default(), // TODO
+            normalized_attacks: Default::default(),   // TODO
+            previewvid_path: String::from("previewvid.mov"),
+            cdimage_path: String::from("cdimage.png"),
+            discimage_path: String::from("discimage.png"),
+            lyrics_path: String::from("lyrics.lrc"),
+            selectable: true,
 
             // To be populated by the test
             charts: vec![],
@@ -606,6 +603,7 @@ mod tests {
             step_artist_str: String::from("Step artist"),
             description_str: String::from("Description"),
             chart_name_str: String::from("Chart name"),
+            chart_style_str: String::from("Chart style"),
             difficulty_str: String::from("Challenge"),
             rating_str: String::from("17"),
             cached_radar_values: Some([
