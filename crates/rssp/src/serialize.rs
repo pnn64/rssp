@@ -347,7 +347,6 @@ mod tests {
         {
             let mut cursor = io::Cursor::new(&mut buffer);
             super::serialize_simfile(&summary, "ssc", &mut cursor)?;
-            cursor.get_ref()
         };
 
         let output = String::from_utf8(buffer).unwrap();
@@ -485,7 +484,6 @@ mod tests {
         {
             let mut cursor = io::Cursor::new(&mut buffer);
             super::serialize_simfile(&summary, "sm", &mut cursor)?;
-            cursor.get_ref()
         };
 
         let output = String::from_utf8(buffer).unwrap();
