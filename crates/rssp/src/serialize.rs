@@ -61,25 +61,6 @@ fn format_dot3_f32(value: f32) -> String {
     format!("{:.3}", value)
 }
 
-#[must_use]
-#[inline(always)]
-fn format_radar_values(radar_values: Option<[f32; crate::stats::RADAR_CATEGORY_COUNT]>) -> String {
-    match radar_values {
-        Some(radar_values) => radar_values
-            .iter()
-            .map(|&f| format_dot3_f32(f))
-            .collect::<Vec<String>>()
-            .join(","),
-        None => String::from(""),
-    }
-}
-
-enum ListItem<'a> {
-    Float(f64),
-    Int(i32),
-    Str(&'a str),
-}
-
 #[derive(Default)]
 enum PropValue<'a> {
     #[default]
@@ -94,15 +75,6 @@ enum PropValue<'a> {
     Bool(bool),
     NormalizedList(&'a str),
     NormalizedListOpt(Option<&'a str>),
-    // TODO: decide if we actually need these.
-    // Currently only charts store timing fields like this and they're redundant with the normalized forms.
-    List(&'a [[Option<ListItem<'a>>; 4]]),
-    Pairs(&'a [(f64, f64)]),
-    TimeSignatures(&'a [(f64, i32, i32)]),
-    Labels(&'a [(f64, String)]),
-    TickCounts(&'a [(f64, i32)]),
-    Combos(&'a [(f64, i32, i32)]),
-    Speeds(&'a [(f64, f64, f64, i32)]),
     RadarValues(Option<[f32; crate::stats::RADAR_CATEGORY_COUNT]>),
 }
 
@@ -152,119 +124,6 @@ impl<'a> PropValue<'a> {
                 None => Ok(0),
                 Some(items_str) => NormalizedList(items_str).serialize(out),
             },
-            List(items) => {
-                let mut written_bytes = 0;
-                let mut first_row = true;
-
-                for row in *items {
-                    if !first_row {
-                        written_bytes += write_all!(out, b",\n")?;
-                    }
-                    let mut first_item = true;
-                    for item in row {
-                        if !first_item {
-                            written_bytes += write_all!(out, b"=")?;
-                        }
-                        written_bytes += match item {
-                            Some(ListItem::Float(f)) => {
-                                write_all!(out, format_dot6_f64(*f).as_bytes())?
-                            }
-                            Some(ListItem::Int(i)) => write_all!(out, i.to_string().as_bytes())?,
-                            Some(ListItem::Str(s)) => sm_escape(out, s.as_bytes())?,
-                            None => break,
-                        };
-                        first_item = false;
-                    }
-                    first_row = false;
-                }
-
-                Ok(written_bytes)
-            }
-            Pairs(rows) => List(
-                rows.iter()
-                    .map(|row| {
-                        [
-                            Some(ListItem::Float(row.0)),
-                            Some(ListItem::Float(row.1)),
-                            None,
-                            None,
-                        ]
-                    })
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-            )
-            .serialize(out),
-            TimeSignatures(rows) => List(
-                rows.iter()
-                    .map(|row| {
-                        [
-                            Some(ListItem::Float(row.0)),
-                            Some(ListItem::Int(row.1)),
-                            Some(ListItem::Int(row.2)),
-                            None,
-                        ]
-                    })
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-            )
-            .serialize(out),
-
-            Labels(rows) => List(
-                rows.iter()
-                    .map(|row| {
-                        [
-                            Some(ListItem::Float(row.0)),
-                            Some(ListItem::Str(&row.1)),
-                            None,
-                            None,
-                        ]
-                    })
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-            )
-            .serialize(out),
-            TickCounts(rows) => List(
-                rows.iter()
-                    .map(|row| {
-                        [
-                            Some(ListItem::Float(row.0)),
-                            Some(ListItem::Int(row.1)),
-                            None,
-                            None,
-                        ]
-                    })
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-            )
-            .serialize(out),
-            Combos(rows) => List(
-                rows.iter()
-                    .map(|row| {
-                        [
-                            Some(ListItem::Float(row.0)),
-                            Some(ListItem::Int(row.1)),
-                            None,
-                            None,
-                        ]
-                    })
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-            )
-            .serialize(out),
-            Speeds(rows) => List(
-                rows.iter()
-                    .map(|row| {
-                        [
-                            Some(ListItem::Float(row.0)),
-                            Some(ListItem::Float(row.1)),
-                            Some(ListItem::Float(row.2)),
-                            Some(ListItem::Int(row.3)),
-                        ]
-                    })
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-            )
-            .serialize(out),
             RadarValues(rv) => match rv {
                 Some(values) => {
                     let mut written_bytes = 0;
@@ -300,13 +159,6 @@ impl<'a> PropValue<'a> {
             Bool(_) => false,
             NormalizedList(s) => s.is_empty(),
             NormalizedListOpt(opt) => opt.as_ref().is_none_or(|s| s.is_empty()),
-            List(rows) => rows.is_empty(),
-            Pairs(rows) => rows.is_empty(),
-            TimeSignatures(rows) => rows.is_empty(),
-            Labels(rows) => rows.is_empty(),
-            TickCounts(rows) => rows.is_empty(),
-            Combos(rows) => rows.is_empty(),
-            Speeds(rows) => rows.is_empty(),
             RadarValues(rv) => rv.is_none(),
         }
     }
@@ -534,16 +386,6 @@ pub fn serialize_simfile(
         written_bytes += write_all!(out, b"\n")?;
     }
 
-    Ok(written_bytes)
-}
-
-#[must_use]
-#[inline(always)]
-fn write_sm_chart_field(value: &str, out: &mut dyn io::Write) -> io::Result<usize> {
-    let mut written_bytes = 0;
-    written_bytes += write_all!(out, b"     ")?;
-    written_bytes += out.write(value.as_bytes())?;
-    written_bytes += write_all!(out, b":\n")?;
     Ok(written_bytes)
 }
 
