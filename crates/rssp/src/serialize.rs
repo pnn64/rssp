@@ -2,17 +2,16 @@ use std::io;
 
 use rssp_core::parse::extension_is_ssc;
 
-use crate::{SimfileSummary, stats::RADAR_CATEGORY_COUNT};
-
-const DEFAULT_BPMS: &str = "0.000=60.000";
-const DEFAULT_TIME_SIGNATURES: &str = "0.000000=4=4";
-const DEFAULT_SPEEDS: &str = "0.000000=1.000000=0.000000=0";
-const DEFAULT_SCROLLS: &str = "0.000000=1.000000";
-
-enum ValueWriter {
-    Plain,
-    List,
-}
+pub(crate) const DEFAULT_VERSION: &[u8] = b"0.83";
+pub(crate) const DEFAULT_TITLE: &[u8] = b"Untitled";
+pub(crate) const DEFAULT_ARTIST: &[u8] = b"Unknown artist";
+pub(crate) const DEFAULT_BPMS: &[u8] = b"0.000000=60.000000";
+pub(crate) const DEFAULT_TIME_SIGNATURES: &[u8] = b"0.000000=4=4";
+pub(crate) const DEFAULT_TICKCOUNTS: &[u8] = b"0.000000=4";
+pub(crate) const DEFAULT_COMBOS: &[u8] = b"0.000000=1";
+pub(crate) const DEFAULT_SPEEDS: &[u8] = b"0.000000=1.000000=0.000000=0";
+pub(crate) const DEFAULT_SCROLLS: &[u8] = b"0.000000=1.000000";
+pub(crate) const DEFAULT_LABELS: &[u8] = b"0.000000=Song Start";
 
 /// Call `write_all` and, on success, return the input's size in bytes
 macro_rules! write_all {
@@ -21,79 +20,47 @@ macro_rules! write_all {
     };
 }
 
-/// Unwrap `Some(String)` to `&str`, or `None` to `""`
-macro_rules! slice_or_default {
-    ($e: expr) => {
-        $e.as_deref().unwrap_or_default()
-    };
-    ($e: expr, $default: expr) => {
-        $e.as_deref().unwrap_or_else(|| $default)
-    };
-}
-
-fn write_prop(
-    key: &[u8],
-    value: &[u8],
-    writer: ValueWriter,
-    out: &mut dyn io::Write,
-) -> Result<usize, io::Error> {
+#[must_use]
+fn sm_escape(out: &mut dyn io::Write, bytes: &[u8]) -> io::Result<usize> {
     let mut written_bytes = 0;
-    written_bytes += write_all!(out, b"#")?;
-    written_bytes += write_all!(out, key)?;
-    written_bytes += write_all!(out, b":")?;
-    written_bytes += match writer {
-        ValueWriter::Plain => write_all!(out, value)?,
-        ValueWriter::List => write_comma_separated_list(out, value)?,
-    };
-    written_bytes += write_all!(out, b";\n")?;
-    Ok(written_bytes)
-}
+    let mut bytes_iter = bytes.iter().peekable();
 
-fn write_comma_separated_list(out: &mut dyn io::Write, value: &[u8]) -> io::Result<usize> {
-    let mut written_bytes = 0;
-    let mut start = 0;
-
-    while let Some(offset) = value[start..].iter().position(|&b| b == b',') {
-        let comma = start + offset;
-        written_bytes += write_all!(out, &value[start..=comma])?;
-        written_bytes += write_all!(out, b"\n")?;
-        start = comma + 1;
+    while let Some(&byte) = bytes_iter.next() {
+        if byte == b'/' && bytes_iter.peek().is_some_and(|&b| *b == b'/') {
+            written_bytes += write_all!(out, b"\\/\\/")?;
+            bytes_iter.next();
+            continue;
+        }
+        if byte == b'\\' || byte == b':' || byte == b';' {
+            written_bytes += write_all!(out, b"\\")?;
+        }
+        written_bytes += write_all!(out, &[byte])?;
     }
 
-    written_bytes += write_all!(out, &value[start..])?;
     Ok(written_bytes)
 }
 
-fn write_sm_chart_field(value: &str, out: &mut dyn io::Write) -> Result<usize, io::Error> {
-    let written_bytes =
-        write_all!(out, b"     ")? + out.write(value.as_bytes())? + write_all!(out, b":\n")?;
-    Ok(written_bytes)
-}
-
+#[must_use]
 #[inline(always)]
 fn format_version(ssc_version: f32) -> String {
     format!("{:.2}", ssc_version)
 }
 
+#[must_use]
 #[inline(always)]
 fn format_dot6_f64(value: f64) -> String {
     format!("{:.6}", value)
 }
 
+#[must_use]
 #[inline(always)]
 fn format_dot3_f32(value: f32) -> String {
     format!("{:.3}", value)
 }
 
+#[must_use]
 #[inline(always)]
-fn format_selectable(value: bool) -> String {
-    match value {
-        true => String::from("YES"),
-        false => String::from("NO"),
-    }
-}
-
-fn format_radar_values(radar_values: Option<[f32; RADAR_CATEGORY_COUNT]>) -> String {
+fn format_radar_values(radar_values: Option<[f32; crate::stats::RADAR_CATEGORY_COUNT]>) -> String {
     match radar_values {
         Some(radar_values) => radar_values
             .iter()
@@ -104,117 +71,470 @@ fn format_radar_values(radar_values: Option<[f32; RADAR_CATEGORY_COUNT]>) -> Str
     }
 }
 
+enum ListItem<'a> {
+    Float(f64),
+    Int(i32),
+    Str(&'a str),
+}
+
+#[derive(Default)]
+enum PropValue<'a> {
+    #[default]
+    Empty,
+    Str(&'a str),
+    StrOpt(Option<&'a str>),
+    Bytes(&'a [u8]),
+    NoteData(&'a [u8]),
+    Version(f32),
+    Number(f64),
+    NumberOpt(Option<f64>),
+    Bool(bool),
+    NormalizedList(&'a str),
+    NormalizedListOpt(Option<&'a str>),
+    // TODO: decide if we actually need these.
+    // Currently only charts store timing fields like this and they're redundant with the normalized forms.
+    List(&'a [[Option<ListItem<'a>>; 4]]),
+    Pairs(&'a [(f64, f64)]),
+    TimeSignatures(&'a [(f64, i32, i32)]),
+    Labels(&'a [(f64, String)]),
+    TickCounts(&'a [(f64, i32)]),
+    Combos(&'a [(f64, i32, i32)]),
+    Speeds(&'a [(f64, f64, f64, i32)]),
+    RadarValues(Option<[f32; crate::stats::RADAR_CATEGORY_COUNT]>),
+}
+
+impl<'a> PropValue<'a> {
+    #[must_use]
+    fn serialize(&self, out: &mut dyn io::Write) -> io::Result<usize> {
+        use PropValue::*;
+
+        match self {
+            Empty => Ok(0),
+            Str(s) => sm_escape(out, s.as_bytes()),
+            StrOpt(opt) => match opt {
+                None => Ok(0),
+                Some(s) => Str(s).serialize(out),
+            },
+            Bytes(b) => write_all!(out, b),
+            NoteData(b) => Ok(write_all!(out, b"\n")? + write_all!(out, b)?),
+            Version(v) => write_all!(out, format_version(*v).as_bytes()),
+            Number(n) => write_all!(out, format_dot6_f64(*n).as_bytes()),
+            NumberOpt(opt) => match opt {
+                None => Ok(0),
+                Some(n) => Number(*n).serialize(out),
+            },
+            Bool(b) => {
+                if *b {
+                    write_all!(out, b"YES")
+                } else {
+                    write_all!(out, b"NO")
+                }
+            }
+            NormalizedList(items_str) => {
+                let items = items_str.as_bytes();
+                let mut written_bytes = 0;
+                let mut start = 0;
+
+                while let Some(offset) = items[start..].iter().position(|&b| b == b',') {
+                    let comma = start + offset;
+                    written_bytes += write_all!(out, &items[start..=comma])?;
+                    written_bytes += write_all!(out, b"\n")?;
+                    start = comma + 1;
+                }
+
+                written_bytes += write_all!(out, &items[start..])?;
+                Ok(written_bytes)
+            }
+            NormalizedListOpt(opt_items_str) => match opt_items_str {
+                None => Ok(0),
+                Some(items_str) => NormalizedList(items_str).serialize(out),
+            },
+            List(items) => {
+                let mut written_bytes = 0;
+                let mut first_row = true;
+
+                for row in *items {
+                    if !first_row {
+                        written_bytes += write_all!(out, b",\n")?;
+                    }
+                    let mut first_item = true;
+                    for item in row {
+                        if !first_item {
+                            written_bytes += write_all!(out, b"=")?;
+                        }
+                        written_bytes += match item {
+                            Some(ListItem::Float(f)) => {
+                                write_all!(out, format_dot6_f64(*f).as_bytes())?
+                            }
+                            Some(ListItem::Int(i)) => write_all!(out, i.to_string().as_bytes())?,
+                            Some(ListItem::Str(s)) => sm_escape(out, s.as_bytes())?,
+                            None => break,
+                        };
+                        first_item = false;
+                    }
+                    first_row = false;
+                }
+
+                Ok(written_bytes)
+            }
+            Pairs(rows) => List(
+                rows.iter()
+                    .map(|row| {
+                        [
+                            Some(ListItem::Float(row.0)),
+                            Some(ListItem::Float(row.1)),
+                            None,
+                            None,
+                        ]
+                    })
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            )
+            .serialize(out),
+            TimeSignatures(rows) => List(
+                rows.iter()
+                    .map(|row| {
+                        [
+                            Some(ListItem::Float(row.0)),
+                            Some(ListItem::Int(row.1)),
+                            Some(ListItem::Int(row.2)),
+                            None,
+                        ]
+                    })
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            )
+            .serialize(out),
+
+            Labels(rows) => List(
+                rows.iter()
+                    .map(|row| {
+                        [
+                            Some(ListItem::Float(row.0)),
+                            Some(ListItem::Str(&row.1)),
+                            None,
+                            None,
+                        ]
+                    })
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            )
+            .serialize(out),
+            TickCounts(rows) => List(
+                rows.iter()
+                    .map(|row| {
+                        [
+                            Some(ListItem::Float(row.0)),
+                            Some(ListItem::Int(row.1)),
+                            None,
+                            None,
+                        ]
+                    })
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            )
+            .serialize(out),
+            Combos(rows) => List(
+                rows.iter()
+                    .map(|row| {
+                        [
+                            Some(ListItem::Float(row.0)),
+                            Some(ListItem::Int(row.1)),
+                            None,
+                            None,
+                        ]
+                    })
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            )
+            .serialize(out),
+            Speeds(rows) => List(
+                rows.iter()
+                    .map(|row| {
+                        [
+                            Some(ListItem::Float(row.0)),
+                            Some(ListItem::Float(row.1)),
+                            Some(ListItem::Float(row.2)),
+                            Some(ListItem::Int(row.3)),
+                        ]
+                    })
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            )
+            .serialize(out),
+            RadarValues(rv) => match rv {
+                Some(values) => {
+                    let mut written_bytes = 0;
+                    let mut first_item = true;
+
+                    for value in values {
+                        if !first_item {
+                            written_bytes += write_all!(out, b",")?;
+                        }
+                        written_bytes += write_all!(out, format_dot3_f32(*value).as_bytes())?;
+                        first_item = false;
+                    }
+
+                    Ok(written_bytes)
+                }
+                None => Ok(0),
+            },
+        }
+    }
+
+    #[must_use]
+    fn is_empty(&self) -> bool {
+        use PropValue::*;
+        match self {
+            Empty => true,
+            Str(s) => s.is_empty(),
+            StrOpt(opt) => opt.as_ref().is_none_or(|s| s.is_empty()),
+            Bytes(b) => b.is_empty(),
+            NoteData(_) => false,
+            Version(_) => false,
+            Number(_) => false,
+            NumberOpt(opt) => opt.is_none(),
+            Bool(_) => false,
+            NormalizedList(s) => s.is_empty(),
+            NormalizedListOpt(opt) => opt.as_ref().is_none_or(|s| s.is_empty()),
+            List(rows) => rows.is_empty(),
+            Pairs(rows) => rows.is_empty(),
+            TimeSignatures(rows) => rows.is_empty(),
+            Labels(rows) => rows.is_empty(),
+            TickCounts(rows) => rows.is_empty(),
+            Combos(rows) => rows.is_empty(),
+            Speeds(rows) => rows.is_empty(),
+            RadarValues(rv) => rv.is_none(),
+        }
+    }
+}
+
+#[derive(Default)]
+struct Prop<'a> {
+    key: &'a [u8],
+    value: PropValue<'a>,
+    default_value: Option<&'a [u8]>,
+    ssc_only: bool,
+    nonempty_value_only: bool,
+    own_timing_only: bool,
+}
+
+impl<'a> Prop<'a> {
+    #[must_use]
+    #[inline(always)]
+    fn new(key: &'a [u8], value: PropValue<'a>) -> Prop<'a> {
+        Prop {
+            key,
+            value,
+            ..Default::default()
+        }
+    }
+
+    #[must_use]
+    #[inline(always)]
+    fn new_with_default(key: &'a [u8], default: &'a [u8], value: PropValue<'a>) -> Prop<'a> {
+        Prop {
+            key,
+            value,
+            default_value: Some(default),
+            ..Default::default()
+        }
+    }
+
+    #[must_use]
+    #[inline(always)]
+    fn ssc_only(key: &'a [u8], value: PropValue<'a>) -> Prop<'a> {
+        Prop {
+            key,
+            value,
+            ssc_only: true,
+            ..Default::default()
+        }
+    }
+
+    #[must_use]
+    #[inline(always)]
+    fn ssc_nonempty_only(key: &'a [u8], value: PropValue<'a>) -> Prop<'a> {
+        Prop {
+            key,
+            value,
+            ssc_only: true,
+            nonempty_value_only: true,
+            ..Default::default()
+        }
+    }
+
+    #[must_use]
+    #[inline(always)]
+    fn ssc_only_with_default(key: &'a [u8], default: &'a [u8], value: PropValue<'a>) -> Prop<'a> {
+        Prop {
+            key,
+            value,
+            default_value: Some(default),
+            ssc_only: true,
+            ..Default::default()
+        }
+    }
+
+    #[must_use]
+    #[inline(always)]
+    fn nonempty_only(key: &'a [u8], value: PropValue<'a>) -> Prop<'a> {
+        Prop {
+            key,
+            value,
+            nonempty_value_only: true,
+            ..Default::default()
+        }
+    }
+
+    #[must_use]
+    #[inline(always)]
+    fn own_timing_only(key: &'a [u8], value: PropValue<'a>) -> Prop<'a> {
+        Prop {
+            key,
+            value,
+            own_timing_only: true,
+            ..Default::default()
+        }
+    }
+
+    #[must_use]
+    #[inline(always)]
+    fn own_timing_only_with_default(
+        key: &'a [u8],
+        default: &'a [u8],
+        value: PropValue<'a>,
+    ) -> Prop<'a> {
+        Prop {
+            key,
+            value,
+            default_value: Some(default),
+            own_timing_only: true,
+            ..Default::default()
+        }
+    }
+
+    #[must_use]
+    #[inline(always)]
+    fn start_prop(out: &mut dyn io::Write, key: &[u8]) -> io::Result<usize> {
+        let mut written_bytes = 0;
+        written_bytes += write_all!(out, b"#")?;
+        written_bytes += write_all!(out, key)?;
+        written_bytes += write_all!(out, b":")?;
+        Ok(written_bytes)
+    }
+
+    #[must_use]
+    #[inline(always)]
+    fn end_prop(out: &mut dyn io::Write) -> io::Result<usize> {
+        Ok(write_all!(out, b";\n")?)
+    }
+
+    #[must_use]
+    fn serialize(self, ssc: bool, own_timing: bool, out: &mut dyn io::Write) -> io::Result<usize> {
+        if self.ssc_only && !ssc {
+            Ok(0)
+        } else if self.nonempty_value_only && self.value.is_empty() {
+            Ok(0)
+        } else if self.own_timing_only && !own_timing {
+            Ok(0)
+        } else {
+            let value = match (self.default_value, self.value.is_empty()) {
+                (Some(default), true) => PropValue::Bytes(default),
+                _ => self.value,
+            };
+            let mut written_bytes = 0;
+            written_bytes += Prop::start_prop(out, self.key)?;
+            written_bytes += value.serialize(out)?;
+            written_bytes += Prop::end_prop(out)?;
+            Ok(written_bytes)
+        }
+    }
+}
+
+#[must_use]
 pub fn serialize_simfile(
-    summary: &SimfileSummary,
+    summary: &crate::SimfileSummary,
     extension: &str,
     out: &mut dyn io::Write,
 ) -> io::Result<usize> {
-    use ValueWriter::*;
-
     let ssc = extension_is_ssc(extension)?;
-
     let mut written_bytes = 0;
 
-    let formatted_version = format_version(summary.ssc_version);
-    let formatted_offset = format_dot6_f64(summary.offset);
-    let formatted_sample_start = format_dot6_f64(summary.sample_start);
-    let formatted_sample_length = format_dot6_f64(summary.sample_length);
-    let formatted_selectable = format_selectable(summary.selectable);
-
-    // (key, value, is_included, value_writer)
-    let properties: Vec<(&[u8], &str, bool, ValueWriter)> = vec![
-        (b"VERSION", &formatted_version, ssc, Plain),
-        (b"TITLE", &summary.title_str, true, Plain),
-        (b"SUBTITLE", &summary.subtitle_str, true, Plain),
-        (b"ARTIST", &summary.artist_str, true, Plain),
-        (b"TITLETRANSLIT", &summary.titletranslit_str, true, Plain),
-        (
-            b"SUBTITLETRANSLIT",
-            &summary.subtitletranslit_str,
-            true,
-            Plain,
-        ),
-        (b"ARTISTTRANSLIT", &summary.artisttranslit_str, true, Plain),
-        (b"GENRE", &summary.genre_str, true, Plain),
-        (b"ORIGIN", &summary.origin_str, ssc, Plain),
-        (b"CREDIT", &summary.credit_str, true, Plain),
-        (b"BANNER", &summary.banner_path, true, Plain),
-        (b"BACKGROUND", &summary.background_path, true, Plain),
-        (b"PREVIEWVID", &summary.previewvid_path, ssc, Plain),
-        (b"JACKET", &summary.jacket_path, ssc, Plain),
-        (b"CDIMAGE", &summary.cdimage_path, ssc, Plain),
-        (b"DISCIMAGE", &summary.discimage_path, ssc, Plain),
-        (b"LYRICSPATH", &summary.lyrics_path, true, Plain),
-        (b"CDTITLE", &summary.cdtitle_path, true, Plain),
-        (b"MUSIC", &summary.music_path, true, Plain),
-        (b"OFFSET", &formatted_offset, true, Plain),
-        (b"SAMPLESTART", &formatted_sample_start, true, Plain),
-        (b"SAMPLELENGTH", &formatted_sample_length, true, Plain),
-        (b"SELECTABLE", &formatted_selectable, true, Plain),
-        (
-            b"DISPLAYBPM",
-            &summary.display_bpm_str,
-            !summary.display_bpm_str.is_empty(),
-            Plain,
-        ),
-        (b"BPMS", &summary.normalized_bpms, true, List),
-        (b"STOPS", &summary.normalized_stops, true, List),
-        (b"DELAYS", &summary.normalized_delays, ssc, List),
-        (b"WARPS", &summary.normalized_warps, ssc, List),
-        (
-            b"TIMESIGNATURES",
-            &summary.normalized_time_signatures,
-            ssc,
-            List,
-        ),
-        (b"TICKCOUNTS", &summary.normalized_tickcounts, ssc, List),
-        (b"COMBOS", &summary.normalized_combos, ssc, List),
-        (b"SPEEDS", &summary.normalized_speeds, ssc, List),
-        (b"SCROLLS", &summary.normalized_scrolls, ssc, List),
-        (b"FAKES", &summary.normalized_fakes, ssc, List),
-        (b"LABELS", &summary.normalized_labels, ssc, List),
-        (b"BGCHANGES", &summary.normalized_bgchanges, true, List),
-        (
-            b"FGCHANGES",
-            &summary.normalized_fgchanges,
-            !summary.normalized_fgchanges.is_empty(),
-            List,
-        ),
-        (b"KEYSOUNDS", &summary.normalized_keysounds, true, List),
-        // TODO: make sure the implementation for this meshes well with the original ATTACKS implementation
-        (b"ATTACKS", &summary.normalized_attacks, true, List),
+    #[rustfmt::skip]
+    let props = [
+        Prop::ssc_only_with_default(b"VERSION", DEFAULT_VERSION, PropValue::Version(summary.ssc_version)),
+        Prop::new_with_default(b"TITLE", DEFAULT_TITLE, PropValue::Str(&summary.title_str)),
+        Prop::new(b"SUBTITLE", PropValue::Str(&summary.subtitle_str)),
+        Prop::new_with_default(b"ARTIST", DEFAULT_ARTIST, PropValue::Str(&summary.artist_str)),
+        Prop::new(b"TITLETRANSLIT", PropValue::Str(&summary.titletranslit_str)),
+        Prop::new(b"SUBTITLETRANSLIT", PropValue::Str(&summary.subtitletranslit_str)),
+        Prop::new(b"ARTISTTRANSLIT", PropValue::Str(&summary.artisttranslit_str)),
+        Prop::new(b"GENRE", PropValue::Str(&summary.genre_str)),
+        Prop::ssc_only(b"ORIGIN", PropValue::Str(&summary.origin_str)),
+        Prop::new(b"CREDIT", PropValue::Str(&summary.credit_str)),
+        Prop::new(b"BANNER", PropValue::Str(&summary.banner_path)),
+        Prop::new(b"BACKGROUND", PropValue::Str(&summary.background_path)),
+        Prop::ssc_only(b"PREVIEWVID", PropValue::Str(&summary.previewvid_path)),
+        Prop::ssc_only(b"JACKET", PropValue::Str(&summary.jacket_path)),
+        Prop::ssc_only(b"CDIMAGE", PropValue::Str(&summary.cdimage_path)),
+        Prop::ssc_only(b"DISCIMAGE", PropValue::Str(&summary.discimage_path)),
+        Prop::new(b"LYRICSPATH", PropValue::Str(&summary.lyrics_path)),
+        Prop::new(b"CDTITLE", PropValue::Str(&summary.cdtitle_path)),
+        Prop::new(b"MUSIC", PropValue::Str(&summary.music_path)),
+        Prop::new(b"OFFSET", PropValue::Number(summary.offset)),
+        Prop::new(b"SAMPLESTART", PropValue::Number(summary.sample_start)),
+        Prop::new(b"SAMPLELENGTH", PropValue::Number(summary.sample_length)),
+        Prop::new(b"SELECTABLE", PropValue::Bool(summary.selectable)),
+        Prop::nonempty_only(b"DISPLAYBPM", PropValue::Str(&summary.display_bpm_str)),
+        Prop::new_with_default(b"BPMS", DEFAULT_BPMS, PropValue::NormalizedList(&summary.normalized_bpms)),
+        Prop::new(b"STOPS", PropValue::NormalizedList(&summary.normalized_stops)),
+        Prop::ssc_only(b"DELAYS", PropValue::NormalizedList(&summary.normalized_delays)),
+        Prop::ssc_only(b"WARPS", PropValue::NormalizedList(&summary.normalized_warps)),
+        Prop::ssc_only_with_default(b"TIMESIGNATURES", DEFAULT_TIME_SIGNATURES, PropValue::NormalizedList(&summary.normalized_time_signatures)),
+        Prop::ssc_only_with_default(b"TICKCOUNTS", DEFAULT_TICKCOUNTS, PropValue::NormalizedList(&summary.normalized_tickcounts)),
+        Prop::ssc_only_with_default(b"COMBOS", DEFAULT_COMBOS, PropValue::NormalizedList(&summary.normalized_combos)),
+        Prop::ssc_only_with_default(b"SPEEDS", DEFAULT_SPEEDS, PropValue::NormalizedList(&summary.normalized_speeds)),
+        Prop::ssc_only_with_default(b"SCROLLS", DEFAULT_SCROLLS, PropValue::NormalizedList(&summary.normalized_scrolls)),
+        Prop::ssc_only(b"FAKES", PropValue::NormalizedList(&summary.normalized_fakes)),
+        Prop::ssc_only_with_default(b"LABELS", DEFAULT_LABELS, PropValue::NormalizedList(&summary.normalized_labels)),
+        Prop::ssc_nonempty_only(b"LASTSECONDHINT", PropValue::NumberOpt(None)), // TODO: add SimfileSummary.last_second_hint
+        Prop::new(b"BGCHANGES", PropValue::NormalizedList(&summary.normalized_bgchanges)),
+        Prop::nonempty_only(b"FGCHANGES", PropValue::NormalizedList(&summary.normalized_fgchanges)),
+        Prop::new(b"KEYSOUNDS", PropValue::NormalizedList(&summary.normalized_keysounds)),
+        Prop::new(b"ATTACKS", PropValue::NormalizedList(&summary.normalized_attacks)),
     ];
 
-    for (key, value, is_included, value_writer) in properties {
-        if is_included {
-            written_bytes += write_prop(key, value.as_bytes(), value_writer, out)?;
-        }
+    for prop in props {
+        written_bytes += prop.serialize(ssc, false, out)?;
     }
 
     written_bytes += write_all!(out, b"\n")?;
 
-    match ssc {
-        true => {
-            for chart in &summary.charts {
-                written_bytes += serialize_ssc_chart(out, chart)?;
-                written_bytes += write_all!(out, b"\n")?;
-            }
-        }
-        false => {
-            for chart in &summary.charts {
-                written_bytes += serialize_sm_chart(out, chart)?;
-                written_bytes += write_all!(out, b"\n")?;
-            }
-        }
+    for chart in &summary.charts {
+        written_bytes += if ssc {
+            serialize_ssc_chart(out, chart)
+        } else {
+            serialize_sm_chart(out, chart)
+        }?;
+        written_bytes += write_all!(out, b"\n")?;
     }
 
     Ok(written_bytes)
 }
 
-fn serialize_sm_chart(
-    out: &mut dyn io::Write,
-    chart: &crate::ChartSummary,
-) -> Result<usize, io::Error> {
+#[must_use]
+#[inline(always)]
+fn write_sm_chart_field(value: &str, out: &mut dyn io::Write) -> io::Result<usize> {
+    let mut written_bytes = 0;
+    written_bytes += write_all!(out, b"     ")?;
+    written_bytes += out.write(value.as_bytes())?;
+    written_bytes += write_all!(out, b":\n")?;
+    Ok(written_bytes)
+}
+
+#[must_use]
+fn serialize_sm_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> io::Result<usize> {
     let mut written_bytes = 0;
     written_bytes += write_all!(out, b"#NOTES:\n")?;
     written_bytes += write_sm_chart_field(&chart.step_type_str, out)?;
@@ -227,106 +547,42 @@ fn serialize_sm_chart(
     Ok(written_bytes)
 }
 
-fn serialize_ssc_chart(
-    out: &mut dyn io::Write,
-    chart: &crate::ChartSummary,
-) -> Result<usize, io::Error> {
+#[must_use]
+fn serialize_ssc_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> io::Result<usize> {
     let mut written_bytes = 0;
-    let formatted_radar_values = format_radar_values(chart.cached_radar_values);
-    let chart_properties: Vec<(&[u8], &str)> = vec![
-        (b"NOTEDATA", ""),
-        (b"CHARTNAME", &chart.chart_name_str),
-        (b"STEPSTYPE", &chart.step_type_str),
-        (b"DESCRIPTION", &chart.description_str),
-        (b"CHARTSTYLE", &chart.chart_style_str),
-        (b"DIFFICULTY", &chart.difficulty_str),
-        (b"METER", &chart.rating_str),
-        (b"RADARVALUES", &formatted_radar_values),
-        (b"CREDIT", &chart.step_artist_str),
+
+    #[rustfmt::skip]
+    let props = [
+        Prop::new(b"NOTEDATA", PropValue::Empty),
+        Prop::new(b"CHARTNAME", PropValue::Str(&chart.chart_name_str)),
+        Prop::new_with_default(b"STEPSTYPE", b"dance-single", PropValue::Str(&chart.step_type_str)),
+        Prop::new(b"DESCRIPTION", PropValue::Str(&chart.description_str)),
+        Prop::new(b"CHARTSTYLE", PropValue::Str(&chart.chart_style_str)),
+        Prop::new_with_default(b"DIFFICULTY", b"Beginner", PropValue::Str(&chart.difficulty_str)),
+        Prop::new_with_default(b"METER", b"1", PropValue::Str(&chart.rating_str)),
+        Prop::nonempty_only(b"MUSIC", PropValue::Str(&chart.music_path)), // TODO
+        Prop::new(b"RADARVALUES", PropValue::RadarValues(chart.cached_radar_values)),
+        Prop::new(b"CREDIT", PropValue::Str(&chart.step_artist_str)),
+        Prop::own_timing_only(b"OFFSET", PropValue::Number(chart.chart_offset_seconds)),
+        Prop::own_timing_only_with_default(b"BPMS", DEFAULT_BPMS, PropValue::NormalizedListOpt(chart.chart_bpms.as_deref())),
+        Prop::own_timing_only(b"STOPS", PropValue::NormalizedListOpt(chart.chart_stops.as_deref())),
+        Prop::own_timing_only(b"DELAYS", PropValue::NormalizedListOpt(chart.chart_delays.as_deref())),
+        Prop::own_timing_only(b"WARPS", PropValue::NormalizedListOpt(chart.chart_warps.as_deref())),
+        Prop::own_timing_only_with_default(b"TIMESIGNATURES", DEFAULT_TIME_SIGNATURES, PropValue::NormalizedListOpt(chart.chart_time_signatures.as_deref())),
+        Prop::own_timing_only_with_default(b"TICKCOUNTS", DEFAULT_TICKCOUNTS, PropValue::NormalizedListOpt(chart.chart_tickcounts.as_deref())),
+        Prop::own_timing_only_with_default(b"COMBOS", DEFAULT_COMBOS, PropValue::NormalizedListOpt(chart.chart_combos.as_deref())),
+        Prop::own_timing_only_with_default(b"SPEEDS", DEFAULT_SPEEDS, PropValue::NormalizedListOpt(chart.chart_speeds.as_deref())),
+        Prop::own_timing_only_with_default(b"SCROLLS", DEFAULT_SCROLLS, PropValue::NormalizedListOpt(chart.chart_scrolls.as_deref())),
+        Prop::own_timing_only(b"FAKES", PropValue::NormalizedListOpt(chart.chart_fakes.as_deref())),
+        Prop::own_timing_only_with_default(b"LABELS", DEFAULT_LABELS, PropValue::NormalizedListOpt(chart.chart_labels.as_deref())),
+        Prop::nonempty_only(b"ATTACKS", PropValue::NormalizedListOpt(chart.chart_attacks.as_deref())),
+        Prop::nonempty_only(b"DISPLAYBPM", PropValue::StrOpt(chart.chart_display_bpm.as_deref())),
+        Prop::nonempty_only(b"NOTES", PropValue::NoteData(&chart.minimized_note_data)),
+        Prop::nonempty_only(b"NOTES2", PropValue::Empty), // TODO
     ];
 
-    for property in chart_properties {
-        written_bytes += write_prop(property.0, property.1.as_bytes(), ValueWriter::Plain, out)?;
-    }
-
-    if chart.chart_has_own_timing {
-        written_bytes += serialize_ssc_chart_timing_fields(out, chart)?;
-    }
-
-    written_bytes += write_all!(out, b"#NOTES:\n")?;
-    written_bytes += write_all!(out, &chart.minimized_note_data)?;
-    written_bytes += write_all!(out, b";\n")?;
-
-    Ok(written_bytes)
-}
-
-fn serialize_ssc_chart_timing_fields(
-    out: &mut dyn io::Write,
-    chart: &crate::ChartSummary,
-) -> Result<usize, io::Error> {
-    use ValueWriter::*;
-
-    let mut written_bytes = 0;
-    let formatted_chart_offset = format_dot6_f64(chart.chart_offset_seconds);
-    let chart_timing_properties: Vec<(&[u8], &str, ValueWriter, bool)> = vec![
-        (b"OFFSET", &formatted_chart_offset, Plain, true),
-        (
-            b"BPMS",
-            slice_or_default!(chart.chart_bpms, DEFAULT_BPMS),
-            List,
-            true,
-        ),
-        (b"STOPS", slice_or_default!(chart.chart_stops), List, true),
-        (b"DELAYS", slice_or_default!(chart.chart_delays), List, true),
-        (b"WARPS", slice_or_default!(chart.chart_warps), List, true),
-        (
-            b"TIMESIGNATURES",
-            slice_or_default!(chart.chart_time_signatures, DEFAULT_TIME_SIGNATURES),
-            List,
-            true,
-        ),
-        (
-            b"TICKCOUNTS",
-            slice_or_default!(chart.chart_tickcounts),
-            List,
-            true,
-        ),
-        (b"COMBOS", slice_or_default!(chart.chart_combos), List, true),
-        (
-            b"SPEEDS",
-            slice_or_default!(chart.chart_speeds, DEFAULT_SPEEDS),
-            List,
-            true,
-        ),
-        (
-            b"SCROLLS",
-            slice_or_default!(chart.chart_scrolls, DEFAULT_SCROLLS),
-            List,
-            true,
-        ),
-        (b"FAKES", slice_or_default!(chart.chart_fakes), List, true),
-        (b"LABELS", slice_or_default!(chart.chart_labels), List, true),
-        (
-            b"ATTACKS",
-            slice_or_default!(chart.chart_attacks),
-            List,
-            !chart.chart_attacks.as_ref().is_none_or(|v| v.is_empty()),
-        ),
-        (
-            b"DISPLAYBPM",
-            slice_or_default!(chart.chart_display_bpm),
-            Plain,
-            !chart
-                .chart_display_bpm
-                .as_ref()
-                .is_none_or(|v| v.is_empty()),
-        ),
-    ];
-
-    for (key, value, value_writer, is_included) in chart_timing_properties {
-        if is_included {
-            written_bytes += write_prop(key, value.as_bytes(), value_writer, out)?;
-        }
+    for prop in props {
+        written_bytes += prop.serialize(true, chart.chart_has_own_timing, out)?;
     }
 
     Ok(written_bytes)
@@ -535,7 +791,7 @@ mod tests {
         Ok(())
     }
 
-    fn simfile_summary_with_all_fields() -> crate::SimfileSummary {
+    fn simfile_summary_with_all_fields(include_nonempty: bool) -> crate::SimfileSummary {
         crate::SimfileSummary {
             title_str: String::from("Title"),
             subtitle_str: String::from("Subtitle"),
@@ -565,20 +821,21 @@ mod tests {
             cdtitle_path: String::from("cdtitle.png"),
             jacket_path: String::from("jacket.png"),
             music_path: String::from("music.ogg"),
-            display_bpm_str: String::from("150"),
+            display_bpm_str: String::from("150"), // TODO include_nonempty
             sample_start: 10.0,
             sample_length: 16.0,
             origin_str: String::from("Origin"),
             credit_str: String::from("Credit"),
             normalized_bgchanges: Default::default(), // TODO
-            normalized_fgchanges: Default::default(), // TODO
+            normalized_fgchanges: Default::default(), // TODO include_nonempty
             normalized_keysounds: Default::default(), // TODO
-            normalized_attacks: Default::default(),   // TODO
+            normalized_attacks: Default::default(),
             previewvid_path: String::from("previewvid.mov"),
             cdimage_path: String::from("cdimage.png"),
             discimage_path: String::from("discimage.png"),
             lyrics_path: String::from("lyrics.lrc"),
             selectable: true,
+            // last_second_hint: Some(120.0), // TODO include_nonempty
 
             // To be populated by the test
             charts: vec![],
