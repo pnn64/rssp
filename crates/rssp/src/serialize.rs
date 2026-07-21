@@ -364,7 +364,7 @@ pub fn serialize_simfile(
         Prop::ssc_only_with_default(b"SCROLLS", DEFAULT_SCROLLS, PropValue::NormalizedList(&summary.normalized_scrolls)),
         Prop::ssc_only(b"FAKES", PropValue::NormalizedList(&summary.normalized_fakes)),
         Prop::ssc_only_with_default(b"LABELS", DEFAULT_LABELS, PropValue::NormalizedList(&summary.normalized_labels)),
-        Prop::ssc_nonempty_only(b"LASTSECONDHINT", PropValue::NumberOpt(None)), // TODO: add SimfileSummary.last_second_hint
+        Prop::ssc_nonempty_only(b"LASTSECONDHINT", PropValue::NumberOpt(summary.last_second_hint)),
         Prop::new(b"BGCHANGES", PropValue::NormalizedList(&summary.normalized_bgchanges)),
         Prop::nonempty_only(b"FGCHANGES", PropValue::NormalizedList(&summary.normalized_fgchanges)),
         Prop::new(b"KEYSOUNDS", PropValue::NormalizedList(&summary.normalized_keysounds)),
@@ -1131,7 +1131,7 @@ mod tests {
             discimage_path: String::from("discimage.png"),
             lyrics_path: String::from("lyrics.lrc"),
             selectable: true,
-            // last_second_hint: include_nonempty.then(|| 120.0), // TODO
+            last_second_hint: include_nonempty.then(|| 120.0),
 
             // To be populated by the test
             charts: vec![],
