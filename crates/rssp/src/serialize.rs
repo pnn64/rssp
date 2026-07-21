@@ -12,6 +12,9 @@ pub(crate) const DEFAULT_COMBOS: &[u8] = b"0.000000=1";
 pub(crate) const DEFAULT_SPEEDS: &[u8] = b"0.000000=1.000000=0.000000=0";
 pub(crate) const DEFAULT_SCROLLS: &[u8] = b"0.000000=1.000000";
 pub(crate) const DEFAULT_LABELS: &[u8] = b"0.000000=Song Start";
+pub(crate) const DEFAULT_STEPSTYPE: &[u8] = b"dance-single";
+pub(crate) const DEFAULT_DIFFICULTY: &[u8] = b"Beginner";
+pub(crate) const DEFAULT_METER: &[u8] = b"1";
 
 /// Call `write_all` and, on success, return the input's size in bytes
 macro_rules! write_all {
@@ -459,6 +462,17 @@ pub fn serialize_simfile(
     out: &mut dyn io::Write,
 ) -> io::Result<usize> {
     let ssc = extension_is_ssc(extension)?;
+    if !ssc {
+        for chart in &summary.charts {
+            if chart.chart_has_own_timing {
+                return io::Result::Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Can't serialize chart with its own timing to .sm",
+                ));
+            }
+        }
+    }
+
     let mut written_bytes = 0;
 
     #[rustfmt::skip]
@@ -537,11 +551,28 @@ fn write_sm_chart_field(value: &str, out: &mut dyn io::Write) -> io::Result<usiz
 fn serialize_sm_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> io::Result<usize> {
     let mut written_bytes = 0;
     written_bytes += write_all!(out, b"#NOTES:\n")?;
-    written_bytes += write_sm_chart_field(&chart.step_type_str, out)?;
-    written_bytes += write_sm_chart_field(&chart.description_str, out)?;
-    written_bytes += write_sm_chart_field(&chart.difficulty_str, out)?;
-    written_bytes += write_sm_chart_field(&chart.rating_str, out)?;
-    written_bytes += write_sm_chart_field(&format_radar_values(chart.cached_radar_values), out)?;
+
+    // Kludge: don't use `Prop#serialize` here because SM charts are special.
+    // We use `Prop` anyway for the sake of `new_with_default`.
+    #[rustfmt::skip]
+    let props = [
+        Prop::new_with_default(b"", DEFAULT_STEPSTYPE, PropValue::Str(&chart.step_type_str)),
+        Prop::new(b"", PropValue::Str(&chart.description_str)),
+        Prop::new_with_default(b"", DEFAULT_DIFFICULTY, PropValue::Str(&chart.difficulty_str)),
+        Prop::new_with_default(b"", DEFAULT_METER, PropValue::Str(&chart.rating_str)),
+        Prop::new(b"", PropValue::RadarValues(chart.cached_radar_values)),
+    ];
+
+    for prop in props {
+        let value = match (prop.default_value, prop.value.is_empty()) {
+            (Some(default), true) => PropValue::Bytes(default),
+            _ => prop.value,
+        };
+        written_bytes += write_all!(out, b"     ")?;
+        written_bytes += value.serialize(out)?;
+        written_bytes += write_all!(out, b":\n")?;
+    }
+
     written_bytes += write_all!(out, &chart.minimized_note_data)?;
     written_bytes += write_all!(out, b";\n")?;
     Ok(written_bytes)
@@ -555,11 +586,11 @@ fn serialize_ssc_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> 
     let props = [
         Prop::new(b"NOTEDATA", PropValue::Empty),
         Prop::new(b"CHARTNAME", PropValue::Str(&chart.chart_name_str)),
-        Prop::new_with_default(b"STEPSTYPE", b"dance-single", PropValue::Str(&chart.step_type_str)),
+        Prop::new_with_default(b"STEPSTYPE", DEFAULT_STEPSTYPE, PropValue::Str(&chart.step_type_str)),
         Prop::new(b"DESCRIPTION", PropValue::Str(&chart.description_str)),
         Prop::new(b"CHARTSTYLE", PropValue::Str(&chart.chart_style_str)),
-        Prop::new_with_default(b"DIFFICULTY", b"Beginner", PropValue::Str(&chart.difficulty_str)),
-        Prop::new_with_default(b"METER", b"1", PropValue::Str(&chart.rating_str)),
+        Prop::new_with_default(b"DIFFICULTY", DEFAULT_DIFFICULTY, PropValue::Str(&chart.difficulty_str)),
+        Prop::new_with_default(b"METER", DEFAULT_METER, PropValue::Str(&chart.rating_str)),
         Prop::nonempty_only(b"MUSIC", PropValue::Str(&chart.music_path)), // TODO
         Prop::new(b"RADARVALUES", PropValue::RadarValues(chart.cached_radar_values)),
         Prop::new(b"CREDIT", PropValue::Str(&chart.step_artist_str)),
@@ -596,9 +627,13 @@ mod tests {
 
     #[test]
     fn serialize_simfile_with_ssc() -> io::Result<()> {
-        let mut summary = simfile_summary_with_all_fields();
-        summary.charts.push(chart_summary_with_all_fields(false));
-        summary.charts.push(chart_summary_with_all_fields(true));
+        let mut summary = simfile_summary_with_all_fields(false, false);
+        summary
+            .charts
+            .push(chart_summary_with_all_fields(false, false, false));
+        summary
+            .charts
+            .push(chart_summary_with_all_fields(true, false, false));
         let mut buffer = vec![];
         {
             let mut cursor = io::Cursor::new(&mut buffer);
@@ -630,7 +665,6 @@ mod tests {
             #SAMPLESTART:10.000000;\n\
             #SAMPLELENGTH:16.000000;\n\
             #SELECTABLE:YES;\n\
-            #DISPLAYBPM:150;\n\
             #BPMS:0.000=120.000,\n\
             16.000=240.000,\n\
             48.000=120.000;\n\
@@ -717,7 +751,267 @@ mod tests {
             4.500=4.750;\n\
             #LABELS:0.000=Song Start,\n\
             16.000=Speedup;\n\
+            #NOTES:\n\
+            0000\n\
+            0000\n\
+            0000\n\
+            0000\n\
+            ;\n\
+            \n";
+
+        assert_eq!(expected, output);
+
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_simfile_with_ssc_and_nonempty_fields() -> io::Result<()> {
+        let mut summary = simfile_summary_with_all_fields(true, false);
+        summary
+            .charts
+            .push(chart_summary_with_all_fields(false, true, false));
+        summary
+            .charts
+            .push(chart_summary_with_all_fields(true, true, false));
+        let mut buffer = vec![];
+        {
+            let mut cursor = io::Cursor::new(&mut buffer);
+            super::serialize_simfile(&summary, "ssc", &mut cursor)?;
+        };
+
+        let output = String::from_utf8(buffer).unwrap();
+
+        let expected = "#VERSION:0.83;\n\
+            #TITLE:Title;\n\
+            #SUBTITLE:Subtitle;\n\
+            #ARTIST:Artist;\n\
+            #TITLETRANSLIT:Title translit;\n\
+            #SUBTITLETRANSLIT:Subtitle translit;\n\
+            #ARTISTTRANSLIT:Artist translit;\n\
+            #GENRE:Genre;\n\
+            #ORIGIN:Origin;\n\
+            #CREDIT:Credit;\n\
+            #BANNER:banner.png;\n\
+            #BACKGROUND:background.png;\n\
+            #PREVIEWVID:previewvid.mov;\n\
+            #JACKET:jacket.png;\n\
+            #CDIMAGE:cdimage.png;\n\
+            #DISCIMAGE:discimage.png;\n\
+            #LYRICSPATH:lyrics.lrc;\n\
+            #CDTITLE:cdtitle.png;\n\
+            #MUSIC:music.ogg;\n\
+            #OFFSET:0.123000;\n\
+            #SAMPLESTART:10.000000;\n\
+            #SAMPLELENGTH:16.000000;\n\
+            #SELECTABLE:YES;\n\
             #DISPLAYBPM:150;\n\
+            #BPMS:0.000=120.000,\n\
+            16.000=240.000,\n\
+            48.000=120.000;\n\
+            #STOPS:1.000=1.250,\n\
+            1.500=1.750;\n\
+            #DELAYS:2.000=2.250,\n\
+            2.500=2.750;\n\
+            #WARPS:3.000=3.250,\n\
+            3.500=3.750;\n\
+            #TIMESIGNATURES:0.000=4=4,\n\
+            16.000=8=4,\n\
+            48.000=4=4;\n\
+            #TICKCOUNTS:0.000=4,\n\
+            16.000=2,\n\
+            48.000=4;\n\
+            #COMBOS:0.000=1,\n\
+            16.000=2,\n\
+            48.000=1;\n\
+            #SPEEDS:0.000=1.000=0.000=0,\n\
+            12.000=0.500=4.000=0,\n\
+            48.000=1.000=0.000=1;\n\
+            #SCROLLS:0.000=1.000,\n\
+            16.000=2.000,\n\
+            48.000=1.000;\n\
+            #FAKES:4.000=4.250,\n\
+            4.500=4.750;\n\
+            #LABELS:0.000=Song Start,\n\
+            16.000=Speedup;\n\
+            #LASTSECONDHINT:120.000000;\n\
+            #BGCHANGES:;\n\
+            #FGCHANGES:;\n\
+            #KEYSOUNDS:;\n\
+            #ATTACKS:;\n\
+            \n\
+            #NOTEDATA:;\n\
+            #CHARTNAME:Chart name;\n\
+            #STEPSTYPE:dance-single;\n\
+            #DESCRIPTION:Description;\n\
+            #CHARTSTYLE:Chart style;\n\
+            #DIFFICULTY:Challenge;\n\
+            #METER:17;\n\
+            #MUSIC:chart_music.ogg;\n\
+            #RADARVALUES:0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140;\n\
+            #CREDIT:Step artist;\n\
+            #ATTACKS:;\n\
+            #DISPLAYBPM:300;\n\
+            #NOTES:\n\
+            0000\n\
+            0000\n\
+            0000\n\
+            0000\n\
+            ;\n\
+            \n\
+            #NOTEDATA:;\n\
+            #CHARTNAME:Chart name;\n\
+            #STEPSTYPE:dance-single;\n\
+            #DESCRIPTION:Description;\n\
+            #CHARTSTYLE:Chart style;\n\
+            #DIFFICULTY:Challenge;\n\
+            #METER:17;\n\
+            #MUSIC:chart_music.ogg;\n\
+            #RADARVALUES:0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140;\n\
+            #CREDIT:Step artist;\n\
+            #OFFSET:0.000000;\n\
+            #BPMS:0.000=120.000,\n\
+            16.000=240.000,\n\
+            48.000=120.000;\n\
+            #STOPS:1.000=1.250,\n\
+            1.500=1.750;\n\
+            #DELAYS:2.000=2.250,\n\
+            2.500=2.750;\n\
+            #WARPS:3.000=3.250,\n\
+            3.500=3.750;\n\
+            #TIMESIGNATURES:0.000=4=4,\n\
+            16.000=8=4,\n\
+            48.000=4=4;\n\
+            #TICKCOUNTS:0.000=4,\n\
+            16.000=2,\n\
+            48.000=4;\n\
+            #COMBOS:0.000=1,\n\
+            16.000=2,\n\
+            48.000=1;\n\
+            #SPEEDS:0.000=1.000=0.000=0,\n\
+            12.000=0.500=4.000=0,\n\
+            48.000=1.000=0.000=1;\n\
+            #SCROLLS:0.000=1.000,\n\
+            16.000=2.000,\n\
+            48.000=1.000;\n\
+            #FAKES:4.000=4.250,\n\
+            4.500=4.750;\n\
+            #LABELS:0.000=Song Start,\n\
+            16.000=Speedup;\n\
+            #ATTACKS:;\n\
+            #DISPLAYBPM:300;\n\
+            #NOTES:\n\
+            0000\n\
+            0000\n\
+            0000\n\
+            0000\n\
+            ;\n\
+            \n";
+
+        assert_eq!(expected, output);
+
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_simfile_with_ssc_and_trigger_defaults() -> io::Result<()> {
+        let mut summary = simfile_summary_with_all_fields(false, true);
+        summary
+            .charts
+            .push(chart_summary_with_all_fields(false, false, true));
+        summary
+            .charts
+            .push(chart_summary_with_all_fields(true, false, true));
+        let mut buffer = vec![];
+        {
+            let mut cursor = io::Cursor::new(&mut buffer);
+            super::serialize_simfile(&summary, "ssc", &mut cursor)?;
+        };
+
+        let output = String::from_utf8(buffer).unwrap();
+
+        let expected = "#VERSION:0.83;\n\
+            #TITLE:Untitled;\n\
+            #SUBTITLE:Subtitle;\n\
+            #ARTIST:Unknown artist;\n\
+            #TITLETRANSLIT:Title translit;\n\
+            #SUBTITLETRANSLIT:Subtitle translit;\n\
+            #ARTISTTRANSLIT:Artist translit;\n\
+            #GENRE:Genre;\n\
+            #ORIGIN:Origin;\n\
+            #CREDIT:Credit;\n\
+            #BANNER:banner.png;\n\
+            #BACKGROUND:background.png;\n\
+            #PREVIEWVID:previewvid.mov;\n\
+            #JACKET:jacket.png;\n\
+            #CDIMAGE:cdimage.png;\n\
+            #DISCIMAGE:discimage.png;\n\
+            #LYRICSPATH:lyrics.lrc;\n\
+            #CDTITLE:cdtitle.png;\n\
+            #MUSIC:music.ogg;\n\
+            #OFFSET:0.123000;\n\
+            #SAMPLESTART:10.000000;\n\
+            #SAMPLELENGTH:16.000000;\n\
+            #SELECTABLE:YES;\n\
+            #BPMS:0.000000=60.000000;\n\
+            #STOPS:1.000=1.250,\n\
+            1.500=1.750;\n\
+            #DELAYS:2.000=2.250,\n\
+            2.500=2.750;\n\
+            #WARPS:3.000=3.250,\n\
+            3.500=3.750;\n\
+            #TIMESIGNATURES:0.000000=4=4;\n\
+            #TICKCOUNTS:0.000000=4;\n\
+            #COMBOS:0.000000=1;\n\
+            #SPEEDS:0.000000=1.000000=0.000000=0;\n\
+            #SCROLLS:0.000000=1.000000;\n\
+            #FAKES:4.000=4.250,\n\
+            4.500=4.750;\n\
+            #LABELS:0.000000=Song Start;\n\
+            #BGCHANGES:;\n\
+            #KEYSOUNDS:;\n\
+            #ATTACKS:;\n\
+            \n\
+            #NOTEDATA:;\n\
+            #CHARTNAME:Chart name;\n\
+            #STEPSTYPE:dance-single;\n\
+            #DESCRIPTION:Description;\n\
+            #CHARTSTYLE:Chart style;\n\
+            #DIFFICULTY:Beginner;\n\
+            #METER:1;\n\
+            #RADARVALUES:0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140;\n\
+            #CREDIT:Step artist;\n\
+            #NOTES:\n\
+            0000\n\
+            0000\n\
+            0000\n\
+            0000\n\
+            ;\n\
+            \n\
+            #NOTEDATA:;\n\
+            #CHARTNAME:Chart name;\n\
+            #STEPSTYPE:dance-single;\n\
+            #DESCRIPTION:Description;\n\
+            #CHARTSTYLE:Chart style;\n\
+            #DIFFICULTY:Beginner;\n\
+            #METER:1;\n\
+            #RADARVALUES:0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140;\n\
+            #CREDIT:Step artist;\n\
+            #OFFSET:0.000000;\n\
+            #BPMS:0.000000=60.000000;\n\
+            #STOPS:1.000=1.250,\n\
+            1.500=1.750;\n\
+            #DELAYS:2.000=2.250,\n\
+            2.500=2.750;\n\
+            #WARPS:3.000=3.250,\n\
+            3.500=3.750;\n\
+            #TIMESIGNATURES:0.000000=4=4;\n\
+            #TICKCOUNTS:0.000000=4;\n\
+            #COMBOS:0.000000=1;\n\
+            #SPEEDS:0.000000=1.000000=0.000000=0;\n\
+            #SCROLLS:0.000000=1.000000;\n\
+            #FAKES:4.000=4.250,\n\
+            4.500=4.750;\n\
+            #LABELS:0.000000=Song Start;\n\
             #NOTES:\n\
             0000\n\
             0000\n\
@@ -733,9 +1027,65 @@ mod tests {
 
     #[test]
     fn serialize_simfile_with_sm() -> io::Result<()> {
-        let mut summary = simfile_summary_with_all_fields();
-        summary.charts.push(chart_summary_with_all_fields(false));
-        summary.charts.push(chart_summary_with_all_fields(true));
+        let mut summary = simfile_summary_with_all_fields(false, false);
+        summary
+            .charts
+            .push(chart_summary_with_all_fields(false, false, false));
+
+        let mut buffer = vec![];
+        {
+            let mut cursor = io::Cursor::new(&mut buffer);
+            super::serialize_simfile(&summary, "sm", &mut cursor)?;
+        };
+
+        let output = String::from_utf8(buffer).unwrap();
+
+        let expected = "#TITLE:Title;\n\
+        #SUBTITLE:Subtitle;\n\
+        #ARTIST:Artist;\n\
+        #TITLETRANSLIT:Title translit;\n\
+        #SUBTITLETRANSLIT:Subtitle translit;\n\
+        #ARTISTTRANSLIT:Artist translit;\n\
+        #GENRE:Genre;\n\
+        #CREDIT:Credit;\n\
+        #BANNER:banner.png;\n\
+        #BACKGROUND:background.png;\n\
+        #LYRICSPATH:lyrics.lrc;\n\
+        #CDTITLE:cdtitle.png;\n\
+        #MUSIC:music.ogg;\n\
+        #OFFSET:0.123000;\n\
+        #SAMPLESTART:10.000000;\n\
+        #SAMPLELENGTH:16.000000;\n\
+        #SELECTABLE:YES;\n\
+        #BPMS:0.000=120.000,\n\
+        16.000=240.000,\n\
+        48.000=120.000;\n\
+        #STOPS:1.000=1.250,\n\
+        1.500=1.750;\n\
+        #BGCHANGES:;\n\
+        #KEYSOUNDS:;\n\
+        #ATTACKS:;\n\
+        \n\
+        #NOTES:\n     dance-single:\n     Description:\n     Challenge:\n     17:\n     0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140:\n\
+        0000\n\
+        0000\n\
+        0000\n\
+        0000\n\
+        ;\n\
+        \n";
+
+        assert_eq!(expected, output);
+
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_simfile_with_sm_and_nonempty_fields() -> io::Result<()> {
+        let mut summary = simfile_summary_with_all_fields(true, false);
+        summary
+            .charts
+            .push(chart_summary_with_all_fields(false, true, false));
+
         let mut buffer = vec![];
         {
             let mut cursor = io::Cursor::new(&mut buffer);
@@ -768,15 +1118,9 @@ mod tests {
         #STOPS:1.000=1.250,\n\
         1.500=1.750;\n\
         #BGCHANGES:;\n\
+        #FGCHANGES:;\n\
         #KEYSOUNDS:;\n\
         #ATTACKS:;\n\
-        \n\
-        #NOTES:\n     dance-single:\n     Description:\n     Challenge:\n     17:\n     0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140:\n\
-        0000\n\
-        0000\n\
-        0000\n\
-        0000\n\
-        ;\n\
         \n\
         #NOTES:\n     dance-single:\n     Description:\n     Challenge:\n     17:\n     0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140:\n\
         0000\n\
@@ -791,29 +1135,131 @@ mod tests {
         Ok(())
     }
 
-    fn simfile_summary_with_all_fields(include_nonempty: bool) -> crate::SimfileSummary {
+    #[test]
+    fn serialize_simfile_with_sm_and_trigger_defaults() -> io::Result<()> {
+        let mut summary = simfile_summary_with_all_fields(false, true);
+        summary
+            .charts
+            .push(chart_summary_with_all_fields(false, false, true));
+
+        let mut buffer = vec![];
+        {
+            let mut cursor = io::Cursor::new(&mut buffer);
+            super::serialize_simfile(&summary, "sm", &mut cursor)?;
+        };
+
+        let output = String::from_utf8(buffer).unwrap();
+
+        let expected = "#TITLE:Untitled;\n\
+        #SUBTITLE:Subtitle;\n\
+        #ARTIST:Unknown artist;\n\
+        #TITLETRANSLIT:Title translit;\n\
+        #SUBTITLETRANSLIT:Subtitle translit;\n\
+        #ARTISTTRANSLIT:Artist translit;\n\
+        #GENRE:Genre;\n\
+        #CREDIT:Credit;\n\
+        #BANNER:banner.png;\n\
+        #BACKGROUND:background.png;\n\
+        #LYRICSPATH:lyrics.lrc;\n\
+        #CDTITLE:cdtitle.png;\n\
+        #MUSIC:music.ogg;\n\
+        #OFFSET:0.123000;\n\
+        #SAMPLESTART:10.000000;\n\
+        #SAMPLELENGTH:16.000000;\n\
+        #SELECTABLE:YES;\n\
+        #BPMS:0.000000=60.000000;\n\
+        #STOPS:1.000=1.250,\n\
+        1.500=1.750;\n\
+        #BGCHANGES:;\n\
+        #KEYSOUNDS:;\n\
+        #ATTACKS:;\n\
+        \n\
+        #NOTES:\n     dance-single:\n     Description:\n     Beginner:\n     1:\n     0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140:\n\
+        0000\n\
+        0000\n\
+        0000\n\
+        0000\n\
+        ;\n\
+        \n";
+
+        assert_eq!(expected, output);
+
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_simfile_with_sm_and_chart_timing_returns_error() -> io::Result<()> {
+        let mut summary = simfile_summary_with_all_fields(true, false);
+        summary
+            .charts
+            .push(chart_summary_with_all_fields(true, false, false));
+
+        let mut buffer = vec![];
+        {
+            let mut cursor = io::Cursor::new(&mut buffer);
+
+            match super::serialize_simfile(&summary, "sm", &mut cursor) {
+                Ok(_) => panic!("serialize_simfile returned Ok but a chart has its own timing"),
+                Err(_) => {}
+            }
+        };
+
+        Ok(())
+    }
+
+    fn simfile_summary_with_all_fields(
+        include_nonempty: bool,
+        trigger_defaults: bool,
+    ) -> crate::SimfileSummary {
         crate::SimfileSummary {
-            title_str: String::from("Title"),
+            title_str: match trigger_defaults {
+                false => String::from("Title"),
+                true => String::from(""),
+            },
             subtitle_str: String::from("Subtitle"),
-            artist_str: String::from("Artist"),
+            artist_str: match trigger_defaults {
+                false => String::from("Artist"),
+                true => String::from(""),
+            },
             genre_str: String::from("Genre"),
             titletranslit_str: String::from("Title translit"),
             subtitletranslit_str: String::from("Subtitle translit"),
             artisttranslit_str: String::from("Artist translit"),
             offset: 0.123,
-            normalized_bpms: String::from("0.000=120.000,16.000=240.000,48.000=120.000"),
+            normalized_bpms: match trigger_defaults {
+                false => String::from("0.000=120.000,16.000=240.000,48.000=120.000"),
+                true => String::from(""),
+            },
             normalized_stops: String::from("1.000=1.250,1.500=1.750"),
             normalized_delays: String::from("2.000=2.250,2.500=2.750"),
             normalized_warps: String::from("3.000=3.250,3.500=3.750"),
-            normalized_speeds: String::from(
-                "0.000=1.000=0.000=0,12.000=0.500=4.000=0,48.000=1.000=0.000=1",
-            ),
-            normalized_scrolls: String::from("0.000=1.000,16.000=2.000,48.000=1.000"),
+            normalized_speeds: match trigger_defaults {
+                false => {
+                    String::from("0.000=1.000=0.000=0,12.000=0.500=4.000=0,48.000=1.000=0.000=1")
+                }
+                true => String::from(""),
+            },
+            normalized_scrolls: match trigger_defaults {
+                false => String::from("0.000=1.000,16.000=2.000,48.000=1.000"),
+                true => String::from(""),
+            },
             normalized_fakes: String::from("4.000=4.250,4.500=4.750"),
-            normalized_time_signatures: String::from("0.000=4=4,16.000=8=4,48.000=4=4"),
-            normalized_labels: String::from("0.000=Song Start,16.000=Speedup"),
-            normalized_tickcounts: String::from("0.000=4,16.000=2,48.000=4"),
-            normalized_combos: String::from("0.000=1,16.000=2,48.000=1"),
+            normalized_time_signatures: match trigger_defaults {
+                false => String::from("0.000=4=4,16.000=8=4,48.000=4=4"),
+                true => String::from(""),
+            },
+            normalized_labels: match trigger_defaults {
+                false => String::from("0.000=Song Start,16.000=Speedup"),
+                true => String::from(""),
+            },
+            normalized_tickcounts: match trigger_defaults {
+                false => String::from("0.000=4,16.000=2,48.000=4"),
+                true => String::from(""),
+            },
+            normalized_combos: match trigger_defaults {
+                false => String::from("0.000=1,16.000=2,48.000=1"),
+                true => String::from(""),
+            },
             ssc_version: 0.83,
             timing_format: rssp_core::timing::TimingFormat::Ssc,
             banner_path: String::from("banner.png"),
@@ -821,21 +1267,29 @@ mod tests {
             cdtitle_path: String::from("cdtitle.png"),
             jacket_path: String::from("jacket.png"),
             music_path: String::from("music.ogg"),
-            display_bpm_str: String::from("150"), // TODO include_nonempty
+            display_bpm_str: if include_nonempty {
+                String::from("150")
+            } else {
+                Default::default()
+            },
             sample_start: 10.0,
             sample_length: 16.0,
             origin_str: String::from("Origin"),
             credit_str: String::from("Credit"),
             normalized_bgchanges: Default::default(), // TODO
-            normalized_fgchanges: Default::default(), // TODO include_nonempty
+            normalized_fgchanges: if include_nonempty {
+                Default::default() // TODO
+            } else {
+                Default::default()
+            },
             normalized_keysounds: Default::default(), // TODO
-            normalized_attacks: Default::default(),
+            normalized_attacks: Default::default(),   // TODO
             previewvid_path: String::from("previewvid.mov"),
             cdimage_path: String::from("cdimage.png"),
             discimage_path: String::from("discimage.png"),
             lyrics_path: String::from("lyrics.lrc"),
             selectable: true,
-            // last_second_hint: Some(120.0), // TODO include_nonempty
+            // last_second_hint: include_nonempty.then(|| 120.0), // TODO
 
             // To be populated by the test
             charts: vec![],
@@ -852,48 +1306,64 @@ mod tests {
         }
     }
 
-    fn chart_summary_with_all_fields(has_own_timing: bool) -> crate::ChartSummary {
+    fn chart_summary_with_all_fields(
+        has_own_timing: bool,
+        include_nonempty: bool,
+        trigger_defaults: bool,
+    ) -> crate::ChartSummary {
         crate::ChartSummary {
-            step_type_str: String::from("dance-single"),
+            step_type_str: match trigger_defaults {
+                false => String::from("dance-single"),
+                true => String::from(""),
+            },
             step_artist_str: String::from("Step artist"),
             description_str: String::from("Description"),
             chart_name_str: String::from("Chart name"),
             chart_style_str: String::from("Chart style"),
-            difficulty_str: String::from("Challenge"),
-            rating_str: String::from("17"),
+            difficulty_str: match trigger_defaults {
+                false => String::from("Challenge"),
+                true => String::from(""),
+            },
+            rating_str: match trigger_defaults {
+                false => String::from("17"),
+                true => String::from(""),
+            },
             cached_radar_values: Some([
                 0.010, 0.020, 0.030, 0.040, 0.050, 0.060, 0.070, 0.080, 0.090, 0.100, 0.110, 0.120,
                 0.130, 0.140,
             ]),
             tech_notation_str: String::from("BR FS XO"),
             minimized_note_data: b"0000\n0000\n0000\n0000\n".to_vec(), // TODO
+            music_path: match include_nonempty {
+                true => String::from("chart_music.ogg"),
+                false => String::from(""),
+            },
 
             // Timing fields
             chart_has_own_timing: has_own_timing,
-            music_path: match has_own_timing {
-                true => String::from("music.ogg"),
-                false => String::from(""),
-            },
-            chart_attacks: Default::default(), // TODO
-            chart_bpms: has_own_timing
+            chart_bpms: (has_own_timing && !trigger_defaults)
                 .then(|| String::from("0.000=120.000,16.000=240.000,48.000=120.000")),
             chart_stops: has_own_timing.then(|| String::from("1.000=1.250,1.500=1.750")),
             chart_delays: has_own_timing.then(|| String::from("2.000=2.250,2.500=2.750")),
             chart_warps: has_own_timing.then(|| String::from("3.000=3.250,3.500=3.750")),
-            chart_speeds: has_own_timing.then(|| {
+            chart_speeds: (has_own_timing && !trigger_defaults).then(|| {
                 String::from("0.000=1.000=0.000=0,12.000=0.500=4.000=0,48.000=1.000=0.000=1")
             }),
-            chart_scrolls: has_own_timing
+            chart_scrolls: (has_own_timing && !trigger_defaults)
                 .then(|| String::from("0.000=1.000,16.000=2.000,48.000=1.000")),
             chart_fakes: has_own_timing.then(|| String::from("4.000=4.250,4.500=4.750")),
-            chart_time_signatures: has_own_timing
+            chart_time_signatures: (has_own_timing && !trigger_defaults)
                 .then(|| String::from("0.000=4=4,16.000=8=4,48.000=4=4")),
-            chart_labels: has_own_timing.then(|| String::from("0.000=Song Start,16.000=Speedup")),
-            chart_tickcounts: has_own_timing.then(|| String::from("0.000=4,16.000=2,48.000=4")),
-            chart_combos: has_own_timing.then(|| String::from("0.000=1,16.000=2,48.000=1")),
-            chart_display_bpm: has_own_timing.then(|| String::from("150")),
+            chart_labels: (has_own_timing && !trigger_defaults)
+                .then(|| String::from("0.000=Song Start,16.000=Speedup")),
+            chart_tickcounts: (has_own_timing && !trigger_defaults)
+                .then(|| String::from("0.000=4,16.000=2,48.000=4")),
+            chart_combos: (has_own_timing && !trigger_defaults)
+                .then(|| String::from("0.000=1,16.000=2,48.000=1")),
+            chart_attacks: include_nonempty.then(|| Default::default()), // TODO
+            chart_display_bpm: include_nonempty.then(|| String::from("300")),
 
-            // The remaining fields are irrelevant to serialization
+            // These are currently unused in favor of the `chart_*` fields above
             timing_segments: Arc::new(crate::timing::TimingSegments {
                 beat0_offset_adjust: Default::default(),
                 bpms: Default::default(),
@@ -904,6 +1374,8 @@ mod tests {
                 scrolls: Default::default(),
                 fakes: Default::default(),
             }),
+
+            // The remaining fields are irrelevant to serialization
             matrix_rating: Default::default(),
             tier_bpm: Default::default(),
             stats: Default::default(),
