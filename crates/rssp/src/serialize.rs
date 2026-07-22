@@ -68,6 +68,7 @@ enum PropValue<'a> {
     Str(&'a str),
     StrOpt(Option<&'a str>),
     Bytes(&'a [u8]),
+    BytesOpt(Option<&'a [u8]>),
     NoteData(&'a [u8]),
     Version(f32),
     Number(f64),
@@ -89,6 +90,10 @@ impl<'a> PropValue<'a> {
                 Some(s) => PropValue::Str(s).serialize(out),
             },
             PropValue::Bytes(b) => write_all!(out, b),
+            PropValue::BytesOpt(opt) => match opt {
+                None => Ok(0),
+                Some(b) => PropValue::Bytes(*b).serialize(out),
+            },
             PropValue::NoteData(b) => Ok(write_all!(out, b"\n")? + write_all!(out, b)?),
             PropValue::Version(v) => write_all!(out, format_version(*v).as_bytes()),
             PropValue::Number(n) => write_all!(out, format_dot6_f64(*n).as_bytes()),
@@ -113,6 +118,9 @@ impl<'a> PropValue<'a> {
                     written_bytes += write_all!(out, &items[start..=comma])?;
                     written_bytes += write_all!(out, b"\n")?;
                     start = comma + 1;
+                    while start < items.len() && items[start].is_ascii_whitespace() {
+                        start += 1;
+                    }
                 }
 
                 written_bytes += write_all!(out, &items[start..])?;
@@ -152,6 +160,7 @@ impl<'a> PropValue<'a> {
             PropValue::Str(s) => s.is_empty(),
             PropValue::StrOpt(opt) => opt.as_ref().is_none_or(|s| s.is_empty()),
             PropValue::Bytes(b) => b.is_empty(),
+            PropValue::BytesOpt(opt) => opt.as_ref().is_none_or(|b| b.is_empty()),
             PropValue::NoteData(_) => false,
             PropValue::Version(_) => false,
             PropValue::Number(_) => false,
@@ -352,7 +361,7 @@ pub fn serialize_simfile(
         Prop::new(b"SAMPLESTART", PropValue::Number(summary.sample_start)),
         Prop::new(b"SAMPLELENGTH", PropValue::Number(summary.sample_length)),
         Prop::new(b"SELECTABLE", PropValue::Bool(summary.selectable)),
-        Prop::nonempty_only(b"DISPLAYBPM", PropValue::Str(&summary.display_bpm_str)),
+        Prop::nonempty_only(b"DISPLAYBPM", PropValue::Bytes(&summary.display_bpm_str.as_bytes())), // Don't escape the ':' in ranges
         Prop::new_with_default(b"BPMS", DEFAULT_BPMS, PropValue::NormalizedList(&summary.normalized_bpms)),
         Prop::new(b"STOPS", PropValue::NormalizedList(&summary.normalized_stops)),
         Prop::ssc_only(b"DELAYS", PropValue::NormalizedList(&summary.normalized_delays)),
@@ -449,7 +458,7 @@ fn serialize_ssc_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> 
         Prop::own_timing_only(b"FAKES", PropValue::NormalizedListOpt(chart.chart_fakes.as_deref())),
         Prop::own_timing_only_with_default(b"LABELS", DEFAULT_LABELS, PropValue::NormalizedListOpt(chart.chart_labels.as_deref())),
         Prop::nonempty_only(b"ATTACKS", PropValue::NormalizedListOpt(chart.chart_attacks.as_deref())),
-        Prop::nonempty_only(b"DISPLAYBPM", PropValue::StrOpt(chart.chart_display_bpm.as_deref())),
+        Prop::nonempty_only(b"DISPLAYBPM", PropValue::BytesOpt(chart.chart_display_bpm.as_ref().map(|v| v.as_bytes()))),
         Prop::nonempty_only(b"NOTES", PropValue::NoteData(&chart.minimized_note_data)),
         Prop::nonempty_only(b"NOTES2", PropValue::Empty), // TODO
     ];
