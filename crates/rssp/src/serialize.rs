@@ -81,31 +81,29 @@ enum PropValue<'a> {
 impl<'a> PropValue<'a> {
     #[must_use]
     fn serialize(&self, out: &mut dyn io::Write) -> io::Result<usize> {
-        use PropValue::*;
-
         match self {
-            Empty => Ok(0),
-            Str(s) => sm_escape(out, s.as_bytes()),
-            StrOpt(opt) => match opt {
+            PropValue::Empty => Ok(0),
+            PropValue::Str(s) => sm_escape(out, s.as_bytes()),
+            PropValue::StrOpt(opt) => match opt {
                 None => Ok(0),
-                Some(s) => Str(s).serialize(out),
+                Some(s) => PropValue::Str(s).serialize(out),
             },
-            Bytes(b) => write_all!(out, b),
-            NoteData(b) => Ok(write_all!(out, b"\n")? + write_all!(out, b)?),
-            Version(v) => write_all!(out, format_version(*v).as_bytes()),
-            Number(n) => write_all!(out, format_dot6_f64(*n).as_bytes()),
-            NumberOpt(opt) => match opt {
+            PropValue::Bytes(b) => write_all!(out, b),
+            PropValue::NoteData(b) => Ok(write_all!(out, b"\n")? + write_all!(out, b)?),
+            PropValue::Version(v) => write_all!(out, format_version(*v).as_bytes()),
+            PropValue::Number(n) => write_all!(out, format_dot6_f64(*n).as_bytes()),
+            PropValue::NumberOpt(opt) => match opt {
                 None => Ok(0),
-                Some(n) => Number(*n).serialize(out),
+                Some(n) => PropValue::Number(*n).serialize(out),
             },
-            Bool(b) => {
+            PropValue::Bool(b) => {
                 if *b {
                     write_all!(out, b"YES")
                 } else {
                     write_all!(out, b"NO")
                 }
             }
-            NormalizedList(items_str) => {
+            PropValue::NormalizedList(items_str) => {
                 let items = items_str.as_bytes();
                 let mut written_bytes = 0;
                 let mut start = 0;
@@ -120,11 +118,11 @@ impl<'a> PropValue<'a> {
                 written_bytes += write_all!(out, &items[start..])?;
                 Ok(written_bytes)
             }
-            NormalizedListOpt(opt_items_str) => match opt_items_str {
+            PropValue::NormalizedListOpt(opt_items_str) => match opt_items_str {
                 None => Ok(0),
-                Some(items_str) => NormalizedList(items_str).serialize(out),
+                Some(items_str) => PropValue::NormalizedList(items_str).serialize(out),
             },
-            RadarValues(rv) => match rv {
+            PropValue::RadarValues(rv) => match rv {
                 Some(values) => {
                     let mut written_bytes = 0;
                     let mut first_item = true;
@@ -146,20 +144,19 @@ impl<'a> PropValue<'a> {
 
     #[must_use]
     fn is_empty(&self) -> bool {
-        use PropValue::*;
         match self {
-            Empty => true,
-            Str(s) => s.is_empty(),
-            StrOpt(opt) => opt.as_ref().is_none_or(|s| s.is_empty()),
-            Bytes(b) => b.is_empty(),
-            NoteData(_) => false,
-            Version(_) => false,
-            Number(_) => false,
-            NumberOpt(opt) => opt.is_none(),
-            Bool(_) => false,
-            NormalizedList(s) => s.is_empty(),
-            NormalizedListOpt(opt) => opt.as_ref().is_none_or(|s| s.is_empty()),
-            RadarValues(rv) => rv.is_none(),
+            PropValue::Empty => true,
+            PropValue::Str(s) => s.is_empty(),
+            PropValue::StrOpt(opt) => opt.as_ref().is_none_or(|s| s.is_empty()),
+            PropValue::Bytes(b) => b.is_empty(),
+            PropValue::NoteData(_) => false,
+            PropValue::Version(_) => false,
+            PropValue::Number(_) => false,
+            PropValue::NumberOpt(opt) => opt.is_none(),
+            PropValue::Bool(_) => false,
+            PropValue::NormalizedList(s) => s.is_empty(),
+            PropValue::NormalizedListOpt(opt) => opt.as_ref().is_none_or(|s| s.is_empty()),
+            PropValue::RadarValues(rv) => rv.is_none(),
         }
     }
 }
@@ -395,7 +392,7 @@ fn serialize_sm_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> i
     written_bytes += write_all!(out, b"#NOTES:\n")?;
 
     // Kludge: don't use `Prop#serialize` here because SM charts are special.
-    // We use `Prop` anyway for the sake of `new_with_default`.
+    // We use `Prop` anyway for the convenience of `new_with_default` and `PropValue::RadarValues`.
     #[rustfmt::skip]
     let props = [
         Prop::new_with_default(b"", DEFAULT_STEPSTYPE, PropValue::Str(&chart.step_type_str)),
@@ -433,7 +430,7 @@ fn serialize_ssc_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> 
         Prop::new(b"CHARTSTYLE", PropValue::Str(&chart.chart_style_str)),
         Prop::new_with_default(b"DIFFICULTY", DEFAULT_DIFFICULTY, PropValue::Str(&chart.difficulty_str)),
         Prop::new_with_default(b"METER", DEFAULT_METER, PropValue::Str(&chart.rating_str)),
-        Prop::nonempty_only(b"MUSIC", PropValue::Str(&chart.music_path)), // TODO
+        Prop::nonempty_only(b"MUSIC", PropValue::Str(&chart.music_path)),
         Prop::new(b"RADARVALUES", PropValue::RadarValues(chart.cached_radar_values)),
         Prop::new(b"CREDIT", PropValue::Str(&chart.step_artist_str)),
         Prop::own_timing_only(b"OFFSET", PropValue::Number(chart.chart_offset_seconds)),
