@@ -2,19 +2,19 @@ use std::io;
 
 use rssp_core::parse::extension_is_ssc;
 
-pub(crate) const DEFAULT_VERSION: &[u8] = b"0.83";
-pub(crate) const DEFAULT_TITLE: &[u8] = b"Untitled";
-pub(crate) const DEFAULT_ARTIST: &[u8] = b"Unknown artist";
-pub(crate) const DEFAULT_BPMS: &[u8] = b"0.000000=60.000000";
-pub(crate) const DEFAULT_TIME_SIGNATURES: &[u8] = b"0.000000=4=4";
-pub(crate) const DEFAULT_TICKCOUNTS: &[u8] = b"0.000000=4";
-pub(crate) const DEFAULT_COMBOS: &[u8] = b"0.000000=1";
-pub(crate) const DEFAULT_SPEEDS: &[u8] = b"0.000000=1.000000=0.000000=0";
-pub(crate) const DEFAULT_SCROLLS: &[u8] = b"0.000000=1.000000";
-pub(crate) const DEFAULT_LABELS: &[u8] = b"0.000000=Song Start";
-pub(crate) const DEFAULT_STEPSTYPE: &[u8] = b"dance-single";
-pub(crate) const DEFAULT_DIFFICULTY: &[u8] = b"Beginner";
-pub(crate) const DEFAULT_METER: &[u8] = b"1";
+pub const DEFAULT_VERSION: &[u8] = b"0.83";
+pub const DEFAULT_TITLE: &[u8] = b"Untitled";
+pub const DEFAULT_ARTIST: &[u8] = b"Unknown artist";
+pub const DEFAULT_BPMS: &[u8] = b"0.000000=60.000000";
+pub const DEFAULT_TIME_SIGNATURES: &[u8] = b"0.000000=4=4";
+pub const DEFAULT_TICKCOUNTS: &[u8] = b"0.000000=4";
+pub const DEFAULT_COMBOS: &[u8] = b"0.000000=1";
+pub const DEFAULT_SPEEDS: &[u8] = b"0.000000=1.000000=0.000000=0";
+pub const DEFAULT_SCROLLS: &[u8] = b"0.000000=1.000000";
+pub const DEFAULT_LABELS: &[u8] = b"0.000000=Song Start";
+pub const DEFAULT_STEPSTYPE: &[u8] = b"dance-single";
+pub const DEFAULT_DIFFICULTY: &[u8] = b"Beginner";
+pub const DEFAULT_METER: &[u8] = b"1";
 
 /// Call `write_all` and, on success, return the input's size in bytes
 macro_rules! write_all {
@@ -57,8 +57,8 @@ fn format_dot6_f64(value: f64) -> String {
 
 #[must_use]
 #[inline(always)]
-fn format_dot3_f32(value: f32) -> String {
-    format!("{:.3}", value)
+fn format_dot6_f32(value: f32) -> String {
+    format!("{:.6}", value)
 }
 
 #[derive(Default)]
@@ -75,7 +75,7 @@ enum PropValue<'a> {
     Bool(bool),
     NormalizedList(&'a str),
     NormalizedListOpt(Option<&'a str>),
-    RadarValues(Option<[f32; crate::stats::RADAR_CATEGORY_COUNT]>),
+    RadarValues(Option<[f32; crate::stats::RADAR_CATEGORY_COUNT]>, bool),
 }
 
 impl<'a> PropValue<'a> {
@@ -122,17 +122,20 @@ impl<'a> PropValue<'a> {
                 None => Ok(0),
                 Some(items_str) => PropValue::NormalizedList(items_str).serialize(out),
             },
-            PropValue::RadarValues(rv) => match rv {
+            PropValue::RadarValues(rv, per_player) => match rv {
                 Some(values) => {
                     let mut written_bytes = 0;
                     let mut first_item = true;
+                    let players = if *per_player { 2 } else { 1 };
 
-                    for value in values {
-                        if !first_item {
-                            written_bytes += write_all!(out, b",")?;
+                    for _ in 0..players {
+                        for value in values {
+                            if !first_item {
+                                written_bytes += write_all!(out, b",")?;
+                            }
+                            written_bytes += write_all!(out, format_dot6_f32(*value).as_bytes())?;
+                            first_item = false;
                         }
-                        written_bytes += write_all!(out, format_dot3_f32(*value).as_bytes())?;
-                        first_item = false;
                     }
 
                     Ok(written_bytes)
@@ -156,7 +159,7 @@ impl<'a> PropValue<'a> {
             PropValue::Bool(_) => false,
             PropValue::NormalizedList(s) => s.is_empty(),
             PropValue::NormalizedListOpt(opt) => opt.as_ref().is_none_or(|s| s.is_empty()),
-            PropValue::RadarValues(rv) => rv.is_none(),
+            PropValue::RadarValues(rv, _) => rv.is_none(),
         }
     }
 }
@@ -399,7 +402,7 @@ fn serialize_sm_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> i
         Prop::new(b"", PropValue::Str(&chart.description_str)),
         Prop::new_with_default(b"", DEFAULT_DIFFICULTY, PropValue::Str(&chart.difficulty_str)),
         Prop::new_with_default(b"", DEFAULT_METER, PropValue::Str(&chart.rating_str)),
-        Prop::new(b"", PropValue::RadarValues(chart.cached_radar_values)),
+        Prop::new(b"", PropValue::RadarValues(chart.cached_radar_values, false)),
     ];
 
     for prop in props {
@@ -431,7 +434,7 @@ fn serialize_ssc_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> 
         Prop::new_with_default(b"DIFFICULTY", DEFAULT_DIFFICULTY, PropValue::Str(&chart.difficulty_str)),
         Prop::new_with_default(b"METER", DEFAULT_METER, PropValue::Str(&chart.rating_str)),
         Prop::nonempty_only(b"MUSIC", PropValue::Str(&chart.music_path)),
-        Prop::new(b"RADARVALUES", PropValue::RadarValues(chart.cached_radar_values)),
+        Prop::new(b"RADARVALUES", PropValue::RadarValues(chart.cached_radar_values, true)),
         Prop::new(b"CREDIT", PropValue::Str(&chart.step_artist_str)),
         Prop::own_timing_only(b"OFFSET", PropValue::Number(chart.chart_offset_seconds)),
         Prop::own_timing_only_with_default(b"BPMS", DEFAULT_BPMS, PropValue::NormalizedListOpt(chart.chart_bpms.as_deref())),

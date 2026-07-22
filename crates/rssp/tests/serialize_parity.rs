@@ -3,12 +3,15 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::sleep;
+use std::time::Duration;
 
 use libtest_mimic::Arguments;
-use rssp::stats::RADAR_CATEGORY_COUNT;
 use walkdir::WalkDir;
 
 use rssp::report::{TimingSnapshot, build_timing_snapshot};
+use rssp::serialize::*;
+use rssp::stats::RADAR_CATEGORY_COUNT;
 use rssp::{AnalysisOptions, ChartSummary, SimfileSummary, analyze};
 
 #[derive(Debug, Clone)]
@@ -117,7 +120,7 @@ fn compare_radar_values(
         (None, None) => true,
         (Some(expected), Some(actual)) => {
             for i in 0..RADAR_CATEGORY_COUNT {
-                if expected[i] - actual[i] < 0.1e-3 {
+                if expected[i] - actual[i] > 1e-6 {
                     return false;
                 }
             }
@@ -145,6 +148,43 @@ macro_rules! build_comparison_entry {
             &$expected.$field,
             &$actual.$field,
             $expected.$field == $actual.$field,
+            None,
+        )
+    };
+    ($field: ident, $expected: expr, $actual: expr, $default: expr) => {
+        (
+            stringify!($field),
+            &$expected.$field,
+            &$actual.$field,
+            $expected.$field == $actual.$field
+                || ($expected.$field.is_empty() && $actual.$field.as_bytes() == $default),
+            Some($default),
+        )
+    };
+}
+
+macro_rules! build_comparison_entry_opt {
+    ($field: ident, $expected: expr, $actual: expr) => {
+        (
+            stringify!($field),
+            &$expected.$field,
+            &$actual.$field,
+            $expected.$field == $actual.$field,
+            None,
+        )
+    };
+    ($field: ident, $expected: expr, $actual: expr, $default: expr) => {
+        (
+            stringify!($field),
+            &$expected.$field,
+            &$actual.$field,
+            $expected.$field == $actual.$field
+                || ($expected.$field.as_ref().is_none_or(|f| f.is_empty())
+                    && $actual
+                        .$field
+                        .as_ref()
+                        .is_some_and(|f| f.as_bytes() == $default)),
+            Some($default),
         )
     };
 }
@@ -157,10 +197,10 @@ fn compare_simfile_str_fields(
     let expected_ssc_version_display = format!("{:.2}", expected.ssc_version);
     let actual_ssc_version_display = format!("{:.2}", actual.ssc_version);
 
-    let comparison_table: Vec<(&str, &str, &str, bool)> = vec![
-        build_comparison_entry!(title_str, expected, actual),
+    let comparison_table: Vec<(&str, &str, &str, bool, Option<&[u8]>)> = vec![
+        build_comparison_entry!(title_str, expected, actual, DEFAULT_TITLE),
         build_comparison_entry!(subtitle_str, expected, actual),
-        build_comparison_entry!(artist_str, expected, actual),
+        build_comparison_entry!(artist_str, expected, actual, DEFAULT_ARTIST),
         build_comparison_entry!(titletranslit_str, expected, actual),
         build_comparison_entry!(subtitletranslit_str, expected, actual),
         build_comparison_entry!(artisttranslit_str, expected, actual),
@@ -177,16 +217,21 @@ fn compare_simfile_str_fields(
         build_comparison_entry!(cdtitle_path, expected, actual),
         build_comparison_entry!(background_path, expected, actual),
         build_comparison_entry!(banner_path, expected, actual),
-        build_comparison_entry!(normalized_bpms, expected, actual),
+        build_comparison_entry!(normalized_bpms, expected, actual, DEFAULT_BPMS),
         build_comparison_entry!(normalized_stops, expected, actual),
         build_comparison_entry!(normalized_delays, expected, actual),
-        build_comparison_entry!(normalized_speeds, expected, actual),
-        build_comparison_entry!(normalized_scrolls, expected, actual),
+        build_comparison_entry!(normalized_speeds, expected, actual, DEFAULT_SPEEDS),
+        build_comparison_entry!(normalized_scrolls, expected, actual, DEFAULT_SCROLLS),
         build_comparison_entry!(normalized_fakes, expected, actual),
-        build_comparison_entry!(normalized_time_signatures, expected, actual),
-        build_comparison_entry!(normalized_labels, expected, actual),
-        build_comparison_entry!(normalized_tickcounts, expected, actual),
-        build_comparison_entry!(normalized_combos, expected, actual),
+        build_comparison_entry!(
+            normalized_time_signatures,
+            expected,
+            actual,
+            DEFAULT_TIME_SIGNATURES
+        ),
+        build_comparison_entry!(normalized_labels, expected, actual, DEFAULT_LABELS),
+        build_comparison_entry!(normalized_tickcounts, expected, actual, DEFAULT_TICKCOUNTS),
+        build_comparison_entry!(normalized_combos, expected, actual, DEFAULT_COMBOS),
         build_comparison_entry!(normalized_bgchanges, expected, actual),
         build_comparison_entry!(normalized_fgchanges, expected, actual),
         build_comparison_entry!(normalized_keysounds, expected, actual),
@@ -196,6 +241,7 @@ fn compare_simfile_str_fields(
             &expected_ssc_version_display,
             &actual_ssc_version_display,
             expected.ssc_version == actual.ssc_version,
+            Some(DEFAULT_VERSION),
         ),
     ];
 
@@ -209,7 +255,7 @@ fn compare_simfile_str_fields(
     let mut buffer = vec![];
     {
         let mut cursor = io::Cursor::new(&mut buffer);
-        for (field_name, expected, actual, cmp) in comparison_table {
+        for (field_name, expected, actual, cmp, _) in comparison_table {
             writeln!(
                 &mut cursor,
                 "  {}: baseline: {} -> reencoded: {} {}",
@@ -263,14 +309,29 @@ fn compare_chart_str_fields_and_hashes(
             (Some(expected_chart), Some(actual_chart)) => {
                 let expected_radar_values = format_radar_values(expected_chart.cached_radar_values);
                 let actual_radar_values = format_radar_values(actual_chart.cached_radar_values);
-                let comparison_table: Vec<(&str, &str, &str, bool)> = vec![
-                    build_comparison_entry!(step_type_str, expected_chart, actual_chart),
+                let comparison_table: Vec<(&str, &str, &str, bool, Option<&[u8]>)> = vec![
+                    build_comparison_entry!(
+                        step_type_str,
+                        expected_chart,
+                        actual_chart,
+                        DEFAULT_STEPSTYPE
+                    ),
                     build_comparison_entry!(step_artist_str, expected_chart, actual_chart),
                     build_comparison_entry!(description_str, expected_chart, actual_chart),
                     build_comparison_entry!(chart_name_str, expected_chart, actual_chart),
                     build_comparison_entry!(chart_style_str, expected_chart, actual_chart),
-                    build_comparison_entry!(difficulty_str, expected_chart, actual_chart),
-                    build_comparison_entry!(rating_str, expected_chart, actual_chart),
+                    build_comparison_entry!(
+                        difficulty_str,
+                        expected_chart,
+                        actual_chart,
+                        DEFAULT_DIFFICULTY
+                    ),
+                    build_comparison_entry!(
+                        rating_str,
+                        expected_chart,
+                        actual_chart,
+                        DEFAULT_METER
+                    ),
                     build_comparison_entry!(short_hash, expected_chart, actual_chart),
                     build_comparison_entry!(bpm_neutral_hash, expected_chart, actual_chart),
                     (
@@ -281,6 +342,7 @@ fn compare_chart_str_fields_and_hashes(
                             expected_chart.cached_radar_values.as_ref(),
                             actual_chart.cached_radar_values.as_ref(),
                         ),
+                        None,
                     ),
                 ];
 
@@ -294,7 +356,7 @@ fn compare_chart_str_fields_and_hashes(
                 let mut buffer = vec![];
                 {
                     let mut cursor = io::Cursor::new(&mut buffer);
-                    for (field_name, expected, actual, cmp) in comparison_table {
+                    for (field_name, expected, actual, cmp, _) in comparison_table {
                         writeln!(
                             &mut cursor,
                             "  {}: baseline: {} -> reencoded: {} {}",
@@ -360,37 +422,74 @@ fn compare_chart_timing_fields(
                 ));
             }
             (Some(expected_chart), Some(actual_chart)) => {
-                let some_true = Some(String::from("true"));
-                let some_false = Some(String::from("false"));
+                // Massage this boolean into a string to keep the comparison table simple
+                let expected_chart_has_own_timing =
+                    Some(expected_chart.chart_has_own_timing.to_string());
+                let actual_chart_has_own_timing =
+                    Some(actual_chart.chart_has_own_timing.to_string());
 
-                let comparison_table: Vec<(&str, &Option<String>, &Option<String>, bool)> = vec![
+                let comparison_table: Vec<(
+                    &str,
+                    &Option<String>,
+                    &Option<String>,
+                    bool,
+                    Option<&[u8]>,
+                )> = vec![
                     (
                         "chart_has_own_timing",
-                        if expected_chart.chart_has_own_timing {
-                            &some_true
-                        } else {
-                            &some_false
-                        },
-                        if actual_chart.chart_has_own_timing {
-                            &some_true
-                        } else {
-                            &some_false
-                        },
+                        &expected_chart_has_own_timing,
+                        &actual_chart_has_own_timing,
                         expected_chart.chart_has_own_timing == actual_chart.chart_has_own_timing,
+                        None,
                     ),
-                    build_comparison_entry!(chart_attacks, expected_chart, actual_chart),
-                    build_comparison_entry!(chart_stops, expected_chart, actual_chart),
-                    build_comparison_entry!(chart_speeds, expected_chart, actual_chart),
-                    build_comparison_entry!(chart_scrolls, expected_chart, actual_chart),
-                    build_comparison_entry!(chart_bpms, expected_chart, actual_chart),
-                    build_comparison_entry!(chart_delays, expected_chart, actual_chart),
-                    build_comparison_entry!(chart_warps, expected_chart, actual_chart),
-                    build_comparison_entry!(chart_fakes, expected_chart, actual_chart),
-                    build_comparison_entry!(chart_display_bpm, expected_chart, actual_chart),
-                    build_comparison_entry!(chart_time_signatures, expected_chart, actual_chart),
-                    build_comparison_entry!(chart_labels, expected_chart, actual_chart),
-                    build_comparison_entry!(chart_tickcounts, expected_chart, actual_chart),
-                    build_comparison_entry!(chart_combos, expected_chart, actual_chart),
+                    build_comparison_entry_opt!(chart_attacks, expected_chart, actual_chart),
+                    build_comparison_entry_opt!(chart_stops, expected_chart, actual_chart),
+                    build_comparison_entry_opt!(
+                        chart_speeds,
+                        expected_chart,
+                        actual_chart,
+                        DEFAULT_SPEEDS
+                    ),
+                    build_comparison_entry_opt!(
+                        chart_scrolls,
+                        expected_chart,
+                        actual_chart,
+                        DEFAULT_SCROLLS
+                    ),
+                    build_comparison_entry_opt!(
+                        chart_bpms,
+                        expected_chart,
+                        actual_chart,
+                        DEFAULT_BPMS
+                    ),
+                    build_comparison_entry_opt!(chart_delays, expected_chart, actual_chart),
+                    build_comparison_entry_opt!(chart_warps, expected_chart, actual_chart),
+                    build_comparison_entry_opt!(chart_fakes, expected_chart, actual_chart),
+                    build_comparison_entry_opt!(chart_display_bpm, expected_chart, actual_chart),
+                    build_comparison_entry_opt!(
+                        chart_time_signatures,
+                        expected_chart,
+                        actual_chart,
+                        DEFAULT_TIME_SIGNATURES
+                    ),
+                    build_comparison_entry_opt!(
+                        chart_labels,
+                        expected_chart,
+                        actual_chart,
+                        DEFAULT_LABELS
+                    ),
+                    build_comparison_entry_opt!(
+                        chart_tickcounts,
+                        expected_chart,
+                        actual_chart,
+                        DEFAULT_TICKCOUNTS
+                    ),
+                    build_comparison_entry_opt!(
+                        chart_combos,
+                        expected_chart,
+                        actual_chart,
+                        DEFAULT_COMBOS
+                    ),
                 ];
 
                 let all_ok = comparison_table.iter().all(|entry| entry.3);
@@ -403,7 +502,7 @@ fn compare_chart_timing_fields(
                 let mut buffer = vec![];
                 {
                     let mut cursor = io::Cursor::new(&mut buffer);
-                    for (field_name, expected, actual, cmp) in comparison_table {
+                    for (field_name, expected, actual, cmp, _) in comparison_table {
                         writeln!(
                             &mut cursor,
                             "  {}: baseline: {:?} -> reencoded: {:?} {}",
@@ -549,9 +648,17 @@ fn check_file(path: &Path, extension: &str) -> Result<(), String> {
     let mut buffer = vec![];
     {
         let mut cursor = io::Cursor::new(&mut buffer);
-        rssp::serialize::serialize_simfile(&base_summary, "ssc", &mut cursor)
-            .map_err(|e| e.to_string())?;
+        serialize_simfile(&base_summary, extension, &mut cursor).map_err(|e| e.to_string())?;
     };
+
+    // for chart in &base_summary.charts {
+    //     if chart.bpm_neutral_hash == "a5830d9474451c26" {
+    //         unsafe {
+    //             eprintln!("{}", String::from_utf8_unchecked(buffer.clone()));
+    //             sleep(Duration::from_secs(1));
+    //         }
+    //     }
+    // }
 
     // Re-run rssp analyze on the serialized simfile
     let reencoded_summary = run_rssp_analyze(&buffer, extension)?;
