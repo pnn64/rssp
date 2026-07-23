@@ -3,16 +3,19 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread::sleep;
-use std::time::Duration;
 
 use libtest_mimic::Arguments;
+use rssp::parse::extension_is_ssc;
 use walkdir::WalkDir;
 
 use rssp::report::{TimingSnapshot, build_timing_snapshot};
 use rssp::serialize::*;
 use rssp::stats::RADAR_CATEGORY_COUNT;
 use rssp::{AnalysisOptions, ChartSummary, SimfileSummary, analyze};
+
+pub const NORM_DEFAULT_BPMS: &[u8] = b"0.000=60.000";
+pub const NORM_DEFAULT_SPEEDS: &[u8] = b"0.000=1.000=0.000=0";
+pub const NORM_DEFAULT_SCROLLS: &[u8] = b"0.000=1.000";
 
 #[derive(Debug, Clone)]
 struct TestCase {
@@ -189,15 +192,53 @@ macro_rules! build_comparison_entry_opt {
     };
 }
 
+fn normalized_eq(a: &str, b: &str) -> bool {
+    let mut a_lines = a.lines();
+    let mut b_lines = b.lines();
+    for (line_a, line_b) in a_lines.by_ref().zip(b_lines.by_ref()) {
+        if line_a != line_b {
+            return false;
+        }
+    }
+    if a_lines.next().is_some() || b_lines.next().is_some() {
+        return false;
+    }
+    true
+}
+
+macro_rules! build_normalized_comparison_entry {
+    ($field: ident, $expected: expr, $actual: expr) => {
+        (
+            stringify!($field),
+            &$expected.$field,
+            &$actual.$field,
+            normalized_eq(&$expected.$field, &$actual.$field),
+            None,
+        )
+    };
+    ($field: ident, $expected: expr, $actual: expr, $default: expr) => {
+        (
+            stringify!($field),
+            &$expected.$field,
+            &$actual.$field,
+            normalized_eq(&$expected.$field, &$actual.$field)
+                || ($expected.$field.is_empty() && $actual.$field.as_bytes() == $default),
+            Some($default),
+        )
+    };
+}
+
 fn compare_simfile_str_fields(
     path: &Path,
+    extension: &str,
     expected: &SimfileSummary,
     actual: &SimfileSummary,
 ) -> Result<(), String> {
+    let is_ssc = extension_is_ssc(extension).map_err(|e| e.to_string())?;
     let expected_ssc_version_display = format!("{:.2}", expected.ssc_version);
     let actual_ssc_version_display = format!("{:.2}", actual.ssc_version);
 
-    let comparison_table: Vec<(&str, &str, &str, bool, Option<&[u8]>)> = vec![
+    let mut comparison_table: Vec<(&str, &str, &str, bool, Option<&[u8]>)> = vec![
         build_comparison_entry!(title_str, expected, actual, DEFAULT_TITLE),
         build_comparison_entry!(subtitle_str, expected, actual),
         build_comparison_entry!(artist_str, expected, actual, DEFAULT_ARTIST),
@@ -206,43 +247,105 @@ fn compare_simfile_str_fields(
         build_comparison_entry!(artisttranslit_str, expected, actual),
         build_comparison_entry!(display_bpm_str, expected, actual),
         build_comparison_entry!(credit_str, expected, actual),
-        build_comparison_entry!(origin_str, expected, actual),
         build_comparison_entry!(genre_str, expected, actual),
         build_comparison_entry!(lyrics_path, expected, actual),
-        build_comparison_entry!(discimage_path, expected, actual),
-        build_comparison_entry!(cdimage_path, expected, actual),
-        build_comparison_entry!(previewvid_path, expected, actual),
         build_comparison_entry!(music_path, expected, actual),
-        build_comparison_entry!(jacket_path, expected, actual),
         build_comparison_entry!(cdtitle_path, expected, actual),
         build_comparison_entry!(background_path, expected, actual),
         build_comparison_entry!(banner_path, expected, actual),
-        build_comparison_entry!(normalized_bpms, expected, actual, DEFAULT_BPMS),
-        build_comparison_entry!(normalized_stops, expected, actual),
-        build_comparison_entry!(normalized_delays, expected, actual),
-        build_comparison_entry!(normalized_speeds, expected, actual, DEFAULT_SPEEDS),
-        build_comparison_entry!(normalized_scrolls, expected, actual, DEFAULT_SCROLLS),
-        build_comparison_entry!(normalized_fakes, expected, actual),
-        build_comparison_entry!(
+    ];
+    if is_ssc {
+        comparison_table.extend_from_slice(&[
+            build_comparison_entry!(origin_str, expected, actual),
+            build_comparison_entry!(discimage_path, expected, actual),
+            build_comparison_entry!(cdimage_path, expected, actual),
+            build_comparison_entry!(previewvid_path, expected, actual),
+            build_comparison_entry!(jacket_path, expected, actual),
+            (
+                "ssc_version",
+                &expected_ssc_version_display,
+                &actual_ssc_version_display,
+                expected.ssc_version == actual.ssc_version,
+                Some(DEFAULT_VERSION),
+            ),
+        ]);
+    }
+
+    let all_ok = comparison_table.iter().all(|entry| entry.3);
+
+    if all_ok {
+        return Ok(());
+    }
+
+    // Build error string
+    let mut buffer = vec![];
+    {
+        let mut cursor = io::Cursor::new(&mut buffer);
+        for (field_name, expected, actual, cmp, _) in comparison_table {
+            writeln!(
+                &mut cursor,
+                "  {}: baseline: {:?} -> reencoded: {:?} {}",
+                field_name,
+                expected,
+                actual,
+                match cmp {
+                    true => "....ok",
+                    false => "....MISMATCH",
+                }
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    } // Drop cursor
+
+    let err_output = String::from_utf8(buffer).unwrap();
+
+    Err(format!(
+        "\n\nMISMATCH DETECTED\nFile: {}\n{}",
+        path.display(),
+        err_output,
+    ))
+}
+
+fn compare_simfile_normalized_fields(
+    path: &Path,
+    expected: &SimfileSummary,
+    actual: &SimfileSummary,
+) -> Result<(), String> {
+    let comparison_table: Vec<(&str, &str, &str, bool, Option<&[u8]>)> = vec![
+        build_normalized_comparison_entry!(normalized_bpms, expected, actual, NORM_DEFAULT_BPMS),
+        build_normalized_comparison_entry!(normalized_stops, expected, actual),
+        build_normalized_comparison_entry!(normalized_delays, expected, actual),
+        build_normalized_comparison_entry!(
+            normalized_speeds,
+            expected,
+            actual,
+            NORM_DEFAULT_SPEEDS
+        ),
+        build_normalized_comparison_entry!(
+            normalized_scrolls,
+            expected,
+            actual,
+            NORM_DEFAULT_SCROLLS
+        ),
+        build_normalized_comparison_entry!(normalized_fakes, expected, actual),
+        build_normalized_comparison_entry!(
             normalized_time_signatures,
             expected,
             actual,
             DEFAULT_TIME_SIGNATURES
         ),
-        build_comparison_entry!(normalized_labels, expected, actual, DEFAULT_LABELS),
-        build_comparison_entry!(normalized_tickcounts, expected, actual, DEFAULT_TICKCOUNTS),
-        build_comparison_entry!(normalized_combos, expected, actual, DEFAULT_COMBOS),
-        build_comparison_entry!(normalized_bgchanges, expected, actual),
-        build_comparison_entry!(normalized_fgchanges, expected, actual),
-        build_comparison_entry!(normalized_keysounds, expected, actual),
-        build_comparison_entry!(normalized_attacks, expected, actual),
-        (
-            "ssc_version",
-            &expected_ssc_version_display,
-            &actual_ssc_version_display,
-            expected.ssc_version == actual.ssc_version,
-            Some(DEFAULT_VERSION),
+        build_normalized_comparison_entry!(normalized_labels, expected, actual, DEFAULT_LABELS),
+        build_normalized_comparison_entry!(
+            normalized_tickcounts,
+            expected,
+            actual,
+            DEFAULT_TICKCOUNTS
         ),
+        build_normalized_comparison_entry!(normalized_combos, expected, actual, DEFAULT_COMBOS),
+        build_normalized_comparison_entry!(normalized_bgchanges, expected, actual),
+        build_normalized_comparison_entry!(normalized_fgchanges, expected, actual),
+        build_normalized_comparison_entry!(normalized_keysounds, expected, actual),
+        build_normalized_comparison_entry!(normalized_attacks, expected, actual),
     ];
 
     let all_ok = comparison_table.iter().all(|entry| entry.3);
@@ -258,7 +361,7 @@ fn compare_simfile_str_fields(
         for (field_name, expected, actual, cmp, _) in comparison_table {
             writeln!(
                 &mut cursor,
-                "  {}: baseline: {} -> reencoded: {} {}",
+                "  {}: baseline: {:?} -> reencoded: {:?} {}",
                 field_name,
                 expected,
                 actual,
@@ -359,7 +462,7 @@ fn compare_chart_str_fields_and_hashes(
                     for (field_name, expected, actual, cmp, _) in comparison_table {
                         writeln!(
                             &mut cursor,
-                            "  {}: baseline: {} -> reencoded: {} {}",
+                            "  {}: baseline: {:?} -> reencoded: {:?} {}",
                             field_name,
                             expected,
                             actual,
@@ -583,25 +686,24 @@ fn compare_timing(
                 }
 
                 // Build error string
-                let mut buffer = vec![];
-                {
-                    let mut cursor = io::Cursor::new(&mut buffer);
-                    for (field_name, matches) in timing_comparison_table {
-                        writeln!(
-                            &mut cursor,
-                            "  {}: {}",
-                            field_name,
-                            match matches {
-                                true => "....ok",
-                                false => "....MISMATCH",
-                            }
-                        )
-                        .map_err(|e| e.to_string())?;
-                    }
-                } // Drop cursor
+                let mut error = String::new();
+                for (field_name, matches) in timing_comparison_table {
+                    error += &format!(
+                        "  {}: {}",
+                        field_name,
+                        match matches {
+                            true => "....ok",
+                            false => "....MISMATCH",
+                        }
+                    );
+                }
 
-                let err_output = String::from_utf8(buffer).unwrap();
-                errors.push(err_output);
+                error += &format!(
+                    "\nExpected: {:?}\nActual: {:?}\n",
+                    expected_timing, actual_timing
+                );
+
+                errors.push(error);
             }
         }
     }
@@ -651,21 +753,20 @@ fn check_file(path: &Path, extension: &str) -> Result<(), String> {
         serialize_simfile(&base_summary, extension, &mut cursor).map_err(|e| e.to_string())?;
     };
 
-    // for chart in &base_summary.charts {
-    //     if chart.bpm_neutral_hash == "a5830d9474451c26" {
-    //         unsafe {
-    //             eprintln!("{}", String::from_utf8_unchecked(buffer.clone()));
-    //             sleep(Duration::from_secs(1));
-    //         }
-    //     }
-    // }
-
     // Re-run rssp analyze on the serialized simfile
     let reencoded_summary = run_rssp_analyze(&buffer, extension)?;
 
     println!("File: {}", path.display());
 
-    compare_simfile_str_fields(path, &base_summary, &reencoded_summary)?;
+    // let result = String::from_utf8(buffer);
+    // match result {
+    //     Ok(buffer_str) => println!("{}", buffer_str),
+    //     Err(_) => println!("debug failed"),
+    // }
+    // println!("{:?}", base_summary);
+
+    compare_simfile_str_fields(path, extension, &base_summary, &reencoded_summary)?;
+    compare_simfile_normalized_fields(path, &base_summary, &reencoded_summary)?;
     compare_chart_str_fields_and_hashes(path, &base_summary.charts, &reencoded_summary.charts)?;
     compare_chart_timing_fields(path, &base_summary.charts, &reencoded_summary.charts)?;
     compare_timing(path, &base_summary, &reencoded_summary)?;
