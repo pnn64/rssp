@@ -1,5 +1,6 @@
 use crate::timing::{
-    TimingData, beat_to_note_row, has_nonjudgable_rows, is_judgable_at_beat, note_row_to_beat,
+    JudgableRowCursor, TimingData, beat_to_note_row, beat_to_note_row_f32, has_nonjudgable_rows,
+    note_row_to_beat,
 };
 
 pub use crate::nps::measure_equally_spaced;
@@ -1079,10 +1080,11 @@ fn process_timing_rows_no_holds<'a, const L: usize>(
     beats: &[f32],
 ) -> ArrowStats {
     let mut stats = ArrowStats::default();
+    let mut judgable = JudgableRowCursor::new(timing);
     for (ridx, line) in rows.enumerate() {
         process_timing_row_no_holds(
             line,
-            is_judgable_at_beat(timing, f64::from(beats[ridx])),
+            judgable.is_judgable(beat_to_note_row_f32(beats[ridx])),
             &mut stats,
         );
     }
@@ -1295,6 +1297,7 @@ fn process_timing_rows<'a, const L: usize>(
     let mut stats = ArrowStats::default();
     let mut ends_per = vec![0u32; ends.len()];
     let mut active = 0i32;
+    let mut judgable = JudgableRowCursor::new(timing);
 
     for (ridx, line) in rows.enumerate() {
         if ridx > 0 {
@@ -1303,7 +1306,7 @@ fn process_timing_rows<'a, const L: usize>(
         process_timing_row::<L>(
             line,
             &ends[ridx],
-            is_judgable_at_beat(timing, f64::from(beats[ridx])),
+            judgable.is_judgable(beat_to_note_row_f32(beats[ridx])),
             &mut stats,
             &mut ends_per,
             &mut active,

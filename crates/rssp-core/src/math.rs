@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 const POW10: [f64; 19] = [
     1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16,
     1e17, 1e18,
@@ -82,8 +84,16 @@ pub fn round_sig_figs_itg(value: f64) -> f64 {
 }
 
 #[inline(always)]
+#[must_use]
 pub fn fmt_dec6_itg(value: f64) -> String {
-    format!("{:.6}", value as f32)
+    let mut out = String::with_capacity(16);
+    push_dec6_itg(&mut out, value);
+    out
+}
+
+#[inline]
+pub(crate) fn push_dec6_itg(out: &mut String, value: f64) {
+    write!(out, "{:.6}", value as f32).expect("writing to a String cannot fail");
 }
 
 #[inline]
@@ -167,7 +177,7 @@ pub fn roundtrip_bpm_itg(bpm: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{fmt_dec3_half_up, round_sig_figs_6};
+    use super::{fmt_dec3_half_up, fmt_dec6_itg, round_sig_figs_6};
 
     #[test]
     fn round_sig_figs_common_range() {
@@ -205,6 +215,23 @@ mod tests {
         for value in values {
             let rounded = (value.mul_add(1000.0, 0.5).floor()) / 1000.0;
             assert_eq!(fmt_dec3_half_up(value), format!("{rounded:.3}"));
+        }
+    }
+
+    #[test]
+    fn dec6_itg_matches_f32_formatting() {
+        for value in [
+            -12_345.6789,
+            -0.0,
+            0.0,
+            0.125,
+            120.0,
+            180.123_456_789,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ] {
+            assert_eq!(fmt_dec6_itg(value), format!("{:.6}", value as f32));
         }
     }
 }

@@ -1,5 +1,5 @@
 use crate::bpm::{clean_timing_map_cow, parse_beat_or_row, parse_bpm_map};
-use crate::math::{fmt_dec6_itg, lrint_f32, lrint_f64, roundtrip_bpm_itg};
+use crate::math::{lrint_f32, lrint_f64, push_dec6_itg, roundtrip_bpm_itg};
 use crate::parse::parse_offset_seconds;
 use std::cmp::Ordering;
 
@@ -598,18 +598,17 @@ pub fn normalize_scrolls_like_itg(mut scrolls: Vec<(f64, f64)>) -> Vec<(f64, f64
 
 #[must_use]
 pub fn format_bpm_segments_like_itg(bpms: &[(f64, f64)]) -> String {
-    bpms.iter()
-        .enumerate()
-        .fold(String::new(), |mut out, (idx, (beat, bpm))| {
-            if idx > 0 {
-                out.push(',');
-            }
-            let beat = f64::from(note_row_to_beat_f32(beat_to_note_row_f32(*beat as f32)));
-            out.push_str(&fmt_dec6_itg(beat));
-            out.push('=');
-            out.push_str(&fmt_dec6_itg(roundtrip_bpm_itg(*bpm)));
-            out
-        })
+    let mut out = String::with_capacity(bpms.len().saturating_mul(24));
+    for (idx, &(beat, bpm)) in bpms.iter().enumerate() {
+        if idx > 0 {
+            out.push(',');
+        }
+        let beat = f64::from(note_row_to_beat_f32(beat_to_note_row_f32(beat as f32)));
+        push_dec6_itg(&mut out, beat);
+        out.push('=');
+        push_dec6_itg(&mut out, roundtrip_bpm_itg(bpm));
+    }
+    out
 }
 
 #[must_use]
@@ -1294,12 +1293,108 @@ fn is_in_range_segment(segs: &[Segment], rows: &[i32], beat: f64) -> bool {
     let Some(idx) = segment_index_at_row(rows, row) else {
         return false;
     };
+    is_in_range_segment_at_row(segs, idx, row)
+}
+
+#[inline(always)]
+fn is_in_range_segment_at_row(segs: &[Segment], idx: usize, row: i32) -> bool {
     let seg = segs[idx];
     if !seg.value.is_finite() {
         return false;
     }
     let beat_f = note_row_to_beat(row) as f32;
     beat_f >= seg.beat as f32 && beat_f < (seg.beat + seg.value) as f32
+}
+
+struct SegmentRowCursor<'a> {
+    rows: &'a [i32],
+    next: usize,
+    last_row: i32,
+}
+
+impl<'a> SegmentRowCursor<'a> {
+    const fn new(rows: &'a [i32]) -> Self {
+        Self {
+            rows,
+            next: 0,
+            last_row: i32::MIN,
+        }
+    }
+
+    #[inline(always)]
+    fn index_at(&mut self, row: i32) -> Option<usize> {
+        if row < self.last_row {
+            self.next = 0;
+        }
+        while self.next < self.rows.len() && self.rows[self.next] <= row {
+            self.next += 1;
+        }
+        self.last_row = row;
+        self.next.checked_sub(1)
+    }
+}
+
+pub(crate) struct FakeRowCursor<'a> {
+    timing: &'a TimingData,
+    segments: SegmentRowCursor<'a>,
+}
+
+impl<'a> FakeRowCursor<'a> {
+    #[inline]
+    pub(crate) fn new(timing: &'a TimingData) -> Self {
+        Self {
+            timing,
+            segments: SegmentRowCursor::new(&timing.fake_start_rows),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_fake(&mut self, row: i32) -> bool {
+        let Some(idx) = self.segments.index_at(row) else {
+            return false;
+        };
+        is_in_range_segment_at_row(&self.timing.fakes, idx, row)
+    }
+}
+
+pub(crate) struct JudgableRowCursor<'a> {
+    timing: &'a TimingData,
+    warps: SegmentRowCursor<'a>,
+    fakes: SegmentRowCursor<'a>,
+}
+
+impl<'a> JudgableRowCursor<'a> {
+    #[inline]
+    pub(crate) fn new(timing: &'a TimingData) -> Self {
+        Self {
+            timing,
+            warps: SegmentRowCursor::new(&timing.warp_start_rows),
+            fakes: SegmentRowCursor::new(&timing.fake_start_rows),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_judgable(&mut self, row: i32) -> bool {
+        if let Some(idx) = self.warps.index_at(row) {
+            let seg = self.timing.warps[idx];
+            if seg.value.is_finite() && seg.value > 0.0 {
+                let beat_row = note_row_to_beat(row) as f32;
+                let seg_beat = seg.beat as f32;
+                if seg_beat <= beat_row
+                    && beat_row < seg_beat + seg.value as f32
+                    && !(has_row(&self.timing.stop_rows, row)
+                        || has_row(&self.timing.delay_rows, row))
+                {
+                    return false;
+                }
+            }
+        }
+
+        let Some(idx) = self.fakes.index_at(row) else {
+            return true;
+        };
+        !is_in_range_segment_at_row(&self.timing.fakes, idx, row)
+    }
 }
 
 #[inline(always)]
@@ -1829,6 +1924,79 @@ mod tests {
                 cursor.time_for_beat(target).to_bits(),
                 get_time_for_beat_f32(&timing, target).to_bits(),
                 "target beat {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn row_membership_cursors_match_independent_queries() {
+        let timing = timing_data_from_chart_data(
+            0.0,
+            0.0,
+            None,
+            "0=120",
+            None,
+            "10=0.25",
+            None,
+            "6=0.125",
+            None,
+            "4=4,12=2",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "1=1.5,8=2,16=0.5",
+            TimingFormat::Ssc,
+            true,
+        );
+        let mut fake_cursor = FakeRowCursor::new(&timing);
+        let mut judgable_cursor = JudgableRowCursor::new(&timing);
+        let beats = [
+            -1.0, 0.0, 1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 9.5, 10.0, 12.0, 14.0, 16.0, 16.5, 20.0,
+        ];
+
+        for beat in beats {
+            let row = beat_to_note_row(beat);
+            assert_eq!(fake_cursor.is_fake(row), is_fake_at_row(&timing, row));
+            assert_eq!(
+                judgable_cursor.is_judgable(row),
+                is_judgable_at_row(&timing, row)
+            );
+        }
+    }
+
+    #[test]
+    fn row_membership_cursors_reset_for_decreasing_queries() {
+        let timing = timing_data_from_chart_data(
+            0.0,
+            0.0,
+            None,
+            "0=120",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "4=4",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "2=1,10=2",
+            TimingFormat::Ssc,
+            true,
+        );
+        let mut fake_cursor = FakeRowCursor::new(&timing);
+        let mut judgable_cursor = JudgableRowCursor::new(&timing);
+
+        for beat in [0.0, 12.0, 2.5, 8.0, -1.0, 16.0] {
+            let row = beat_to_note_row(beat);
+            assert_eq!(fake_cursor.is_fake(row), is_fake_at_row(&timing, row));
+            assert_eq!(
+                judgable_cursor.is_judgable(row),
+                is_judgable_at_row(&timing, row)
             );
         }
     }

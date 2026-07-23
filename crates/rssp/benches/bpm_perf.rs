@@ -220,5 +220,31 @@ fn bench_bpm_inner(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_bpm_pipeline, bench_bpm_inner);
+fn bench_bpm_format(c: &mut Criterion) {
+    let bpms: Vec<_> = (0..512)
+        .map(|idx| {
+            (
+                idx as f64 * 0.125,
+                60.0 + f64::from((idx * 37 % 360) as u32) / 3.0,
+            )
+        })
+        .collect();
+
+    let mut group = c.benchmark_group("bpm_format");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("format_segments", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::format_bpm_segments_like_itg(black_box(&bpms)));
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_bpm_pipeline,
+    bench_bpm_inner,
+    bench_bpm_format
+);
 criterion_main!(benches);

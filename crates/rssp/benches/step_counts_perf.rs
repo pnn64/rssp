@@ -242,5 +242,56 @@ fn bench_step_counts_inner(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_step_counts_pipeline, bench_step_counts_inner);
+fn bench_judgability_scan(c: &mut Criterion) {
+    let (charts, globals) = build_count_inputs();
+    let chart = charts
+        .iter()
+        .find(|chart| chart.lanes == 4)
+        .expect("fixture should contain a dance-single chart");
+    let (_minimized, _stats, _densities, rows, beats, _last_beat) =
+        rssp::stats::minimize_rows_typed::<4>(&chart.chart_data);
+    let timing = rssp::timing::timing_data_from_chart_data(
+        globals.song_offset,
+        0.0,
+        chart.chart_bpms.as_deref(),
+        &globals.bpms_raw,
+        chart.chart_stops.as_deref(),
+        &globals.stops_raw,
+        chart.chart_delays.as_deref(),
+        &globals.delays_raw,
+        chart.chart_warps.as_deref(),
+        &globals.warps_raw,
+        chart.chart_speeds.as_deref(),
+        &globals.speeds_raw,
+        chart.chart_scrolls.as_deref(),
+        &globals.scrolls_raw,
+        chart.chart_fakes.as_deref(),
+        &globals.fakes_raw,
+        globals.timing_format,
+        true,
+    );
+
+    let mut group = c.benchmark_group("judgability_scan");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("timing_aware_stats", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::stats::compute_timing_aware_stats_from_rows_with_row_to_beat(
+                    black_box(&rows),
+                    black_box(&timing),
+                    black_box(&beats),
+                ),
+            );
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_step_counts_pipeline,
+    bench_step_counts_inner,
+    bench_judgability_scan
+);
 criterion_main!(benches);

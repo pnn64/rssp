@@ -1,8 +1,8 @@
 use std::sync::OnceLock;
 
 use crate::timing::{
-    BeatTimeCursorF32, FixedTimingParts, ROWS_PER_BEAT, TimingData, beat_to_note_row_f32,
-    fakes as timing_fakes, fixed_timing_parts, get_time_for_beat_f32, is_fake_at_row,
+    BeatTimeCursorF32, FakeRowCursor, FixedTimingParts, ROWS_PER_BEAT, TimingData,
+    beat_to_note_row_f32, fakes as timing_fakes, fixed_timing_parts, get_time_for_beat_f32,
 };
 
 const INVALID_COLUMN: i8 = -1;
@@ -487,6 +487,37 @@ const fn state_new() -> State {
 }
 
 #[inline(always)]
+fn state_from_key(key: u32, column_count: usize) -> State {
+    let mut combined_columns = [Foot::None; MAX_COLUMNS];
+    let mut where_the_feet_are = [INVALID_COLUMN; NUM_FEET];
+    let mut occupied_mask = 0u8;
+    let mut column = 0usize;
+    while column < column_count {
+        let foot = match (key >> (column * 3)) & 0b111 {
+            1 => Foot::LeftHeel,
+            2 => Foot::LeftToe,
+            3 => Foot::RightHeel,
+            4 => Foot::RightToe,
+            _ => Foot::None,
+        };
+        combined_columns[column] = foot;
+        if foot != Foot::None {
+            where_the_feet_are[foot_idx(foot)] = column as i8;
+            occupied_mask |= 1u8 << column;
+        }
+        column += 1;
+    }
+
+    State {
+        combined_columns,
+        where_the_feet_are,
+        occupied_mask,
+        moved_mask: ((key >> 24) & 0x0f) as u8,
+        holding_mask: ((key >> 28) & 0x0f) as u8,
+    }
+}
+
+#[inline(always)]
 const fn foot_moved(s: &State, pair: &FootPair) -> bool {
     let mask = FOOT_MASKS[foot_idx(pair.heel)] | FOOT_MASKS[foot_idx(pair.toe)];
     (s.moved_mask & mask) != 0
@@ -504,7 +535,7 @@ const NO_PERMS: [FootPlacement; 1] = [[Foot::None; MAX_COLUMNS]];
 
 #[derive(Debug, Clone)]
 struct StepParityNode {
-    state: State,
+    state_key: u32,
     pred: u32,
     cost: f32,
 }
@@ -1335,6 +1366,7 @@ fn parity_create_rows_holds<const LANES: usize, const HAS_FAKES: bool>(
     let copy_len = cols.min(LANES);
     let fixed = fixed_timing_parts(timing);
     let mut time_cursor = BeatTimeCursorF32::new(timing);
+    let mut fake_cursor = FakeRowCursor::new(timing);
 
     for (idx, row) in rows.iter().enumerate() {
         let mut nonzero_mask = row_nonzero_mask(row, copy_len);
@@ -1343,7 +1375,7 @@ fn parity_create_rows_holds<const LANES: usize, const HAS_FAKES: bool>(
         }
         let (row_i32, beat) = row_quantized(row_to_beat[idx]);
         let second = time_for_parity_row(&mut time_cursor, fixed, row_i32, beat);
-        let row_fake = HAS_FAKES && is_fake_at_row(timing, row_i32);
+        let row_fake = HAS_FAKES && fake_cursor.is_fake(row_i32);
 
         while nonzero_mask != 0 {
             let c = nonzero_mask.trailing_zeros() as usize;
@@ -1384,6 +1416,7 @@ fn parity_create_rows_no_holds<const LANES: usize, const HAS_FAKES: bool>(
     let copy_len = cols.min(LANES);
     let fixed = fixed_timing_parts(timing);
     let mut time_cursor = BeatTimeCursorF32::new(timing);
+    let mut fake_cursor = FakeRowCursor::new(timing);
 
     for (idx, row) in rows.iter().enumerate() {
         let mut nonzero_mask = row_nonzero_mask(row, copy_len);
@@ -1392,7 +1425,7 @@ fn parity_create_rows_no_holds<const LANES: usize, const HAS_FAKES: bool>(
         }
         let (row_i32, beat) = row_quantized(row_to_beat[idx]);
         let second = time_for_parity_row(&mut time_cursor, fixed, row_i32, beat);
-        let row_fake = HAS_FAKES && is_fake_at_row(timing, row_i32);
+        let row_fake = HAS_FAKES && fake_cursor.is_fake(row_i32);
 
         while nonzero_mask != 0 {
             let c = nonzero_mask.trailing_zeros() as usize;
@@ -1486,10 +1519,10 @@ fn parity_build_row(g: &StepParityGenerator, counter: &RowCounter) -> Row {
     row
 }
 
-fn parity_add_node(g: &mut StepParityGenerator, state: State) -> usize {
+fn parity_add_node(g: &mut StepParityGenerator, state_key: u32) -> usize {
     let idx = g.nodes.len();
     g.nodes.push(StepParityNode {
-        state,
+        state_key,
         pred: u32::MAX,
         cost: f32::MAX,
     });
@@ -1509,7 +1542,7 @@ fn parity_perms_for_row(g: &mut StepParityGenerator, row_idx: usize) -> &'static
 }
 
 fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
-    let start_id = parity_add_node(g, state_new());
+    let start_id = parity_add_node(g, 0);
     g.nodes[start_id].cost = 0.0;
 
     g.prev_ids.clear();
@@ -1537,7 +1570,14 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
 
         for j in 0..g.prev_ids.len() {
             let init_id = g.prev_ids[j];
-            let init_state = g.nodes[init_id].state;
+            // ITGmania zero-initializes the synthetic starting state's foot
+            // positions. A legitimate solved state may also have key zero, so
+            // the node identity—not the key—must distinguish the two.
+            let init_state = if init_id == start_id {
+                state_new()
+            } else {
+                state_from_key(g.nodes[init_id].state_key, g.column_count)
+            };
             let init_cost = g.nodes[init_id].cost;
             let left_moved_not_holding = foot_moved_not_holding(&init_state, &LEFT_PAIR);
             let right_moved_not_holding = foot_moved_not_holding(&init_state, &RIGHT_PAIR);
@@ -1550,7 +1590,7 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
                 let res_id = match row_map_probe(&g.state_map, key) {
                     RowMapProbe::Found(id) => id,
                     RowMapProbe::Vacant(slot) => {
-                        let id = parity_add_node(g, result);
+                        let id = parity_add_node(g, key);
                         g.next_ids.push(id);
                         row_map_insert_at(&mut g.state_map, slot, key, id);
                         id
@@ -1748,7 +1788,8 @@ fn parity_backtrack(g: &mut StepParityGenerator, mut cur: usize) -> bool {
     let mut write = rows;
     while write > 0 {
         write -= 1;
-        g.result_columns[write] = g.nodes[cur].state.combined_columns;
+        g.result_columns[write] =
+            state_from_key(g.nodes[cur].state_key, g.column_count).combined_columns;
         let prev = g.nodes[cur].pred;
         if prev == u32::MAX {
             g.result_columns.clear();
@@ -2569,9 +2610,12 @@ fn build_notes(rows: &[ParsedRow], timing: Option<&TimingData>) -> Vec<Intermedi
     let mut hold_idx = [usize::MAX; MAX_COLUMNS];
     let mut hold_row = [0i32; MAX_COLUMNS];
     let mut notes: Vec<IntermediateNoteData> = Vec::with_capacity(rows.len());
+    let mut fake_cursor = timing.map(FakeRowCursor::new);
 
     for row in rows {
-        let row_fake = timing.is_some_and(|t| is_fake_at_row(t, row.row));
+        let row_fake = fake_cursor
+            .as_mut()
+            .is_some_and(|cursor| cursor.is_fake(row.row));
 
         let mut mask = row.mask;
         while mask != 0 {
@@ -3057,6 +3101,30 @@ mod tests {
 
         assert_eq!(combined.0, separate_counts);
         assert_eq!(combined.1, separate_annotations);
+    }
+
+    #[test]
+    fn packed_state_keys_round_trip_transition_states() {
+        let mut placement = [Foot::None; MAX_COLUMNS];
+        placement[0] = Foot::LeftHeel;
+        placement[1] = Foot::RightHeel;
+
+        let (no_holds, _, no_holds_key) =
+            parity_result_state_no_holds(&state_new(), &placement, 4, 0b0011);
+        assert_eq!(state_from_key(no_holds_key, 4), no_holds);
+
+        let (with_hold, _, with_hold_key) =
+            parity_result_state(&state_new(), &placement, 4, 0b0001, 0b0011);
+        assert_eq!(state_from_key(with_hold_key, 4), with_hold);
+
+        // A failed/empty placement can legitimately produce key zero. It is
+        // distinct from the synthetic starting state because its foot
+        // positions use INVALID_COLUMN rather than ITGmania's initial zeros.
+        let (zero_state, _, zero_key) =
+            parity_result_state_no_holds(&state_new(), &NO_PERMS[0], 4, 0b0001);
+        assert_eq!(zero_key, 0);
+        assert_eq!(state_from_key(zero_key, 4), zero_state);
+        assert_ne!(zero_state, state_new());
     }
 
     #[test]
