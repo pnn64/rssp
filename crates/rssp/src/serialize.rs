@@ -377,7 +377,7 @@ pub fn serialize_simfile(
         Prop::new(b"BGCHANGES", PropValue::NormalizedList(&summary.normalized_bgchanges)),
         Prop::nonempty_only(b"FGCHANGES", PropValue::NormalizedList(&summary.normalized_fgchanges)),
         Prop::new(b"KEYSOUNDS", PropValue::NormalizedList(&summary.normalized_keysounds)),
-        Prop::new(b"ATTACKS", PropValue::NormalizedList(&summary.normalized_attacks)),
+        Prop::new(b"ATTACKS", PropValue::Bytes(summary.normalized_attacks.as_bytes())), // Commas aren't always row separators
     ];
 
     for prop in props {
@@ -457,7 +457,7 @@ fn serialize_ssc_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> 
         Prop::own_timing_only_with_default(b"SCROLLS", DEFAULT_SCROLLS, PropValue::NormalizedListOpt(chart.chart_scrolls.as_deref())),
         Prop::own_timing_only(b"FAKES", PropValue::NormalizedListOpt(chart.chart_fakes.as_deref())),
         Prop::own_timing_only_with_default(b"LABELS", DEFAULT_LABELS, PropValue::NormalizedListOpt(chart.chart_labels.as_deref())),
-        Prop::nonempty_only(b"ATTACKS", PropValue::NormalizedListOpt(chart.chart_attacks.as_deref())),
+        Prop::nonempty_only(b"ATTACKS", PropValue::BytesOpt(chart.chart_attacks.as_deref().map(|a| a.as_bytes()))),
         Prop::nonempty_only(b"DISPLAYBPM", PropValue::BytesOpt(chart.chart_display_bpm.as_ref().map(|v| v.as_bytes()))),
         Prop::nonempty_only(b"NOTES", PropValue::NoteData(&chart.minimized_note_data)),
         Prop::nonempty_only(b"NOTES2", PropValue::Empty), // TODO
