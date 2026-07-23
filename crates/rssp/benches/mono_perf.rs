@@ -29,7 +29,19 @@ fn generate_bitmasks(minimized_chart: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-fn build_bitmasks() -> Vec<u8> {
+fn generate_rows(minimized_chart: &[u8]) -> Vec<[u8; 4]> {
+    minimized_chart
+        .split(|&b| b == b'\n')
+        .filter_map(|line| {
+            if line.len() < 4 || line[0] == b',' {
+                return None;
+            }
+            Some([line[0], line[1], line[2], line[3]])
+        })
+        .collect()
+}
+
+fn build_pattern_input() -> (Vec<[u8; 4]>, Vec<u8>) {
     let parsed =
         rssp::parse::extract_sections(FIXTURE.as_bytes(), "ssc").expect("fixture should parse");
 
@@ -65,11 +77,14 @@ fn build_bitmasks() -> Vec<u8> {
     }
 
     let (_, minimized_chart) = best_chart.expect("fixture should contain a 4-lane chart");
-    generate_bitmasks(&minimized_chart)
+    (
+        generate_rows(&minimized_chart),
+        generate_bitmasks(&minimized_chart),
+    )
 }
 
 fn bench_mono_counts(c: &mut Criterion) {
-    let bitmasks = build_bitmasks();
+    let (rows, bitmasks) = build_pattern_input();
     let mut group = c.benchmark_group("mono");
     group.sample_size(200);
     group.measurement_time(Duration::from_secs(2));
@@ -78,6 +93,39 @@ fn bench_mono_counts(c: &mut Criterion) {
             let counts =
                 rssp::patterns::count_facing_steps(black_box(&bitmasks), black_box(MONO_THRESHOLD));
             black_box(counts);
+        });
+    });
+    group.finish();
+
+    let compiled = rssp::patterns::compiled_custom_empty();
+    let mut group = c.benchmark_group("pattern_pipeline");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("separate_with_bitmask_buffer", |b| {
+        b.iter(|| {
+            let masks: Vec<_> = black_box(&rows)
+                .iter()
+                .map(|row| {
+                    u8::from(matches!(row[0], b'1' | b'2' | b'4'))
+                        | (u8::from(matches!(row[1], b'1' | b'2' | b'4')) << 1)
+                        | (u8::from(matches!(row[2], b'1' | b'2' | b'4')) << 2)
+                        | (u8::from(matches!(row[3], b'1' | b'2' | b'4')) << 3)
+                })
+                .collect();
+            black_box((
+                rssp::patterns::detect_default_patterns(&masks),
+                rssp::patterns::count_anchors(&masks),
+                rssp::patterns::count_facing_steps(&masks, MONO_THRESHOLD),
+            ));
+        });
+    });
+    group.bench_function("fused_rows", |b| {
+        b.iter(|| {
+            black_box(rssp::patterns::analyze_patterns_from_rows(
+                black_box(&rows),
+                black_box(MONO_THRESHOLD),
+                black_box(&compiled),
+            ));
         });
     });
     group.finish();

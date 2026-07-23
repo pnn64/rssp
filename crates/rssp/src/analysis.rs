@@ -20,16 +20,15 @@ use crate::parse::{
     unescape_trim,
 };
 use crate::patterns::{
-    CompiledCustomPatterns, PATTERN_COUNT, PatternCounts, PatternVariant, compile_custom_patterns,
-    compiled_custom_empty, compiled_custom_is_empty, count_anchors, count_facing_steps,
-    detect_custom_patterns_compiled, detect_default_patterns,
+    CompiledCustomPatterns, PATTERN_COUNT, PatternCounts, PatternVariant,
+    analyze_patterns_from_rows, compile_custom_patterns, compiled_custom_empty,
 };
 use crate::stats::{
     RADAR_CATEGORY_COUNT, StreamCounts, compute_stream_counts,
     compute_timing_aware_stats_from_rows_with_row_to_beat,
     compute_timing_aware_stats_no_holds_from_rows, compute_timing_aware_stats_with_row_to_beat,
-    generate_breakdowns, minimize_chart_count_rows, minimize_chart_for_hash,
-    minimize_chart_rows_bits, minimize_rows_typed, stream_breakdowns,
+    generate_breakdowns, minimize_chart_count_rows, minimize_chart_for_hash, minimize_rows_typed,
+    stream_breakdowns,
 };
 use crate::tech::parse_tech_notation;
 use crate::timing::{
@@ -201,25 +200,17 @@ fn parse_radar_values_str(raw: &str, split_players: bool) -> Option<[f32; RADAR_
     Some(out)
 }
 
-/// Detects predefined patterns and counts anchors from note bitmasks.
-fn compute_pattern_and_anchor_stats(bitmasks: &[u8]) -> (PatternCounts, (u32, u32, u32, u32)) {
-    let detected_patterns = detect_default_patterns(bitmasks);
-    let anchors = count_anchors(bitmasks);
-    (detected_patterns, anchors)
-}
-
 /// Calculates mono (same-foot patterns) and candle stats.
 fn compute_mono_and_candle_stats(
-    bitmasks: &[u8],
+    facing_steps: (u32, u32),
     stats: &stats::ArrowStats,
     detected_patterns: &PatternCounts,
-    options: &AnalysisOptions,
 ) -> (u32, u32, u32, f64, u32, f64) {
     if stats.total_steps <= 1 {
         return (0, 0, 0, 0.0, 0, 0.0);
     }
 
-    let (facing_left, facing_right) = count_facing_steps(bitmasks, options.mono_threshold);
+    let (facing_left, facing_right) = facing_steps;
     let mono_total = facing_left + facing_right;
     let mono_percent = if stats.total_steps > 0 {
         (f64::from(mono_total) / f64::from(stats.total_steps)) * 100.0
@@ -276,6 +267,55 @@ fn parity_scratch<const LANES: usize>(
     scratch
         .as_mut()
         .expect("parity scratch exists after initialization")
+}
+
+fn parity_outputs<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    has_holds: bool,
+    scratch: &mut Option<step_parity::TimingRowsScratch<LANES>>,
+    options: &AnalysisOptions,
+) -> (
+    step_parity::TechCounts,
+    Option<Vec<step_parity::RowAnnotation>>,
+) {
+    match (
+        options.compute_tech_counts,
+        options.compute_note_annotations,
+    ) {
+        (true, true) => {
+            let (counts, annotations) = step_parity::analyze_and_annotate_timing_rows_known_holds(
+                rows,
+                row_to_beat,
+                timing,
+                has_holds,
+                parity_scratch(scratch),
+            );
+            (counts, Some(annotations))
+        }
+        (true, false) => (
+            step_parity::analyze_timing_rows_known_holds(
+                rows,
+                row_to_beat,
+                timing,
+                has_holds,
+                parity_scratch(scratch),
+            ),
+            None,
+        ),
+        (false, true) => (
+            step_parity::TechCounts::default(),
+            Some(step_parity::annotate_timing_rows_known_holds(
+                rows,
+                row_to_beat,
+                timing,
+                has_holds,
+                parity_scratch(scratch),
+            )),
+        ),
+        (false, false) => (step_parity::TechCounts::default(), None),
+    }
 }
 
 // Computes various metrics derived from measure densities and the BPM map.
@@ -421,33 +461,26 @@ fn build_chart_summary(
     let want_parity_rows = options.compute_tech_counts || options.compute_note_annotations;
     let rows_collected = compute_patterns || want_parity_rows;
     let (mut rows4, mut rows8) = (Vec::new(), Vec::new());
-    let (mut minimized_chart, mut stats, measure_densities, row_to_beat, last_beat, bitmasks) =
+    let (mut minimized_chart, mut stats, measure_densities, row_to_beat, last_beat) =
         if compute_patterns {
-            let (chart, stats, densities, rows, row_to_beat, last_beat, bitmasks) =
-                minimize_chart_rows_bits(chart_data);
+            let (chart, stats, densities, rows, row_to_beat, last_beat) =
+                minimize_rows_typed::<4>(chart_data);
             rows4 = rows;
-            (
-                chart,
-                stats,
-                densities,
-                row_to_beat,
-                last_beat,
-                Some(bitmasks),
-            )
+            (chart, stats, densities, row_to_beat, last_beat)
         } else if !want_parity_rows {
             let (chart, stats, densities, row_to_beat, last_beat) =
                 minimize_chart_count_rows(chart_data, lanes);
-            (chart, stats, densities, row_to_beat, last_beat, None)
+            (chart, stats, densities, row_to_beat, last_beat)
         } else if lanes == 8 {
             let (chart, stats, densities, rows, row_to_beat, last_beat) =
                 minimize_rows_typed::<8>(chart_data);
             rows8 = rows;
-            (chart, stats, densities, row_to_beat, last_beat, None)
+            (chart, stats, densities, row_to_beat, last_beat)
         } else {
             let (chart, stats, densities, rows, row_to_beat, last_beat) =
                 minimize_rows_typed::<4>(chart_data);
             rows4 = rows;
-            (chart, stats, densities, row_to_beat, last_beat, None)
+            (chart, stats, densities, row_to_beat, last_beat)
         };
     if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
         minimized_chart.truncate(pos + 1);
@@ -610,25 +643,26 @@ fn build_chart_summary(
         bpms_to_use.as_ref(),
     );
 
-    let (detected_patterns, (anchor_left, anchor_down, anchor_up, anchor_right)) = bitmasks
+    let pattern_analysis = compute_patterns.then(|| {
+        analyze_patterns_from_rows(&rows4, options.mono_threshold, compiled_custom_patterns)
+    });
+    let (detected_patterns, (anchor_left, anchor_down, anchor_up, anchor_right)) = pattern_analysis
         .as_ref()
-        .map_or(([0u32; PATTERN_COUNT], (0, 0, 0, 0)), |bm| {
-            compute_pattern_and_anchor_stats(bm.as_slice())
+        .map_or(([0u32; PATTERN_COUNT], (0, 0, 0, 0)), |analysis| {
+            (analysis.detected_patterns, analysis.anchors)
         });
 
     let (facing_left, facing_right, mono_total, mono_percent_raw, candle_total, candle_percent_raw) =
-        bitmasks.as_ref().map_or((0, 0, 0, 0.0, 0, 0.0), |bm| {
-            compute_mono_and_candle_stats(bm.as_slice(), &stats, &detected_patterns, options)
-        });
+        pattern_analysis
+            .as_ref()
+            .map_or((0, 0, 0, 0.0, 0, 0.0), |analysis| {
+                compute_mono_and_candle_stats(analysis.facing_steps, &stats, &detected_patterns)
+            });
     let mono_percent = round_dp(mono_percent_raw, 2);
     let candle_percent = round_dp(candle_percent_raw, 2);
 
-    let custom_patterns = if compute_patterns && !compiled_custom_is_empty(compiled_custom_patterns)
-    {
-        detect_custom_patterns_compiled(bitmasks.as_ref().unwrap(), compiled_custom_patterns)
-    } else {
-        Vec::new()
-    };
+    let custom_patterns =
+        pattern_analysis.map_or_else(Vec::new, |analysis| analysis.custom_patterns);
 
     let chart_timing;
     let timing = if chart_has_own_timing {
@@ -661,7 +695,7 @@ fn build_chart_summary(
     let reuse_base_stats =
         stats.holds == 0 && stats.rolls == 0 && stats.lifts == 0 && !has_nonjudgable_rows(timing);
     let has_hold_notes = stats.holds != 0 || stats.rolls != 0;
-    let (tech_counts, mut timing_stats) = match lanes {
+    let (tech_counts, mut timing_stats, note_annotations) = match lanes {
         4 => {
             let timing_stats = if reuse_base_stats {
                 stats.clone()
@@ -681,19 +715,15 @@ fn build_chart_summary(
                     &row_to_beat,
                 )
             };
-            let tech_counts = if options.compute_tech_counts {
-                let scratch = parity_scratch(parity_scratch4);
-                step_parity::analyze_timing_rows_known_holds::<4>(
-                    &rows4,
-                    &row_to_beat,
-                    timing,
-                    has_hold_notes,
-                    scratch,
-                )
-            } else {
-                step_parity::TechCounts::default()
-            };
-            (tech_counts, timing_stats)
+            let (tech_counts, note_annotations) = parity_outputs(
+                &rows4,
+                &row_to_beat,
+                timing,
+                has_hold_notes,
+                parity_scratch4,
+                options,
+            );
+            (tech_counts, timing_stats, note_annotations)
         }
         8 => {
             let timing_stats = if reuse_base_stats {
@@ -714,19 +744,15 @@ fn build_chart_summary(
                     &row_to_beat,
                 )
             };
-            let tech_counts = if options.compute_tech_counts {
-                let scratch = parity_scratch(parity_scratch8);
-                step_parity::analyze_timing_rows_known_holds::<8>(
-                    &rows8,
-                    &row_to_beat,
-                    timing,
-                    has_hold_notes,
-                    scratch,
-                )
-            } else {
-                step_parity::TechCounts::default()
-            };
-            (tech_counts, timing_stats)
+            let (tech_counts, note_annotations) = parity_outputs(
+                &rows8,
+                &row_to_beat,
+                timing,
+                has_hold_notes,
+                parity_scratch8,
+                options,
+            );
+            (tech_counts, timing_stats, note_annotations)
         }
         _ => {
             let tech_counts = if options.compute_tech_counts {
@@ -744,41 +770,13 @@ fn build_chart_summary(
                     &row_to_beat,
                 )
             };
-            (tech_counts, timing_stats)
+            let note_annotations = options.compute_note_annotations.then(Vec::new);
+            (tech_counts, timing_stats, note_annotations)
         }
     };
     timing_stats.holding = raw_holding;
     let mines_nonfake = timing_stats.mines;
     stats = timing_stats;
-
-    let note_annotations = if options.compute_note_annotations {
-        let annotated = match lanes {
-            4 => {
-                let scratch = parity_scratch(parity_scratch4);
-                step_parity::annotate_timing_rows_known_holds::<4>(
-                    &rows4,
-                    &row_to_beat,
-                    timing,
-                    has_hold_notes,
-                    scratch,
-                )
-            }
-            8 => {
-                let scratch = parity_scratch(parity_scratch8);
-                step_parity::annotate_timing_rows_known_holds::<8>(
-                    &rows8,
-                    &row_to_beat,
-                    timing,
-                    has_hold_notes,
-                    scratch,
-                )
-            }
-            _ => Vec::new(),
-        };
-        Some(annotated)
-    } else {
-        None
-    };
 
     let elapsed_chart = chart_start_time.elapsed();
 
@@ -1228,4 +1226,51 @@ pub fn compute_all_hashes(
     }
 
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AnalysisOptions, analyze};
+
+    const FIXTURE: &[u8] = include_bytes!("../benches/fixtures/hash_fixture.ssc");
+
+    #[test]
+    fn combined_parity_outputs_match_independent_analysis_options() {
+        let counts = analyze(FIXTURE, "ssc", &AnalysisOptions::default())
+            .expect("count-only analysis should succeed");
+        let annotations = analyze(
+            FIXTURE,
+            "ssc",
+            &AnalysisOptions {
+                compute_tech_counts: false,
+                compute_note_annotations: true,
+                ..AnalysisOptions::default()
+            },
+        )
+        .expect("annotation-only analysis should succeed");
+        let combined = analyze(
+            FIXTURE,
+            "ssc",
+            &AnalysisOptions {
+                compute_note_annotations: true,
+                ..AnalysisOptions::default()
+            },
+        )
+        .expect("combined analysis should succeed");
+
+        assert_eq!(combined.charts.len(), counts.charts.len());
+        assert_eq!(combined.charts.len(), annotations.charts.len());
+        for ((combined_chart, counts_chart), annotations_chart) in combined
+            .charts
+            .iter()
+            .zip(&counts.charts)
+            .zip(&annotations.charts)
+        {
+            assert_eq!(combined_chart.tech_counts, counts_chart.tech_counts);
+            assert_eq!(
+                combined_chart.note_annotations,
+                annotations_chart.note_annotations
+            );
+        }
+    }
 }

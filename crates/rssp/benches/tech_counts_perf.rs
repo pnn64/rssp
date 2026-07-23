@@ -39,6 +39,12 @@ struct TechParityInput {
     lanes: usize,
 }
 
+struct AnnotationInput {
+    rows: Vec<[u8; 4]>,
+    row_to_beat: Vec<f32>,
+    timing: rssp::timing::TimingData,
+}
+
 fn clean_tag_bytes(tag: Option<&[u8]>) -> String {
     tag.and_then(|bytes| std::str::from_utf8(bytes).ok())
         .map(rssp::bpm::clean_timing_map)
@@ -205,6 +211,20 @@ fn build_parity_inputs(charts: &[TechChartInput], globals: &TechGlobals) -> Vec<
     out
 }
 
+fn build_annotation_input(charts: &[TechChartInput], globals: &TechGlobals) -> AnnotationInput {
+    let chart = charts
+        .iter()
+        .find(|chart| chart.lanes == 4)
+        .expect("fixture should contain a dance-single chart");
+    let (_minimized, _stats, _densities, rows, row_to_beat, _last_beat) =
+        rssp::stats::minimize_rows_typed::<4>(&chart.chart_data);
+    AnnotationInput {
+        rows,
+        row_to_beat,
+        timing: timing_for_chart(chart, globals),
+    }
+}
+
 fn bench_tech_counts_pipeline(c: &mut Criterion) {
     let fixture = FIXTURE.as_bytes();
     let options = rssp::AnalysisOptions::default();
@@ -271,10 +291,52 @@ fn bench_tech_counts_step_parity(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_counts_with_annotations(c: &mut Criterion) {
+    let (charts, globals) = build_tech_inputs();
+    let input = build_annotation_input(&charts, &globals);
+    let mut separate_scratch = rssp::step_parity::timing_rows_scratch::<4>()
+        .expect("dance-single parity layout should exist");
+    let mut combined_scratch = rssp::step_parity::timing_rows_scratch::<4>()
+        .expect("dance-single parity layout should exist");
+
+    let mut group = c.benchmark_group("counts_with_annotations");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("separate_solves", |b| {
+        b.iter(|| {
+            let counts = rssp::step_parity::analyze_timing_rows(
+                black_box(&input.rows),
+                black_box(&input.row_to_beat),
+                black_box(&input.timing),
+                black_box(&mut separate_scratch),
+            );
+            let annotations = rssp::step_parity::annotate_timing_rows(
+                black_box(&input.rows),
+                black_box(&input.row_to_beat),
+                black_box(&input.timing),
+                black_box(&mut separate_scratch),
+            );
+            black_box((counts, annotations));
+        });
+    });
+    group.bench_function("combined_solve", |b| {
+        b.iter(|| {
+            black_box(rssp::step_parity::analyze_and_annotate_timing_rows(
+                black_box(&input.rows),
+                black_box(&input.row_to_beat),
+                black_box(&input.timing),
+                black_box(&mut combined_scratch),
+            ));
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_tech_counts_pipeline,
     bench_tech_counts_inner,
-    bench_tech_counts_step_parity
+    bench_tech_counts_step_parity,
+    bench_counts_with_annotations
 );
 criterion_main!(benches);

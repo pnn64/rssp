@@ -1,8 +1,8 @@
 use std::sync::OnceLock;
 
 use crate::timing::{
-    FixedTimingParts, ROWS_PER_BEAT, TimingData, beat_to_note_row_f32, fakes as timing_fakes,
-    fixed_timing_parts, get_time_for_beat_f32, is_fake_at_row,
+    BeatTimeCursorF32, FixedTimingParts, ROWS_PER_BEAT, TimingData, beat_to_note_row_f32,
+    fakes as timing_fakes, fixed_timing_parts, get_time_for_beat_f32, is_fake_at_row,
 };
 
 const INVALID_COLUMN: i8 = -1;
@@ -1334,6 +1334,7 @@ fn parity_create_rows_holds<const LANES: usize, const HAS_FAKES: bool>(
     fill_hold_heads_from_arrays(rows, row_to_beat, cols, hold_heads);
     let copy_len = cols.min(LANES);
     let fixed = fixed_timing_parts(timing);
+    let mut time_cursor = BeatTimeCursorF32::new(timing);
 
     for (idx, row) in rows.iter().enumerate() {
         let mut nonzero_mask = row_nonzero_mask(row, copy_len);
@@ -1341,7 +1342,7 @@ fn parity_create_rows_holds<const LANES: usize, const HAS_FAKES: bool>(
             continue;
         }
         let (row_i32, beat) = row_quantized(row_to_beat[idx]);
-        let second = time_for_parity_row(timing, fixed, row_i32, beat);
+        let second = time_for_parity_row(&mut time_cursor, fixed, row_i32, beat);
         let row_fake = HAS_FAKES && is_fake_at_row(timing, row_i32);
 
         while nonzero_mask != 0 {
@@ -1382,6 +1383,7 @@ fn parity_create_rows_no_holds<const LANES: usize, const HAS_FAKES: bool>(
     let mut counter = row_counter_new();
     let copy_len = cols.min(LANES);
     let fixed = fixed_timing_parts(timing);
+    let mut time_cursor = BeatTimeCursorF32::new(timing);
 
     for (idx, row) in rows.iter().enumerate() {
         let mut nonzero_mask = row_nonzero_mask(row, copy_len);
@@ -1389,7 +1391,7 @@ fn parity_create_rows_no_holds<const LANES: usize, const HAS_FAKES: bool>(
             continue;
         }
         let (row_i32, beat) = row_quantized(row_to_beat[idx]);
-        let second = time_for_parity_row(timing, fixed, row_i32, beat);
+        let second = time_for_parity_row(&mut time_cursor, fixed, row_i32, beat);
         let row_fake = HAS_FAKES && is_fake_at_row(timing, row_i32);
 
         while nonzero_mask != 0 {
@@ -1412,13 +1414,13 @@ fn parity_create_rows_no_holds<const LANES: usize, const HAS_FAKES: bool>(
 
 #[inline(always)]
 fn time_for_parity_row(
-    timing: &TimingData,
+    time_cursor: &mut BeatTimeCursorF32<'_>,
     fixed: Option<FixedTimingParts>,
     row: i32,
     beat: f32,
 ) -> f32 {
     fixed.map_or_else(
-        || get_time_for_beat_f32(timing, f64::from(beat)) as f32,
+        || time_cursor.time_for_beat(f64::from(beat)) as f32,
         |parts| fixed_row_time(parts, row),
     )
 }
@@ -2198,16 +2200,17 @@ impl RowAnnotation {
     }
 }
 
-fn collect_annotations(
+fn collect_annotations_and_counts(
     rows: &[Row],
     placements: &[FootPlacement],
     layout: &StageLayout,
-) -> Vec<RowAnnotation> {
+) -> (TechCounts, Vec<RowAnnotation>) {
     let n = rows.len();
     let mut out = Vec::with_capacity(n);
     if n == 0 || placements.len() != n {
-        return out;
+        return (TechCounts::default(), out);
     }
+    let mut counts = TechCounts::default();
 
     let cols = layout_cols(layout).min(MAX_COLUMNS);
 
@@ -2269,6 +2272,7 @@ fn collect_annotations(
             &prev_prev_pos,
             i,
         );
+        counts += tech;
 
         out.push(RowAnnotation {
             beat: curr.beat,
@@ -2282,7 +2286,15 @@ fn collect_annotations(
         prev_pos = curr_pos;
     }
 
-    out
+    (counts, out)
+}
+
+fn collect_annotations(
+    rows: &[Row],
+    placements: &[FootPlacement],
+    layout: &StageLayout,
+) -> Vec<RowAnnotation> {
+    collect_annotations_and_counts(rows, placements, layout).1
 }
 
 #[inline(always)]
@@ -2724,6 +2736,42 @@ pub fn analyze_timing_rows_known_holds<const LANES: usize>(
     )
 }
 
+pub fn analyze_and_annotate_timing_rows<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    scratch: &mut TimingRowsScratch<LANES>,
+) -> (TechCounts, Vec<RowAnnotation>) {
+    let has_holds = rows_have_holds(rows, layout_cols(scratch.generator.layout));
+    analyze_and_annotate_timing_rows_known_holds(rows, row_to_beat, timing, has_holds, scratch)
+}
+
+pub fn analyze_and_annotate_timing_rows_known_holds<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    has_holds: bool,
+    scratch: &mut TimingRowsScratch<LANES>,
+) -> (TechCounts, Vec<RowAnnotation>) {
+    let cols = layout_cols(scratch.generator.layout);
+    if !parity_analyze_rows(
+        &mut scratch.generator,
+        &mut scratch.hold_heads,
+        rows,
+        row_to_beat,
+        timing,
+        cols,
+        has_holds,
+    ) {
+        return (TechCounts::default(), Vec::new());
+    }
+    collect_annotations_and_counts(
+        &scratch.generator.rows,
+        &scratch.generator.result_columns,
+        scratch.generator.layout,
+    )
+}
+
 /// Per-row crossover annotations for the given row arrays, mirroring
 /// [`analyze_timing_rows`] but returning [`RowAnnotation`] for every judged
 /// parity row instead of aggregate [`TechCounts`]. Intended for gameplay
@@ -2927,12 +2975,17 @@ mod tests {
 1000
 ;";
         let (counts, annotations) = annotations_for(data);
-        let annotated_crossovers =
-            annotations.iter().filter(|a| a.row_tech.crossovers > 0).count() as u32;
+        let annotated_crossovers = annotations
+            .iter()
+            .filter(|a| a.row_tech.crossovers > 0)
+            .count() as u32;
         assert_eq!(annotated_crossovers, counts.crossovers);
         // The pattern is designed to actually contain crossovers, so this
         // guards against the annotation path silently classifying nothing.
-        assert!(counts.crossovers > 0, "expected the test pattern to crossover");
+        assert!(
+            counts.crossovers > 0,
+            "expected the test pattern to crossover"
+        );
     }
 
     #[test]
@@ -2957,6 +3010,53 @@ mod tests {
             summed += a.row_tech;
         }
         assert_eq!(summed, counts);
+    }
+
+    #[test]
+    fn combined_counts_and_annotations_match_separate_solves() {
+        let data = b"2000
+0010
+3000
+0001
+,
+1000
+0010
+0001
+0010
+1000
+;";
+        let timing = basic_timing();
+        let (_minimized, _stats, _densities, rows, row_to_beat, _last) =
+            minimize_rows_typed::<4>(data);
+        let has_holds = rows_have_holds(&rows, 4);
+
+        let mut separate_scratch = timing_rows_scratch::<4>().expect("dance-single layout");
+        let separate_counts = analyze_timing_rows_known_holds(
+            &rows,
+            &row_to_beat,
+            &timing,
+            has_holds,
+            &mut separate_scratch,
+        );
+        let separate_annotations = annotate_timing_rows_known_holds(
+            &rows,
+            &row_to_beat,
+            &timing,
+            has_holds,
+            &mut separate_scratch,
+        );
+
+        let mut combined_scratch = timing_rows_scratch::<4>().expect("dance-single layout");
+        let combined = analyze_and_annotate_timing_rows_known_holds(
+            &rows,
+            &row_to_beat,
+            &timing,
+            has_holds,
+            &mut combined_scratch,
+        );
+
+        assert_eq!(combined.0, separate_counts);
+        assert_eq!(combined.1, separate_annotations);
     }
 
     #[test]

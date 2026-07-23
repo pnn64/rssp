@@ -79,14 +79,22 @@ pub type PatternCounts = [u32; PATTERN_COUNT];
 // Summary Types
 // ============================================================================
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CustomPatternSummary {
     pub pattern: String,
     pub count: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PatternAnalysis {
+    pub detected_patterns: PatternCounts,
+    pub anchors: (u32, u32, u32, u32),
+    pub facing_steps: (u32, u32),
+    pub custom_patterns: Vec<CustomPatternSummary>,
+}
+
 #[derive(Debug, Clone)]
-pub(crate) struct CompiledPattern {
+struct CompiledPattern {
     pattern: String,
     bits: Vec<u8>,
 }
@@ -511,6 +519,13 @@ pub fn detect_custom_patterns_compiled(
 ) -> Vec<CustomPatternSummary> {
     let counts = ac_search_vec(bitmasks, &compiled.dfa, compiled.patterns.len());
 
+    custom_pattern_summaries(compiled, &counts)
+}
+
+fn custom_pattern_summaries(
+    compiled: &CompiledCustomPatterns,
+    counts: &[u32],
+) -> Vec<CustomPatternSummary> {
     compiled
         .patterns
         .iter()
@@ -526,6 +541,62 @@ pub fn detect_custom_patterns_compiled(
 pub fn detect_custom_patterns(bitmasks: &[u8], patterns: &[String]) -> Vec<CustomPatternSummary> {
     let compiled = compile_custom_patterns(patterns);
     detect_custom_patterns_compiled(bitmasks, &compiled)
+}
+
+#[inline(always)]
+fn note_mask4(row: &[u8; 4]) -> u8 {
+    u8::from(matches!(row[0], b'1' | b'2' | b'4'))
+        | (u8::from(matches!(row[1], b'1' | b'2' | b'4')) << 1)
+        | (u8::from(matches!(row[2], b'1' | b'2' | b'4')) << 2)
+        | (u8::from(matches!(row[3], b'1' | b'2' | b'4')) << 3)
+}
+
+#[must_use]
+pub fn analyze_patterns_from_rows(
+    rows: &[[u8; 4]],
+    mono_threshold: usize,
+    compiled: &CompiledCustomPatterns,
+) -> PatternAnalysis {
+    let mut detected_patterns = [0u32; PATTERN_COUNT];
+    let mut default_state = 0u32;
+    let mut custom_counts = vec![0u32; compiled.patterns.len()];
+    let mut custom_state = 0u32;
+    let mut anchors = [0u32; 4];
+    let mut mask_history = [0u8; 4];
+    let mut facing = FacingCounter::new(mono_threshold);
+
+    for (idx, row) in rows.iter().enumerate() {
+        let mask = note_mask4(row);
+        let sym = (mask & 0x0F) as usize;
+
+        default_state = PATTERN_DFA.goto[default_state as usize * AC_ALPHA + sym];
+        for &id in ac_output_slice(&PATTERN_DFA, default_state) {
+            detected_patterns[id as usize] += 1;
+        }
+
+        if !custom_counts.is_empty() {
+            custom_state = compiled.dfa.goto[custom_state as usize * AC_ALPHA + sym];
+            for &id in ac_output_slice(&compiled.dfa, custom_state) {
+                custom_counts[id] += 1;
+            }
+        }
+
+        if idx >= 4 {
+            let anchor_mask = mask_history[idx & 3] & mask_history[(idx - 2) & 3] & mask;
+            for (column, count) in anchors.iter_mut().enumerate() {
+                *count += u32::from(anchor_mask & (1 << column) != 0);
+            }
+        }
+        mask_history[idx & 3] = mask;
+        facing.push(mask);
+    }
+
+    PatternAnalysis {
+        detected_patterns,
+        anchors: (anchors[0], anchors[1], anchors[2], anchors[3]),
+        facing_steps: facing.finish(),
+        custom_patterns: custom_pattern_summaries(compiled, &custom_counts),
+    }
 }
 
 // ============================================================================
@@ -590,6 +661,96 @@ const FORCED_FOOT: [u8; 5] = [FOOT_NONE, FOOT_LEFT, FOOT_NONE, FOOT_NONE, FOOT_R
 const OPPOSITE_FOOT: [u8; 3] = [FOOT_NONE, FOOT_RIGHT, FOOT_LEFT];
 const FOOT_CONFLICT: u8 = 1 << 2;
 const FOOT_MASK: u8 = 0b11;
+
+struct FacingCounter {
+    final_left: u32,
+    final_right: u32,
+    state: u8,
+    count: usize,
+    prev_arrow: u8,
+    prev_foot: u8,
+    mono_threshold: usize,
+}
+
+impl FacingCounter {
+    const fn new(mono_threshold: usize) -> Self {
+        Self {
+            final_left: 0,
+            final_right: 0,
+            state: FACE_WAIT,
+            count: 0,
+            prev_arrow: ARROW_NONE,
+            prev_foot: FOOT_NONE,
+            mono_threshold,
+        }
+    }
+
+    #[inline(always)]
+    fn push(&mut self, mask: u8) {
+        let curr_arrow = bitmask_arrow(mask);
+        if curr_arrow == ARROW_NONE {
+            if self.prev_arrow != ARROW_NONE {
+                finalize_facing(
+                    self.state,
+                    self.count,
+                    &mut self.final_left,
+                    &mut self.final_right,
+                    self.mono_threshold,
+                );
+                self.state = FACE_WAIT;
+                self.count = 0;
+                self.prev_arrow = ARROW_NONE;
+                self.prev_foot = FOOT_NONE;
+            }
+            return;
+        }
+
+        if self.prev_arrow == ARROW_NONE {
+            self.state = FACE_WAIT;
+            self.count = 1;
+            self.prev_foot = FORCED_FOOT[curr_arrow as usize];
+            self.prev_arrow = curr_arrow;
+            return;
+        }
+
+        let direction = DIR_TABLE[self.prev_arrow as usize][curr_arrow as usize];
+        let (new_foot, should_finalize) = next_facing_foot(self.prev_foot, curr_arrow);
+        if should_finalize {
+            finalize_facing(
+                self.state,
+                self.count,
+                &mut self.final_left,
+                &mut self.final_right,
+                self.mono_threshold,
+            );
+            self.state = FACE_WAIT;
+            self.count = 0;
+        }
+        self.prev_foot = new_foot;
+        (self.state, self.count) = step_facing(
+            self.state,
+            self.count,
+            direction,
+            &mut self.final_left,
+            &mut self.final_right,
+            self.mono_threshold,
+        );
+        self.prev_arrow = curr_arrow;
+    }
+
+    fn finish(mut self) -> (u32, u32) {
+        if self.prev_arrow != ARROW_NONE {
+            finalize_facing(
+                self.state,
+                self.count,
+                &mut self.final_left,
+                &mut self.final_right,
+                self.mono_threshold,
+            );
+        }
+        (self.final_left, self.final_right)
+    }
+}
 
 const fn build_dir_table() -> [[u8; 5]; 5] {
     let mut t = [[DIR_NONE; 5]; 5];
@@ -699,75 +860,11 @@ const fn next_facing_foot(prev_foot: u8, curr_arrow: u8) -> (u8, bool) {
 
 #[must_use]
 pub fn count_facing_steps(bitmasks: &[u8], mono_threshold: usize) -> (u32, u32) {
-    let mut final_left = 0_u32;
-    let mut final_right = 0_u32;
-    let mut state = FACE_WAIT;
-    let mut count = 0usize;
-    let mut prev_arrow = ARROW_NONE;
-    let mut prev_foot = FOOT_NONE;
-
+    let mut counter = FacingCounter::new(mono_threshold);
     for &mask in bitmasks {
-        let curr_arrow = bitmask_arrow(mask);
-        if curr_arrow == ARROW_NONE {
-            if prev_arrow != ARROW_NONE {
-                finalize_facing(
-                    state,
-                    count,
-                    &mut final_left,
-                    &mut final_right,
-                    mono_threshold,
-                );
-                state = FACE_WAIT;
-                count = 0;
-                prev_arrow = ARROW_NONE;
-                prev_foot = FOOT_NONE;
-            }
-            continue;
-        };
-
-        if prev_arrow == ARROW_NONE {
-            state = FACE_WAIT;
-            count = 1;
-            prev_foot = FORCED_FOOT[curr_arrow as usize];
-            prev_arrow = curr_arrow;
-            continue;
-        }
-
-        let direction = DIR_TABLE[prev_arrow as usize][curr_arrow as usize];
-        let (new_foot, should_finalize) = next_facing_foot(prev_foot, curr_arrow);
-        if should_finalize {
-            finalize_facing(
-                state,
-                count,
-                &mut final_left,
-                &mut final_right,
-                mono_threshold,
-            );
-            state = FACE_WAIT;
-            count = 0;
-        }
-        prev_foot = new_foot;
-        (state, count) = step_facing(
-            state,
-            count,
-            direction,
-            &mut final_left,
-            &mut final_right,
-            mono_threshold,
-        );
-        prev_arrow = curr_arrow;
+        counter.push(mask);
     }
-
-    if prev_arrow != ARROW_NONE {
-        finalize_facing(
-            state,
-            count,
-            &mut final_left,
-            &mut final_right,
-            mono_threshold,
-        );
-    }
-    (final_left, final_right)
+    counter.finish()
 }
 
 // ============================================================================
@@ -805,7 +902,20 @@ pub const fn compute_box_counts(counts: &PatternCounts) -> BoxCounts {
 
 #[cfg(test)]
 mod tests {
-    use super::count_facing_steps;
+    use super::{
+        analyze_patterns_from_rows, compile_custom_patterns, count_anchors, count_facing_steps,
+        detect_custom_patterns_compiled, detect_default_patterns,
+    };
+
+    fn row_from_mask(mask: u8) -> [u8; 4] {
+        std::array::from_fn(|column| {
+            if mask & (1 << column) == 0 {
+                b'0'
+            } else {
+                b'1'
+            }
+        })
+    }
 
     #[test]
     fn facing_steps_count_left_and_right_runs() {
@@ -826,5 +936,28 @@ mod tests {
             (4, 0)
         );
         assert_eq!(count_facing_steps(&[0b0001, 0b0100, 0b1000], 2), (2, 0));
+    }
+
+    #[test]
+    fn row_analysis_matches_separate_bitmask_passes() {
+        let bitmasks = [
+            0b0001, 0b0010, 0b0100, 0b1000, 0, 0b0001, 0b0100, 0b0001, 0b0100, 0b0011, 0b0001,
+            0b0010, 0b0100, 0b0001,
+        ];
+        let rows: Vec<_> = bitmasks.iter().copied().map(row_from_mask).collect();
+        let custom = compile_custom_patterns(&["LDU".to_string(), "LUL".to_string()]);
+
+        let combined = analyze_patterns_from_rows(&rows, 2, &custom);
+
+        assert_eq!(
+            combined.detected_patterns,
+            detect_default_patterns(&bitmasks)
+        );
+        assert_eq!(combined.anchors, count_anchors(&bitmasks));
+        assert_eq!(combined.facing_steps, count_facing_steps(&bitmasks, 2));
+        assert_eq!(
+            combined.custom_patterns,
+            detect_custom_patterns_compiled(&bitmasks, &custom)
+        );
     }
 }

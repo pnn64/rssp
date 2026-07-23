@@ -1356,6 +1356,46 @@ pub(crate) fn fixed_time_for_beat(parts: FixedTimingParts, target_beat: f64) -> 
     f64::from(start + note_row_to_beat_f32(row) / bps) - global_offset
 }
 
+pub(crate) struct BeatTimeCursorF32<'a> {
+    timing: &'a TimingData,
+    fixed: Option<FixedTimingParts>,
+    state: GetBeatStateF32,
+    last_target_row: i32,
+}
+
+impl<'a> BeatTimeCursorF32<'a> {
+    #[inline]
+    pub(crate) fn new(timing: &'a TimingData) -> Self {
+        Self {
+            timing,
+            fixed: fixed_timing_parts(timing),
+            state: GetBeatStateF32 {
+                last_time: (-timing.beat0_offset_sec - timing.global_offset_sec) as f32,
+                ..Default::default()
+            },
+            last_target_row: i32::MIN,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn time_for_beat(&mut self, target_beat: f64) -> f64 {
+        if let Some(parts) = self.fixed {
+            return fixed_time_for_beat(parts, target_beat);
+        }
+
+        let target_row = beat_to_note_row_f32(target_beat as f32);
+        if target_row < self.last_target_row {
+            self.state = GetBeatStateF32 {
+                last_time: (-self.timing.beat0_offset_sec - self.timing.global_offset_sec) as f32,
+                ..Default::default()
+            };
+        }
+        let elapsed = get_elapsed_time_f32(self.timing, &mut self.state, target_beat as f32);
+        self.last_target_row = target_row;
+        f64::from(elapsed) - self.timing.global_offset_sec
+    }
+}
+
 pub(crate) fn get_time_for_beat_f32(t: &TimingData, target_beat: f64) -> f64 {
     if let Some(parts) = fixed_timing_parts(t) {
         return fixed_time_for_beat(parts, target_beat);
@@ -1365,8 +1405,8 @@ pub(crate) fn get_time_for_beat_f32(t: &TimingData, target_beat: f64) -> f64 {
         last_time: (-t.beat0_offset_sec - t.global_offset_sec) as f32,
         ..Default::default()
     };
-    get_elapsed_time_f32(t, &mut state, target_beat as f32);
-    f64::from(state.last_time) - t.global_offset_sec
+    let elapsed = get_elapsed_time_f32(t, &mut state, target_beat as f32);
+    f64::from(elapsed) - t.global_offset_sec
 }
 
 fn get_time_internal(t: &TimingData, target_beat: f64) -> f64 {
@@ -1494,7 +1534,7 @@ fn get_elapsed_time(t: &TimingData, state: &mut GetBeatState, target_beat: f64) 
     }
 }
 
-fn get_elapsed_time_f32(t: &TimingData, state: &mut GetBeatStateF32, target_beat: f32) {
+fn get_elapsed_time_f32(t: &TimingData, state: &mut GetBeatStateF32, target_beat: f32) -> f32 {
     let find_marker = target_beat < f32::MAX;
     let mut bps = get_bpm_for_row_f32(t, state.last_row) / 60.0;
     let mut curr_segment = state.bpm_idx + state.warp_idx + state.stop_idx + state.delay_idx;
@@ -1510,6 +1550,9 @@ fn get_elapsed_time_f32(t: &TimingData, state: &mut GetBeatStateF32, target_beat
         } else {
             note_row_to_beat_f32(event_row - state.last_row) / bps
         };
+        if event_type == TimingEvent::Marker {
+            return state.last_time + dt;
+        }
         state.last_time += dt;
 
         match event_type {
@@ -1529,7 +1572,7 @@ fn get_elapsed_time_f32(t: &TimingData, state: &mut GetBeatStateF32, target_beat
                 state.delay_idx += 1;
                 curr_segment += 1;
             }
-            TimingEvent::Marker => return,
+            TimingEvent::Marker => unreachable!("marker is returned before state mutation"),
             TimingEvent::Warp => {
                 state.is_warping = true;
                 let w = &t.warps[state.warp_idx];
@@ -1544,6 +1587,7 @@ fn get_elapsed_time_f32(t: &TimingData, state: &mut GetBeatStateF32, target_beat
         }
         state.last_row = event_row;
     }
+    state.last_time
 }
 
 fn find_next_event(
@@ -1729,4 +1773,63 @@ pub fn get_speed_multiplier(t: &TimingData, beat: f64, time: f64) -> f64 {
     }
     let progress = (time - rt.start_time) / (rt.end_time - rt.start_time);
     (seg.ratio - rt.prev_ratio).mul_add(progress, rt.prev_ratio)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn variable_timing() -> TimingData {
+        timing_data_from_chart_data(
+            0.125,
+            0.0,
+            None,
+            "0=120,4=180,12=90,24=240,48=150",
+            None,
+            "2=0.500,16=0.250,52=0.125",
+            None,
+            "8=0.125,32=0.375",
+            None,
+            "20=4,40=2",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "",
+            TimingFormat::Ssc,
+            true,
+        )
+    }
+
+    #[test]
+    fn sequential_beat_cursor_matches_independent_queries_bit_for_bit() {
+        let timing = variable_timing();
+        let mut cursor = BeatTimeCursorF32::new(&timing);
+        let targets = [
+            -1.0, 0.0, 1.0, 2.0, 4.0, 7.5, 8.0, 12.0, 16.0, 20.0, 21.0, 24.0, 32.0, 40.0, 41.0,
+            48.0, 52.0, 64.0,
+        ];
+
+        for target in targets {
+            assert_eq!(
+                cursor.time_for_beat(target).to_bits(),
+                get_time_for_beat_f32(&timing, target).to_bits(),
+                "target beat {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn sequential_beat_cursor_resets_for_decreasing_queries() {
+        let timing = variable_timing();
+        let mut cursor = BeatTimeCursorF32::new(&timing);
+        for target in [0.0, 32.0, 4.0, 52.0, -0.5, 64.0] {
+            assert_eq!(
+                cursor.time_for_beat(target).to_bits(),
+                get_time_for_beat_f32(&timing, target).to_bits(),
+                "target beat {target}"
+            );
+        }
+    }
 }

@@ -7,7 +7,7 @@ use crate::parse::{
     unescape_trim,
 };
 use crate::timing::{
-    ROWS_PER_BEAT, TimingData, compute_timing_segments, fixed_timing_parts, get_time_for_beat_f32,
+    BeatTimeCursorF32, ROWS_PER_BEAT, TimingData, compute_timing_segments, fixed_timing_parts,
     steps_timing_allowed, timing_data_from_segments, timing_format_from_ext,
 };
 
@@ -194,10 +194,11 @@ pub fn compute_measure_nps_vec_with_timing(densities: &[usize], timing: &TimingD
     }
 
     let mut out = Vec::with_capacity(densities.len());
-    let mut start = get_time_for_beat_f32(timing, 0.0);
+    let mut cursor = BeatTimeCursorF32::new(timing);
+    let mut start = cursor.time_for_beat(0.0);
 
     for (i, &d) in densities.iter().enumerate() {
-        let end = get_time_for_beat_f32(timing, (i as f64 + 1.0) * 4.0);
+        let end = cursor.time_for_beat((i as f64 + 1.0) * 4.0);
         let dur = end - start;
         out.push(if d == 0 || dur <= 0.12 {
             0.0
