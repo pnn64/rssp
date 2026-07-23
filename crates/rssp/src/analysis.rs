@@ -2,6 +2,8 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Instant;
 
+use rssp_core::bpm::normalize_speeds_float_digits;
+
 use crate::duration::{self, TimingOffsets};
 use crate::report::{ChartSummary, SimfileSummary};
 use crate::stats;
@@ -991,7 +993,7 @@ pub fn analyze(
         .speeds
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let normalized_global_speeds = normalize_float_digits(global_speeds_raw);
+    let normalized_global_speeds = normalize_speeds_float_digits(global_speeds_raw);
     let cleaned_global_speeds = clean_timing_map(global_speeds_raw);
     let global_scrolls_raw = parsed_data
         .scrolls
