@@ -79,6 +79,43 @@ pub fn normalize_float_digits(param: &str) -> String {
 }
 
 #[must_use]
+pub fn normalize_speeds_float_digits(param: &str) -> String {
+    let mut out = String::with_capacity(param.len());
+    for entry in param.split(',') {
+        let t = entry.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let mut split = t.split('=');
+        match (split.next(), split.next(), split.next(), split.next()) {
+            (Some(b), Some(r), Some(d), Some(u)) => {
+                if let (Some(beat), Some(ratio), Some(delay)) = (
+                    parse_normalized_decimal(b),
+                    parse_normalized_decimal(r),
+                    parse_normalized_decimal(d),
+                ) {
+                    if !out.is_empty() {
+                        out.push(',');
+                    }
+                    push_dec3_half_up(&mut out, beat);
+                    out.push('=');
+                    push_dec3_half_up(&mut out, ratio);
+                    out.push('=');
+                    push_dec3_half_up(&mut out, delay);
+                    out.push('=');
+                    out += u;
+                }
+            }
+            _ => {
+                // Not enough values to parse - skip this row
+            }
+        }
+    }
+
+    out
+}
+
+#[must_use]
 pub fn clean_timing_map(param: &str) -> String {
     let mut out = String::with_capacity(param.len());
     for entry in param.split(',') {
