@@ -194,88 +194,56 @@ impl<'a> Prop<'a> {
         }
     }
 
-    #[must_use]
-    #[inline(always)]
     fn new_with_default(key: &'a [u8], default: &'a [u8], value: PropValue<'a>) -> Prop<'a> {
-        Prop {
-            key,
-            value,
-            default_value: Some(default),
-            ..Default::default()
-        }
+        let mut prop = Prop::new(key, value);
+        prop.default_value = Some(default);
+        prop
     }
 
     #[must_use]
-    #[inline(always)]
     fn ssc_only(key: &'a [u8], value: PropValue<'a>) -> Prop<'a> {
-        Prop {
-            key,
-            value,
-            ssc_only: true,
-            ..Default::default()
-        }
+        let mut prop = Prop::new(key, value);
+        prop.ssc_only = true;
+        prop
     }
 
     #[must_use]
-    #[inline(always)]
     fn ssc_nonempty_only(key: &'a [u8], value: PropValue<'a>) -> Prop<'a> {
-        Prop {
-            key,
-            value,
-            ssc_only: true,
-            nonempty_value_only: true,
-            ..Default::default()
-        }
+        let mut prop = Prop::ssc_only(key, value);
+        prop.nonempty_value_only = true;
+        prop
     }
 
     #[must_use]
-    #[inline(always)]
     fn ssc_only_with_default(key: &'a [u8], default: &'a [u8], value: PropValue<'a>) -> Prop<'a> {
-        Prop {
-            key,
-            value,
-            default_value: Some(default),
-            ssc_only: true,
-            ..Default::default()
-        }
+        let mut prop = Prop::ssc_only(key, value);
+        prop.default_value = Some(default);
+        prop
     }
 
     #[must_use]
-    #[inline(always)]
     fn nonempty_only(key: &'a [u8], value: PropValue<'a>) -> Prop<'a> {
-        Prop {
-            key,
-            value,
-            nonempty_value_only: true,
-            ..Default::default()
-        }
+        let mut prop = Prop::new(key, value);
+        prop.nonempty_value_only = true;
+        prop
     }
 
     #[must_use]
-    #[inline(always)]
     fn own_timing_only(key: &'a [u8], value: PropValue<'a>) -> Prop<'a> {
-        Prop {
-            key,
-            value,
-            own_timing_only: true,
-            ..Default::default()
-        }
+        let mut prop = Prop::new(key, value);
+        prop.own_timing_only = true;
+        prop
     }
 
     #[must_use]
-    #[inline(always)]
     fn own_timing_only_with_default(
         key: &'a [u8],
         default: &'a [u8],
         value: PropValue<'a>,
     ) -> Prop<'a> {
-        Prop {
-            key,
-            value,
-            default_value: Some(default),
-            own_timing_only: true,
-            ..Default::default()
-        }
+        let mut prop = Prop::own_timing_only(key, value);
+        prop.default_value = Some(default);
+        prop
     }
 
     #[must_use]
