@@ -83,7 +83,11 @@ mod platform {
 
     pub fn stabilize_thread() {
         let cpu_count = std::thread::available_parallelism().map_or(1, usize::from);
-        let cpu = if cpu_count > 2 { 2 } else { 0 };
+        let cpu = std::env::var("RSSP_BENCH_CPU")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .filter(|&cpu| cpu < cpu_count)
+            .unwrap_or_else(|| if cpu_count > 2 { 2 } else { 0 });
         let thread = unsafe { GetCurrentThread() };
         let previous = unsafe { SetThreadAffinityMask(thread, 1usize << cpu) };
         assert_ne!(previous, 0, "SetThreadAffinityMask failed");
@@ -163,6 +167,16 @@ fn large_stop_map(entries: usize) -> String {
         write!(&mut map, "{}=0.125", idx * 4).unwrap();
     }
     map
+}
+
+#[cfg(windows)]
+fn parity_rows<const LANES: usize>(entries: usize, masks: &[u8]) -> Vec<[u8; LANES]> {
+    (0..entries)
+        .map(|idx| {
+            let mask = masks[idx % masks.len()];
+            std::array::from_fn(|lane| if mask & (1 << lane) == 0 { b'0' } else { b'1' })
+        })
+        .collect()
 }
 
 #[cfg(windows)]
@@ -326,6 +340,86 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     cleanup.finish();
+
+    const SINGLE_ROWS: usize = 2_048;
+    const DOUBLE_ROWS: usize = 512;
+    let parity_timing = rssp::timing::timing_data_from_chart_data(
+        0.0,
+        0.0,
+        None,
+        "0=150",
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        rssp::timing::TimingFormat::Ssc,
+        true,
+    );
+    let single_rows = parity_rows::<4>(
+        SINGLE_ROWS,
+        &[
+            0b0001, 0b0100, 0b1000, 0b0010, 0b0011, 0b1100, 0b0101, 0b1010, 0b0010, 0b1000, 0b0100,
+            0b0001, 0b1001, 0b0110,
+        ],
+    );
+    let single_beats: Vec<_> = (0..SINGLE_ROWS).map(|idx| idx as f32 * 0.25).collect();
+    let double_rows = parity_rows::<8>(
+        DOUBLE_ROWS,
+        &[
+            0b0000_0001,
+            0b0001_0000,
+            0b1000_0000,
+            0b0000_1000,
+            0b0001_0001,
+            0b1000_1000,
+            0b0010_0100,
+            0b0100_0010,
+            0b0000_0011,
+            0b1100_0000,
+        ],
+    );
+    let double_beats: Vec<_> = (0..DOUBLE_ROWS).map(|idx| idx as f32 * 0.25).collect();
+    let mut single_scratch =
+        rssp::step_parity::timing_rows_scratch::<4>().expect("dance-single parity layout");
+    let mut double_scratch =
+        rssp::step_parity::timing_rows_scratch::<8>().expect("dance-double parity layout");
+
+    let mut parity = c.benchmark_group("cycles/step_parity");
+    parity.sample_size(50);
+    parity.measurement_time(Duration::from_secs(3));
+    parity.throughput(Throughput::Elements(SINGLE_ROWS as u64));
+    parity.bench_function("dense_single", |b| {
+        b.iter(|| {
+            black_box(rssp::step_parity::analyze_timing_rows_known_holds(
+                black_box(&single_rows),
+                black_box(&single_beats),
+                black_box(&parity_timing),
+                false,
+                black_box(&mut single_scratch),
+            ));
+        });
+    });
+    parity.throughput(Throughput::Elements(DOUBLE_ROWS as u64));
+    parity.bench_function("dense_double", |b| {
+        b.iter(|| {
+            black_box(rssp::step_parity::analyze_timing_rows_known_holds(
+                black_box(&double_rows),
+                black_box(&double_beats),
+                black_box(&parity_timing),
+                false,
+                black_box(&mut double_scratch),
+            ));
+        });
+    });
+    parity.finish();
 }
 
 #[cfg(windows)]

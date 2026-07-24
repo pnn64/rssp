@@ -72,6 +72,16 @@ const FEET: [Foot; 4] = [
     Foot::RightHeel,
     Foot::RightToe,
 ];
+const FOOT_FROM_KEY_BITS: [Foot; 8] = [
+    Foot::None,
+    Foot::LeftHeel,
+    Foot::LeftToe,
+    Foot::RightHeel,
+    Foot::RightToe,
+    Foot::None,
+    Foot::None,
+    Foot::None,
+];
 const FOOT_MASKS: [u8; NUM_FEET] = [0, 1, 2, 4, 8];
 const OTHER_FOOT_IDXS: [usize; NUM_FEET] = [0, 2, 1, 4, 3];
 const LEFT_FOOT_MASK: u8 = FOOT_MASKS[1] | FOOT_MASKS[2];
@@ -487,19 +497,13 @@ const fn state_new() -> State {
 }
 
 #[inline(always)]
-fn state_from_key(key: u32, column_count: usize) -> State {
+fn state_from_key<const COLS: usize>(key: u32) -> State {
     let mut combined_columns = [Foot::None; MAX_COLUMNS];
     let mut where_the_feet_are = [INVALID_COLUMN; NUM_FEET];
     let mut occupied_mask = 0u8;
     let mut column = 0usize;
-    while column < column_count {
-        let foot = match (key >> (column * 3)) & 0b111 {
-            1 => Foot::LeftHeel,
-            2 => Foot::LeftToe,
-            3 => Foot::RightHeel,
-            4 => Foot::RightToe,
-            _ => Foot::None,
-        };
+    while column < COLS {
+        let foot = FOOT_FROM_KEY_BITS[((key >> (column * 3)) & 0b111) as usize];
         combined_columns[column] = foot;
         if foot != Foot::None {
             where_the_feet_are[foot_idx(foot)] = column as i8;
@@ -1029,10 +1033,19 @@ fn parity_finish(g: &mut StepParityGenerator) -> bool {
     if g.rows.is_empty() {
         return false;
     }
-    let Some(best) = parity_dp_rows(g) else {
+    match g.column_count {
+        4 => parity_finish_columns::<4>(g),
+        8 => parity_finish_columns::<8>(g),
+        _ => false,
+    }
+}
+
+#[inline(always)]
+fn parity_finish_columns<const COLS: usize>(g: &mut StepParityGenerator) -> bool {
+    let Some(best) = parity_dp_rows::<COLS>(g) else {
         return false;
     };
-    parity_backtrack(g, best)
+    parity_backtrack::<COLS>(g, best)
 }
 
 fn parity_analyze(
@@ -1541,7 +1554,8 @@ fn parity_perms_for_row(g: &mut StepParityGenerator, row_idx: usize) -> &'static
     }
 }
 
-fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
+fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usize> {
+    debug_assert_eq!(g.column_count, COLS);
     let start_id = parity_add_node(g, 0);
     g.nodes[start_id].cost = 0.0;
 
@@ -1576,16 +1590,16 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
             let init_state = if init_id == start_id {
                 state_new()
             } else {
-                state_from_key(g.nodes[init_id].state_key, g.column_count)
+                state_from_key::<COLS>(g.nodes[init_id].state_key)
             };
             let init_cost = g.nodes[init_id].cost;
             let left_moved_not_holding = foot_moved_not_holding(&init_state, &LEFT_PAIR);
             let right_moved_not_holding = foot_moved_not_holding(&init_state, &RIGHT_PAIR);
             for perm in perms {
                 let (result, hit, key) = if hold_mask == 0 {
-                    parity_result_state_no_holds(&init_state, perm, g.column_count, active_mask)
+                    parity_result_state_no_holds::<COLS>(&init_state, perm, active_mask)
                 } else {
-                    parity_result_state(&init_state, perm, g.column_count, hold_mask, active_mask)
+                    parity_result_state::<COLS>(&init_state, perm, hold_mask, active_mask)
                 };
                 let res_id = match row_map_probe(&g.state_map, key) {
                     RowMapProbe::Found(id) => id,
@@ -1631,21 +1645,19 @@ fn parity_dp_rows(g: &mut StepParityGenerator) -> Option<usize> {
         .min_by(|&a, &b| g.nodes[a].cost.total_cmp(&g.nodes[b].cost))
 }
 
-fn parity_result_state(
+fn parity_result_state<const COLS: usize>(
     initial: &State,
     cols: &FootPlacement,
-    col_count: usize,
     hold_mask: u8,
     active_mask: u8,
 ) -> (State, [i8; NUM_FEET], u32) {
-    let n = col_count;
     let (mut combined, mut hit) = ([Foot::None; MAX_COLUMNS], [INVALID_COLUMN; NUM_FEET]);
     let (mut moved_mask, mut holding_mask) = (0u8, 0u8);
     let mut mask = active_mask;
     while mask != 0 {
         let i = mask.trailing_zeros() as usize;
         mask &= mask - 1;
-        if i >= n {
+        if i >= COLS {
             continue;
         }
         let foot = cols[i];
@@ -1671,7 +1683,7 @@ fn parity_result_state(
     );
     let (mut where_the_feet_are, mut comb_p, mut occupied_mask) =
         ([INVALID_COLUMN; NUM_FEET], 0u32, 0u8);
-    for i in 0..n {
+    for i in 0..COLS {
         let mut foot = combined[i];
         if foot == Foot::None {
             let prev = initial.combined_columns[i];
@@ -1708,20 +1720,18 @@ fn parity_result_state(
     )
 }
 
-fn parity_result_state_no_holds(
+fn parity_result_state_no_holds<const COLS: usize>(
     initial: &State,
     cols: &FootPlacement,
-    col_count: usize,
     active_mask: u8,
 ) -> (State, [i8; NUM_FEET], u32) {
-    let n = col_count;
     let (mut combined, mut hit) = ([Foot::None; MAX_COLUMNS], [INVALID_COLUMN; NUM_FEET]);
     let mut moved_mask = 0u8;
     let mut mask = active_mask;
     while mask != 0 {
         let i = mask.trailing_zeros() as usize;
         mask &= mask - 1;
-        if i >= n {
+        if i >= COLS {
             continue;
         }
         let foot = cols[i];
@@ -1740,7 +1750,7 @@ fn parity_result_state_no_holds(
     );
     let (mut where_the_feet_are, mut comb_p, mut occupied_mask) =
         ([INVALID_COLUMN; NUM_FEET], 0u32, 0u8);
-    for i in 0..n {
+    for i in 0..COLS {
         let mut foot = combined[i];
         if foot == Foot::None {
             let prev = initial.combined_columns[i];
@@ -1777,7 +1787,7 @@ fn parity_result_state_no_holds(
     )
 }
 
-fn parity_backtrack(g: &mut StepParityGenerator, mut cur: usize) -> bool {
+fn parity_backtrack<const COLS: usize>(g: &mut StepParityGenerator, mut cur: usize) -> bool {
     let rows = g.rows.len();
     if g.result_columns.len() < rows {
         g.result_columns.resize(rows, [Foot::None; MAX_COLUMNS]);
@@ -1788,8 +1798,7 @@ fn parity_backtrack(g: &mut StepParityGenerator, mut cur: usize) -> bool {
     let mut write = rows;
     while write > 0 {
         write -= 1;
-        g.result_columns[write] =
-            state_from_key(g.nodes[cur].state_key, g.column_count).combined_columns;
+        g.result_columns[write] = state_from_key::<COLS>(g.nodes[cur].state_key).combined_columns;
         let prev = g.nodes[cur].pred;
         if prev == u32::MAX {
             g.result_columns.clear();
@@ -3110,21 +3119,54 @@ mod tests {
         placement[1] = Foot::RightHeel;
 
         let (no_holds, _, no_holds_key) =
-            parity_result_state_no_holds(&state_new(), &placement, 4, 0b0011);
-        assert_eq!(state_from_key(no_holds_key, 4), no_holds);
+            parity_result_state_no_holds::<4>(&state_new(), &placement, 0b0011);
+        assert_eq!(state_from_key::<4>(no_holds_key), no_holds);
 
         let (with_hold, _, with_hold_key) =
-            parity_result_state(&state_new(), &placement, 4, 0b0001, 0b0011);
-        assert_eq!(state_from_key(with_hold_key, 4), with_hold);
+            parity_result_state::<4>(&state_new(), &placement, 0b0001, 0b0011);
+        assert_eq!(state_from_key::<4>(with_hold_key), with_hold);
 
         // A failed/empty placement can legitimately produce key zero. It is
         // distinct from the synthetic starting state because its foot
         // positions use INVALID_COLUMN rather than ITGmania's initial zeros.
         let (zero_state, _, zero_key) =
-            parity_result_state_no_holds(&state_new(), &NO_PERMS[0], 4, 0b0001);
+            parity_result_state_no_holds::<4>(&state_new(), &NO_PERMS[0], 0b0001);
         assert_eq!(zero_key, 0);
-        assert_eq!(state_from_key(zero_key, 4), zero_state);
+        assert_eq!(state_from_key::<4>(zero_key), zero_state);
         assert_ne!(zero_state, state_new());
+    }
+
+    #[test]
+    fn specialized_column_transitions_agree_for_single_panel_states() {
+        let cache = dance_single_cache();
+        let mut initial_placement = [Foot::None; MAX_COLUMNS];
+        initial_placement[0] = Foot::LeftHeel;
+        initial_placement[3] = Foot::RightHeel;
+        let (placed, _, _) =
+            parity_result_state_no_holds::<4>(&state_new(), &initial_placement, 0b1001);
+        let initial_states = [state_new(), state_from_key::<4>(0), placed];
+
+        for initial in initial_states {
+            for active_mask in 0u8..16 {
+                let permutations = cache.perm_table[active_mask as usize].as_ref();
+                let permutations = if permutations.is_empty() {
+                    &NO_PERMS
+                } else {
+                    permutations
+                };
+                for placement in permutations {
+                    assert_eq!(
+                        parity_result_state_no_holds::<4>(&initial, placement, active_mask),
+                        parity_result_state_no_holds::<8>(&initial, placement, active_mask)
+                    );
+                    let hold_mask = active_mask & 0b0101;
+                    assert_eq!(
+                        parity_result_state::<4>(&initial, placement, hold_mask, active_mask),
+                        parity_result_state::<8>(&initial, placement, hold_mask, active_mask)
+                    );
+                }
+            }
+        }
     }
 
     #[test]
