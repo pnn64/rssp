@@ -292,6 +292,18 @@ fn large_bpm_map(entries: usize) -> String {
     map
 }
 
+fn large_speed_map(entries: usize) -> String {
+    let mut map = String::with_capacity(entries * 28);
+    for idx in 0..entries {
+        if idx != 0 {
+            map.push(',');
+        }
+        use std::fmt::Write;
+        write!(&mut map, "{}={}=0={}", idx * 4, 1 + idx % 7, idx & 1).unwrap();
+    }
+    map
+}
+
 fn bench_parse_bpm_map(c: &mut Criterion) {
     let map = large_bpm_map(4_096);
     let mut group = c.benchmark_group("parse_bpm_map");
@@ -307,6 +319,7 @@ fn bench_parse_bpm_map(c: &mut Criterion) {
 
 fn bench_timing_segment_cleanup(c: &mut Criterion) {
     let ordered_map = large_bpm_map(4_096);
+    let ordered_speeds = large_speed_map(4_096);
     let mut group = c.benchmark_group("timing_segment_cleanup");
     group.sample_size(100);
     group.measurement_time(Duration::from_secs(2));
@@ -329,6 +342,78 @@ fn bench_timing_segment_cleanup(c: &mut Criterion) {
                 "",
                 None,
                 black_box(&ordered_map),
+                rssp::timing::TimingFormat::Ssc,
+                true,
+            ));
+        });
+    });
+    group.bench_function("ordered_bpms", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::timing_data_from_chart_data(
+                black_box(0.0),
+                black_box(0.0),
+                None,
+                black_box(&ordered_map),
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                rssp::timing::TimingFormat::Ssc,
+                true,
+            ));
+        });
+    });
+    group.bench_function("ordered_speeds", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::timing_data_from_chart_data(
+                black_box(0.0),
+                black_box(0.0),
+                None,
+                black_box("0=120"),
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                black_box(&ordered_speeds),
+                None,
+                "",
+                None,
+                "",
+                rssp::timing::TimingFormat::Ssc,
+                true,
+            ));
+        });
+    });
+    group.bench_function("ordered_scrolls", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::timing_data_from_chart_data(
+                black_box(0.0),
+                black_box(0.0),
+                None,
+                black_box("0=120"),
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                black_box(&ordered_map),
+                None,
+                "",
                 rssp::timing::TimingFormat::Ssc,
                 true,
             ));

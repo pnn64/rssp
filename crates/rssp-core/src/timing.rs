@@ -338,6 +338,18 @@ fn add_scroll_segment(out: &mut Vec<Segment>, mut seg: Segment) {
         return;
     }
 
+    let last = out.len() - 1;
+    if row > segment_row(&out[last]) {
+        if !eq_segment(&seg, &out[last]) {
+            out.push(seg);
+        }
+        return;
+    }
+
+    add_scroll_segment_slow(out, seg, row);
+}
+
+fn add_scroll_segment_slow(out: &mut Vec<Segment>, seg: Segment, row: i32) {
     let idx = {
         let pos = out.partition_point(|s| segment_row(s) <= row);
         if pos == 0 { 0 } else { pos - 1 }
@@ -411,6 +423,18 @@ fn add_speed_segment(out: &mut Vec<SpeedSegment>, mut seg: SpeedSegment) {
         return;
     }
 
+    let last = out.len() - 1;
+    if row > speed_row(&out[last]) {
+        if !eq_speed(&seg, &out[last]) {
+            out.push(seg);
+        }
+        return;
+    }
+
+    add_speed_segment_slow(out, seg, row);
+}
+
+fn add_speed_segment_slow(out: &mut Vec<SpeedSegment>, seg: SpeedSegment, row: i32) {
     let idx = {
         let pos = out.partition_point(|s| speed_row(s) <= row);
         if pos == 0 { 0 } else { pos - 1 }
@@ -689,35 +713,42 @@ fn tidy_bpms(mut bpms: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
     if bpms.is_empty() {
         return vec![(0.0, DEFAULT_BPM)];
     }
-    bpms.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
 
-    let mut last_per_beat: Vec<(f64, f64)> = Vec::with_capacity(bpms.len());
-    for (beat, bpm) in bpms {
-        if let Some(last) = last_per_beat.last_mut()
-            && beat == last.0
-        {
-            *last = (beat, bpm);
-            continue;
-        }
-        last_per_beat.push((beat, bpm));
+    let mut ordered = true;
+    let mut previous_beat = f64::NEG_INFINITY;
+    for &(beat, _) in &bpms {
+        ordered &= beat >= previous_beat;
+        previous_beat = beat;
     }
-    if let Some(first) = last_per_beat.first_mut() {
-        first.0 = 0.0;
+    if !ordered {
+        bpms.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
     }
 
-    let mut tidied = Vec::with_capacity(last_per_beat.len());
-    let mut last_value: Option<f64> = None;
-    for (beat, bpm) in last_per_beat {
-        if last_value == Some(bpm) {
-            continue;
+    let mut write = 0;
+    for read in 0..bpms.len() {
+        if write != 0 && bpms[read].0 == bpms[write - 1].0 {
+            bpms[write - 1] = bpms[read];
+        } else {
+            if write != read {
+                bpms[write] = bpms[read];
+            }
+            write += 1;
         }
-        last_value = Some(bpm);
-        tidied.push((beat, bpm));
     }
-    if tidied.is_empty() {
-        tidied.push((0.0, DEFAULT_BPM));
+    bpms.truncate(write);
+    bpms[0].0 = 0.0;
+
+    write = 0;
+    for read in 0..bpms.len() {
+        if write == 0 || bpms[read].1 != bpms[write - 1].1 {
+            if write != read {
+                bpms[write] = bpms[read];
+            }
+            write += 1;
+        }
     }
-    tidied
+    bpms.truncate(write);
+    bpms
 }
 
 fn process_bpms_and_stops_ssc(
@@ -1898,6 +1929,64 @@ pub fn get_speed_multiplier(t: &TimingData, beat: f64, time: f64) -> f64 {
 mod tests {
     use super::*;
 
+    fn tidy_bpms_materialized(mut bpms: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
+        if bpms.is_empty() {
+            return vec![(0.0, DEFAULT_BPM)];
+        }
+        bpms.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+
+        let mut last_per_beat: Vec<(f64, f64)> = Vec::with_capacity(bpms.len());
+        for (beat, bpm) in bpms {
+            if let Some(last) = last_per_beat.last_mut()
+                && beat == last.0
+            {
+                *last = (beat, bpm);
+                continue;
+            }
+            last_per_beat.push((beat, bpm));
+        }
+        last_per_beat[0].0 = 0.0;
+
+        let mut tidied = Vec::with_capacity(last_per_beat.len());
+        let mut last_value = None;
+        for (beat, bpm) in last_per_beat {
+            if last_value == Some(bpm) {
+                continue;
+            }
+            last_value = Some(bpm);
+            tidied.push((beat, bpm));
+        }
+        tidied
+    }
+
+    fn tidy_scroll_segments_slow(segments: Vec<Segment>) -> Vec<Segment> {
+        let mut out = Vec::with_capacity(segments.len());
+        for mut seg in segments {
+            let row = beat_to_note_row(seg.beat);
+            seg.beat = note_row_to_beat(row);
+            if out.is_empty() {
+                out.push(seg);
+            } else {
+                add_scroll_segment_slow(&mut out, seg, row);
+            }
+        }
+        out
+    }
+
+    fn tidy_speed_segments_slow(segments: Vec<SpeedSegment>) -> Vec<SpeedSegment> {
+        let mut out = Vec::with_capacity(segments.len());
+        for mut seg in segments {
+            let row = beat_to_note_row(seg.beat);
+            seg.beat = note_row_to_beat(row);
+            if out.is_empty() {
+                out.push(seg);
+            } else {
+                add_speed_segment_slow(&mut out, seg, row);
+            }
+        }
+        out
+    }
+
     fn tidy_row_segments_materialized(segments: Vec<Segment>) -> Vec<Segment> {
         let mut keyed: Vec<(i32, usize, Segment)> = Vec::with_capacity(segments.len());
         for (idx, mut seg) in segments.into_iter().enumerate() {
@@ -1930,6 +2019,24 @@ mod tests {
         }
     }
 
+    fn assert_bpm_bits_eq(actual: &[(f64, f64)], expected: &[(f64, f64)]) {
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert_eq!(actual.0.to_bits(), expected.0.to_bits());
+            assert_eq!(actual.1.to_bits(), expected.1.to_bits());
+        }
+    }
+
+    fn assert_speed_bits_eq(actual: &[SpeedSegment], expected: &[SpeedSegment]) {
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert_eq!(actual.beat.to_bits(), expected.beat.to_bits());
+            assert_eq!(actual.ratio.to_bits(), expected.ratio.to_bits());
+            assert_eq!(actual.delay.to_bits(), expected.delay.to_bits());
+            assert_eq!(actual.unit, expected.unit);
+        }
+    }
+
     fn variable_timing() -> TimingData {
         timing_data_from_chart_data(
             0.125,
@@ -1951,6 +2058,163 @@ mod tests {
             TimingFormat::Ssc,
             true,
         )
+    }
+
+    #[test]
+    fn in_place_bpm_cleanup_matches_materialized_path_bit_for_bit() {
+        let cases = [
+            Vec::new(),
+            vec![(4.0, 120.0)],
+            vec![
+                (0.0, 120.0),
+                (4.0, 120.0),
+                (8.0, 150.0),
+                (8.0, 180.0),
+                (12.0, 180.0),
+            ],
+            vec![(8.0, 180.0), (-4.0, 90.0), (0.0, 120.0), (8.0, 150.0)],
+            vec![(f64::NAN, 90.0), (4.0, f64::NAN), (0.0, 120.0)],
+        ];
+
+        for bpms in cases {
+            let expected = tidy_bpms_materialized(bpms.clone());
+            let actual = tidy_bpms(bpms);
+            assert_bpm_bits_eq(&actual, &expected);
+        }
+    }
+
+    #[test]
+    fn generated_bpm_cleanup_matches_materialized_path_bit_for_bit() {
+        let mut state = 0x3c6e_f372_fe94_f82b_u64;
+        for len in 0..128 {
+            let bpms: Vec<_> = (0..len)
+                .map(|idx| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    let beat = if len % 2 == 0 {
+                        idx as f64 / 3.0
+                    } else {
+                        (state % 64) as f64 - 16.0
+                    };
+                    (beat, 60.0 + (state % 7) as f64 * 30.0)
+                })
+                .collect();
+            let expected = tidy_bpms_materialized(bpms.clone());
+            let actual = tidy_bpms(bpms);
+            assert_bpm_bits_eq(&actual, &expected);
+        }
+    }
+
+    #[test]
+    fn ordered_speed_and_scroll_cleanup_match_search_path_bit_for_bit() {
+        let scrolls = vec![
+            Segment {
+                beat: 0.0,
+                value: 1.0,
+            },
+            Segment {
+                beat: 1.0,
+                value: 1.0,
+            },
+            Segment {
+                beat: 2.0,
+                value: 2.0,
+            },
+            Segment {
+                beat: 2.0,
+                value: 0.5,
+            },
+            Segment {
+                beat: 3.0,
+                value: 0.5,
+            },
+            Segment {
+                beat: 4.0,
+                value: 1.5,
+            },
+        ];
+        let expected = tidy_scroll_segments_slow(scrolls.clone());
+        let actual = tidy_scroll_segments(scrolls);
+        assert_segment_bits_eq(&actual, &expected);
+
+        let speeds = vec![
+            SpeedSegment {
+                beat: 0.0,
+                ratio: 1.0,
+                delay: 0.0,
+                unit: SpeedUnit::Beats,
+            },
+            SpeedSegment {
+                beat: 1.0,
+                ratio: 1.0,
+                delay: 0.0,
+                unit: SpeedUnit::Beats,
+            },
+            SpeedSegment {
+                beat: 2.0,
+                ratio: 2.0,
+                delay: 1.0,
+                unit: SpeedUnit::Beats,
+            },
+            SpeedSegment {
+                beat: 2.0,
+                ratio: 0.5,
+                delay: 0.25,
+                unit: SpeedUnit::Seconds,
+            },
+            SpeedSegment {
+                beat: 4.0,
+                ratio: 1.5,
+                delay: 0.0,
+                unit: SpeedUnit::Seconds,
+            },
+        ];
+        let expected = tidy_speed_segments_slow(speeds.clone());
+        let actual = tidy_speed_segments(speeds);
+        assert_speed_bits_eq(&actual, &expected);
+    }
+
+    #[test]
+    fn generated_speed_and_scroll_cleanup_match_search_paths() {
+        let mut state = 0xa54f_f53a_5f1d_36f1_u64;
+        for len in 0..96 {
+            let mut scrolls = Vec::with_capacity(len);
+            let mut speeds = Vec::with_capacity(len);
+            for idx in 0..len {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let row = if len % 2 == 0 {
+                    idx as i32 / 2
+                } else {
+                    (state % 64) as i32 - 16
+                };
+                let beat = note_row_to_beat(row);
+                scrolls.push(Segment {
+                    beat,
+                    value: 0.5 + (state % 5) as f64 * 0.5,
+                });
+                speeds.push(SpeedSegment {
+                    beat,
+                    ratio: 0.5 + (state % 7) as f64 * 0.25,
+                    delay: (state % 3) as f64 * 0.5,
+                    unit: if state & 1 == 0 {
+                        SpeedUnit::Beats
+                    } else {
+                        SpeedUnit::Seconds
+                    },
+                });
+            }
+
+            let expected = tidy_scroll_segments_slow(scrolls.clone());
+            let actual = tidy_scroll_segments(scrolls);
+            assert_segment_bits_eq(&actual, &expected);
+
+            let expected = tidy_speed_segments_slow(speeds.clone());
+            let actual = tidy_speed_segments(speeds);
+            assert_speed_bits_eq(&actual, &expected);
+        }
     }
 
     #[test]
