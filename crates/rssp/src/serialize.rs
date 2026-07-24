@@ -509,7 +509,7 @@ mod tests {
             4.500=4.750;\n\
             #LABELS:0.000=Song Start,\n\
             16.000=Speedup;\n\
-            #BGCHANGES:;\n\
+            #BGCHANGES:BGChanges;\n\
             #KEYSOUNDS:;\n\
             #ATTACKS:;\n\
             \n\
@@ -520,7 +520,8 @@ mod tests {
             #CHARTSTYLE:Chart style;\n\
             #DIFFICULTY:Challenge;\n\
             #METER:17;\n\
-            #RADARVALUES:0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140;\n\
+            #RADARVALUES:0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000,\
+            0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000;\n\
             #CREDIT:Step artist;\n\
             #NOTES:\n\
             0000\n\
@@ -536,7 +537,8 @@ mod tests {
             #CHARTSTYLE:Chart style;\n\
             #DIFFICULTY:Challenge;\n\
             #METER:17;\n\
-            #RADARVALUES:0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140;\n\
+            #RADARVALUES:0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000,\
+            0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000;\n\
             #CREDIT:Step artist;\n\
             #OFFSET:0.000000;\n\
             #BPMS:0.000=120.000,\n\
@@ -650,10 +652,10 @@ mod tests {
             #LABELS:0.000=Song Start,\n\
             16.000=Speedup;\n\
             #LASTSECONDHINT:120.000000;\n\
-            #BGCHANGES:;\n\
-            #FGCHANGES:;\n\
+            #BGCHANGES:BGChanges;\n\
+            #FGCHANGES:FGChanges;\n\
             #KEYSOUNDS:;\n\
-            #ATTACKS:;\n\
+            #ATTACKS:Attacks;\n\
             \n\
             #NOTEDATA:;\n\
             #CHARTNAME:Chart name;\n\
@@ -663,9 +665,10 @@ mod tests {
             #DIFFICULTY:Challenge;\n\
             #METER:17;\n\
             #MUSIC:chart_music.ogg;\n\
-            #RADARVALUES:0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140;\n\
+            #RADARVALUES:0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000,\
+            0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000;\n\
             #CREDIT:Step artist;\n\
-            #ATTACKS:;\n\
+            #ATTACKS:Attacks;\n\
             #DISPLAYBPM:300;\n\
             #NOTES:\n\
             0000\n\
@@ -682,7 +685,8 @@ mod tests {
             #DIFFICULTY:Challenge;\n\
             #METER:17;\n\
             #MUSIC:chart_music.ogg;\n\
-            #RADARVALUES:0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140;\n\
+            #RADARVALUES:0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000,\
+            0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000;\n\
             #CREDIT:Step artist;\n\
             #OFFSET:0.000000;\n\
             #BPMS:0.000=120.000,\n\
@@ -713,7 +717,7 @@ mod tests {
             4.500=4.750;\n\
             #LABELS:0.000=Song Start,\n\
             16.000=Speedup;\n\
-            #ATTACKS:;\n\
+            #ATTACKS:Attacks;\n\
             #DISPLAYBPM:300;\n\
             #NOTES:\n\
             0000\n\
@@ -783,7 +787,7 @@ mod tests {
             #FAKES:4.000=4.250,\n\
             4.500=4.750;\n\
             #LABELS:0.000000=Song Start;\n\
-            #BGCHANGES:;\n\
+            #BGCHANGES:BGChanges;\n\
             #KEYSOUNDS:;\n\
             #ATTACKS:;\n\
             \n\
@@ -794,7 +798,8 @@ mod tests {
             #CHARTSTYLE:Chart style;\n\
             #DIFFICULTY:Beginner;\n\
             #METER:1;\n\
-            #RADARVALUES:0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140;\n\
+            #RADARVALUES:0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000,\
+            0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000;\n\
             #CREDIT:Step artist;\n\
             #NOTES:\n\
             0000\n\
@@ -810,7 +815,8 @@ mod tests {
             #CHARTSTYLE:Chart style;\n\
             #DIFFICULTY:Beginner;\n\
             #METER:1;\n\
-            #RADARVALUES:0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140;\n\
+            #RADARVALUES:0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000,\
+            0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000;\n\
             #CREDIT:Step artist;\n\
             #OFFSET:0.000000;\n\
             #BPMS:0.000000=60.000000;\n\
@@ -878,11 +884,11 @@ mod tests {
         48.000=120.000;\n\
         #STOPS:1.000=1.250,\n\
         1.500=1.750;\n\
-        #BGCHANGES:;\n\
+        #BGCHANGES:BGChanges;\n\
         #KEYSOUNDS:;\n\
         #ATTACKS:;\n\
         \n\
-        #NOTES:\n     dance-single:\n     Description:\n     Challenge:\n     17:\n     0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140:\n\
+        #NOTES:\n     dance-single:\n     Description:\n     Challenge:\n     17:\n     0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000:\n\
         0000\n\
         0000\n\
         0000\n\
@@ -933,12 +939,12 @@ mod tests {
         48.000=120.000;\n\
         #STOPS:1.000=1.250,\n\
         1.500=1.750;\n\
-        #BGCHANGES:;\n\
-        #FGCHANGES:;\n\
+        #BGCHANGES:BGChanges;\n\
+        #FGCHANGES:FGChanges;\n\
         #KEYSOUNDS:;\n\
-        #ATTACKS:;\n\
+        #ATTACKS:Attacks;\n\
         \n\
-        #NOTES:\n     dance-single:\n     Description:\n     Challenge:\n     17:\n     0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140:\n\
+        #NOTES:\n     dance-single:\n     Description:\n     Challenge:\n     17:\n     0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000:\n\
         0000\n\
         0000\n\
         0000\n\
@@ -986,11 +992,11 @@ mod tests {
         #BPMS:0.000000=60.000000;\n\
         #STOPS:1.000=1.250,\n\
         1.500=1.750;\n\
-        #BGCHANGES:;\n\
+        #BGCHANGES:BGChanges;\n\
         #KEYSOUNDS:;\n\
         #ATTACKS:;\n\
         \n\
-        #NOTES:\n     dance-single:\n     Description:\n     Beginner:\n     1:\n     0.010,0.020,0.030,0.040,0.050,0.060,0.070,0.080,0.090,0.100,0.110,0.120,0.130,0.140:\n\
+        #NOTES:\n     dance-single:\n     Description:\n     Beginner:\n     1:\n     0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000:\n\
         0000\n\
         0000\n\
         0000\n\
@@ -1092,14 +1098,18 @@ mod tests {
             sample_length: 16.0,
             origin_str: String::from("Origin"),
             credit_str: String::from("Credit"),
-            normalized_bgchanges: Default::default(), // TODO
+            normalized_bgchanges: String::from("BGChanges"), // TODO: replace with valid string
             normalized_fgchanges: if include_nonempty {
-                Default::default() // TODO
+                String::from("FGChanges") // TODO: replace with valid string
             } else {
                 Default::default()
             },
             normalized_keysounds: Default::default(), // TODO
-            normalized_attacks: Default::default(),   // TODO
+            normalized_attacks: if include_nonempty {
+                String::from("Attacks") // TODO: replace with valid string
+            } else {
+                Default::default()
+            },
             previewvid_path: String::from("previewvid.mov"),
             cdimage_path: String::from("cdimage.png"),
             discimage_path: String::from("discimage.png"),
@@ -1176,7 +1186,7 @@ mod tests {
                 .then(|| String::from("0.000=4,16.000=2,48.000=4")),
             chart_combos: (has_own_timing && !trigger_defaults)
                 .then(|| String::from("0.000=1,16.000=2,48.000=1")),
-            chart_attacks: include_nonempty.then(|| Default::default()), // TODO
+            chart_attacks: include_nonempty.then(|| String::from("Attacks")), // TODO
             chart_display_bpm: include_nonempty.then(|| String::from("300")),
 
             // These are currently unused in favor of the `chart_*` fields above
