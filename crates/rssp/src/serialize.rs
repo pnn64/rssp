@@ -66,9 +66,9 @@ enum PropValue<'a> {
     #[default]
     Empty,
     Str(&'a str),
-    StrOpt(Option<&'a str>),
+    StrNoEscape(&'a str),
+    StrNoEscapeOpt(Option<&'a str>),
     Bytes(&'a [u8]),
-    BytesOpt(Option<&'a [u8]>),
     NoteData(&'a [u8]),
     Version(f32),
     Number(f64),
@@ -85,15 +85,12 @@ impl<'a> PropValue<'a> {
         match self {
             PropValue::Empty => Ok(0),
             PropValue::Str(s) => sm_escape(out, s.as_bytes()),
-            PropValue::StrOpt(opt) => match opt {
+            PropValue::StrNoEscape(s) => write_all!(out, s.as_bytes()),
+            PropValue::StrNoEscapeOpt(opt) => match opt {
                 None => Ok(0),
-                Some(s) => PropValue::Str(s).serialize(out),
+                Some(s) => PropValue::StrNoEscape(*s).serialize(out),
             },
             PropValue::Bytes(b) => write_all!(out, b),
-            PropValue::BytesOpt(opt) => match opt {
-                None => Ok(0),
-                Some(b) => PropValue::Bytes(*b).serialize(out),
-            },
             PropValue::NoteData(b) => Ok(write_all!(out, b"\n")? + write_all!(out, b)?),
             PropValue::Version(v) => write_all!(out, format_version(*v).as_bytes()),
             PropValue::Number(n) => write_all!(out, format_dot6_f64(*n).as_bytes()),
@@ -158,9 +155,9 @@ impl<'a> PropValue<'a> {
         match self {
             PropValue::Empty => true,
             PropValue::Str(s) => s.is_empty(),
-            PropValue::StrOpt(opt) => opt.as_ref().is_none_or(|s| s.is_empty()),
+            PropValue::StrNoEscape(s) => s.is_empty(),
+            PropValue::StrNoEscapeOpt(opt) => opt.as_ref().is_none_or(|s| s.is_empty()),
             PropValue::Bytes(b) => b.is_empty(),
-            PropValue::BytesOpt(opt) => opt.as_ref().is_none_or(|b| b.is_empty()),
             PropValue::NoteData(_) => false,
             PropValue::Version(v) => !v.is_finite(),
             PropValue::Number(_) => false,
@@ -329,7 +326,7 @@ pub fn serialize_simfile(
         Prop::new(b"SAMPLESTART", PropValue::Number(summary.sample_start)),
         Prop::new(b"SAMPLELENGTH", PropValue::Number(summary.sample_length)),
         Prop::new(b"SELECTABLE", PropValue::Bool(summary.selectable)),
-        Prop::nonempty_only(b"DISPLAYBPM", PropValue::Bytes(&summary.display_bpm_str.as_bytes())), // Don't escape the ':' in ranges
+        Prop::nonempty_only(b"DISPLAYBPM", PropValue::StrNoEscape(&summary.display_bpm_str)),
         Prop::new_with_default(b"BPMS", DEFAULT_BPMS, PropValue::NormalizedList(&summary.normalized_bpms)),
         Prop::new(b"STOPS", PropValue::NormalizedList(&summary.normalized_stops)),
         Prop::ssc_only(b"DELAYS", PropValue::NormalizedList(&summary.normalized_delays)),
@@ -342,10 +339,10 @@ pub fn serialize_simfile(
         Prop::ssc_only(b"FAKES", PropValue::NormalizedList(&summary.normalized_fakes)),
         Prop::ssc_only_with_default(b"LABELS", DEFAULT_LABELS, PropValue::NormalizedList(&summary.normalized_labels)),
         Prop::ssc_nonempty_only(b"LASTSECONDHINT", PropValue::NumberOpt(summary.last_second_hint)),
-        Prop::new(b"BGCHANGES", PropValue::NormalizedList(&summary.normalized_bgchanges)),
-        Prop::nonempty_only(b"FGCHANGES", PropValue::NormalizedList(&summary.normalized_fgchanges)),
+        Prop::new(b"BGCHANGES", PropValue::StrNoEscape(&summary.normalized_bgchanges)),
+        Prop::nonempty_only(b"FGCHANGES", PropValue::StrNoEscape(&summary.normalized_fgchanges)),
         Prop::new(b"KEYSOUNDS", PropValue::NormalizedList(&summary.normalized_keysounds)),
-        Prop::new(b"ATTACKS", PropValue::Bytes(summary.normalized_attacks.as_bytes())), // Commas aren't always row separators
+        Prop::new(b"ATTACKS", PropValue::StrNoEscape(&summary.normalized_attacks)), // Commas aren't always row separators
     ];
 
     for prop in props {
@@ -425,8 +422,8 @@ fn serialize_ssc_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> 
         Prop::own_timing_only_with_default(b"SCROLLS", DEFAULT_SCROLLS, PropValue::NormalizedListOpt(chart.chart_scrolls.as_deref())),
         Prop::own_timing_only(b"FAKES", PropValue::NormalizedListOpt(chart.chart_fakes.as_deref())),
         Prop::own_timing_only_with_default(b"LABELS", DEFAULT_LABELS, PropValue::NormalizedListOpt(chart.chart_labels.as_deref())),
-        Prop::nonempty_only(b"ATTACKS", PropValue::BytesOpt(chart.chart_attacks.as_deref().map(|a| a.as_bytes()))),
-        Prop::nonempty_only(b"DISPLAYBPM", PropValue::BytesOpt(chart.chart_display_bpm.as_ref().map(|v| v.as_bytes()))),
+        Prop::nonempty_only(b"ATTACKS", PropValue::StrNoEscapeOpt(chart.chart_attacks.as_deref())),
+        Prop::nonempty_only(b"DISPLAYBPM", PropValue::StrNoEscapeOpt(chart.chart_display_bpm.as_deref())),
         Prop::nonempty_only(b"NOTES", PropValue::NoteData(&chart.minimized_note_data)),
         Prop::nonempty_only(b"NOTES2", PropValue::Empty), // TODO
     ];
