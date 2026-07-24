@@ -152,16 +152,43 @@ fn large_speed_map(entries: usize) -> String {
 }
 
 #[cfg(windows)]
+fn large_stop_map(entries: usize) -> String {
+    use std::fmt::Write;
+
+    let mut map = String::with_capacity(entries * 16);
+    for idx in 0..entries {
+        if idx != 0 {
+            map.push(',');
+        }
+        write!(&mut map, "{}=0.125", idx * 4).unwrap();
+    }
+    map
+}
+
+#[cfg(windows)]
 fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     const ENTRIES: usize = 4_096;
     platform::stabilize_thread();
 
     let pair_map = large_pair_map(ENTRIES);
     let speed_map = large_speed_map(ENTRIES);
-    let segments = rssp::timing::TimingSegments {
+    let stop_map = large_stop_map(ENTRIES);
+    let row_segments = rssp::timing::TimingSegments {
         beat0_offset_adjust: 0.0,
         bpms: vec![(0.0, 120.0)],
         stops: (0..ENTRIES).map(|idx| (idx as f32 * 4.0, 0.125)).collect(),
+        delays: Vec::new(),
+        warps: Vec::new(),
+        speeds: Vec::new(),
+        scrolls: Vec::new(),
+        fakes: Vec::new(),
+    };
+    let bpm_segments = rssp::timing::TimingSegments {
+        beat0_offset_adjust: 0.0,
+        bpms: (0..ENTRIES)
+            .map(|idx| (idx as f32 * 4.0, 60.0 + (idx % 300) as f32))
+            .collect(),
+        stops: Vec::new(),
         delays: Vec::new(),
         warps: Vec::new(),
         speeds: Vec::new(),
@@ -237,7 +264,64 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             black_box(rssp::timing::timing_data_from_segments(
                 0.0,
                 0.0,
-                black_box(&segments),
+                black_box(&row_segments),
+            ));
+        });
+    });
+    cleanup.bench_function("ordered_sm_bpms", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::timing_data_from_chart_data(
+                0.0,
+                0.0,
+                None,
+                black_box(&pair_map),
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                rssp::timing::TimingFormat::Sm,
+                true,
+            ));
+        });
+    });
+    cleanup.bench_function("ordered_sm_stops", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::timing_data_from_chart_data(
+                0.0,
+                0.0,
+                None,
+                "0=120",
+                None,
+                black_box(&stop_map),
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                rssp::timing::TimingFormat::Sm,
+                true,
+            ));
+        });
+    });
+    cleanup.bench_function("many_bpms_from_segments", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::timing_data_from_segments(
+                0.0,
+                0.0,
+                black_box(&bpm_segments),
             ));
         });
     });

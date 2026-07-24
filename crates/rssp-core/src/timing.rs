@@ -822,23 +822,49 @@ fn process_bpms_and_stops_ssc(
     (tidy_bpms(bpm_changes), out_stops, Vec::new(), 0.0)
 }
 
+fn sort_changes_by_beat(changes: &mut [(f32, f32)]) {
+    let mut ordered = true;
+    let mut previous_beat = f32::NEG_INFINITY;
+    for &(beat, _) in changes.iter() {
+        ordered &= beat >= previous_beat;
+        previous_beat = beat;
+    }
+    if !ordered {
+        changes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    }
+}
+
+fn sort_segments_by_beat(segments: &mut [Segment]) {
+    let mut ordered = true;
+    let mut previous_beat = f64::NEG_INFINITY;
+    for segment in segments.iter() {
+        ordered &= segment.beat >= previous_beat;
+        previous_beat = segment.beat;
+    }
+    if !ordered {
+        segments.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
+    }
+}
+
 fn process_bpms_and_stops_sm(
     bpms: &[(f64, f64)],
     stops: &[Segment],
 ) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
-    let mut bpm_changes: Vec<(f32, f32)> = bpms
-        .iter()
-        .filter(|(b, v)| b.is_finite() && v.is_finite() && *v != 0.0)
-        .map(|(b, v)| (*b as f32, *v as f32))
-        .collect();
-    bpm_changes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    let mut bpm_changes = Vec::with_capacity(bpms.len());
+    for &(beat, value) in bpms {
+        if beat.is_finite() && value.is_finite() && value != 0.0 {
+            bpm_changes.push((beat as f32, value as f32));
+        }
+    }
+    sort_changes_by_beat(&mut bpm_changes);
 
-    let mut stop_changes: Vec<(f32, f32)> = stops
-        .iter()
-        .filter(|s| s.beat.is_finite() && s.value.is_finite() && s.value != 0.0)
-        .map(|s| (s.beat as f32, s.value as f32))
-        .collect();
-    stop_changes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    let mut stop_changes = Vec::with_capacity(stops.len());
+    for segment in stops {
+        if segment.beat.is_finite() && segment.value.is_finite() && segment.value != 0.0 {
+            stop_changes.push((segment.beat as f32, segment.value as f32));
+        }
+    }
+    sort_changes_by_beat(&mut stop_changes);
 
     let mut beat0_offset = 0.0_f32;
     let mut stop_idx = 0;
@@ -863,8 +889,8 @@ fn process_bpms_and_stops_sm(
         };
     }
 
-    let mut out_bpms: Vec<(f32, f32)> = Vec::new();
-    let mut out_stops: Vec<Segment> = Vec::new();
+    let mut out_bpms = Vec::with_capacity(bpm_changes.len().max(1));
+    let mut out_stops = Vec::with_capacity(stop_changes.len().saturating_sub(stop_idx));
     let mut out_warps: Vec<Segment> = Vec::new();
 
     if bpm > 0.0 && bpm <= FAST_BPM_WARP_F32 {
@@ -980,8 +1006,8 @@ fn process_bpms_and_stops_sm(
             .map(|(b, v)| (f64::from(b), f64::from(v)))
             .collect(),
     );
-    out_stops.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
-    out_warps.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
+    sort_segments_by_beat(&mut out_stops);
+    sort_segments_by_beat(&mut out_warps);
 
     (out_bpms, out_stops, out_warps, f64::from(beat0_offset))
 }
@@ -1080,13 +1106,17 @@ pub fn timing_data_from_segments(
         value: f64::from(*v),
     };
 
-    let mut bpms: Vec<_> = segments
-        .bpms
-        .iter()
-        .map(|(b, v)| (f64::from(*b), f64::from(*v)))
-        .collect();
-    if bpms.is_empty() {
-        bpms.push((0.0, DEFAULT_BPM));
+    let mut beat_to_time = Vec::with_capacity(segments.bpms.len().max(1));
+    if segments.bpms.is_empty() {
+        beat_to_time.push(BeatTimePoint {
+            beat: 0.0,
+            bpm: DEFAULT_BPM,
+        });
+    } else {
+        beat_to_time.extend(segments.bpms.iter().map(|&(beat, bpm)| BeatTimePoint {
+            beat: f64::from(beat),
+            bpm: f64::from(bpm),
+        }));
     }
 
     let stops: Vec<_> = segments.stops.iter().map(to_seg).collect();
@@ -1108,7 +1138,7 @@ pub fn timing_data_from_segments(
     timing_data_build(
         song_offset + f64::from(segments.beat0_offset_adjust),
         global_offset,
-        &bpms,
+        beat_to_time,
         stops,
         delays,
         warps,
@@ -1197,10 +1227,15 @@ pub fn timing_data_from_chart_data(
             .collect(),
     );
 
+    let beat_to_time = bpms
+        .into_iter()
+        .map(|(beat, bpm)| BeatTimePoint { beat, bpm })
+        .collect();
+
     timing_data_build(
         song_offset + beat0_adj,
         global_offset,
-        &bpms,
+        beat_to_time,
         stops,
         delays,
         warps,
@@ -1213,7 +1248,7 @@ pub fn timing_data_from_chart_data(
 fn timing_data_build(
     song_offset: f64,
     global_offset: f64,
-    bpms: &[(f64, f64)],
+    beat_to_time: Vec<BeatTimePoint>,
     stops: Vec<Segment>,
     delays: Vec<Segment>,
     warps: Vec<Segment>,
@@ -1221,13 +1256,11 @@ fn timing_data_build(
     scrolls: Vec<Segment>,
     fakes: Vec<Segment>,
 ) -> TimingData {
-    let mut beat_to_time = Vec::with_capacity(bpms.len());
     let mut max_bpm = 0.0_f64;
 
-    for &(beat, bpm) in bpms {
-        beat_to_time.push(BeatTimePoint { beat, bpm });
-        if bpm.is_finite() && bpm > max_bpm {
-            max_bpm = bpm;
+    for point in &beat_to_time {
+        if point.bpm.is_finite() && point.bpm > max_bpm {
+            max_bpm = point.bpm;
         }
     }
 
@@ -2101,6 +2134,14 @@ mod tests {
         }
     }
 
+    fn assert_change_bits_eq(actual: &[(f32, f32)], expected: &[(f32, f32)]) {
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert_eq!(actual.0.to_bits(), expected.0.to_bits());
+            assert_eq!(actual.1.to_bits(), expected.1.to_bits());
+        }
+    }
+
     fn variable_timing() -> TimingData {
         timing_data_from_chart_data(
             0.125,
@@ -2122,6 +2163,130 @@ mod tests {
             TimingFormat::Ssc,
             true,
         )
+    }
+
+    #[test]
+    fn ordered_change_sort_matches_stable_sort_bit_for_bit() {
+        let cases = [
+            Vec::new(),
+            vec![(0.0, 120.0)],
+            vec![(-4.0, 90.0), (0.0, 120.0), (0.0, 180.0), (8.0, 60.0)],
+            vec![(8.0, 60.0), (-0.0, 120.0), (4.0, 90.0), (0.0, 180.0)],
+        ];
+
+        for mut changes in cases {
+            let mut expected = changes.clone();
+            expected.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+            sort_changes_by_beat(&mut changes);
+            assert_change_bits_eq(&changes, &expected);
+        }
+    }
+
+    #[test]
+    fn generated_change_sort_matches_stable_sort_bit_for_bit() {
+        let mut state = 0x1f83_d9ab_fb41_bd6b_u64;
+        for len in 0..128 {
+            let mut changes: Vec<_> = (0..len)
+                .map(|idx| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    let beat = if len % 2 == 0 {
+                        idx as f32 / 3.0
+                    } else {
+                        (state % 64) as f32 - 16.0
+                    };
+                    (beat, f32::from_bits(state as u32))
+                })
+                .collect();
+            let mut expected = changes.clone();
+            expected.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+            sort_changes_by_beat(&mut changes);
+            assert_change_bits_eq(&changes, &expected);
+        }
+    }
+
+    #[test]
+    fn segment_sort_fast_path_matches_stable_sort_bit_for_bit() {
+        let cases = [
+            Vec::new(),
+            vec![Segment {
+                beat: 0.0,
+                value: 1.0,
+            }],
+            vec![
+                Segment {
+                    beat: -4.0,
+                    value: 1.0,
+                },
+                Segment {
+                    beat: 0.0,
+                    value: 2.0,
+                },
+                Segment {
+                    beat: 0.0,
+                    value: 3.0,
+                },
+                Segment {
+                    beat: 8.0,
+                    value: 4.0,
+                },
+            ],
+            vec![
+                Segment {
+                    beat: 8.0,
+                    value: 1.0,
+                },
+                Segment {
+                    beat: -0.0,
+                    value: 2.0,
+                },
+                Segment {
+                    beat: 4.0,
+                    value: 3.0,
+                },
+                Segment {
+                    beat: 0.0,
+                    value: 4.0,
+                },
+            ],
+        ];
+
+        for mut segments in cases {
+            let mut expected = segments.clone();
+            expected.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(Ordering::Less));
+            sort_segments_by_beat(&mut segments);
+            assert_segment_bits_eq(&segments, &expected);
+        }
+    }
+
+    #[test]
+    fn timing_data_from_segments_preserves_bpms_and_supplies_default() {
+        for bpms in [
+            Vec::new(),
+            vec![(0.0, 120.0)],
+            vec![(-0.0, 90.0), (4.0, 180.0), (12.0, 60.0)],
+        ] {
+            let expected = if bpms.is_empty() {
+                vec![(0.0, DEFAULT_BPM)]
+            } else {
+                bpms.iter()
+                    .map(|&(beat, bpm)| (f64::from(beat), f64::from(bpm)))
+                    .collect()
+            };
+            let segments = TimingSegments {
+                beat0_offset_adjust: 0.0,
+                bpms,
+                stops: Vec::new(),
+                delays: Vec::new(),
+                warps: Vec::new(),
+                speeds: Vec::new(),
+                scrolls: Vec::new(),
+                fakes: Vec::new(),
+            };
+            let timing = timing_data_from_segments(0.0, 0.0, &segments);
+            assert_bpm_bits_eq(&bpm_segments(&timing), &expected);
+        }
     }
 
     #[test]
