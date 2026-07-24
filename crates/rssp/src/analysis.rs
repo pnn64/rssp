@@ -2,8 +2,6 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Instant;
 
-use rssp_core::bpm::normalize_speeds_float_digits;
-
 use crate::duration::{self, TimingOffsets};
 use crate::report::{ChartSummary, SimfileSummary};
 use crate::stats;
@@ -12,6 +10,7 @@ use crate::step_parity;
 use crate::bpm::{
     clean_timing_map, clean_timing_map_cow, compute_bpm_range, compute_bpm_stats,
     compute_measure_nps_vec_with_timing, compute_tier_bpm, get_nps_stats, normalize_float_digits,
+    normalize_speeds_float_digits,
 };
 use crate::hash::{compute_chart_hash, compute_chart_hash_pair};
 use crate::math::{round_dp, round_sig_figs_6};
