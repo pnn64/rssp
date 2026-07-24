@@ -13,6 +13,8 @@ use rssp::serialize::*;
 use rssp::stats::RADAR_CATEGORY_COUNT;
 use rssp::{AnalysisOptions, ChartSummary, SimfileSummary, analyze};
 
+static EMPTY: String = String::new();
+
 pub const NORM_DEFAULT_BPMS: &[u8] = b"0.000=60.000";
 pub const NORM_DEFAULT_SPEEDS: &[u8] = b"0.000=1.000=0.000=0";
 pub const NORM_DEFAULT_SCROLLS: &[u8] = b"0.000=1.000";
@@ -170,8 +172,8 @@ macro_rules! build_comparison_entry_opt {
     ($field: ident, $expected: expr, $actual: expr) => {
         (
             stringify!($field),
-            &$expected.$field,
-            &$actual.$field,
+            &$expected.$field.as_ref().unwrap_or_else(|| &EMPTY),
+            &$actual.$field.as_ref().unwrap_or_else(|| &EMPTY),
             $expected.$field == $actual.$field,
             None,
         )
@@ -179,14 +181,27 @@ macro_rules! build_comparison_entry_opt {
     ($field: ident, $expected: expr, $actual: expr, $default: expr) => {
         (
             stringify!($field),
-            &$expected.$field,
-            &$actual.$field,
+            &$expected.$field.as_ref().unwrap_or_else(|| &EMPTY),
+            &$actual.$field.as_ref().unwrap_or_else(|| &EMPTY),
             $expected.$field == $actual.$field
                 || ($expected.$field.as_ref().is_none_or(|f| f.is_empty())
                     && $actual
                         .$field
                         .as_ref()
                         .is_some_and(|f| f.as_bytes() == $default)),
+            Some($default),
+        )
+    };
+}
+
+macro_rules! version_comparison_entry {
+    ($expected_version_str: expr, $actual_version_str: expr, $default: expr) => {
+        (
+            "VERSION",
+            $expected_version_str,
+            $actual_version_str,
+            $expected_version_str == $actual_version_str
+                || ($expected_version_str.is_empty() && $actual_version_str.as_bytes() == $default),
             Some($default),
         )
     };
@@ -235,8 +250,16 @@ fn compare_simfile_str_fields(
     actual: &SimfileSummary,
 ) -> Result<(), String> {
     let is_ssc = extension_is_ssc(extension).map_err(|e| e.to_string())?;
-    let expected_ssc_version_display = format!("{:.2}", expected.ssc_version);
-    let actual_ssc_version_display = format!("{:.2}", actual.ssc_version);
+    let expected_ssc_version = if expected.ssc_version.is_finite() {
+        format!("{:.2}", expected.ssc_version)
+    } else {
+        String::new()
+    };
+    let actual_ssc_version = if actual.ssc_version.is_finite() {
+        format!("{:.2}", actual.ssc_version)
+    } else {
+        String::new()
+    };
 
     let mut comparison_table: Vec<(&str, &str, &str, bool, Option<&[u8]>)> = vec![
         build_comparison_entry!(title_str, expected, actual, DEFAULT_TITLE),
@@ -256,18 +279,12 @@ fn compare_simfile_str_fields(
     ];
     if is_ssc {
         comparison_table.extend_from_slice(&[
+            version_comparison_entry!(&expected_ssc_version, &actual_ssc_version, DEFAULT_VERSION),
             build_comparison_entry!(origin_str, expected, actual),
             build_comparison_entry!(discimage_path, expected, actual),
             build_comparison_entry!(cdimage_path, expected, actual),
             build_comparison_entry!(previewvid_path, expected, actual),
             build_comparison_entry!(jacket_path, expected, actual),
-            (
-                "ssc_version",
-                &expected_ssc_version_display,
-                &actual_ssc_version_display,
-                expected.ssc_version == actual.ssc_version,
-                Some(DEFAULT_VERSION),
-            ),
         ]);
     }
 
@@ -277,32 +294,24 @@ fn compare_simfile_str_fields(
         return Ok(());
     }
 
-    // Build error string
-    let mut buffer = vec![];
-    {
-        let mut cursor = io::Cursor::new(&mut buffer);
-        for (field_name, expected, actual, cmp, _) in comparison_table {
-            writeln!(
-                &mut cursor,
-                "  {}: baseline: {:?} -> reencoded: {:?} {}",
-                field_name,
-                expected,
-                actual,
-                match cmp {
-                    true => "....ok",
-                    false => "....MISMATCH",
-                }
-            )
-            .map_err(|e| e.to_string())?;
-        }
-    } // Drop cursor
-
-    let err_output = String::from_utf8(buffer).unwrap();
+    let mut error_details = String::new();
+    for (field_name, expected, actual, cmp, _) in comparison_table {
+        error_details += &format!(
+            "  {}: baseline: {:?} -> reencoded: {:?} {}\n",
+            field_name,
+            expected,
+            actual,
+            match cmp {
+                true => "....ok",
+                false => "....MISMATCH",
+            }
+        );
+    }
 
     Err(format!(
         "\n\nMISMATCH DETECTED\nFile: {}\n{}",
         path.display(),
-        err_output,
+        error_details,
     ))
 }
 
@@ -355,31 +364,24 @@ fn compare_simfile_normalized_fields(
     }
 
     // Build error string
-    let mut buffer = vec![];
-    {
-        let mut cursor = io::Cursor::new(&mut buffer);
-        for (field_name, expected, actual, cmp, _) in comparison_table {
-            writeln!(
-                &mut cursor,
-                "  {}: baseline: {:?} -> reencoded: {:?} {}",
-                field_name,
-                expected,
-                actual,
-                match cmp {
-                    true => "....ok",
-                    false => "....MISMATCH",
-                }
-            )
-            .map_err(|e| e.to_string())?;
-        }
-    } // Drop cursor
-
-    let err_output = String::from_utf8(buffer).unwrap();
+    let mut error_details = String::new();
+    for (field_name, expected, actual, cmp, _) in comparison_table {
+        error_details += &format!(
+            "  {}: baseline: {:?} -> reencoded: {:?} {}\n",
+            field_name,
+            expected,
+            actual,
+            match cmp {
+                true => "....ok",
+                false => "....MISMATCH",
+            }
+        );
+    }
 
     Err(format!(
         "\n\nMISMATCH DETECTED\nFile: {}\n{}",
         path.display(),
-        err_output,
+        error_details,
     ))
 }
 
@@ -456,27 +458,21 @@ fn compare_chart_str_fields_and_hashes(
                 }
 
                 // Build error string
-                let mut buffer = vec![];
-                {
-                    let mut cursor = io::Cursor::new(&mut buffer);
-                    for (field_name, expected, actual, cmp, _) in comparison_table {
-                        writeln!(
-                            &mut cursor,
-                            "  {}: baseline: {:?} -> reencoded: {:?} {}",
-                            field_name,
-                            expected,
-                            actual,
-                            match cmp {
-                                true => "....ok",
-                                false => "....MISMATCH",
-                            }
-                        )
-                        .map_err(|e| e.to_string())?;
-                    }
-                } // Drop cursor
+                let mut error_details = String::new();
+                for (field_name, expected, actual, cmp, _) in comparison_table {
+                    error_details += &format!(
+                        "  {}: baseline: {:?} -> reencoded: {:?} {}\n",
+                        field_name,
+                        expected,
+                        actual,
+                        match cmp {
+                            true => "....ok",
+                            false => "....MISMATCH",
+                        }
+                    );
+                }
 
-                let err_output = String::from_utf8(buffer).unwrap();
-                errors.push(err_output);
+                errors.push(error_details);
             }
         }
     }
@@ -485,7 +481,7 @@ fn compare_chart_str_fields_and_hashes(
         return Ok(());
     }
 
-    let mut error_details = String::from("Step artist mismatches:\n");
+    let mut error_details = String::from("Chart timing field mismatches:\n");
     for line in errors {
         error_details.push_str(&line);
         error_details.push('\n');
@@ -526,18 +522,17 @@ fn compare_chart_timing_fields(
             }
             (Some(expected_chart), Some(actual_chart)) => {
                 // Massage this boolean into a string to keep the comparison table simple
-                let expected_chart_has_own_timing =
-                    Some(expected_chart.chart_has_own_timing.to_string());
-                let actual_chart_has_own_timing =
-                    Some(actual_chart.chart_has_own_timing.to_string());
+                let expected_chart_has_own_timing = expected_chart.chart_has_own_timing.to_string();
+                let actual_chart_has_own_timing = actual_chart.chart_has_own_timing.to_string();
 
-                let comparison_table: Vec<(
-                    &str,
-                    &Option<String>,
-                    &Option<String>,
-                    bool,
-                    Option<&[u8]>,
-                )> = vec![
+                let comparison_table: Vec<(&str, &String, &String, bool, Option<&[u8]>)> = vec![
+                    // Compare these again here for important debugging context
+                    build_comparison_entry!(step_type_str, expected_chart, actual_chart),
+                    build_comparison_entry!(difficulty_str, expected_chart, actual_chart),
+                    build_comparison_entry!(rating_str, expected_chart, actual_chart),
+                    // Compare these again here to log timing data when hash breaks
+                    build_comparison_entry!(short_hash, expected_chart, actual_chart),
+                    build_comparison_entry!(bpm_neutral_hash, expected_chart, actual_chart),
                     (
                         "chart_has_own_timing",
                         &expected_chart_has_own_timing,
@@ -602,27 +597,21 @@ fn compare_chart_timing_fields(
                 }
 
                 // Build error string
-                let mut buffer = vec![];
-                {
-                    let mut cursor = io::Cursor::new(&mut buffer);
-                    for (field_name, expected, actual, cmp, _) in comparison_table {
-                        writeln!(
-                            &mut cursor,
-                            "  {}: baseline: {:?} -> reencoded: {:?} {}",
-                            field_name,
-                            expected,
-                            actual,
-                            match cmp {
-                                true => "....ok",
-                                false => "....MISMATCH",
-                            }
-                        )
-                        .map_err(|e| e.to_string())?;
-                    }
-                } // Drop cursor
+                let mut error_details = String::new();
+                for (field_name, expected, actual, cmp, _) in comparison_table {
+                    error_details += &format!(
+                        "  {}: baseline: {:?} -> reencoded: {:?} {}\n",
+                        field_name,
+                        expected,
+                        actual,
+                        match cmp {
+                            true => "....ok",
+                            false => "....MISMATCH",
+                        }
+                    );
+                }
 
-                let err_output = String::from_utf8(buffer).unwrap();
-                errors.push(err_output);
+                errors.push(error_details);
             }
         }
     }
@@ -686,10 +675,10 @@ fn compare_timing(
                 }
 
                 // Build error string
-                let mut error = String::new();
+                let mut error_details = String::new();
                 for (field_name, matches) in timing_comparison_table {
-                    error += &format!(
-                        "  {}: {}",
+                    error_details += &format!(
+                        "  {}: {}\n",
                         field_name,
                         match matches {
                             true => "....ok",
@@ -698,12 +687,12 @@ fn compare_timing(
                     );
                 }
 
-                error += &format!(
+                error_details += &format!(
                     "\nExpected: {:?}\nActual: {:?}\n",
                     expected_timing, actual_timing
                 );
 
-                errors.push(error);
+                errors.push(error_details);
             }
         }
     }
@@ -758,17 +747,10 @@ fn check_file(path: &Path, extension: &str) -> Result<(), String> {
 
     println!("File: {}", path.display());
 
-    // let result = String::from_utf8(buffer);
-    // match result {
-    //     Ok(buffer_str) => println!("{}", buffer_str),
-    //     Err(_) => println!("debug failed"),
-    // }
-    // println!("{:?}", base_summary);
-
     compare_simfile_str_fields(path, extension, &base_summary, &reencoded_summary)?;
     compare_simfile_normalized_fields(path, &base_summary, &reencoded_summary)?;
-    compare_chart_str_fields_and_hashes(path, &base_summary.charts, &reencoded_summary.charts)?;
     compare_chart_timing_fields(path, &base_summary.charts, &reencoded_summary.charts)?;
+    compare_chart_str_fields_and_hashes(path, &base_summary.charts, &reencoded_summary.charts)?;
     compare_timing(path, &base_summary, &reencoded_summary)?;
 
     Ok(())
