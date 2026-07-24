@@ -24,11 +24,10 @@ use crate::patterns::{
     analyze_patterns_from_rows, compile_custom_patterns, compiled_custom_empty,
 };
 use crate::stats::{
-    RADAR_CATEGORY_COUNT, StreamCounts, compute_stream_counts,
+    RADAR_CATEGORY_COUNT, StreamCounts, compute_stream_outputs,
     compute_timing_aware_stats_from_rows_with_row_to_beat,
     compute_timing_aware_stats_no_holds_from_rows, compute_timing_aware_stats_with_row_to_beat,
-    generate_breakdowns, minimize_chart_count_rows, minimize_chart_for_hash, minimize_rows_typed,
-    stream_breakdowns,
+    minimize_chart_count_rows, minimize_chart_for_hash, minimize_rows_typed,
 };
 use crate::tech::parse_tech_notation;
 use crate::timing::{
@@ -325,7 +324,8 @@ fn compute_derived_chart_metrics(
     minimized_chart: &[u8],
     bpms_to_use: &str,
 ) -> DerivedChartMetrics {
-    let stream_counts = compute_stream_counts(measure_densities);
+    let (stream_counts, sn_breakdowns, standard_breakdowns) =
+        compute_stream_outputs(measure_densities);
     let total_streams = stream_counts.run16_streams
         + stream_counts.run20_streams
         + stream_counts.run24_streams
@@ -334,15 +334,16 @@ fn compute_derived_chart_metrics(
     let (short_hash, bpm_neutral_hash) = compute_chart_hash_pair(minimized_chart, bpms_to_use);
     if total_streams == 0 {
         let tier_bpm = round_dp(compute_tier_bpm(&[], bpm_map, 4.0), 2);
+        let (detailed_breakdown, partial_breakdown, simple_breakdown) = standard_breakdowns;
         return DerivedChartMetrics {
             stream_counts,
             total_streams,
             sn_detailed_breakdown: String::new(),
             sn_partial_breakdown: String::new(),
             sn_simple_breakdown: String::new(),
-            detailed_breakdown: "No Streams!".to_string(),
-            partial_breakdown: "No Streams!".to_string(),
-            simple_breakdown: "No Streams!".to_string(),
+            detailed_breakdown,
+            partial_breakdown,
+            simple_breakdown,
             short_hash,
             bpm_neutral_hash,
             tier_bpm,
@@ -351,10 +352,8 @@ fn compute_derived_chart_metrics(
     }
 
     let tier_bpm = round_dp(compute_tier_bpm(measure_densities, bpm_map, 4.0), 2);
-    let (sn_detailed_breakdown, sn_partial_breakdown, sn_simple_breakdown) =
-        generate_breakdowns(measure_densities);
-    let (detailed_breakdown, partial_breakdown, simple_breakdown) =
-        stream_breakdowns(measure_densities);
+    let (sn_detailed_breakdown, sn_partial_breakdown, sn_simple_breakdown) = sn_breakdowns;
+    let (detailed_breakdown, partial_breakdown, simple_breakdown) = standard_breakdowns;
 
     let matrix_rating = round_dp(compute_matrix_rating(measure_densities, bpm_map), 2);
 

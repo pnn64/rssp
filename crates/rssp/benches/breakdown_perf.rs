@@ -157,10 +157,33 @@ fn bench_breakdown_counts(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_combined_stream_outputs(c: &mut Criterion) {
+    let densities: Vec<_> = (0..16_384)
+        .map(|idx| match idx % 23 {
+            0..=7 => 16,
+            8..=11 => 20,
+            12..=14 => 24,
+            15..=16 => 32,
+            _ => 0,
+        })
+        .collect();
+
+    let mut group = c.benchmark_group("combined_stream_outputs");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("counts_and_six_breakdowns", |b| {
+        b.iter(|| {
+            black_box(rssp::stats::compute_stream_outputs(black_box(&densities)));
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_breakdown_pipeline,
     bench_breakdown_inner,
-    bench_breakdown_counts
+    bench_breakdown_counts,
+    bench_combined_stream_outputs
 );
 criterion_main!(benches);

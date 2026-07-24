@@ -280,11 +280,70 @@ fn bench_mines_nonfake(c: &mut Criterion) {
     group.finish();
 }
 
+fn large_bpm_map(entries: usize) -> String {
+    let mut map = String::with_capacity(entries * 20);
+    for idx in 0..entries {
+        if idx != 0 {
+            map.push(',');
+        }
+        use std::fmt::Write;
+        write!(&mut map, "{}={}", idx * 4, 60 + idx % 300).unwrap();
+    }
+    map
+}
+
+fn bench_parse_bpm_map(c: &mut Criterion) {
+    let map = large_bpm_map(4_096);
+    let mut group = c.benchmark_group("parse_bpm_map");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("ordered_map", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::parse_bpm_map(black_box(&map)));
+        });
+    });
+    group.finish();
+}
+
+fn bench_timing_segment_cleanup(c: &mut Criterion) {
+    let ordered_map = large_bpm_map(4_096);
+    let mut group = c.benchmark_group("timing_segment_cleanup");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("ordered_maps", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::timing_data_from_chart_data(
+                black_box(0.0),
+                black_box(0.0),
+                None,
+                black_box("0=120"),
+                None,
+                black_box(&ordered_map),
+                None,
+                black_box(&ordered_map),
+                None,
+                black_box(&ordered_map),
+                None,
+                "",
+                None,
+                "",
+                None,
+                black_box(&ordered_map),
+                rssp::timing::TimingFormat::Ssc,
+                true,
+            ));
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_bpm_pipeline,
     bench_bpm_inner,
     bench_bpm_format,
-    bench_mines_nonfake
+    bench_mines_nonfake,
+    bench_parse_bpm_map,
+    bench_timing_segment_cleanup
 );
 criterion_main!(benches);

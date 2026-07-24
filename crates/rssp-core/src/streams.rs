@@ -1,4 +1,4 @@
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct StreamCounts {
     pub run16_streams: u32,
     pub run20_streams: u32,
@@ -140,10 +140,15 @@ pub fn stream_sequences(measures: &[usize]) -> Vec<StreamSegment> {
 
 #[must_use]
 pub fn compute_stream_counts(measures: &[usize]) -> StreamCounts {
+    compute_stream_counts_and_range(measures).0
+}
+
+fn compute_stream_counts_and_range(measures: &[usize]) -> (StreamCounts, Option<(usize, usize)>) {
     let mut sc = StreamCounts::default();
     let (mut seen_stream, mut leading_breaks, mut pending_breaks) = (false, 0usize, 0usize);
+    let (mut first_stream, mut last_stream) = (None, 0usize);
 
-    for &d in measures {
+    for (idx, &d) in measures.iter().enumerate() {
         if d < STREAM_THRESHOLD {
             if seen_stream {
                 pending_breaks += 1;
@@ -152,6 +157,8 @@ pub fn compute_stream_counts(measures: &[usize]) -> StreamCounts {
             }
             continue;
         }
+        first_stream.get_or_insert(idx);
+        last_stream = idx;
 
         if d >= 32 {
             sc.run32_streams += 1;
@@ -180,12 +187,39 @@ pub fn compute_stream_counts(measures: &[usize]) -> StreamCounts {
     }
 
     if !seen_stream {
-        return StreamCounts::default();
+        return (StreamCounts::default(), None);
     }
     if pending_breaks >= 2 {
         sc.total_breaks += pending_breaks as u32;
     }
-    sc
+    (sc, first_stream.map(|start| (start, last_stream)))
+}
+
+#[must_use]
+pub fn compute_stream_outputs(
+    measures: &[usize],
+) -> (
+    StreamCounts,
+    (String, String, String),
+    (String, String, String),
+) {
+    let (counts, range) = compute_stream_counts_and_range(measures);
+    let Some((start, end)) = range else {
+        return (
+            counts,
+            (String::new(), String::new(), String::new()),
+            no_streams3(),
+        );
+    };
+
+    let tokens = tokenize(&measures[start..=end]);
+    let sn = (
+        format_breakdown_tokens(&tokens, BreakdownMode::Detailed),
+        format_breakdown_tokens(&tokens, BreakdownMode::Partial),
+        format_breakdown_tokens(&tokens, BreakdownMode::Simplified),
+    );
+    let standard = format_stream_tokens3(&tokens);
+    (counts, sn, standard)
 }
 
 #[must_use]
@@ -523,6 +557,84 @@ fn format_segments3(segs: &[StreamSegment]) -> (String, String, String) {
     )
 }
 
+fn format_stream_tokens3(tokens: &[Token]) -> (String, String, String) {
+    let cap = tokens.len().saturating_mul(SEGMENT_TEXT_CAP);
+    let mut detailed = String::with_capacity(cap);
+    let mut partial = String::with_capacity(cap);
+    let mut simple = String::with_capacity(cap);
+    let (mut simple_sum, mut simple_broken, mut unseparated) = (0usize, false, false);
+    let mut run_size = 0usize;
+
+    for token in tokens {
+        match *token {
+            Token::Run(_, size) => run_size += size,
+            Token::Break(size) => {
+                append_stream_run(
+                    &mut detailed,
+                    &mut partial,
+                    &mut simple_sum,
+                    &mut simple_broken,
+                    &mut unseparated,
+                    run_size,
+                );
+                run_size = 0;
+                if size == 1 {
+                    unseparated = true;
+                } else {
+                    flush_detailed(&mut detailed, size);
+                    partial.push_str(break_symbol(size));
+                    flush_simple(&mut simple, &mut simple_sum, &mut simple_broken, size);
+                    unseparated = false;
+                }
+            }
+        }
+    }
+    append_stream_run(
+        &mut detailed,
+        &mut partial,
+        &mut simple_sum,
+        &mut simple_broken,
+        &mut unseparated,
+        run_size,
+    );
+
+    if simple_sum != 0 {
+        push_usize(&mut simple, simple_sum);
+        if simple_broken {
+            simple.push('*');
+        }
+    }
+
+    (
+        nonempty_stream(detailed),
+        nonempty_stream(partial),
+        nonempty_stream(simple),
+    )
+}
+
+fn append_stream_run(
+    detailed: &mut String,
+    partial: &mut String,
+    simple_sum: &mut usize,
+    simple_broken: &mut bool,
+    unseparated: &mut bool,
+    size: usize,
+) {
+    if size == 0 {
+        return;
+    }
+    if *unseparated {
+        detailed.push('-');
+        partial.push('-');
+        *simple_broken = true;
+        *simple_sum += 1;
+    }
+    push_usize(detailed, size);
+    push_usize(partial, size);
+    *simple_sum += size;
+    *unseparated = false;
+}
+
 fn nonempty_stream(out: String) -> String {
     if out.is_empty() {
         "No Streams!".into()
@@ -649,6 +761,52 @@ mod tests {
                 simple,
                 stream_breakdown(measures, StreamBreakdownLevel::Simple)
             );
+        }
+    }
+
+    #[test]
+    fn combined_stream_outputs_match_independent_apis() {
+        let cases: [&[usize]; 12] = [
+            &[],
+            &[0, 12, 15, 0],
+            &[16],
+            &[0, 16, 0],
+            &[0, 0, 16, 0, 0],
+            &[16, 0, 16],
+            &[16, 0, 0, 16],
+            &[16, 20, 24, 32],
+            &[16, 0, 20, 0, 24, 0, 32],
+            &[16, 0, 0, 20, 0, 0, 24, 0, 0, 32],
+            &[0, 16, 16, 0, 20, 20, 0, 0, 24, 24, 24, 0],
+            &[16, 0, 16, 0, 0, 32, 32, 0, 0, 0, 0, 24, 0, 20],
+        ];
+
+        for measures in cases {
+            let (counts, sn, standard) = compute_stream_outputs(measures);
+            assert_eq!(counts, compute_stream_counts(measures), "{measures:?}");
+            assert_eq!(sn, generate_breakdowns(measures), "{measures:?}");
+            assert_eq!(standard, stream_breakdowns(measures), "{measures:?}");
+        }
+    }
+
+    #[test]
+    fn combined_stream_outputs_match_for_generated_density_patterns() {
+        let densities = [0, 15, 16, 19, 20, 23, 24, 31, 32, 48];
+        let mut state = 0x6a09_e667_f3bc_c909_u64;
+
+        for len in 0..128 {
+            let measures: Vec<_> = (0..len)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    densities[state as usize % densities.len()]
+                })
+                .collect();
+            let (counts, sn, standard) = compute_stream_outputs(&measures);
+            assert_eq!(counts, compute_stream_counts(&measures), "{measures:?}");
+            assert_eq!(sn, generate_breakdowns(&measures), "{measures:?}");
+            assert_eq!(standard, stream_breakdowns(&measures), "{measures:?}");
         }
     }
 

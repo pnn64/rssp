@@ -418,17 +418,31 @@ pub fn chart_bpm_snapshots(data: &[u8], ext: &str) -> Result<Vec<ChartBpmSnapsho
 // BPM parsing - consolidated
 #[must_use]
 pub fn parse_bpm_map(s: &str) -> Vec<(f64, f64)> {
-    let mut v: Vec<_> = s
-        .split(',')
-        .filter_map(|c| {
-            let c = c.trim();
-            let (l, r) = c.split_once('=')?;
-            let beat = parse_beat_or_row(l)?;
-            let bpm = r.trim().parse::<f64>().ok().map(|v| f64::from(v as f32))?;
-            Some((beat, bpm))
-        })
-        .collect();
-    v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut v = Vec::new();
+    let (mut previous_beat, mut ordered) = (f64::NEG_INFINITY, true);
+    for component in s.split(',') {
+        let component = component.trim();
+        let Some((left, right)) = component.split_once('=') else {
+            continue;
+        };
+        let Some(beat) = parse_beat_or_row(left) else {
+            continue;
+        };
+        let Some(bpm) = right
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|value| f64::from(value as f32))
+        else {
+            continue;
+        };
+        ordered &= beat >= previous_beat;
+        previous_beat = beat;
+        v.push((beat, bpm));
+    }
+    if !ordered {
+        v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    }
     v
 }
 
@@ -900,6 +914,26 @@ mod tests {
         assert_eq!(
             normalize_float_digits("0=120, 4.0004 = 150.9995, bad, 8=175.1254"),
             "0.000=120.000,4.000=151.000,8.000=175.125"
+        );
+    }
+
+    #[test]
+    fn parse_bpm_map_preserves_ordered_and_stably_sorts_unordered_entries() {
+        assert_eq!(
+            parse_bpm_map("0=120,4=140,4=150,8=180"),
+            vec![(0.0, 120.0), (4.0, 140.0), (4.0, 150.0), (8.0, 180.0)]
+        );
+        assert_eq!(
+            parse_bpm_map("8=180,4=140,0=120,4=150"),
+            vec![(0.0, 120.0), (4.0, 140.0), (4.0, 150.0), (8.0, 180.0)]
+        );
+    }
+
+    #[test]
+    fn parse_bpm_map_retains_row_suffix_and_invalid_entry_behavior() {
+        assert_eq!(
+            parse_bpm_map("96r=150,bad,48R=120,NaN=999,144r=nope,0=90"),
+            vec![(0.0, 90.0), (1.0, 120.0), (2.0, 150.0)]
         );
     }
 

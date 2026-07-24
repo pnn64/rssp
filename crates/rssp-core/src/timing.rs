@@ -268,15 +268,39 @@ fn has_row(rows: &[i32], row: i32) -> bool {
 }
 
 // --- Segment tidying ---
-fn tidy_row_segments(segments: Vec<Segment>) -> Vec<Segment> {
-    let mut keyed: Vec<(i32, usize, Segment)> = Vec::with_capacity(segments.len());
+fn tidy_row_segments(mut segments: Vec<Segment>) -> Vec<Segment> {
+    let mut ordered = true;
+    let mut previous_row = i32::MIN;
 
-    for (idx, mut seg) in segments.into_iter().enumerate() {
+    for seg in &mut segments {
         let row = beat_to_note_row(seg.beat);
         seg.beat = note_row_to_beat(row);
-        keyed.push((row, idx, seg));
+        ordered &= row >= previous_row;
+        previous_row = row;
     }
 
+    if ordered {
+        let mut write = 0;
+        for read in 0..segments.len() {
+            let row = segment_row(&segments[read]);
+            if write != 0 && segment_row(&segments[write - 1]) == row {
+                segments[write - 1] = segments[read];
+            } else {
+                if write != read {
+                    segments[write] = segments[read];
+                }
+                write += 1;
+            }
+        }
+        segments.truncate(write);
+        return segments;
+    }
+
+    let mut keyed: Vec<_> = segments
+        .into_iter()
+        .enumerate()
+        .map(|(idx, seg)| (segment_row(&seg), idx, seg))
+        .collect();
     keyed.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
 
     let mut out = Vec::with_capacity(keyed.len());
@@ -1874,6 +1898,38 @@ pub fn get_speed_multiplier(t: &TimingData, beat: f64, time: f64) -> f64 {
 mod tests {
     use super::*;
 
+    fn tidy_row_segments_materialized(segments: Vec<Segment>) -> Vec<Segment> {
+        let mut keyed: Vec<(i32, usize, Segment)> = Vec::with_capacity(segments.len());
+        for (idx, mut seg) in segments.into_iter().enumerate() {
+            let row = beat_to_note_row(seg.beat);
+            seg.beat = note_row_to_beat(row);
+            keyed.push((row, idx, seg));
+        }
+        keyed.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+
+        let mut out = Vec::with_capacity(keyed.len());
+        let mut i = 0;
+        while i < keyed.len() {
+            let row = keyed[i].0;
+            let mut last = keyed[i].2;
+            i += 1;
+            while i < keyed.len() && keyed[i].0 == row {
+                last = keyed[i].2;
+                i += 1;
+            }
+            out.push(last);
+        }
+        out
+    }
+
+    fn assert_segment_bits_eq(actual: &[Segment], expected: &[Segment]) {
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert_eq!(actual.beat.to_bits(), expected.beat.to_bits());
+            assert_eq!(actual.value.to_bits(), expected.value.to_bits());
+        }
+    }
+
     fn variable_timing() -> TimingData {
         timing_data_from_chart_data(
             0.125,
@@ -1895,6 +1951,85 @@ mod tests {
             TimingFormat::Ssc,
             true,
         )
+    }
+
+    #[test]
+    fn ordered_row_segment_cleanup_matches_materialized_sort_path() {
+        let cases = [
+            Vec::new(),
+            vec![Segment {
+                beat: 0.0,
+                value: 1.0,
+            }],
+            vec![
+                Segment {
+                    beat: 0.0,
+                    value: 1.0,
+                },
+                Segment {
+                    beat: 1.0 / 192.0,
+                    value: 2.0,
+                },
+                Segment {
+                    beat: 1.0,
+                    value: 3.0,
+                },
+                Segment {
+                    beat: 1.0 + 1.0 / 192.0,
+                    value: 4.0,
+                },
+            ],
+            vec![
+                Segment {
+                    beat: 8.0,
+                    value: 1.0,
+                },
+                Segment {
+                    beat: 0.0,
+                    value: 2.0,
+                },
+                Segment {
+                    beat: 4.0,
+                    value: 3.0,
+                },
+                Segment {
+                    beat: 0.0,
+                    value: 4.0,
+                },
+            ],
+        ];
+
+        for segments in cases {
+            let expected = tidy_row_segments_materialized(segments.clone());
+            let actual = tidy_row_segments(segments);
+            assert_segment_bits_eq(&actual, &expected);
+        }
+    }
+
+    #[test]
+    fn generated_row_segment_cleanup_matches_materialized_sort_path() {
+        let mut state = 0xbb67_ae85_84ca_a73b_u64;
+        for len in 0..128 {
+            let segments: Vec<_> = (0..len)
+                .map(|idx| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    let row = if len % 2 == 0 {
+                        idx as i32 / 3
+                    } else {
+                        (state % 96) as i32 - 32
+                    };
+                    Segment {
+                        beat: note_row_to_beat(row),
+                        value: f64::from((state >> 32) as u32),
+                    }
+                })
+                .collect();
+            let expected = tidy_row_segments_materialized(segments.clone());
+            let actual = tidy_row_segments(segments);
+            assert_segment_bits_eq(&actual, &expected);
+        }
     }
 
     #[test]
