@@ -303,17 +303,11 @@ pub fn get_nps_stats(nps: &[f64]) -> (f64, f64) {
 #[must_use]
 pub fn measure_equally_spaced(data: &[u8], lanes: usize) -> Vec<bool> {
     let lanes = if lanes == 8 { 8 } else { 4 };
-    let minimized = crate::stats::minimize_chart_for_hash(data, lanes);
     if lanes == 8 {
-        equally_spaced_impl::<8>(&minimized)
+        equally_spaced_impl::<8>(data)
     } else {
-        equally_spaced_impl::<4>(&minimized)
+        equally_spaced_impl::<4>(data)
     }
-}
-
-#[inline(always)]
-fn trim_cr(line: &[u8]) -> &[u8] {
-    line.strip_suffix(b"\r").unwrap_or(line)
 }
 
 #[inline(always)]
@@ -321,58 +315,85 @@ const fn is_note(ch: u8) -> bool {
     matches!(ch, b'1' | b'2' | b'4')
 }
 
-#[inline(always)]
-fn has_step<const L: usize>(line: &[u8]) -> bool {
-    line.iter().take(L).any(|&b| is_note(b))
-}
-
 fn equally_spaced_impl<const L: usize>(data: &[u8]) -> Vec<bool> {
-    let mut results = Vec::new();
-    let (mut rows, mut notes) = (0usize, 0usize);
-    let mut saw_term = false;
-
-    for raw in data.split(|&b| b == b'\n') {
-        let line = trim_cr(raw);
-        if line.is_empty() {
-            continue;
-        }
-
-        match line[0] {
-            b',' => {
-                results.push(notes == rows);
-                rows = 0;
-                notes = 0;
-            }
-            b';' => {
-                results.push(notes == rows);
-                saw_term = true;
-                break;
-            }
-            _ if line.len() >= L => {
-                rows += 1;
-                if has_step::<L>(line) {
-                    notes += 1;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    if !saw_term {
-        results.push(notes == rows);
-    }
-
+    let mut results = Vec::with_capacity(data.iter().filter(|&&byte| byte == b',').count() + 1);
+    crate::stats::for_each_minimized_measure::<L, _>(data, |_, rows, _| {
+        results.push(rows.iter().all(|row| row.iter().copied().any(is_note)));
+    });
     results
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{NPS_MEDIAN_SCAN_MIN, compute_measure_nps_vec_with_timing, get_nps_stats};
+    use super::{
+        NPS_MEDIAN_SCAN_MIN, compute_measure_nps_vec_with_timing, get_nps_stats,
+        measure_equally_spaced,
+    };
     use crate::timing::{TimingFormat, compute_timing_segments, timing_data_from_segments};
+
+    fn equally_spaced_reference(data: &[u8], lanes: usize) -> Vec<bool> {
+        let lanes = if lanes == 8 { 8 } else { 4 };
+        let minimized = crate::stats::minimize_chart_for_hash(data, lanes);
+        let mut results = Vec::new();
+        let (mut rows, mut notes) = (0usize, 0usize);
+
+        for line in minimized.split(|&byte| byte == b'\n') {
+            if line.is_empty() {
+                continue;
+            }
+            if line[0] == b',' {
+                results.push(notes == rows);
+                rows = 0;
+                notes = 0;
+            } else if line.len() >= lanes {
+                rows += 1;
+                notes += usize::from(
+                    line[..lanes]
+                        .iter()
+                        .any(|&byte| matches!(byte, b'1' | b'2' | b'4')),
+                );
+            }
+        }
+        results.push(notes == rows);
+        results
+    }
 
     #[test]
     fn nps_stats_empty() {
         assert_eq!(get_nps_stats(&[]), (0.0, 0.0));
+    }
+
+    #[test]
+    fn streaming_equally_spaced_matches_materialized_chart() {
+        let chart4 = b"\
+            1000\n\
+            0100\n\
+            0010\n\
+            0001\n\
+            ,\n\
+            ,\n\
+            2000\n\
+            0000\n\
+            3000\n\
+            0000\n;";
+        let chart8 = b"\
+            10000000\n\
+            00001000\n\
+            00100000\n\
+            00000001\n\
+            ,\n\
+            20000000\n\
+            00000000\n\
+            30000000\n;";
+
+        assert_eq!(
+            measure_equally_spaced(chart4, 4),
+            equally_spaced_reference(chart4, 4)
+        );
+        assert_eq!(
+            measure_equally_spaced(chart8, 8),
+            equally_spaced_reference(chart8, 8)
+        );
     }
 
     #[test]

@@ -241,10 +241,50 @@ fn bench_bpm_format(c: &mut Criterion) {
     group.finish();
 }
 
+fn mine_chart(measures: usize, rows_per_measure: usize) -> Vec<u8> {
+    let mut chart = Vec::with_capacity(measures * rows_per_measure * 5);
+    for measure in 0..measures {
+        for row in 0..rows_per_measure {
+            let lane = (measure + row) & 3;
+            let mine = (measure * rows_per_measure + row) % 5 == 0;
+            for col in 0..4 {
+                chart.push(if mine && col == lane { b'M' } else { b'0' });
+            }
+            chart.push(b'\n');
+        }
+        if measure + 1 != measures {
+            chart.extend_from_slice(b",\n");
+        }
+    }
+    chart
+}
+
+fn bench_mines_nonfake(c: &mut Criterion) {
+    let chart = mine_chart(1_024, 48);
+    let warps: Vec<_> = (0..64).map(|idx| (idx as f64 * 64.0 + 8.0, 4.0)).collect();
+    let fakes: Vec<_> = (0..64).map(|idx| (idx as f64 * 64.0 + 24.0, 8.0)).collect();
+
+    let mut group = c.benchmark_group("mines_nonfake");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("dense_chart", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::compute_mines_nonfake(
+                black_box(&chart),
+                black_box(4),
+                black_box(&warps),
+                black_box(&fakes),
+            ));
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_bpm_pipeline,
     bench_bpm_inner,
-    bench_bpm_format
+    bench_bpm_format,
+    bench_mines_nonfake
 );
 criterion_main!(benches);

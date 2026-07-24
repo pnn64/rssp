@@ -984,12 +984,40 @@ pub fn compute_matrix_rating(measure_densities: &[usize], bpm_map: &[(f64, f64)]
 }
 
 fn compute_matrix_variable_bpm(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> f64 {
+    const HASH_AGGREGATION_MIN_SEGMENTS: usize = 32;
+    if bpm_map.len() < HASH_AGGREGATION_MIN_SEGMENTS {
+        return compute_matrix_variable_bpm_small(measure_densities, bpm_map);
+    }
+
+    use std::collections::HashMap;
+
+    let mut bpm_counts: HashMap<u64, [usize; 4]> = HashMap::with_capacity(bpm_map.len());
+
+    let (mut bpm_idx, mut next_beat) = (0usize, bpm_map.get(1).map_or(f64::INFINITY, |m| m.0));
+    for (idx, &density) in measure_densities.iter().enumerate() {
+        let beat = idx as f64 * 4.0;
+        while beat >= next_beat {
+            bpm_idx += 1;
+            next_beat = bpm_map.get(bpm_idx + 1).map_or(f64::INFINITY, |m| m.0);
+        }
+
+        let code = density_code(categorize_measure_density(density));
+        let bpm = bpm_map[bpm_idx].1;
+        if code != u8::MAX && bpm > 0.0 {
+            bpm_counts.entry(bpm.to_bits()).or_default()[code as usize] += 1;
+        }
+    }
+
+    matrix_best_from_counts(bpm_counts)
+}
+
+fn compute_matrix_variable_bpm_small(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> f64 {
     let mut bpm_counts: Vec<(u64, [usize; 4])> = Vec::with_capacity(bpm_map.len());
-    let mut bpm_ids = Vec::with_capacity(bpm_map.len());
+    let mut segment_ids = Vec::with_capacity(bpm_map.len());
 
     for &(_, bpm) in bpm_map {
         if bpm <= 0.0 {
-            bpm_ids.push(usize::MAX);
+            segment_ids.push(usize::MAX);
             continue;
         }
 
@@ -1001,28 +1029,32 @@ fn compute_matrix_variable_bpm(measure_densities: &[usize], bpm_map: &[(f64, f64
                 bpm_counts.push((bits, [0; 4]));
                 bpm_counts.len() - 1
             });
-        bpm_ids.push(id);
+        segment_ids.push(id);
     }
 
     if bpm_counts.is_empty() {
         return 0.0;
     }
 
-    let (mut bpm_idx, mut next_beat) = (0usize, bpm_map.get(1).map_or(f64::INFINITY, |m| m.0));
+    let (mut segment_idx, mut next_beat) = (0usize, bpm_map.get(1).map_or(f64::INFINITY, |m| m.0));
     for (idx, &density) in measure_densities.iter().enumerate() {
         let beat = idx as f64 * 4.0;
         while beat >= next_beat {
-            bpm_idx += 1;
-            next_beat = bpm_map.get(bpm_idx + 1).map_or(f64::INFINITY, |m| m.0);
+            segment_idx += 1;
+            next_beat = bpm_map.get(segment_idx + 1).map_or(f64::INFINITY, |m| m.0);
         }
 
         let code = density_code(categorize_measure_density(density));
-        let bpm_id = bpm_ids[bpm_idx];
+        let bpm_id = segment_ids[segment_idx];
         if code != u8::MAX && bpm_id != usize::MAX {
             bpm_counts[bpm_id].1[code as usize] += 1;
         }
     }
 
+    matrix_best_from_counts(bpm_counts)
+}
+
+fn matrix_best_from_counts(bpm_counts: impl IntoIterator<Item = (u64, [usize; 4])>) -> f64 {
     let mut best = 0.0f64;
     for (bpm_bits, counts) in bpm_counts {
         let bpm = f64::from_bits(bpm_bits);
@@ -1121,6 +1153,26 @@ mod tests {
             (32.0, -10.0),
             (48.0, 240.0),
         ];
+        assert_eq!(
+            compute_matrix_rating(&densities, &bpm_map),
+            matrix_rating_generic(&densities, &bpm_map)
+        );
+    }
+
+    #[test]
+    fn many_unique_bpms_match_generic_path() {
+        let densities: Vec<_> = (0..512).map(|idx| [0, 16, 20, 24, 32][idx % 5]).collect();
+        let bpm_map: Vec<_> = (0..256)
+            .map(|idx| {
+                let bpm = if idx % 17 == 0 {
+                    -10.0
+                } else {
+                    60.0 + idx as f64 * 0.125
+                };
+                (idx as f64 * 8.0, bpm)
+            })
+            .collect();
+
         assert_eq!(
             compute_matrix_rating(&densities, &bpm_map),
             matrix_rating_generic(&densities, &bpm_map)

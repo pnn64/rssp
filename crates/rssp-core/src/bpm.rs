@@ -631,53 +631,42 @@ pub fn compute_mines_nonfake(
     fakes: &[(f64, f64)],
 ) -> u32 {
     let lanes = if lanes == 8 { 8 } else { 4 };
-    let minimized = crate::stats::minimize_chart_for_hash(data, lanes);
-    let mut rows = Vec::new();
-    let mut per_measure = Vec::new();
-    let (mut measure_idx, mut row_idx, mut count) = (0usize, 0usize, 0usize);
-
-    for line in minimized.split(|&b| b == b'\n') {
-        if line.is_empty() {
-            continue;
+    let (mut count, mut warp_idx, mut fake_idx) = (0u32, 0usize, 0usize);
+    let segments_are_sorted = |segments: &[(f64, f64)]| {
+        segments.iter().all(|(start, _)| !start.is_nan())
+            && segments.windows(2).all(|pair| pair[0].0 <= pair[1].0)
+    };
+    let (warps_sorted, fakes_sorted) = (segments_are_sorted(warps), segments_are_sorted(fakes));
+    let in_range = |beat: f64, segs: &[(f64, f64)], idx: &mut usize, sorted: bool| -> bool {
+        if !sorted {
+            *idx = segs.partition_point(|(start, _)| *start <= beat);
+        } else {
+            while *idx < segs.len() && segs[*idx].0 <= beat {
+                *idx += 1;
+            }
         }
-        if line[0] == b',' {
-            per_measure.push(count);
-            measure_idx += 1;
-            row_idx = 0;
-            count = 0;
-            continue;
-        }
-        if line.len() < lanes {
-            continue;
-        }
-        let mine = line[..lanes].iter().any(|&b| matches!(b, b'M' | b'm'));
-        rows.push((measure_idx, row_idx, mine));
-        count += 1;
-        row_idx += 1;
-    }
-    per_measure.push(count);
-
-    let in_range = |b: f64, segs: &[(f64, f64)]| -> bool {
-        let i = segs.partition_point(|(s, _)| *s <= b);
+        let i = *idx;
         i > 0 && {
             let (s, l) = segs[i - 1];
-            l > 0.0 && l.is_finite() && b < s + l
+            l > 0.0 && l.is_finite() && beat < s + l
         }
     };
 
-    u32::try_from(
-        rows.iter()
-            .filter(|&&(m, r, mine)| {
-                if !mine {
-                    return false;
-                }
-                let t = per_measure.get(m).copied().unwrap_or(1).max(1) as f64;
-                let beat = (m as f64).mul_add(4.0, 4.0 * (r as f64 / t));
-                !in_range(beat, warps) && !in_range(beat, fakes)
-            })
-            .count(),
-    )
-    .unwrap_or(u32::MAX)
+    crate::stats::for_each_minimized_row(data, lanes, |measure, row, row_count, line| {
+        if !line[..lanes]
+            .iter()
+            .any(|&byte| matches!(byte, b'M' | b'm'))
+        {
+            return;
+        }
+        let beat = (measure as f64).mul_add(4.0, 4.0 * (row as f64 / row_count as f64));
+        if !in_range(beat, warps, &mut warp_idx, warps_sorted)
+            && !in_range(beat, fakes, &mut fake_idx, fakes_sorted)
+        {
+            count = count.saturating_add(1);
+        }
+    });
+    count
 }
 
 #[must_use]
@@ -846,7 +835,65 @@ pub fn normalize_and_tidy_bpms(param: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_tier_bpm, normalize_float_digits};
+    use super::*;
+
+    fn mines_nonfake_reference(
+        data: &[u8],
+        lanes: usize,
+        warps: &[(f64, f64)],
+        fakes: &[(f64, f64)],
+    ) -> u32 {
+        let lanes = if lanes == 8 { 8 } else { 4 };
+        let minimized = crate::stats::minimize_chart_for_hash(data, lanes);
+        let mut rows = Vec::new();
+        let mut per_measure = Vec::new();
+        let (mut measure_idx, mut row_idx, mut count) = (0usize, 0usize, 0usize);
+
+        for line in minimized.split(|&byte| byte == b'\n') {
+            if line.is_empty() {
+                continue;
+            }
+            if line[0] == b',' {
+                per_measure.push(count);
+                measure_idx += 1;
+                row_idx = 0;
+                count = 0;
+                continue;
+            }
+            if line.len() < lanes {
+                continue;
+            }
+            let mine = line[..lanes]
+                .iter()
+                .any(|&byte| matches!(byte, b'M' | b'm'));
+            rows.push((measure_idx, row_idx, mine));
+            count += 1;
+            row_idx += 1;
+        }
+        per_measure.push(count);
+
+        let in_range = |beat: f64, segments: &[(f64, f64)]| {
+            let idx = segments.partition_point(|(start, _)| *start <= beat);
+            idx > 0 && {
+                let (start, length) = segments[idx - 1];
+                length > 0.0 && length.is_finite() && beat < start + length
+            }
+        };
+
+        u32::try_from(
+            rows.iter()
+                .filter(|&&(measure, row, mine)| {
+                    if !mine {
+                        return false;
+                    }
+                    let row_count = per_measure[measure].max(1) as f64;
+                    let beat = (measure as f64).mul_add(4.0, 4.0 * (row as f64 / row_count));
+                    !in_range(beat, warps) && !in_range(beat, fakes)
+                })
+                .count(),
+        )
+        .unwrap_or(u32::MAX)
+    }
 
     #[test]
     fn normalize_float_digits_formats_pairs() {
@@ -877,6 +924,50 @@ mod tests {
         assert_eq!(
             compute_tier_bpm(&densities, &fixed, 4.0),
             compute_tier_bpm(&densities, &generic, 4.0)
+        );
+    }
+
+    #[test]
+    fn streaming_mine_count_matches_materialized_rows() {
+        let chart4 = b"\
+            M000\n\
+            0000\n\
+            0000\n\
+            0000\n\
+            00M0\n\
+            0000\n\
+            000M\n\
+            0000\n\
+            ,\n\
+            M000\n\
+            0000\n\
+            0m00\n\
+            0000\n";
+        let chart8 = b"\
+            M0000000\n\
+            00000000\n\
+            0000m000\n\
+            00000000\n\
+            ,\n\
+            0000000M\n\
+            00000000\n";
+        let warps = [(0.0, 0.5), (8.0, 0.25)];
+        let fakes = [(5.5, 1.0)];
+
+        assert_eq!(
+            compute_mines_nonfake(chart4, 4, &warps, &fakes),
+            mines_nonfake_reference(chart4, 4, &warps, &fakes)
+        );
+        assert_eq!(
+            compute_mines_nonfake(chart8, 8, &warps, &fakes),
+            mines_nonfake_reference(chart8, 8, &warps, &fakes)
+        );
+
+        let unsorted_warps = [(8.0, 0.25), (0.0, 0.5)];
+        let unsorted_fakes = [(5.5, 1.0), (2.0, 0.25)];
+        assert_eq!(
+            compute_mines_nonfake(chart4, 4, &unsorted_warps, &unsorted_fakes),
+            mines_nonfake_reference(chart4, 4, &unsorted_warps, &unsorted_fakes)
         );
     }
 }

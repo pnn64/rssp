@@ -352,10 +352,48 @@ fn bench_nps_stats(c: &mut Criterion) {
     group.finish();
 }
 
+fn equally_spaced_chart(measures: usize, rows_per_measure: usize) -> Vec<u8> {
+    let mut chart = Vec::with_capacity(measures * rows_per_measure * 5);
+    for measure in 0..measures {
+        for row in 0..rows_per_measure {
+            let lane = (measure + row) & 3;
+            for col in 0..4 {
+                chart.push(if col == lane && row % 5 != 0 {
+                    b'1'
+                } else {
+                    b'0'
+                });
+            }
+            chart.push(b'\n');
+        }
+        if measure + 1 != measures {
+            chart.extend_from_slice(b",\n");
+        }
+    }
+    chart
+}
+
+fn bench_equally_spaced(c: &mut Criterion) {
+    let chart = equally_spaced_chart(1_024, 48);
+    let mut group = c.benchmark_group("equally_spaced");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("dense_chart", |b| {
+        b.iter(|| {
+            black_box(rssp::stats::measure_equally_spaced(
+                black_box(&chart),
+                black_box(4),
+            ));
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_nps_pipeline,
     bench_nps_inner,
-    bench_nps_stats
+    bench_nps_stats,
+    bench_equally_spaced
 );
 criterion_main!(benches);

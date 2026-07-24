@@ -957,8 +957,24 @@ pub fn minimize_chart_for_hash(data: &[u8], lanes: usize) -> Vec<u8> {
 
 fn minimize_hash_impl<const L: usize>(data: &[u8]) -> Vec<u8> {
     let mut output = Vec::with_capacity(data.len());
+    for_each_minimized_measure::<L, _>(data, |_, measure, separator| {
+        for line in measure {
+            output.extend_from_slice(line);
+            output.push(b'\n');
+        }
+        if separator {
+            output.extend_from_slice(b",\n");
+        }
+    });
+    output
+}
+
+pub(crate) fn for_each_minimized_measure<const L: usize, F>(data: &[u8], mut on_measure: F)
+where
+    F: FnMut(usize, &[[u8; L]], bool),
+{
     let mut measure = Vec::with_capacity(64);
-    let mut done = false;
+    let (mut measure_idx, mut done) = (0usize, false);
 
     let mut line_off = 0usize;
     while let Some(raw) = next_line(data, &mut line_off) {
@@ -969,11 +985,14 @@ fn minimize_hash_impl<const L: usize>(data: &[u8]) -> Vec<u8> {
 
         match line[0] {
             b',' => {
-                push_hash_measure(&mut measure, &mut output);
-                output.extend_from_slice(b",\n");
+                minimize_measure(&mut measure);
+                on_measure(measure_idx, &measure, true);
+                measure.clear();
+                measure_idx += 1;
             }
             b';' => {
-                push_hash_measure(&mut measure, &mut output);
+                minimize_measure(&mut measure);
+                on_measure(measure_idx, &measure, false);
                 done = true;
                 break;
             }
@@ -987,22 +1006,29 @@ fn minimize_hash_impl<const L: usize>(data: &[u8]) -> Vec<u8> {
     }
 
     if !done {
-        push_hash_measure(&mut measure, &mut output);
+        minimize_measure(&mut measure);
+        on_measure(measure_idx, &measure, false);
     }
-
-    output
 }
 
-fn push_hash_measure<const L: usize>(measure: &mut Vec<[u8; L]>, output: &mut Vec<u8>) {
-    if measure.is_empty() {
-        return;
+pub(crate) fn for_each_minimized_row(
+    data: &[u8],
+    lanes: usize,
+    mut on_row: impl FnMut(usize, usize, usize, &[u8]),
+) {
+    if lanes == 8 {
+        for_each_minimized_measure::<8, _>(data, |measure_idx, rows, _| {
+            for (row_idx, row) in rows.iter().enumerate() {
+                on_row(measure_idx, row_idx, rows.len(), row);
+            }
+        });
+    } else {
+        for_each_minimized_measure::<4, _>(data, |measure_idx, rows, _| {
+            for (row_idx, row) in rows.iter().enumerate() {
+                on_row(measure_idx, row_idx, rows.len(), row);
+            }
+        });
     }
-    minimize_measure(measure);
-    for line in measure.iter() {
-        output.extend_from_slice(line);
-        output.push(b'\n');
-    }
-    measure.clear();
 }
 
 // ============================================================================
