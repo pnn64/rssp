@@ -244,12 +244,21 @@ fn parse_speeds(s: &str) -> Vec<SpeedSegment> {
 
 // --- Row builders ---
 fn build_segment_rows(segments: &[Segment], require_positive: bool) -> Vec<i32> {
-    let mut rows: Vec<i32> = segments
-        .iter()
-        .filter(|s| !require_positive || (s.value.is_finite() && s.value > 0.0))
-        .map(|s| beat_to_note_row_f32(s.beat as f32))
-        .collect();
-    rows.sort_unstable();
+    let mut rows = Vec::with_capacity(segments.len());
+    let mut ordered = true;
+    let mut previous_row = i32::MIN;
+    for segment in segments {
+        if require_positive && (!segment.value.is_finite() || segment.value <= 0.0) {
+            continue;
+        }
+        let row = beat_to_note_row_f32(segment.beat as f32);
+        ordered &= row >= previous_row;
+        previous_row = row;
+        rows.push(row);
+    }
+    if !ordered {
+        rows.sort_unstable();
+    }
     if require_positive {
         rows.dedup();
     }
@@ -329,26 +338,6 @@ fn eq_segment(a: &Segment, b: &Segment) -> bool {
     float_eq(a.value, b.value)
 }
 
-fn add_scroll_segment(out: &mut Vec<Segment>, mut seg: Segment) {
-    let row = beat_to_note_row(seg.beat);
-    seg.beat = note_row_to_beat(row);
-
-    if out.is_empty() {
-        out.push(seg);
-        return;
-    }
-
-    let last = out.len() - 1;
-    if row > segment_row(&out[last]) {
-        if !eq_segment(&seg, &out[last]) {
-            out.push(seg);
-        }
-        return;
-    }
-
-    add_scroll_segment_slow(out, seg, row);
-}
-
 fn add_scroll_segment_slow(out: &mut Vec<Segment>, seg: Segment, row: i32) {
     let idx = {
         let pos = out.partition_point(|s| segment_row(s) <= row);
@@ -396,12 +385,52 @@ fn add_scroll_segment_slow(out: &mut Vec<Segment>, seg: Segment, row: i32) {
     }
 }
 
-fn tidy_scroll_segments(segments: Vec<Segment>) -> Vec<Segment> {
-    let mut out = Vec::with_capacity(segments.len());
-    for seg in segments {
-        add_scroll_segment(&mut out, seg);
+fn tidy_scroll_segments(mut segments: Vec<Segment>) -> Vec<Segment> {
+    let mut ordered = true;
+    let mut previous_row = i32::MIN;
+    for segment in &mut segments {
+        let row = beat_to_note_row(segment.beat);
+        segment.beat = note_row_to_beat(row);
+        ordered &= row >= previous_row;
+        previous_row = row;
     }
-    out
+
+    if !ordered {
+        let mut out = Vec::with_capacity(segments.len());
+        for segment in segments {
+            if out.is_empty() {
+                out.push(segment);
+            } else {
+                let row = segment_row(&segment);
+                add_scroll_segment_slow(&mut out, segment, row);
+            }
+        }
+        return out;
+    }
+
+    let mut write = 0;
+    for read in 0..segments.len() {
+        let segment = segments[read];
+        if write == 0 {
+            segments[write] = segment;
+            write += 1;
+            continue;
+        }
+
+        let last = write - 1;
+        if segment_row(&segment) > segment_row(&segments[last]) {
+            if !eq_segment(&segment, &segments[last]) {
+                segments[write] = segment;
+                write += 1;
+            }
+        } else if write > 1 && eq_segment(&segment, &segments[write - 2]) {
+            write -= 1;
+        } else if !eq_segment(&segment, &segments[last]) {
+            segments[last] = segment;
+        }
+    }
+    segments.truncate(write);
+    segments
 }
 
 #[inline]
@@ -412,26 +441,6 @@ fn speed_row(seg: &SpeedSegment) -> i32 {
 #[inline]
 fn eq_speed(a: &SpeedSegment, b: &SpeedSegment) -> bool {
     float_eq(a.ratio, b.ratio) && float_eq(a.delay, b.delay) && a.unit == b.unit
-}
-
-fn add_speed_segment(out: &mut Vec<SpeedSegment>, mut seg: SpeedSegment) {
-    let row = beat_to_note_row(seg.beat);
-    seg.beat = note_row_to_beat(row);
-
-    if out.is_empty() {
-        out.push(seg);
-        return;
-    }
-
-    let last = out.len() - 1;
-    if row > speed_row(&out[last]) {
-        if !eq_speed(&seg, &out[last]) {
-            out.push(seg);
-        }
-        return;
-    }
-
-    add_speed_segment_slow(out, seg, row);
 }
 
 fn add_speed_segment_slow(out: &mut Vec<SpeedSegment>, seg: SpeedSegment, row: i32) {
@@ -481,12 +490,52 @@ fn add_speed_segment_slow(out: &mut Vec<SpeedSegment>, seg: SpeedSegment, row: i
     }
 }
 
-fn tidy_speed_segments(segments: Vec<SpeedSegment>) -> Vec<SpeedSegment> {
-    let mut out = Vec::with_capacity(segments.len());
-    for seg in segments {
-        add_speed_segment(&mut out, seg);
+fn tidy_speed_segments(mut segments: Vec<SpeedSegment>) -> Vec<SpeedSegment> {
+    let mut ordered = true;
+    let mut previous_row = i32::MIN;
+    for segment in &mut segments {
+        let row = beat_to_note_row(segment.beat);
+        segment.beat = note_row_to_beat(row);
+        ordered &= row >= previous_row;
+        previous_row = row;
     }
-    out
+
+    if !ordered {
+        let mut out = Vec::with_capacity(segments.len());
+        for segment in segments {
+            if out.is_empty() {
+                out.push(segment);
+            } else {
+                let row = speed_row(&segment);
+                add_speed_segment_slow(&mut out, segment, row);
+            }
+        }
+        return out;
+    }
+
+    let mut write = 0;
+    for read in 0..segments.len() {
+        let segment = segments[read];
+        if write == 0 {
+            segments[write] = segment;
+            write += 1;
+            continue;
+        }
+
+        let last = write - 1;
+        if speed_row(&segment) > speed_row(&segments[last]) {
+            if !eq_speed(&segment, &segments[last]) {
+                segments[write] = segment;
+                write += 1;
+            }
+        } else if write > 1 && eq_speed(&segment, &segments[write - 2]) {
+            write -= 1;
+        } else if !eq_speed(&segment, &segments[last]) {
+            segments[last] = segment;
+        }
+    }
+    segments.truncate(write);
+    segments
 }
 
 // --- Optional timing parsing helper ---
@@ -1929,6 +1978,21 @@ pub fn get_speed_multiplier(t: &TimingData, beat: f64, time: f64) -> f64 {
 mod tests {
     use super::*;
 
+    fn build_segment_rows_sorted(segments: &[Segment], require_positive: bool) -> Vec<i32> {
+        let mut rows: Vec<_> = segments
+            .iter()
+            .filter(|segment| {
+                !require_positive || (segment.value.is_finite() && segment.value > 0.0)
+            })
+            .map(|segment| beat_to_note_row_f32(segment.beat as f32))
+            .collect();
+        rows.sort_unstable();
+        if require_positive {
+            rows.dedup();
+        }
+        rows
+    }
+
     fn tidy_bpms_materialized(mut bpms: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
         if bpms.is_empty() {
             return vec![(0.0, DEFAULT_BPM)];
@@ -2058,6 +2122,100 @@ mod tests {
             TimingFormat::Ssc,
             true,
         )
+    }
+
+    #[test]
+    fn ordered_segment_rows_match_sorted_path() {
+        let cases = [
+            Vec::new(),
+            vec![Segment {
+                beat: 0.0,
+                value: 1.0,
+            }],
+            vec![
+                Segment {
+                    beat: 0.0,
+                    value: 1.0,
+                },
+                Segment {
+                    beat: 0.0,
+                    value: 2.0,
+                },
+                Segment {
+                    beat: 4.0,
+                    value: -1.0,
+                },
+                Segment {
+                    beat: 8.0,
+                    value: f64::NAN,
+                },
+                Segment {
+                    beat: 12.0,
+                    value: 0.5,
+                },
+            ],
+            vec![
+                Segment {
+                    beat: 8.0,
+                    value: 1.0,
+                },
+                Segment {
+                    beat: -4.0,
+                    value: 2.0,
+                },
+                Segment {
+                    beat: 0.0,
+                    value: 3.0,
+                },
+                Segment {
+                    beat: 8.0,
+                    value: 4.0,
+                },
+            ],
+        ];
+
+        for segments in cases {
+            for require_positive in [false, true] {
+                assert_eq!(
+                    build_segment_rows(&segments, require_positive),
+                    build_segment_rows_sorted(&segments, require_positive),
+                    "{segments:?}, require_positive={require_positive}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn generated_segment_rows_match_sorted_path() {
+        let mut state = 0x510e_527f_ade6_82d1_u64;
+        for len in 0..128 {
+            let segments: Vec<_> = (0..len)
+                .map(|idx| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    let row = if len % 2 == 0 {
+                        idx as i32 / 3
+                    } else {
+                        (state % 128) as i32 - 32
+                    };
+                    Segment {
+                        beat: note_row_to_beat(row),
+                        value: match state % 5 {
+                            0 => -1.0,
+                            1 => 0.0,
+                            _ => 0.125,
+                        },
+                    }
+                })
+                .collect();
+            for require_positive in [false, true] {
+                assert_eq!(
+                    build_segment_rows(&segments, require_positive),
+                    build_segment_rows_sorted(&segments, require_positive)
+                );
+            }
+        }
     }
 
     #[test]
