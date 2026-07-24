@@ -162,7 +162,7 @@ impl<'a> PropValue<'a> {
             PropValue::Bytes(b) => b.is_empty(),
             PropValue::BytesOpt(opt) => opt.as_ref().is_none_or(|b| b.is_empty()),
             PropValue::NoteData(_) => false,
-            PropValue::Version(_) => false,
+            PropValue::Version(v) => !v.is_finite(),
             PropValue::Number(_) => false,
             PropValue::NumberOpt(opt) => opt.is_none(),
             PropValue::Bool(_) => false,
@@ -306,7 +306,7 @@ pub fn serialize_simfile(
 
     #[rustfmt::skip]
     let props = [
-        Prop::ssc_only_with_default(b"VERSION", DEFAULT_VERSION, PropValue::Version(summary.ssc_version)),
+        Prop::ssc_nonempty_only(b"VERSION", PropValue::Version(summary.ssc_version)),
         Prop::new_with_default(b"TITLE", DEFAULT_TITLE, PropValue::Str(&summary.title_str)),
         Prop::new(b"SUBTITLE", PropValue::Str(&summary.subtitle_str)),
         Prop::new_with_default(b"ARTIST", DEFAULT_ARTIST, PropValue::Str(&summary.artist_str)),
