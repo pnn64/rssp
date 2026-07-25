@@ -205,6 +205,9 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         scrolls: Vec::new(),
         fakes: Vec::new(),
     };
+    let bpm_stats_map: Vec<_> = (0..ENTRIES)
+        .map(|idx| (idx as f64 * 4.0, 60.0 + (idx % 300) as f64))
+        .collect();
 
     let mut parsing = c.benchmark_group("cycles/parsing");
     parsing.throughput(Throughput::Elements(ENTRIES as u64));
@@ -216,6 +219,58 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     parsing.finish();
+
+    let mut normalization = c.benchmark_group("cycles/normalization");
+    normalization.throughput(Throughput::Bytes(pair_map.len() as u64));
+    normalization.sample_size(100);
+    normalization.measurement_time(Duration::from_secs(2));
+    normalization.bench_function("pair_map_separate", |b| {
+        b.iter(|| {
+            black_box((
+                rssp::bpm::clean_timing_map(black_box(&pair_map)),
+                rssp::bpm::normalize_float_digits(black_box(&pair_map)),
+            ));
+        });
+    });
+    normalization.bench_function("pair_map_fused", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::clean_and_normalize_float_digits(black_box(
+                &pair_map,
+            )));
+        });
+    });
+    normalization.throughput(Throughput::Bytes(speed_map.len() as u64));
+    normalization.bench_function("speed_map_separate", |b| {
+        b.iter(|| {
+            black_box((
+                rssp::bpm::clean_timing_map(black_box(&speed_map)),
+                rssp::bpm::normalize_speeds_float_digits(black_box(&speed_map)),
+            ));
+        });
+    });
+    normalization.bench_function("speed_map_fused", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::clean_and_normalize_speeds_float_digits(
+                black_box(&speed_map),
+            ));
+        });
+    });
+    normalization.throughput(Throughput::Elements(bpm_stats_map.len() as u64));
+    normalization.bench_function("bpm_stats_values", |b| {
+        b.iter(|| {
+            let values: Vec<_> = black_box(&bpm_stats_map)
+                .iter()
+                .map(|&(_, bpm)| bpm)
+                .collect();
+            black_box(rssp::bpm::compute_bpm_stats(&values));
+        });
+    });
+    normalization.bench_function("bpm_stats_map", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::compute_bpm_map_stats(black_box(&bpm_stats_map)));
+        });
+    });
+    normalization.finish();
 
     let mut cleanup = c.benchmark_group("cycles/cleanup");
     cleanup.throughput(Throughput::Elements(ENTRIES as u64));

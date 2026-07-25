@@ -119,6 +119,86 @@ pub fn normalize_speeds_float_digits(param: &str) -> String {
 }
 
 #[must_use]
+pub fn clean_and_normalize_float_digits(param: &str) -> (String, String) {
+    let mut cleaned = String::with_capacity(param.len());
+    let mut normalized = String::with_capacity(param.len());
+
+    for entry in param.split(',') {
+        if entry.is_empty() {
+            continue;
+        }
+        let entry = strip_control(entry);
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+
+        if !cleaned.is_empty() {
+            cleaned.push(',');
+        }
+        cleaned.push_str(entry);
+
+        if let Some((beat, value)) = entry.split_once('=')
+            && let (Ok(beat), Ok(value)) = (beat.trim().parse::<f64>(), value.trim().parse::<f64>())
+        {
+            if !normalized.is_empty() {
+                normalized.push(',');
+            }
+            push_dec3_half_up(&mut normalized, beat);
+            normalized.push('=');
+            push_dec3_half_up(&mut normalized, value);
+        }
+    }
+
+    (cleaned, normalized)
+}
+
+#[must_use]
+pub fn clean_and_normalize_speeds_float_digits(param: &str) -> (String, String) {
+    let mut cleaned = String::with_capacity(param.len());
+    let mut normalized = String::with_capacity(param.len());
+
+    for entry in param.split(',') {
+        if entry.is_empty() {
+            continue;
+        }
+        let entry = strip_control(entry);
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+
+        if !cleaned.is_empty() {
+            cleaned.push(',');
+        }
+        cleaned.push_str(entry);
+
+        let mut split = entry.split('=');
+        if let (Some(beat), Some(ratio), Some(delay), Some(unit)) =
+            (split.next(), split.next(), split.next(), split.next())
+            && let (Ok(beat), Ok(ratio), Ok(delay)) = (
+                beat.trim().parse::<f64>(),
+                ratio.trim().parse::<f64>(),
+                delay.trim().parse::<f64>(),
+            )
+        {
+            if !normalized.is_empty() {
+                normalized.push(',');
+            }
+            push_dec3_half_up(&mut normalized, beat);
+            normalized.push('=');
+            push_dec3_half_up(&mut normalized, ratio);
+            normalized.push('=');
+            push_dec3_half_up(&mut normalized, delay);
+            normalized.push('=');
+            normalized.push_str(unit);
+        }
+    }
+
+    (cleaned, normalized)
+}
+
+#[must_use]
 pub fn clean_timing_map(param: &str) -> String {
     let mut out = String::with_capacity(param.len());
     for entry in param.split(',') {
@@ -725,16 +805,24 @@ pub fn compute_mines_nonfake(
 
 #[must_use]
 pub fn compute_bpm_stats(values: &[f64]) -> (f64, f64) {
-    if values.is_empty() {
+    compute_bpm_stats_iter(values.iter().copied())
+}
+
+#[must_use]
+pub fn compute_bpm_map_stats(map: &[(f64, f64)]) -> (f64, f64) {
+    compute_bpm_stats_iter(map.iter().map(|&(_, bpm)| bpm))
+}
+
+fn compute_bpm_stats_iter<I>(values: I) -> (f64, f64)
+where
+    I: Iterator<Item = f64> + Clone,
+{
+    if values.clone().next().is_none() {
         return (0.0, 0.0);
     }
-    let mut v: Vec<_> = values
-        .iter()
-        .copied()
-        .filter(|&b| is_display_bpm(b))
-        .collect();
+    let mut v: Vec<_> = values.clone().filter(|&b| is_display_bpm(b)).collect();
     if v.is_empty() {
-        v.extend_from_slice(values);
+        v.extend(values);
     }
     v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let med = if v.len() % 2 == 0 {
@@ -958,6 +1046,33 @@ mod tests {
     }
 
     #[test]
+    fn fused_cleaning_and_normalization_match_independent_paths() {
+        let pair_maps = [
+            "",
+            "0=120, 4.0004 = 150.9995, bad, 8=175.1254",
+            ",\t0 = 120\r\n,,4=\u{1}150,NaN=999,8=nope,",
+        ];
+        for map in pair_maps {
+            assert_eq!(
+                clean_and_normalize_float_digits(map),
+                (clean_timing_map(map), normalize_float_digits(map))
+            );
+        }
+
+        let speed_maps = [
+            "",
+            "0=1=0=0, 4.0004 = 2.5 = 1.9995 = 1, bad",
+            ",\t0=1=0=0\r\n,,4=\u{1}2=1=1,8=nope=0=0,",
+        ];
+        for map in speed_maps {
+            assert_eq!(
+                clean_and_normalize_speeds_float_digits(map),
+                (clean_timing_map(map), normalize_speeds_float_digits(map))
+            );
+        }
+    }
+
+    #[test]
     fn parse_bpm_map_preserves_ordered_and_stably_sorts_unordered_entries() {
         assert_eq!(
             parse_bpm_map("0=120,4=140,4=150,8=180"),
@@ -975,6 +1090,24 @@ mod tests {
             parse_bpm_map("96r=150,bad,48R=120,NaN=999,144r=nope,0=90"),
             vec![(0.0, 90.0), (1.0, 120.0), (2.0, 150.0)]
         );
+    }
+
+    #[test]
+    fn bpm_map_stats_match_value_slice_stats() {
+        for values in [
+            Vec::new(),
+            vec![120.0],
+            vec![120.0, 180.0, 150.0, 200.0],
+            vec![0.0, -10.0, 10_000.0, 20_000.0],
+            vec![0.0, 120.0, 10_000.0, 180.0, 20_000.0],
+        ] {
+            let map: Vec<_> = values
+                .iter()
+                .enumerate()
+                .map(|(idx, &bpm)| (idx as f64 * 4.0, bpm))
+                .collect();
+            assert_eq!(compute_bpm_map_stats(&map), compute_bpm_stats(&values));
+        }
     }
 
     #[test]

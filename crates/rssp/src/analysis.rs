@@ -8,9 +8,10 @@ use crate::stats;
 use crate::step_parity;
 
 use crate::bpm::{
-    clean_timing_map, clean_timing_map_cow, compute_bpm_range, compute_bpm_stats,
+    clean_and_normalize_float_digits, clean_and_normalize_speeds_float_digits,
+    clean_timing_map_cow, compute_bpm_map_stats, compute_bpm_range,
     compute_measure_nps_vec_with_timing, compute_tier_bpm, get_nps_stats_with_scratch,
-    normalize_float_digits, normalize_speeds_float_digits,
+    normalize_float_digits,
 };
 use crate::hash::{compute_chart_hash, compute_chart_hash_pair};
 use crate::math::{round_dp, round_sig_figs_6};
@@ -112,8 +113,7 @@ fn chart_timing_tag_pair(tag: Option<&[u8]>) -> (Option<String>, Option<String>)
     let Ok(text) = std::str::from_utf8(bytes) else {
         return (None, None);
     };
-    let raw = clean_timing_map(text);
-    let norm = normalize_float_digits(text);
+    let (raw, norm) = clean_and_normalize_float_digits(text);
     let raw = if raw.is_empty() { None } else { Some(raw) };
     let norm = if norm.is_empty() { None } else { Some(norm) };
     (raw, norm)
@@ -966,44 +966,44 @@ pub fn analyze(
         .unwrap_or(0.0);
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"<invalid-bpms>"))
         .unwrap_or("<invalid-bpms>");
-    let normalized_global_bpms = normalize_float_digits(global_bpms_raw);
-    let cleaned_global_bpms = clean_timing_map(global_bpms_raw);
+    let (cleaned_global_bpms, normalized_global_bpms) =
+        clean_and_normalize_float_digits(global_bpms_raw);
     let global_stops_raw = parsed_data
         .stops
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let normalized_global_stops = normalize_float_digits(global_stops_raw);
-    let cleaned_global_stops = clean_timing_map(global_stops_raw);
+    let (cleaned_global_stops, normalized_global_stops) =
+        clean_and_normalize_float_digits(global_stops_raw);
     let global_delays_raw = parsed_data
         .delays
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let normalized_global_delays = normalize_float_digits(global_delays_raw);
-    let cleaned_global_delays = clean_timing_map(global_delays_raw);
+    let (cleaned_global_delays, normalized_global_delays) =
+        clean_and_normalize_float_digits(global_delays_raw);
     let global_warps_raw = parsed_data
         .warps
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let normalized_global_warps = normalize_float_digits(global_warps_raw);
-    let cleaned_global_warps = clean_timing_map(global_warps_raw);
+    let (cleaned_global_warps, normalized_global_warps) =
+        clean_and_normalize_float_digits(global_warps_raw);
     let global_speeds_raw = parsed_data
         .speeds
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let normalized_global_speeds = normalize_speeds_float_digits(global_speeds_raw);
-    let cleaned_global_speeds = clean_timing_map(global_speeds_raw);
+    let (cleaned_global_speeds, normalized_global_speeds) =
+        clean_and_normalize_speeds_float_digits(global_speeds_raw);
     let global_scrolls_raw = parsed_data
         .scrolls
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let normalized_global_scrolls = normalize_float_digits(global_scrolls_raw);
-    let cleaned_global_scrolls = clean_timing_map(global_scrolls_raw);
+    let (cleaned_global_scrolls, normalized_global_scrolls) =
+        clean_and_normalize_float_digits(global_scrolls_raw);
     let global_fakes_raw = parsed_data
         .fakes
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let normalized_global_fakes = normalize_float_digits(global_fakes_raw);
-    let cleaned_global_fakes = clean_timing_map(global_fakes_raw);
+    let (cleaned_global_fakes, normalized_global_fakes) =
+        clean_and_normalize_float_digits(global_fakes_raw);
     let normalized_global_time_signatures = parsed_data
         .time_signatures
         .and_then(|b| std::str::from_utf8(b).ok())
@@ -1060,8 +1060,7 @@ pub fn analyze(
         .map(|(beat, bpm)| (f64::from(*beat), f64::from(*bpm)))
         .collect();
     let (min_bpm_i32, max_bpm_i32) = compute_bpm_range(&global_bpm_map);
-    let bpm_values: Vec<f64> = global_bpm_map.iter().map(|&(_, bpm)| bpm).collect();
-    let (median_bpm_raw, average_bpm_raw) = compute_bpm_stats(&bpm_values);
+    let (median_bpm_raw, average_bpm_raw) = compute_bpm_map_stats(&global_bpm_map);
     let median_bpm = round_dp(median_bpm_raw, 2);
     let average_bpm = round_dp(average_bpm_raw, 2);
 
