@@ -131,6 +131,18 @@ const fn row_map_hash(x: u32) -> usize {
     x.wrapping_mul(0x9E3779B9) as usize
 }
 
+#[inline(always)]
+const fn row_map_hash_for_key<const COLS: usize>(key: u32) -> usize {
+    let hash = row_map_hash(key);
+    if COLS == MAX_COLUMNS && key >> 28 == 0 {
+        // Dance-double column bits extend above the low bits selected by the
+        // power-of-two table. Fold them down for states without active holds.
+        hash ^ (hash >> 16)
+    } else {
+        hash
+    }
+}
+
 const fn row_map_new() -> RowStateMap {
     RowStateMap {
         entries: Vec::new(),
@@ -164,9 +176,9 @@ fn row_map_reset(map: &mut RowStateMap, expected: usize) {
 }
 
 #[inline(always)]
-fn row_map_probe(map: &RowStateMap, key: u32) -> RowMapProbe {
+fn row_map_probe<const COLS: usize>(map: &RowStateMap, key: u32) -> RowMapProbe {
     debug_assert!(map.mask != 0);
-    let mut idx = row_map_hash(key) & map.mask;
+    let mut idx = row_map_hash_for_key::<COLS>(key) & map.mask;
     loop {
         let entry = &map.entries[idx];
         if entry.mark != map.epoch {
@@ -1596,7 +1608,7 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                 } else {
                     parity_result_state::<COLS>(&init_state, perm, hold_mask, active_mask)
                 };
-                let res_id = match row_map_probe(&g.state_map, key) {
+                let res_id = match row_map_probe::<COLS>(&g.state_map, key) {
                     RowMapProbe::Found(id) => id,
                     RowMapProbe::Vacant(slot) => {
                         let id = parity_add_node(g, key);
