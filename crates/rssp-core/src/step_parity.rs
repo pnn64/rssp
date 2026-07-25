@@ -52,13 +52,8 @@ const fn foot_idx(f: Foot) -> usize {
 }
 
 #[inline(always)]
-const fn foot_is_left(f: Foot) -> bool {
-    matches!(f, Foot::LeftHeel | Foot::LeftToe)
-}
-
-#[inline(always)]
-const fn foot_is_right(f: Foot) -> bool {
-    matches!(f, Foot::RightHeel | Foot::RightToe)
+const fn foot_side(f: Foot) -> u8 {
+    (f as u8 + 1) >> 1
 }
 
 const NUM_FEET: usize = 5;
@@ -690,8 +685,8 @@ fn calc_hold_switch_cost(layout: &StageLayout, initial: &State, result: &State, 
 
         let foot = result.combined_columns[c];
         let initial_foot = initial.combined_columns[c];
-        let switched = (foot_is_left(foot) && !foot_is_left(initial_foot))
-            || (foot_is_right(foot) && !foot_is_right(initial_foot));
+        let side = foot_side(foot);
+        let switched = side != 0 && side != foot_side(initial_foot);
 
         if switched {
             let prev_col = initial.where_the_feet_are[foot_idx(foot)];
@@ -3134,6 +3129,28 @@ mod tests {
         assert_eq!(zero_key, 0);
         assert_eq!(state_from_key::<4>(zero_key), zero_state);
         assert_ne!(zero_state, state_new());
+    }
+
+    #[test]
+    fn foot_side_arithmetic_matches_hold_switch_classification() {
+        let feet = [
+            Foot::None,
+            Foot::LeftHeel,
+            Foot::LeftToe,
+            Foot::RightHeel,
+            Foot::RightToe,
+        ];
+        for foot in feet {
+            for initial in feet {
+                let expected = (matches!(foot, Foot::LeftHeel | Foot::LeftToe)
+                    && !matches!(initial, Foot::LeftHeel | Foot::LeftToe))
+                    || (matches!(foot, Foot::RightHeel | Foot::RightToe)
+                        && !matches!(initial, Foot::RightHeel | Foot::RightToe));
+                let side = foot_side(foot);
+                let switched = side != 0 && side != foot_side(initial);
+                assert_eq!(switched, expected);
+            }
+        }
     }
 
     #[test]
