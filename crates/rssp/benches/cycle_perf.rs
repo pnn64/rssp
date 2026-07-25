@@ -43,15 +43,15 @@ impl ValueFormatter for CycleFormatter {
         values: &mut [f64],
     ) -> &'static str {
         let (items, unit) = match *throughput {
-            Throughput::Elements(items) => (items as f64, "elem/cycle"),
+            Throughput::Elements(items) => (items as f64, "elem/Kcycle"),
             Throughput::Bytes(bytes) | Throughput::BytesDecimal(bytes) => {
-                (bytes as f64, "bytes/cycle")
+                (bytes as f64, "bytes/Kcycle")
             }
-            Throughput::Bits(bits) => (bits as f64, "bits/cycle"),
-            Throughput::ElementsAndBytes { elements, .. } => (elements as f64, "elem/cycle"),
+            Throughput::Bits(bits) => (bits as f64, "bits/Kcycle"),
+            Throughput::ElementsAndBytes { elements, .. } => (elements as f64, "elem/Kcycle"),
         };
         for value in values {
-            *value = items / *value;
+            *value = items * 1_000.0 / *value;
         }
         unit
     }
@@ -85,7 +85,7 @@ mod platform {
         cycles
     }
 
-    pub fn stabilize_thread() {
+    pub fn stabilize_thread() -> usize {
         let cpu_count = std::thread::available_parallelism().map_or(1, usize::from);
         let cpu = std::env::var("RSSP_BENCH_CPU")
             .ok()
@@ -98,6 +98,7 @@ mod platform {
         const THREAD_PRIORITY_HIGHEST: i32 = 2;
         let ok = unsafe { SetThreadPriority(thread, THREAD_PRIORITY_HIGHEST) };
         assert_ne!(ok, 0, "SetThreadPriority failed");
+        cpu
     }
 }
 
@@ -176,7 +177,8 @@ fn large_stop_map(entries: usize) -> String {
 #[cfg(windows)]
 fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     const ENTRIES: usize = 4_096;
-    platform::stabilize_thread();
+    let cpu = platform::stabilize_thread();
+    eprintln!("cycle_perf measurement=QueryThreadCycleTime logical_cpu={cpu}");
 
     let pair_map = large_pair_map(ENTRIES);
     let speed_map = large_speed_map(ENTRIES);
@@ -341,11 +343,19 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         step_parity_bench::SINGLE_MASKS,
     );
     let single_beats = step_parity_bench::beats(step_parity_bench::SINGLE_ROW_COUNT);
+    let single_hold_rows = step_parity_bench::hold_rows::<4>(
+        step_parity_bench::SINGLE_ROW_COUNT,
+        step_parity_bench::SINGLE_MASKS,
+    );
     let double_rows = step_parity_bench::rows::<8>(
         step_parity_bench::DOUBLE_ROW_COUNT,
         step_parity_bench::DOUBLE_MASKS,
     );
     let double_beats = step_parity_bench::beats(step_parity_bench::DOUBLE_ROW_COUNT);
+    let double_hold_rows = step_parity_bench::hold_rows::<8>(
+        step_parity_bench::DOUBLE_ROW_COUNT,
+        step_parity_bench::DOUBLE_MASKS,
+    );
     let mut single_scratch =
         rssp::step_parity::timing_rows_scratch::<4>().expect("dance-single parity layout");
     let mut double_scratch =
@@ -368,6 +378,17 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             ));
         });
     });
+    parity.bench_function("dense_single_holds", |b| {
+        b.iter(|| {
+            black_box(rssp::step_parity::analyze_timing_rows_known_holds(
+                black_box(&single_hold_rows),
+                black_box(&single_beats),
+                black_box(&parity_timing),
+                true,
+                black_box(&mut single_scratch),
+            ));
+        });
+    });
     parity.throughput(Throughput::Elements(
         step_parity_bench::DOUBLE_ROW_COUNT as u64,
     ));
@@ -378,6 +399,17 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
                 black_box(&double_beats),
                 black_box(&parity_timing),
                 false,
+                black_box(&mut double_scratch),
+            ));
+        });
+    });
+    parity.bench_function("dense_double_holds", |b| {
+        b.iter(|| {
+            black_box(rssp::step_parity::analyze_timing_rows_known_holds(
+                black_box(&double_hold_rows),
+                black_box(&double_beats),
+                black_box(&parity_timing),
+                true,
                 black_box(&mut double_scratch),
             ));
         });

@@ -34,6 +34,36 @@ pub fn rows<const LANES: usize>(count: usize, masks: &[u8]) -> Vec<[u8; LANES]> 
         .collect()
 }
 
+pub fn hold_rows<const LANES: usize>(count: usize, masks: &[u8]) -> Vec<[u8; LANES]> {
+    let mut rows = Vec::with_capacity(count);
+    let mut hold_lane = usize::MAX;
+    for idx in 0..count {
+        let mask = masks[idx % masks.len()];
+        let mut row = std::array::from_fn(|lane| {
+            if mask & (1u8 << lane) != 0 {
+                b'1'
+            } else {
+                b'0'
+            }
+        });
+        match idx % 16 {
+            0 => {
+                hold_lane = (idx / 16) % LANES;
+                row[hold_lane] = b'2';
+            }
+            8 => {
+                debug_assert_ne!(hold_lane, usize::MAX);
+                row[hold_lane] = b'3';
+                hold_lane = usize::MAX;
+            }
+            _ if hold_lane != usize::MAX => row[hold_lane] = b'0',
+            _ => {}
+        }
+        rows.push(row);
+    }
+    rows
+}
+
 pub fn beats(count: usize) -> Vec<f32> {
     (0..count).map(|idx| idx as f32 * 0.25).collect()
 }

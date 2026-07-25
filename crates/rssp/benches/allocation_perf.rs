@@ -76,6 +76,8 @@ enum Mode {
     Annotations,
     ParitySingle,
     ParityDouble,
+    ParitySingleHolds,
+    ParityDoubleHolds,
 }
 
 struct SimInput {
@@ -131,6 +133,8 @@ fn parse_args() -> (Mode, usize) {
                     "annotations" => Mode::Annotations,
                     "parity-single" => Mode::ParitySingle,
                     "parity-double" => Mode::ParityDouble,
+                    "parity-single-holds" => Mode::ParitySingleHolds,
+                    "parity-double-holds" => Mode::ParityDoubleHolds,
                     _ => Mode::Full,
                 };
                 i += 2;
@@ -172,7 +176,10 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             compute_note_annotations: true,
             ..rssp::AnalysisOptions::default()
         },
-        Mode::ParitySingle | Mode::ParityDouble => rssp::AnalysisOptions::default(),
+        Mode::ParitySingle
+        | Mode::ParityDouble
+        | Mode::ParitySingleHolds
+        | Mode::ParityDoubleHolds => rssp::AnalysisOptions::default(),
     }
 }
 
@@ -188,7 +195,10 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
                 .expect("fixture should parse");
                 checksum = checksum.wrapping_add(parsed.notes_list.len());
             }
-            Mode::ParitySingle | Mode::ParityDouble => {
+            Mode::ParitySingle
+            | Mode::ParityDouble
+            | Mode::ParitySingleHolds
+            | Mode::ParityDoubleHolds => {
                 unreachable!("step-parity modes use their dedicated allocation runner")
             }
             _ => {
@@ -220,6 +230,8 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Annotations => "annotations",
         Mode::ParitySingle => "parity-single",
         Mode::ParityDouble => "parity-double",
+        Mode::ParitySingleHolds => "parity-single-holds",
+        Mode::ParityDoubleHolds => "parity-double-holds",
     }
 }
 
@@ -261,9 +273,14 @@ fn run_parity_alloc<const LANES: usize>(
     mode: &str,
     row_count: usize,
     masks: &[u8],
+    has_holds: bool,
     iterations: usize,
 ) {
-    let rows = step_parity_bench::rows::<LANES>(row_count, masks);
+    let rows = if has_holds {
+        step_parity_bench::hold_rows::<LANES>(row_count, masks)
+    } else {
+        step_parity_bench::rows::<LANES>(row_count, masks)
+    };
     let beats = step_parity_bench::beats(row_count);
     let timing = step_parity_bench::timing();
 
@@ -279,7 +296,7 @@ fn run_parity_alloc<const LANES: usize>(
         black_box(&rows),
         black_box(&beats),
         black_box(&timing),
-        false,
+        has_holds,
         black_box(&mut scratch),
     ));
     let elapsed = start.elapsed();
@@ -294,7 +311,7 @@ fn run_parity_alloc<const LANES: usize>(
             black_box(&rows),
             black_box(&beats),
             black_box(&timing),
-            false,
+            has_holds,
             black_box(&mut scratch),
         ));
     }
@@ -313,6 +330,7 @@ fn main() {
                 mode_name(mode),
                 step_parity_bench::SINGLE_ROW_COUNT,
                 step_parity_bench::SINGLE_MASKS,
+                false,
                 iterations,
             );
             return;
@@ -322,6 +340,27 @@ fn main() {
                 mode_name(mode),
                 step_parity_bench::DOUBLE_ROW_COUNT,
                 step_parity_bench::DOUBLE_MASKS,
+                false,
+                iterations,
+            );
+            return;
+        }
+        Mode::ParitySingleHolds => {
+            run_parity_alloc::<4>(
+                mode_name(mode),
+                step_parity_bench::SINGLE_ROW_COUNT,
+                step_parity_bench::SINGLE_MASKS,
+                true,
+                iterations,
+            );
+            return;
+        }
+        Mode::ParityDoubleHolds => {
+            run_parity_alloc::<8>(
+                mode_name(mode),
+                step_parity_bench::DOUBLE_ROW_COUNT,
+                step_parity_bench::DOUBLE_MASKS,
+                true,
                 iterations,
             );
             return;
