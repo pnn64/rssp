@@ -5,6 +5,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
+#[path = "support/step_parity.rs"]
+mod step_parity_bench;
+
 const FIXTURES: [(&str, &str); 4] = [
     ("fixtures/camellia_mix.ssc", "ssc"),
     ("fixtures/hash_fixture.ssc", "ssc"),
@@ -71,6 +74,8 @@ enum Mode {
     Fast,
     Full,
     Annotations,
+    ParitySingle,
+    ParityDouble,
 }
 
 struct SimInput {
@@ -124,6 +129,8 @@ fn parse_args() -> (Mode, usize) {
                     "parse" => Mode::Parse,
                     "fast" => Mode::Fast,
                     "annotations" => Mode::Annotations,
+                    "parity-single" => Mode::ParitySingle,
+                    "parity-double" => Mode::ParityDouble,
                     _ => Mode::Full,
                 };
                 i += 2;
@@ -165,6 +172,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             compute_note_annotations: true,
             ..rssp::AnalysisOptions::default()
         },
+        Mode::ParitySingle | Mode::ParityDouble => rssp::AnalysisOptions::default(),
     }
 }
 
@@ -179,6 +187,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
                 )
                 .expect("fixture should parse");
                 checksum = checksum.wrapping_add(parsed.notes_list.len());
+            }
+            Mode::ParitySingle | Mode::ParityDouble => {
+                unreachable!("step-parity modes use their dedicated allocation runner")
             }
             _ => {
                 let summary = rssp::analyze(
@@ -207,11 +218,117 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Fast => "fast",
         Mode::Full => "full",
         Mode::Annotations => "annotations",
+        Mode::ParitySingle => "parity-single",
+        Mode::ParityDouble => "parity-double",
     }
+}
+
+fn print_parity_alloc(
+    mode: &str,
+    phase: &str,
+    iterations: usize,
+    rows: usize,
+    elapsed: std::time::Duration,
+    before: Counters,
+    after: Counters,
+) {
+    let divisor = iterations as f64;
+    let seconds = elapsed.as_secs_f64();
+    let total_rows = rows as f64 * divisor;
+    println!(
+        concat!(
+            "mode={} phase={} iters={} elapsed_s={:.6} throughput_mrows_s={:.3} ",
+            "alloc_calls_per_iter={:.1} dealloc_calls_per_iter={:.1} ",
+            "realloc_calls_per_iter={:.1} alloc_bytes_per_iter={:.1} ",
+            "realloc_bytes_per_iter={:.1} live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        mode,
+        phase,
+        iterations,
+        seconds,
+        total_rows / seconds / 1_000_000.0,
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_parity_alloc<const LANES: usize>(
+    mode: &str,
+    row_count: usize,
+    masks: &[u8],
+    iterations: usize,
+) {
+    let rows = step_parity_bench::rows::<LANES>(row_count, masks);
+    let beats = step_parity_bench::beats(row_count);
+    let timing = step_parity_bench::timing();
+
+    // Initialize the immutable layout/permutation cache outside both samples.
+    drop(rssp::step_parity::timing_rows_scratch::<LANES>());
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut scratch =
+        rssp::step_parity::timing_rows_scratch::<LANES>().expect("supported parity layout");
+    black_box(rssp::step_parity::analyze_timing_rows_known_holds(
+        black_box(&rows),
+        black_box(&beats),
+        black_box(&timing),
+        false,
+        black_box(&mut scratch),
+    ));
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    print_parity_alloc(mode, "cold", 1, row_count, elapsed, before, after);
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    for _ in 0..iterations {
+        black_box(rssp::step_parity::analyze_timing_rows_known_holds(
+            black_box(&rows),
+            black_box(&beats),
+            black_box(&timing),
+            false,
+            black_box(&mut scratch),
+        ));
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    print_parity_alloc(
+        mode, "reused", iterations, row_count, elapsed, before, after,
+    );
 }
 
 fn main() {
     let (mode, iterations) = parse_args();
+    match mode {
+        Mode::ParitySingle => {
+            run_parity_alloc::<4>(
+                mode_name(mode),
+                step_parity_bench::SINGLE_ROW_COUNT,
+                step_parity_bench::SINGLE_MASKS,
+                iterations,
+            );
+            return;
+        }
+        Mode::ParityDouble => {
+            run_parity_alloc::<8>(
+                mode_name(mode),
+                step_parity_bench::DOUBLE_ROW_COUNT,
+                step_parity_bench::DOUBLE_MASKS,
+                iterations,
+            );
+            return;
+        }
+        _ => {}
+    }
+
     let corpus = load_corpus();
     let options = options_for(mode);
     let bytes: usize = corpus.iter().map(|sim| sim.raw.len()).sum();
