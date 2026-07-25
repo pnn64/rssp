@@ -195,6 +195,84 @@ fn compute_stream_counts_and_range(measures: &[usize]) -> (StreamCounts, Option<
     (sc, first_stream.map(|start| (start, last_stream)))
 }
 
+/// Counts stream measures and tokenizes the active range in one traversal.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "stream counters are intentionally u32 for output compatibility"
+)]
+fn compute_stream_counts_and_tokens(measures: &[usize]) -> (StreamCounts, Vec<Token>) {
+    let mut counts = StreamCounts::default();
+    let mut tokens = Vec::with_capacity(scratch_cap(measures.len()));
+    let (mut seen_stream, mut leading_breaks, mut pending_breaks) = (false, 0usize, 0usize);
+    let (mut token_category, mut token_len) = (RunDensity::Break, 0usize);
+
+    for &density in measures {
+        let category = categorize_measure_density(density);
+        if category == RunDensity::Break {
+            if seen_stream {
+                pending_breaks += 1;
+                if token_category == RunDensity::Break {
+                    token_len += 1;
+                } else {
+                    tokens.push(Token::Run(token_category, token_len));
+                    token_category = RunDensity::Break;
+                    token_len = 1;
+                }
+            } else {
+                leading_breaks += 1;
+            }
+            continue;
+        }
+
+        match category {
+            RunDensity::Run32 => counts.run32_streams += 1,
+            RunDensity::Run24 => counts.run24_streams += 1,
+            RunDensity::Run20 => counts.run20_streams += 1,
+            RunDensity::Run16 => counts.run16_streams += 1,
+            RunDensity::Break => unreachable!(),
+        }
+
+        if seen_stream {
+            if pending_breaks != 0 {
+                counts.sn_breaks += pending_breaks as u32;
+                if pending_breaks >= 2 {
+                    counts.total_breaks += pending_breaks as u32;
+                }
+                pending_breaks = 0;
+            }
+
+            if token_category == category {
+                token_len += 1;
+            } else {
+                tokens.push(match token_category {
+                    RunDensity::Break => Token::Break(token_len),
+                    run => Token::Run(run, token_len),
+                });
+                token_category = category;
+                token_len = 1;
+            }
+        } else {
+            seen_stream = true;
+            if leading_breaks >= 2 {
+                counts.total_breaks += leading_breaks as u32;
+            }
+            token_category = category;
+            token_len = 1;
+        }
+    }
+
+    if !seen_stream {
+        return (StreamCounts::default(), tokens);
+    }
+    if pending_breaks >= 2 {
+        counts.total_breaks += pending_breaks as u32;
+    }
+    if token_category != RunDensity::Break {
+        tokens.push(Token::Run(token_category, token_len));
+    }
+    (counts, tokens)
+}
+
 #[must_use]
 pub fn compute_stream_outputs(
     measures: &[usize],
@@ -203,16 +281,15 @@ pub fn compute_stream_outputs(
     (String, String, String),
     (String, String, String),
 ) {
-    let (counts, range) = compute_stream_counts_and_range(measures);
-    let Some((start, end)) = range else {
+    let (counts, tokens) = compute_stream_counts_and_tokens(measures);
+    if tokens.is_empty() {
         return (
             counts,
             (String::new(), String::new(), String::new()),
             no_streams3(),
         );
-    };
+    }
 
-    let tokens = tokenize(&measures[start..=end]);
     let sn = (
         format_breakdown_tokens(&tokens, BreakdownMode::Detailed),
         format_breakdown_tokens(&tokens, BreakdownMode::Partial),
@@ -806,6 +883,15 @@ mod tests {
             let (counts, sn, standard) = compute_stream_outputs(&measures);
             assert_eq!(counts, compute_stream_counts(&measures), "{measures:?}");
             assert_eq!(sn, generate_breakdowns(&measures), "{measures:?}");
+            assert_eq!(
+                sn,
+                (
+                    generate_breakdown(&measures, BreakdownMode::Detailed),
+                    generate_breakdown(&measures, BreakdownMode::Partial),
+                    generate_breakdown(&measures, BreakdownMode::Simplified),
+                ),
+                "{measures:?}"
+            );
             assert_eq!(standard, stream_breakdowns(&measures), "{measures:?}");
         }
     }

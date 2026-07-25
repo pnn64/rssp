@@ -17,7 +17,10 @@ pub(crate) fn is_display_bpm(bpm: f64) -> bool {
     bpm > 0.0 && bpm < GIMMICK_BPM_THRESHOLD
 }
 
-pub use crate::nps::{compute_measure_nps_vec, compute_measure_nps_vec_with_timing, get_nps_stats};
+pub use crate::nps::{
+    compute_measure_nps_vec, compute_measure_nps_vec_with_timing, get_nps_stats,
+    get_nps_stats_with_scratch,
+};
 
 #[inline]
 fn has_control(s: &str) -> bool {

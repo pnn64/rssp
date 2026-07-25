@@ -1,4 +1,41 @@
 use crate::stats::{RunDensity, categorize_measure_density};
+use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
+
+#[derive(Default)]
+struct U64MixHasher(u64);
+
+impl U64MixHasher {
+    #[inline(always)]
+    fn mix(mut value: u64) -> u64 {
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^ (value >> 31)
+    }
+}
+
+impl Hasher for U64MixHasher {
+    #[inline(always)]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    #[inline(always)]
+    fn write(&mut self, bytes: &[u8]) {
+        let mut value = 0u64;
+        for (shift, &byte) in bytes.iter().take(8).enumerate() {
+            value |= u64::from(byte) << (shift * 8);
+        }
+        self.0 = Self::mix(value);
+    }
+
+    #[inline(always)]
+    fn write_u64(&mut self, value: u64) {
+        self.0 = Self::mix(value);
+    }
+}
+
+type BpmCountsMap = HashMap<u64, [usize; 4], BuildHasherDefault<U64MixHasher>>;
 
 /// Sorted difficulty table for efficient bound queries.
 type DifficultyMeasures = [(i32, i32); 13];
@@ -989,9 +1026,8 @@ fn compute_matrix_variable_bpm(measure_densities: &[usize], bpm_map: &[(f64, f64
         return compute_matrix_variable_bpm_small(measure_densities, bpm_map);
     }
 
-    use std::collections::HashMap;
-
-    let mut bpm_counts: HashMap<u64, [usize; 4]> = HashMap::with_capacity(bpm_map.len());
+    let mut bpm_counts =
+        BpmCountsMap::with_capacity_and_hasher(bpm_map.len(), BuildHasherDefault::default());
 
     let (mut bpm_idx, mut next_beat) = (0usize, bpm_map.get(1).map_or(f64::INFINITY, |m| m.0));
     for (idx, &density) in measure_densities.iter().enumerate() {

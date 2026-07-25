@@ -9,8 +9,8 @@ use crate::step_parity;
 
 use crate::bpm::{
     clean_timing_map, clean_timing_map_cow, compute_bpm_range, compute_bpm_stats,
-    compute_measure_nps_vec_with_timing, compute_tier_bpm, get_nps_stats, normalize_float_digits,
-    normalize_speeds_float_digits,
+    compute_measure_nps_vec_with_timing, compute_tier_bpm, get_nps_stats_with_scratch,
+    normalize_float_digits, normalize_speeds_float_digits,
 };
 use crate::hash::{compute_chart_hash, compute_chart_hash_pair};
 use crate::math::{round_dp, round_sig_figs_6};
@@ -397,6 +397,7 @@ fn build_chart_summary(
     compiled_custom_patterns: &CompiledCustomPatterns,
     parity_scratch4: &mut Option<step_parity::TimingRowsScratch<4>>,
     parity_scratch8: &mut Option<step_parity::TimingRowsScratch<8>>,
+    nps_scratch: &mut Vec<f64>,
     options: &AnalysisOptions,
 ) -> Option<(ChartSummary, i32)> {
     let chart_start_time = Instant::now();
@@ -684,7 +685,7 @@ fn build_chart_summary(
     };
 
     let mut measure_nps_vec = compute_measure_nps_vec_with_timing(&measure_densities, timing);
-    let (max_nps_raw, median_nps_raw) = get_nps_stats(&measure_nps_vec);
+    let (max_nps_raw, median_nps_raw) = get_nps_stats_with_scratch(&measure_nps_vec, nps_scratch);
     let max_nps = round_sig_figs_6(max_nps_raw);
     let median_nps = round_dp(median_nps_raw, 2);
     for nps in &mut measure_nps_vec {
@@ -1081,6 +1082,7 @@ pub fn analyze(
     let mut global_timing = None;
     let mut parity_scratch4 = None;
     let mut parity_scratch8 = None;
+    let mut nps_scratch = Vec::new();
     let options_ref = &options;
     let compiled_custom_patterns_ref = &compiled_custom_patterns;
     for entry in entries {
@@ -1106,6 +1108,7 @@ pub fn analyze(
             compiled_custom_patterns_ref,
             &mut parity_scratch4,
             &mut parity_scratch8,
+            &mut nps_scratch,
             options_ref,
         ) {
             if chart_length > total_length {

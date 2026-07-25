@@ -349,6 +349,21 @@ fn bench_nps_stats(c: &mut Criterion) {
             black_box(outputs);
         });
     });
+    group.bench_function("reused_median_scratch", |b| {
+        b.iter(|| {
+            let mut outputs = Vec::with_capacity(timing_inputs.len());
+            let mut scratch = Vec::new();
+            for entry in &timing_inputs {
+                let measure_nps_vec = rssp::bpm::compute_measure_nps_vec_with_timing(
+                    black_box(&entry.measure_densities),
+                    black_box(&entry.timing),
+                );
+                let stats = rssp::bpm::get_nps_stats_with_scratch(&measure_nps_vec, &mut scratch);
+                outputs.push(stats);
+            }
+            black_box(outputs);
+        });
+    });
     group.finish();
 }
 

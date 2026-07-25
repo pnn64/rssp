@@ -255,29 +255,39 @@ fn compute_nps_iter<F: Fn(usize) -> f64>(densities: &[usize], get_bpm: F) -> Vec
         .collect()
 }
 
-fn median(arr: &[f64]) -> f64 {
+fn median_with_scratch(arr: &[f64], scratch: &mut Vec<f64>) -> f64 {
     if arr.is_empty() {
         return 0.0;
     }
-    let mut v = arr.to_vec();
-    let mid = v.len() / 2;
-    v.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-    if v.len() % 2 == 1 {
-        v[mid]
+    scratch.extend_from_slice(arr);
+    let mid = scratch.len() / 2;
+    scratch.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    if scratch.len() % 2 == 1 {
+        scratch[mid]
     } else {
-        f64::midpoint(v[..mid].iter().fold(f64::MIN, |a, &b| a.max(b)), v[mid])
+        f64::midpoint(
+            scratch[..mid].iter().fold(f64::MIN, |a, &b| a.max(b)),
+            scratch[mid],
+        )
     }
 }
 
 #[must_use]
 pub fn get_nps_stats(nps: &[f64]) -> (f64, f64) {
+    get_nps_stats_with_scratch(nps, &mut Vec::new())
+}
+
+/// Computes NPS statistics using caller-owned median-selection storage.
+#[must_use]
+pub fn get_nps_stats_with_scratch(nps: &[f64], scratch: &mut Vec<f64>) -> (f64, f64) {
+    scratch.clear();
     if nps.is_empty() {
         return (0.0, 0.0);
     }
     if nps.len() < NPS_MEDIAN_SCAN_MIN {
         return (
             nps.iter().fold(f64::MIN, |a, &b| a.max(b)).max(0.0),
-            median(nps),
+            median_with_scratch(nps, scratch),
         );
     }
 
@@ -295,7 +305,7 @@ pub fn get_nps_stats(nps: &[f64]) -> (f64, f64) {
     } else if all_finite && zeros > nps.len() / 2 {
         0.0
     } else {
-        median(nps)
+        median_with_scratch(nps, scratch)
     };
     (max.max(0.0), med)
 }
@@ -327,7 +337,7 @@ fn equally_spaced_impl<const L: usize>(data: &[u8]) -> Vec<bool> {
 mod tests {
     use super::{
         NPS_MEDIAN_SCAN_MIN, compute_measure_nps_vec_with_timing, get_nps_stats,
-        measure_equally_spaced,
+        get_nps_stats_with_scratch, measure_equally_spaced,
     };
     use crate::timing::{TimingFormat, compute_timing_segments, timing_data_from_segments};
 
@@ -361,6 +371,35 @@ mod tests {
     #[test]
     fn nps_stats_empty() {
         assert_eq!(get_nps_stats(&[]), (0.0, 0.0));
+    }
+
+    #[test]
+    fn reusable_nps_stats_match_allocating_api_and_retain_capacity() {
+        let cases = [
+            vec![],
+            vec![1.0],
+            vec![3.0, 1.0, 2.0, 4.0],
+            vec![0.0; NPS_MEDIAN_SCAN_MIN + 1],
+            (0..NPS_MEDIAN_SCAN_MIN + 3)
+                .map(|i| ((i * 37) % 23) as f64 / 3.0)
+                .collect(),
+        ];
+        let mut scratch = Vec::new();
+
+        for values in cases {
+            assert_eq!(
+                get_nps_stats_with_scratch(&values, &mut scratch),
+                get_nps_stats(&values)
+            );
+        }
+
+        let capacity = scratch.capacity();
+        let short = [4.0, 1.0, 3.0, 2.0];
+        assert_eq!(
+            get_nps_stats_with_scratch(&short, &mut scratch),
+            get_nps_stats(&short)
+        );
+        assert_eq!(scratch.capacity(), capacity);
     }
 
     #[test]

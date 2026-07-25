@@ -337,6 +337,65 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     });
     cleanup.finish();
 
+    let stream_densities: Vec<_> = (0..16_384)
+        .map(|idx| match idx % 23 {
+            0..=7 => 16,
+            8..=11 => 20,
+            12..=14 => 24,
+            15..=16 => 32,
+            _ => 0,
+        })
+        .collect();
+    let matrix_densities: Vec<_> = (0..2_048).map(|idx| [16, 20, 24, 32][idx & 3]).collect();
+    let matrix_bpms: Vec<_> = (0..1_024)
+        .map(|idx| (idx as f64 * 8.0, 60.0 + idx as f64 * 0.125))
+        .collect();
+    let nps_values: Vec<_> = (0..1_025)
+        .map(|idx| ((idx * 37) % 257) as f64 / 7.0)
+        .collect();
+    let mut nps_scratch = Vec::new();
+
+    let mut optimizations = c.benchmark_group("cycles/optimizations");
+    optimizations.sample_size(100);
+    optimizations.measurement_time(Duration::from_secs(2));
+    optimizations.throughput(Throughput::Elements(stream_densities.len() as u64));
+    optimizations.bench_function("stream_outputs", |b| {
+        b.iter(|| {
+            black_box(rssp::stats::compute_stream_outputs(black_box(
+                &stream_densities,
+            )));
+        });
+    });
+    optimizations.throughput(Throughput::Elements(matrix_densities.len() as u64));
+    optimizations.bench_function("matrix_many_bpms", |b| {
+        b.iter(|| {
+            black_box(rssp::matrix::compute_matrix_rating(
+                black_box(&matrix_densities),
+                black_box(&matrix_bpms),
+            ));
+        });
+    });
+    const NPS_BATCH: usize = 256;
+    optimizations.throughput(Throughput::Elements((nps_values.len() * NPS_BATCH) as u64));
+    optimizations.bench_function("nps_stats_allocating", |b| {
+        b.iter(|| {
+            for _ in 0..NPS_BATCH {
+                black_box(rssp::bpm::get_nps_stats(black_box(&nps_values)));
+            }
+        });
+    });
+    optimizations.bench_function("nps_stats_reused", |b| {
+        b.iter(|| {
+            for _ in 0..NPS_BATCH {
+                black_box(rssp::bpm::get_nps_stats_with_scratch(
+                    black_box(&nps_values),
+                    black_box(&mut nps_scratch),
+                ));
+            }
+        });
+    });
+    optimizations.finish();
+
     let parity_timing = step_parity_bench::timing();
     let single_rows = step_parity_bench::rows::<4>(
         step_parity_bench::SINGLE_ROW_COUNT,
