@@ -1,4 +1,4 @@
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -83,6 +83,23 @@ fn build_pattern_input() -> (Vec<[u8; 4]>, Vec<u8>) {
     )
 }
 
+fn custom_pattern_input(unique_count: usize) -> Vec<String> {
+    const DIRECTIONS: [u8; 4] = *b"LDUR";
+    let mut patterns = Vec::with_capacity(unique_count * 3);
+    for mut value in 0..unique_count {
+        let mut bytes = [b'L'; 8];
+        for byte in &mut bytes {
+            *byte = DIRECTIONS[value & 3];
+            value >>= 2;
+        }
+        let pattern = String::from_utf8(bytes.to_vec()).expect("directions are valid UTF-8");
+        patterns.push(pattern.clone());
+        patterns.push(pattern.to_ascii_lowercase());
+        patterns.push(pattern);
+    }
+    patterns
+}
+
 fn bench_mono_counts(c: &mut Criterion) {
     let (rows, bitmasks) = build_pattern_input();
     let mut group = c.benchmark_group("mono");
@@ -131,5 +148,23 @@ fn bench_mono_counts(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_mono_counts);
+fn bench_custom_patterns(c: &mut Criterion) {
+    const UNIQUE_PATTERNS: usize = 256;
+    let patterns = custom_pattern_input(UNIQUE_PATTERNS);
+
+    let mut compile_group = c.benchmark_group("custom_patterns_compile");
+    compile_group.sample_size(100);
+    compile_group.measurement_time(Duration::from_secs(2));
+    compile_group.throughput(Throughput::Elements(patterns.len() as u64));
+    compile_group.bench_function("compile_256_unique_with_duplicates", |b| {
+        b.iter(|| {
+            black_box(rssp::patterns::compile_custom_patterns(black_box(
+                &patterns,
+            )));
+        });
+    });
+    compile_group.finish();
+}
+
+criterion_group!(benches, bench_mono_counts, bench_custom_patterns);
 criterion_main!(benches);

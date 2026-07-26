@@ -84,6 +84,7 @@ enum Mode {
     Json,
     JsonFull,
     CourseJson,
+    CustomCompile,
     ParitySingle,
     ParityDouble,
     ParitySingleHolds,
@@ -151,6 +152,7 @@ fn parse_args() -> (Mode, usize) {
                     "json" => Mode::Json,
                     "json-full" => Mode::JsonFull,
                     "course-json" => Mode::CourseJson,
+                    "custom-compile" => Mode::CustomCompile,
                     "parity-single" => Mode::ParitySingle,
                     "parity-double" => Mode::ParityDouble,
                     "parity-single-holds" => Mode::ParitySingleHolds,
@@ -204,6 +206,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
         },
+        Mode::CustomCompile => rssp::AnalysisOptions::default(),
         Mode::JsonFull => rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
@@ -293,6 +296,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::CourseJson => {
                 unreachable!("course report mode uses its dedicated allocation runner")
+            }
+            Mode::CustomCompile => {
+                unreachable!("custom pattern modes use their dedicated allocation runner")
             }
             Mode::ParitySingle
             | Mode::ParityDouble
@@ -460,6 +466,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Json => "json",
         Mode::JsonFull => "json-full",
         Mode::CourseJson => "course-json",
+        Mode::CustomCompile => "custom-compile",
         Mode::ParitySingle => "parity-single",
         Mode::ParityDouble => "parity-double",
         Mode::ParitySingleHolds => "parity-single-holds",
@@ -554,9 +561,70 @@ fn run_parity_alloc<const LANES: usize>(
     );
 }
 
+fn custom_pattern_input(unique_count: usize) -> Vec<String> {
+    const DIRECTIONS: [u8; 4] = *b"LDUR";
+    let mut patterns = Vec::with_capacity(unique_count * 3);
+    for mut value in 0..unique_count {
+        let mut bytes = [b'L'; 8];
+        for byte in &mut bytes {
+            *byte = DIRECTIONS[value & 3];
+            value >>= 2;
+        }
+        let pattern = String::from_utf8(bytes.to_vec()).expect("directions are valid UTF-8");
+        patterns.push(pattern.clone());
+        patterns.push(pattern.to_ascii_lowercase());
+        patterns.push(pattern);
+    }
+    patterns
+}
+
+fn run_custom_pattern_alloc(iterations: usize) {
+    const UNIQUE_PATTERNS: usize = 256;
+    let patterns = custom_pattern_input(UNIQUE_PATTERNS);
+    black_box(rssp::patterns::compile_custom_patterns(&patterns));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let compiled = rssp::patterns::compile_custom_patterns(black_box(&patterns));
+        checksum = checksum.wrapping_add(usize::from(!rssp::patterns::compiled_custom_is_empty(
+            &compiled,
+        )));
+        black_box(compiled);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=custom-compile iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_patterns_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        patterns.len() as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
 fn main() {
     let (mode, iterations) = parse_args();
     match mode {
+        Mode::CustomCompile => {
+            run_custom_pattern_alloc(iterations);
+            return;
+        }
         Mode::ParitySingle => {
             run_parity_alloc::<4>(
                 mode_name(mode),

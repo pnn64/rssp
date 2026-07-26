@@ -1,4 +1,5 @@
-use std::collections::{HashSet, VecDeque};
+use std::borrow::Cow;
+use std::collections::{HashMap, VecDeque};
 use std::sync::LazyLock;
 
 // ============================================================================
@@ -96,7 +97,6 @@ pub struct PatternAnalysis {
 #[derive(Debug, Clone)]
 struct CompiledPattern {
     pattern: String,
-    bits: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,17 +133,25 @@ fn ac_output_slice<T>(dfa: &AcDfa<T>, state: u32) -> &[T] {
     &dfa.flat_outputs[start..start + len]
 }
 
-fn ac_build<T: Copy>(patterns: &[(T, &[u8])]) -> AcDfa<T> {
+fn ac_build<T, P>(
+    patterns: impl IntoIterator<Item = (T, P)>,
+    mut pattern_symbol: impl FnMut(u8) -> u8,
+) -> AcDfa<T>
+where
+    T: Copy,
+    P: AsRef<[u8]>,
+{
     let mut goto: Vec<[u32; AC_ALPHA]> = vec![[u32::MAX; AC_ALPHA]];
     let mut output: Vec<Vec<T>> = vec![vec![]];
 
-    for &(id, pat) in patterns {
+    for (id, pat) in patterns {
+        let pat = pat.as_ref();
         if pat.is_empty() {
             continue;
         }
         let mut state = 0usize;
         for &b in pat {
-            let sym = (b & 0x0F) as usize;
+            let sym = (pattern_symbol(b) & 0x0F) as usize;
             if goto[state][sym] == u32::MAX {
                 goto[state][sym] = goto.len() as u32;
                 goto.push([u32::MAX; AC_ALPHA]);
@@ -310,10 +318,6 @@ const fn pattern_bit(b: u8) -> u8 {
     }
 }
 
-fn string_to_pattern_bits(p: &str) -> Vec<u8> {
-    p.bytes().map(pattern_bit).collect()
-}
-
 const fn pattern_bits<const N: usize>(p: &[u8; N]) -> [u8; N] {
     let mut bits = [0u8; N];
     let mut i = 0;
@@ -437,7 +441,8 @@ define_patterns! {
     }
 }
 
-static PATTERN_DFA: LazyLock<AcDfa<PatternVariant>> = LazyLock::new(|| ac_build(ALL_PATTERNS));
+static PATTERN_DFA: LazyLock<AcDfa<PatternVariant>> =
+    LazyLock::new(|| ac_build(ALL_PATTERNS.iter().copied(), |byte| byte));
 
 // ============================================================================
 // Pattern Detection Functions
@@ -448,11 +453,12 @@ pub fn detect_patterns<B: AsRef<[u8]>>(
     bitmasks: &[u8],
     patterns: &[(PatternVariant, B)],
 ) -> PatternCounts {
-    let pat_refs: Vec<(PatternVariant, &[u8])> = patterns
-        .iter()
-        .map(|(v, bits)| (*v, bits.as_ref()))
-        .collect();
-    let dfa = ac_build(&pat_refs);
+    let dfa = ac_build(
+        patterns
+            .iter()
+            .map(|(variant, bits)| (*variant, bits.as_ref())),
+        |byte| byte,
+    );
     ac_search_array(bitmasks, &dfa)
 }
 
@@ -486,29 +492,44 @@ pub const fn compiled_custom_is_empty(compiled: &CompiledCustomPatterns) -> bool
 }
 
 pub fn compile_custom_patterns(patterns: &[String]) -> CompiledCustomPatterns {
-    let mut compiled = Vec::with_capacity(patterns.len());
-    let mut seen = HashSet::with_capacity(patterns.len());
+    let mut pattern_indexes = HashMap::with_capacity(patterns.len());
 
     for pattern_str in patterns {
-        let upper = pattern_str.to_ascii_uppercase();
-        if !seen.insert(upper.clone()) {
+        let upper = if pattern_str.bytes().any(|byte| byte.is_ascii_lowercase()) {
+            Cow::Owned(pattern_str.to_ascii_uppercase())
+        } else {
+            Cow::Borrowed(pattern_str.as_str())
+        };
+        if pattern_indexes.contains_key(upper.as_ref()) {
             continue;
         }
-        let bits = string_to_pattern_bits(&upper);
-        compiled.push(CompiledPattern {
-            pattern: upper,
-            bits,
-        });
+        let next_index = pattern_indexes.len();
+        pattern_indexes.insert(upper.into_owned(), next_index);
     }
 
-    let dfa_patterns: Vec<(usize, &[u8])> = compiled
-        .iter()
-        .enumerate()
-        .map(|(i, p)| (i, p.bits.as_slice()))
+    let mut ordered_patterns: Vec<Option<String>> = std::iter::repeat_with(|| None)
+        .take(pattern_indexes.len())
+        .collect();
+    for (pattern, index) in pattern_indexes {
+        ordered_patterns[index] = Some(pattern);
+    }
+    let compiled: Vec<_> = ordered_patterns
+        .into_iter()
+        .map(|pattern| CompiledPattern {
+            pattern: pattern.expect("custom pattern indexes should be contiguous"),
+        })
         .collect();
 
+    let dfa = ac_build(
+        compiled
+            .iter()
+            .enumerate()
+            .map(|(index, pattern)| (index, pattern.pattern.as_bytes())),
+        pattern_bit,
+    );
+
     CompiledCustomPatterns {
-        dfa: ac_build(&dfa_patterns),
+        dfa,
         patterns: compiled,
     }
 }
@@ -903,9 +924,11 @@ pub const fn compute_box_counts(counts: &PatternCounts) -> BoxCounts {
 #[cfg(test)]
 mod tests {
     use super::{
-        analyze_patterns_from_rows, compile_custom_patterns, count_anchors, count_facing_steps,
-        detect_custom_patterns_compiled, detect_default_patterns,
+        AC_ALPHA, CompiledCustomPatterns, CompiledPattern, CustomPatternSummary, ac_build,
+        ac_output_slice, analyze_patterns_from_rows, compile_custom_patterns, count_anchors,
+        count_facing_steps, detect_custom_patterns_compiled, detect_default_patterns, pattern_bit,
     };
+    use std::collections::HashSet;
 
     fn row_from_mask(mask: u8) -> [u8; 4] {
         std::array::from_fn(|column| {
@@ -915,6 +938,57 @@ mod tests {
                 b'1'
             }
         })
+    }
+
+    fn compile_custom_patterns_materialized(patterns: &[String]) -> CompiledCustomPatterns {
+        let mut compiled = Vec::with_capacity(patterns.len());
+        let mut pattern_bits = Vec::with_capacity(patterns.len());
+        let mut seen = HashSet::with_capacity(patterns.len());
+
+        for pattern in patterns {
+            let upper = pattern.to_ascii_uppercase();
+            if !seen.insert(upper.clone()) {
+                continue;
+            }
+            pattern_bits.push(upper.bytes().map(pattern_bit).collect::<Vec<_>>());
+            compiled.push(CompiledPattern { pattern: upper });
+        }
+
+        let dfa = ac_build(
+            pattern_bits
+                .iter()
+                .enumerate()
+                .map(|(index, bits)| (index, bits.as_slice())),
+            |byte| byte,
+        );
+        CompiledCustomPatterns {
+            patterns: compiled,
+            dfa,
+        }
+    }
+
+    fn detect_custom_patterns_materialized(
+        bitmasks: &[u8],
+        compiled: &CompiledCustomPatterns,
+    ) -> Vec<CustomPatternSummary> {
+        let mut counts = vec![0u32; compiled.patterns.len()];
+        let mut state = 0u32;
+        for &bitmask in bitmasks {
+            let symbol = (bitmask & 0x0F) as usize;
+            state = compiled.dfa.goto[state as usize * AC_ALPHA + symbol];
+            for &id in ac_output_slice(&compiled.dfa, state) {
+                counts[id] += 1;
+            }
+        }
+        compiled
+            .patterns
+            .iter()
+            .zip(counts)
+            .map(|(pattern, count)| CustomPatternSummary {
+                pattern: pattern.pattern.clone(),
+                count,
+            })
+            .collect()
     }
 
     #[test]
@@ -958,6 +1032,76 @@ mod tests {
         assert_eq!(
             combined.custom_patterns,
             detect_custom_patterns_compiled(&bitmasks, &custom)
+        );
+    }
+
+    #[test]
+    fn custom_pattern_pipeline_matches_materialized_implementation() {
+        let patterns = [
+            "", "ldu", "LDU", "LuL", "lul", "RDR", "rdr", "éL", "x", "LLLLLLLL",
+        ]
+        .map(str::to_string);
+        let mut state = 0x9e37_79b9_u32;
+        let bitmasks: Vec<_> = (0..4_096)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as u8 & 0x0f
+            })
+            .collect();
+
+        let expected_compiled = compile_custom_patterns_materialized(&patterns);
+        let actual_compiled = compile_custom_patterns(&patterns);
+        assert_eq!(actual_compiled.dfa.goto, expected_compiled.dfa.goto);
+        assert_eq!(
+            actual_compiled.dfa.output_starts,
+            expected_compiled.dfa.output_starts
+        );
+        assert_eq!(
+            actual_compiled.dfa.output_lens,
+            expected_compiled.dfa.output_lens
+        );
+        assert_eq!(
+            actual_compiled.dfa.flat_outputs,
+            expected_compiled.dfa.flat_outputs
+        );
+        assert_eq!(
+            actual_compiled
+                .patterns
+                .iter()
+                .map(|pattern| pattern.pattern.as_str())
+                .collect::<Vec<_>>(),
+            expected_compiled
+                .patterns
+                .iter()
+                .map(|pattern| pattern.pattern.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            detect_custom_patterns_compiled(&bitmasks, &actual_compiled),
+            detect_custom_patterns_materialized(&bitmasks, &expected_compiled)
+        );
+        assert_eq!(
+            detect_custom_patterns_compiled(&[], &actual_compiled),
+            detect_custom_patterns_materialized(&[], &expected_compiled)
+        );
+
+        let many_patterns: Vec<_> = (0..300)
+            .map(|mut value| {
+                let mut pattern = String::with_capacity(5);
+                for _ in 0..5 {
+                    pattern.push(char::from(b"LDUR"[value & 3]));
+                    value >>= 2;
+                }
+                pattern
+            })
+            .collect();
+        let expected_many = compile_custom_patterns_materialized(&many_patterns);
+        let actual_many = compile_custom_patterns(&many_patterns);
+        assert_eq!(
+            detect_custom_patterns_compiled(&bitmasks, &actual_many),
+            detect_custom_patterns_materialized(&bitmasks, &expected_many)
         );
     }
 }
