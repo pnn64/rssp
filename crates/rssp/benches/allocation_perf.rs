@@ -97,6 +97,7 @@ enum Mode {
     JsonFull,
     JsonTiming,
     CourseJson,
+    CourseCsv,
     CourseAnalyze,
     PackScan,
     BackgroundChanges,
@@ -173,6 +174,7 @@ fn parse_args() -> (Mode, usize) {
                     "json-full" => Mode::JsonFull,
                     "json-timing" => Mode::JsonTiming,
                     "course-json" => Mode::CourseJson,
+                    "course-csv" => Mode::CourseCsv,
                     "course-analyze" => Mode::CourseAnalyze,
                     "pack-scan" => Mode::PackScan,
                     "background-changes" => Mode::BackgroundChanges,
@@ -230,7 +232,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
         },
-        Mode::CourseJson => rssp::AnalysisOptions {
+        Mode::CourseJson | Mode::CourseCsv => rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
         },
@@ -346,6 +348,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
                 unreachable!("marker translation mode uses its dedicated allocation runner")
             }
             Mode::CourseJson => {
+                unreachable!("course report mode uses its dedicated allocation runner")
+            }
+            Mode::CourseCsv => {
                 unreachable!("course report mode uses its dedicated allocation runner")
             }
             Mode::CourseAnalyze => {
@@ -488,14 +493,18 @@ fn run_benchmark_once(
     summaries: &[rssp::report::SimfileSummary],
     course: Option<&rssp::CourseSummary>,
 ) -> usize {
-    if matches!(mode, Mode::CourseJson) {
+    if matches!(mode, Mode::CourseJson | Mode::CourseCsv) {
         let mut output = Vec::new();
         rssp::report::write_course_reports(
             course.expect("course summary should be built"),
-            rssp::report::OutputMode::JSON,
+            if matches!(mode, Mode::CourseJson) {
+                rssp::report::OutputMode::JSON
+            } else {
+                rssp::report::OutputMode::CSV
+            },
             &mut output,
         )
-        .expect("course JSON report should write");
+        .expect("course report should write");
         let len = output.len();
         black_box(output);
         return len;
@@ -527,6 +536,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::JsonFull => "json-full",
         Mode::JsonTiming => "json-timing",
         Mode::CourseJson => "course-json",
+        Mode::CourseCsv => "course-csv",
         Mode::CourseAnalyze => "course-analyze",
         Mode::PackScan => "pack-scan",
         Mode::BackgroundChanges => "background-changes",
@@ -1159,8 +1169,8 @@ fn main() {
     } else {
         Vec::new()
     };
-    let course_summary =
-        matches!(mode, Mode::CourseJson).then(|| build_course_summary(&corpus, &options, 1_024));
+    let course_summary = matches!(mode, Mode::CourseJson | Mode::CourseCsv)
+        .then(|| build_course_summary(&corpus, &options, 1_024));
 
     black_box(run_benchmark_once(
         mode,

@@ -188,6 +188,24 @@ fn bench_course_json(c: &mut Criterion) {
         });
     });
     group.finish();
+
+    let mut group = c.benchmark_group("report_course_csv");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(2));
+    group.throughput(Throughput::Elements(ENTRIES as u64));
+    group.bench_function("write_large_course", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::report::write_course_reports(
+                black_box(&summary),
+                rssp::report::OutputMode::CSV,
+                black_box(&mut output),
+            )
+            .expect("course CSV report should write");
+            black_box(output);
+        });
+    });
+    group.finish();
 }
 
 criterion_group!(

@@ -637,7 +637,11 @@ fn write_json_course<W: Write>(course: &CourseSummary, writer: &mut W) -> io::Re
     writeln!(writer)
 }
 
-fn write_csv_course<W: Write>(writer: &mut W, course: &CourseSummary) -> io::Result<()> {
+#[cfg(test)]
+fn write_csv_course_materialized<W: Write>(
+    writer: &mut W,
+    course: &CourseSummary,
+) -> io::Result<()> {
     let header = [
         "Course",
         "Difficulty",
@@ -690,6 +694,71 @@ fn write_csv_course<W: Write>(writer: &mut W, course: &CourseSummary) -> io::Res
         chart.median_nps
     )?;
     Ok(())
+}
+
+const COURSE_CSV_HEADER: &[u8] = concat!(
+    "Course,Difficulty,StepsType,Length,Entries,sha1_hashes,",
+    "bpm_neutral_sha1_hashes,total_arrows,total_steps,jumps,hands,",
+    "holds,rolls,mines,lifts,fakes,total_streams,total_breaks,max_nps,",
+    "median_nps"
+)
+.as_bytes();
+
+fn csv_hashes_len(hashes: &[String]) -> usize {
+    hashes
+        .iter()
+        .map(String::len)
+        .sum::<usize>()
+        .saturating_add(hashes.len().saturating_sub(1))
+}
+
+fn buffer_csv_hashes(buffer: &mut String, hashes: &[String]) {
+    for (index, hash) in hashes.iter().enumerate() {
+        if index != 0 {
+            buffer.push('|');
+        }
+        buffer.push_str(hash);
+    }
+}
+
+fn write_csv_course<W: Write>(writer: &mut W, course: &CourseSummary) -> io::Result<()> {
+    writer.write_all(COURSE_CSV_HEADER)?;
+    writer.write_all(b"\n")?;
+    write!(
+        writer,
+        "{},{},{},",
+        course.course, course.course_difficulty, course.step_type
+    )?;
+    write_duration(writer, course.total_length)?;
+    write!(writer, ",{},", course.entries.len())?;
+    let hash_capacity =
+        csv_hashes_len(&course.sha1_hashes).max(csv_hashes_len(&course.bpm_neutral_sha1_hashes));
+    let mut hash_buffer = String::with_capacity(hash_capacity);
+    buffer_csv_hashes(&mut hash_buffer, &course.sha1_hashes);
+    writer.write_all(hash_buffer.as_bytes())?;
+    writer.write_all(b",")?;
+    hash_buffer.clear();
+    buffer_csv_hashes(&mut hash_buffer, &course.bpm_neutral_sha1_hashes);
+    writer.write_all(hash_buffer.as_bytes())?;
+
+    let chart = &course.chart;
+    writeln!(
+        writer,
+        ",{},{},{},{},{},{},{},{},{},{},{},{:.6},{:.2}",
+        chart.stats.total_arrows,
+        chart.stats.total_steps,
+        chart.stats.jumps,
+        chart.stats.hands,
+        chart.stats.holds,
+        chart.stats.rolls,
+        chart.stats.mines,
+        chart.stats.lifts,
+        chart.stats.fakes,
+        chart.total_streams,
+        chart.stream_counts.total_breaks,
+        chart.max_nps,
+        chart.median_nps
+    )
 }
 
 const fn count(counts: &PatternCounts, variant: PatternVariant) -> u32 {
@@ -1079,9 +1148,9 @@ mod tests {
         CourseEntrySummary, CourseSummary, CsvRow, SpeedUnit, build_timing_snapshot,
         chart_or_global, format_duration, normalize_scrolls_like_itg, normalize_speeds_like_itg,
         parse_combos, parse_labels, parse_tickcounts, parse_time_signatures, push_bpm_range,
-        push_duration, push_num, push_str, steps_timing_allowed, timing_fixed_6, write_json_all,
-        write_json_all_materialized, write_json_course, write_json_course_materialized,
-        write_json_stream_sequences,
+        push_duration, push_num, push_str, steps_timing_allowed, timing_fixed_6, write_csv_course,
+        write_csv_course_materialized, write_json_all, write_json_all_materialized,
+        write_json_course, write_json_course_materialized, write_json_stream_sequences,
     };
 
     fn timing_fixed_6_materialized(value: f64) -> f64 {
@@ -1430,7 +1499,7 @@ mod tests {
     }
 
     #[test]
-    fn course_json_streaming_matches_materialized_report() {
+    fn course_reports_streaming_match_materialized_output() {
         const FIXTURE: &[u8] = include_bytes!("../benches/fixtures/hash_fixture.ssc");
 
         fn assert_matches(options: &crate::AnalysisOptions, populated: bool) {
@@ -1472,12 +1541,20 @@ mod tests {
                 entries,
                 chart,
                 sha1_hashes: if populated {
-                    vec!["0123456789abcdef".to_string()]
+                    vec![
+                        "0123456789abcdef".to_string(),
+                        String::new(),
+                        "abcdef0123456789".to_string(),
+                    ]
                 } else {
                     Vec::new()
                 },
                 bpm_neutral_sha1_hashes: if populated {
-                    vec!["fedcba9876543210".to_string()]
+                    vec![
+                        "fedcba9876543210".to_string(),
+                        String::new(),
+                        "9876543210fedcba".to_string(),
+                    ]
                 } else {
                     Vec::new()
                 },
@@ -1495,6 +1572,13 @@ mod tests {
             assert_eq!(actual, expected);
             serde_json::from_slice::<serde_json::Value>(&actual)
                 .expect("streaming course output should be valid JSON");
+
+            expected.clear();
+            write_csv_course_materialized(&mut expected, &course)
+                .expect("materialized course CSV should write");
+            actual.clear();
+            write_csv_course(&mut actual, &course).expect("streaming course CSV should write");
+            assert_eq!(actual, expected);
         }
 
         assert_matches(&crate::AnalysisOptions::default(), true);
@@ -4278,12 +4362,14 @@ fn push_num<W: Write, T: std::fmt::Display>(out: &mut CsvRow<'_, W>, value: T) {
     out.write_field(|writer| write!(writer, "{value}"));
 }
 
+fn write_duration<W: Write>(writer: &mut W, seconds: i32) -> io::Result<()> {
+    let minutes = seconds / 60;
+    let seconds = seconds % 60;
+    write!(writer, "{minutes}m {seconds:02}s")
+}
+
 fn push_duration<W: Write>(out: &mut CsvRow<'_, W>, seconds: i32) {
-    out.write_field(|writer| {
-        let minutes = seconds / 60;
-        let seconds = seconds % 60;
-        write!(writer, "{minutes}m {seconds:02}s")
-    });
+    out.write_field(|writer| write_duration(writer, seconds));
 }
 
 fn push_bpm_range<W: Write>(out: &mut CsvRow<'_, W>, min_bpm: f64, max_bpm: f64) {
