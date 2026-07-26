@@ -480,7 +480,80 @@ pub fn resolve_song_assets(
     (banner, background)
 }
 
-fn list_song_dir_rel_files(song_dir: &Path) -> Vec<String> {
+struct BgFileCatalog {
+    files: Vec<String>,
+    bucket_ranges: [(usize, usize); 256],
+}
+
+const INLINE_BG_RESOLUTION_FILES: usize = 2_048;
+const BG_RESOLUTION_STATUSES_PER_WORD: usize = u64::BITS as usize / 2;
+const INLINE_BG_RESOLUTION_WORDS: usize =
+    INLINE_BG_RESOLUTION_FILES / BG_RESOLUTION_STATUSES_PER_WORD;
+
+struct BgResolutionStatus {
+    inline: [u64; INLINE_BG_RESOLUTION_WORDS],
+    overflow: Option<Box<[u64]>>,
+}
+
+impl BgResolutionStatus {
+    fn new(file_count: usize) -> Self {
+        let overflow = (file_count > INLINE_BG_RESOLUTION_FILES).then(|| {
+            vec![0; file_count.div_ceil(BG_RESOLUTION_STATUSES_PER_WORD)].into_boxed_slice()
+        });
+        Self {
+            inline: [0; INLINE_BG_RESOLUTION_WORDS],
+            overflow,
+        }
+    }
+
+    fn get(&self, file_index: usize) -> u8 {
+        let words = self.overflow.as_deref().unwrap_or(&self.inline);
+        let shift = (file_index % BG_RESOLUTION_STATUSES_PER_WORD) * 2;
+        ((words[file_index / BG_RESOLUTION_STATUSES_PER_WORD] >> shift) & 0b11) as u8
+    }
+
+    fn set(&mut self, file_index: usize, status: u8) {
+        let words = self.overflow.as_deref_mut().unwrap_or(&mut self.inline);
+        let shift = (file_index % BG_RESOLUTION_STATUSES_PER_WORD) * 2;
+        let word = &mut words[file_index / BG_RESOLUTION_STATUSES_PER_WORD];
+        *word = (*word & !(0b11 << shift)) | (u64::from(status) << shift);
+    }
+}
+
+impl BgFileCatalog {
+    fn from_files(mut files: Vec<String>) -> Self {
+        files.sort_by(|left, right| {
+            bg_file_bucket(left)
+                .cmp(&bg_file_bucket(right))
+                .then_with(|| right.len().cmp(&left.len()))
+                .then_with(|| left.cmp(right))
+        });
+
+        let mut bucket_ranges = [(0, 0); 256];
+        for (index, file) in files.iter().enumerate() {
+            let range = &mut bucket_ranges[bg_file_bucket(file)];
+            if range.0 == range.1 {
+                range.0 = index;
+            }
+            range.1 = index + 1;
+        }
+
+        Self {
+            files,
+            bucket_ranges,
+        }
+    }
+}
+
+#[inline(always)]
+fn bg_file_bucket(file: &str) -> usize {
+    file.as_bytes()
+        .first()
+        .copied()
+        .map_or(0, |byte| byte.to_ascii_lowercase() as usize)
+}
+
+fn list_song_dir_rel_files(song_dir: &Path) -> BgFileCatalog {
     let mut dirs = vec![song_dir.to_path_buf()];
     let mut files = Vec::new();
     while let Some(dir) = dirs.pop() {
@@ -499,8 +572,7 @@ fn list_song_dir_rel_files(song_dir: &Path) -> Vec<String> {
             files.push(to_slash(&rel.to_string_lossy()));
         }
     }
-    files.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
-    files
+    BgFileCatalog::from_files(files)
 }
 
 fn strip_newlines(s: &str) -> Cow<'_, str> {
@@ -515,8 +587,20 @@ fn strip_newlines(s: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-fn match_bg_file<'a>(changes: &'a str, start: usize, files: &[String]) -> Option<&'a str> {
-    for file in files {
+fn match_bg_file(
+    changes: &str,
+    start: usize,
+    files: &BgFileCatalog,
+) -> Option<(usize, Option<usize>)> {
+    let first = *changes.as_bytes().get(start)?;
+    let (bucket_start, bucket_end) = files.bucket_ranges[first.to_ascii_lowercase() as usize];
+    let mut fallback = None;
+    let mut fallback_is_ambiguous = false;
+    for file_index in bucket_start..bucket_end {
+        let file = &files.files[file_index];
+        if fallback.is_some_and(|(file_len, _)| file.len() < file_len) {
+            break;
+        }
         let Some(head) = changes.get(start..start + file.len()) else {
             continue;
         };
@@ -524,14 +608,26 @@ fn match_bg_file<'a>(changes: &'a str, start: usize, files: &[String]) -> Option
             continue;
         }
         let next = start + file.len();
-        if matches!(changes.as_bytes().get(next), None | Some(b'=') | Some(b',')) {
-            return Some(head);
+        if matches!(changes.as_bytes().get(next), None | Some(b'=' | b',')) {
+            if head == file {
+                return Some((file.len(), Some(file_index)));
+            }
+            if fallback.is_some() {
+                fallback_is_ambiguous = true;
+            } else {
+                fallback = Some((file.len(), file_index));
+            }
         }
     }
-    None
+    fallback
+        .map(|(file_len, file_index)| (file_len, (!fallback_is_ambiguous).then_some(file_index)))
 }
 
-fn for_each_bgchange_pair(changes: &str, files: &[String], mut handle: impl FnMut(&str, &str)) {
+fn for_each_bgchange_pair(
+    changes: &str,
+    files: &BgFileCatalog,
+    mut handle: impl FnMut(&str, &str, Option<usize>),
+) {
     let changes = strip_newlines(changes);
     if changes.is_empty() {
         return;
@@ -542,16 +638,18 @@ fn for_each_bgchange_pair(changes: &str, files: &[String], mut handle: impl FnMu
     let mut pnum = 0u8;
     let mut start_beat = None;
     let mut target = None;
+    let mut target_file_index = None;
     while start <= changes.len() {
-        let (field, delimiter) = if (pnum == 1 || pnum == 7)
-            && let Some(found) = match_bg_file(changes, start, files)
+        let (field, delimiter, file_index) = if (pnum == 1 || pnum == 7)
+            && let Some((file_len, file_index)) = match_bg_file(changes, start, files)
         {
-            start += found.len();
+            let found = &changes[start..start + file_len];
+            start += file_len;
             let delimiter = changes.as_bytes().get(start).copied();
             if delimiter.is_some() {
                 start += 1;
             }
-            (found, delimiter)
+            (found, delimiter, file_index)
         } else {
             let rem = &changes[start..];
             let eq = rem.find('=').map(|index| start + index);
@@ -565,12 +663,15 @@ fn for_each_bgchange_pair(changes: &str, files: &[String], mut handle: impl FnMu
             let field = &changes[start..end];
             let delimiter = changes.as_bytes().get(end).copied();
             start = end + usize::from(delimiter.is_some());
-            (field, delimiter)
+            (field, delimiter, None)
         };
 
         match pnum {
             0 => start_beat = Some(field),
-            1 => target = Some(field),
+            1 => {
+                target = Some(field);
+                target_file_index = file_index;
+            }
             _ => {}
         }
 
@@ -578,15 +679,16 @@ fn for_each_bgchange_pair(changes: &str, files: &[String], mut handle: impl FnMu
             Some(b'=') => pnum += 1,
             Some(b',') => {
                 if let (Some(start_beat), Some(target)) = (start_beat, target) {
-                    handle(start_beat, target);
+                    handle(start_beat, target, target_file_index);
                 }
                 start_beat = None;
                 target = None;
+                target_file_index = None;
                 pnum = 0;
             }
             None => {
                 if let (Some(start_beat), Some(target)) = (start_beat, target) {
-                    handle(start_beat, target);
+                    handle(start_beat, target, target_file_index);
                 }
                 break;
             }
@@ -595,32 +697,73 @@ fn for_each_bgchange_pair(changes: &str, files: &[String], mut handle: impl FnMu
     }
 }
 
-fn resolve_bgchange_target(song_dir: &Path, file1: &str) -> Option<BackgroundChangeTarget> {
-    let file1 = file1.trim();
-    if file1.is_empty() {
+fn resolve_bgchange_target(
+    song_dir: &Path,
+    target_name: &str,
+    file_index: Option<usize>,
+    files: &BgFileCatalog,
+    resolution_status: &mut BgResolutionStatus,
+) -> Option<BackgroundChangeTarget> {
+    let target_name = target_name.trim();
+    if target_name.is_empty() {
         return None;
     }
-    if file1.eq_ignore_ascii_case(NO_SONG_BG_FILE) {
+    if target_name.eq_ignore_ascii_case(NO_SONG_BG_FILE) {
         return Some(BackgroundChangeTarget::NoSongBg);
     }
-    if file1.eq_ignore_ascii_case(RANDOM_BACKGROUND_FILE) {
+    if target_name.eq_ignore_ascii_case(RANDOM_BACKGROUND_FILE) {
         return Some(BackgroundChangeTarget::Random);
     }
-    resolve_asset(song_dir, file1).map(BackgroundChangeTarget::File)
+    if let Some(file_index) = file_index {
+        let relative = &files.files[file_index];
+        return match resolution_status.get(file_index) {
+            1 => Some(BackgroundChangeTarget::File(song_dir.join(relative))),
+            2 => None,
+            _ => {
+                let path = song_dir.join(relative);
+                if !is_mac_resource_fork(&path) && path.is_file() {
+                    resolution_status.set(file_index, 1);
+                    Some(BackgroundChangeTarget::File(path))
+                } else {
+                    resolution_status.set(file_index, 2);
+                    None
+                }
+            }
+        };
+    }
+    resolve_asset(song_dir, target_name).map(BackgroundChangeTarget::File)
 }
 
 fn parse_bgchange_pair(
     song_dir: &Path,
     start_beat: &str,
     target: &str,
+    file_index: Option<usize>,
+    files: &BgFileCatalog,
+    resolution_status: &mut BgResolutionStatus,
 ) -> Option<ResolvedBackgroundChange> {
     let start_beat = start_beat.trim().parse::<f32>().unwrap_or(0.0);
-    let target = resolve_bgchange_target(song_dir, target)?;
+    let target = resolve_bgchange_target(song_dir, target, file_index, files, resolution_status)?;
     Some(ResolvedBackgroundChange { start_beat, target })
 }
 
 #[inline(always)]
-fn upsert_bgchange(out: &mut Vec<ResolvedBackgroundChange>, change: ResolvedBackgroundChange) {
+fn upsert_bgchange(
+    out: &mut Vec<ResolvedBackgroundChange>,
+    change: ResolvedBackgroundChange,
+    beats_ordered: &mut bool,
+) {
+    if *beats_ordered && let Some(last) = out.last_mut() {
+        if last.start_beat == change.start_beat {
+            *last = change;
+            return;
+        }
+        if last.start_beat < change.start_beat {
+            out.push(change);
+            return;
+        }
+        *beats_ordered = false;
+    }
     if let Some(slot) = out
         .iter_mut()
         .find(|existing| existing.start_beat == change.start_beat)
@@ -637,20 +780,29 @@ pub fn resolve_background_changes_like_itg(
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
     let files = list_song_dir_rel_files(song_dir);
+    let mut resolution_status = BgResolutionStatus::new(files.files.len());
     let mut out: Vec<ResolvedBackgroundChange> = Vec::new();
     let mut saw_no_song_bg = false;
+    let mut beats_ordered = true;
     for raw in extract_bgchanges_values(simfile_data) {
         let decoded = decode_bytes(raw);
         let text = unescape_tag(decoded.as_ref());
-        for_each_bgchange_pair(text.as_ref(), &files, |start_beat, target| {
-            let Some(change) = parse_bgchange_pair(song_dir, start_beat, target) else {
+        for_each_bgchange_pair(text.as_ref(), &files, |start_beat, target, file_index| {
+            let Some(change) = parse_bgchange_pair(
+                song_dir,
+                start_beat,
+                target,
+                file_index,
+                &files,
+                &mut resolution_status,
+            ) else {
                 return;
             };
             if matches!(change.target, BackgroundChangeTarget::NoSongBg) {
                 saw_no_song_bg = true;
                 return;
             }
-            upsert_bgchange(&mut out, change);
+            upsert_bgchange(&mut out, change, &mut beats_ordered);
         });
     }
     let has_explicit_movie = out.iter().any(|change| {
@@ -703,10 +855,10 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        BackgroundChangeTarget, ResolvedBackgroundChange, cmp_name_ci, for_each_bgchange_pair,
-        is_dir_ci, is_file_ci, lc_name, list_image_candidates, match_bg_file,
-        resolve_background_changes_like_itg, resolve_music_path_like_itg, resolve_song_assets,
-        strip_newlines,
+        BackgroundChangeTarget, BgFileCatalog, BgResolutionStatus, ResolvedBackgroundChange,
+        cmp_name_ci, for_each_bgchange_pair, is_dir_ci, is_file_ci, lc_name, list_image_candidates,
+        match_bg_file, resolve_background_changes_like_itg, resolve_music_path_like_itg,
+        resolve_song_assets, strip_newlines, upsert_bgchange,
     };
 
     struct TempDir(PathBuf);
@@ -731,6 +883,26 @@ mod tests {
         }
     }
 
+    fn match_bg_file_materialized<'a>(
+        changes: &'a str,
+        start: usize,
+        files: &[String],
+    ) -> Option<&'a str> {
+        for file in files {
+            let Some(head) = changes.get(start..start + file.len()) else {
+                continue;
+            };
+            if !head.eq_ignore_ascii_case(file) {
+                continue;
+            }
+            let next = start + file.len();
+            if matches!(changes.as_bytes().get(next), None | Some(b'=' | b',')) {
+                return Some(head);
+            }
+        }
+        None
+    }
+
     fn split_bgchange_sets_materialized(changes: &str, files: &[String]) -> Vec<Vec<String>> {
         let changes = strip_newlines(changes).into_owned();
         if changes.is_empty() {
@@ -741,7 +913,7 @@ mod tests {
         let mut pnum = 0u8;
         while start <= changes.len() {
             if matches!(pnum, 1 | 7)
-                && let Some(found) = match_bg_file(&changes, start, files)
+                && let Some(found) = match_bg_file_materialized(&changes, start, files)
             {
                 out.last_mut().unwrap().push(found.to_string());
                 start += found.len();
@@ -782,12 +954,16 @@ mod tests {
     }
 
     fn assert_streamed_pairs_match(changes: &str, files: &[String]) {
-        let expected = split_bgchange_sets_materialized(changes, files)
+        let mut reference_files = files.to_vec();
+        reference_files
+            .sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| left.cmp(right)));
+        let expected = split_bgchange_sets_materialized(changes, &reference_files)
             .into_iter()
             .filter_map(|fields| Some((fields.first()?.clone(), fields.get(1)?.clone())))
             .collect::<Vec<_>>();
+        let files = BgFileCatalog::from_files(files.to_vec());
         let mut actual = Vec::new();
-        for_each_bgchange_pair(changes, files, |start_beat, target| {
+        for_each_bgchange_pair(changes, &files, |start_beat, target, _| {
             actual.push((start_beat.to_string(), target.to_string()));
         });
         assert_eq!(actual, expected, "changes={changes:?}");
@@ -870,6 +1046,110 @@ mod tests {
         ];
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn indexed_bgchanges_preserve_case_insensitive_repeated_resolution() {
+        let temp = TempDir::new();
+        let relative = "Visuals/Mixed,Case.PNG";
+        std::fs::write(temp.0.join(relative), []).expect("asset test file should be writable");
+        let simfile = concat!(
+            "#BGCHANGES:",
+            "0=visuals/mixed,case.png,",
+            "4=VISUALS/MIXED,CASE.PNG,",
+            "8=Visuals/Mixed,Case.PNG;\n"
+        );
+
+        let actual = resolve_background_changes_like_itg(&temp.0, simfile.as_bytes());
+        let expected_path = temp.0.join(relative);
+        assert_eq!(actual.len(), 3);
+        for (change, start_beat) in actual.iter().zip([0.0, 4.0, 8.0]) {
+            assert_eq!(change.start_beat, start_beat);
+            assert_eq!(
+                change.target,
+                BackgroundChangeTarget::File(expected_path.clone())
+            );
+        }
+    }
+
+    #[test]
+    fn bg_resolution_status_preserves_inline_and_overflow_entries() {
+        for file_count in [2_048, 2_049] {
+            let mut status = BgResolutionStatus::new(file_count);
+            let mut entries = vec![(0, 1), (31, 2), (32, 1), (2_047, 2)];
+            if file_count > 2_048 {
+                entries.push((2_048, 1));
+            }
+            for &(file_index, value) in &entries {
+                status.set(file_index, value);
+            }
+            for (file_index, value) in entries {
+                assert_eq!(status.get(file_index), value);
+            }
+            assert_eq!(status.get(1), 0);
+        }
+    }
+
+    #[test]
+    fn bg_file_catalog_only_indexes_unambiguous_or_exact_case_matches() {
+        let files = BgFileCatalog::from_files(
+            ["Alpha.png", "alpha.png", "Beta.png"]
+                .map(str::to_string)
+                .to_vec(),
+        );
+
+        assert_eq!(match_bg_file("0=ALPHA.PNG,", 2, &files), Some((9, None)));
+        let (file_len, file_index) =
+            match_bg_file("0=alpha.png,", 2, &files).expect("exact filename should match");
+        assert_eq!(file_len, 9);
+        assert_eq!(
+            &files.files[file_index.expect("exact filename should retain its catalog index")],
+            "alpha.png"
+        );
+        assert!(match_bg_file("0=missing.png,", 2, &files).is_none());
+    }
+
+    #[test]
+    fn ordered_bgchange_upsert_matches_linear_reference() {
+        fn linear_upsert(
+            out: &mut Vec<ResolvedBackgroundChange>,
+            change: ResolvedBackgroundChange,
+        ) {
+            if let Some(slot) = out
+                .iter_mut()
+                .find(|existing| existing.start_beat == change.start_beat)
+            {
+                *slot = change;
+            } else {
+                out.push(change);
+            }
+        }
+
+        let cases = [
+            vec![0.0, 4.0, 8.0, 8.0, 12.0],
+            vec![8.0, 4.0, 8.0, 0.0, 4.0],
+            vec![0.0, -0.0, 0.0],
+            vec![f32::NAN, 1.0, f32::NAN],
+        ];
+        for beats in cases {
+            let mut actual = Vec::new();
+            let mut expected = Vec::new();
+            let mut beats_ordered = true;
+            for (index, start_beat) in beats.into_iter().enumerate() {
+                let change = ResolvedBackgroundChange {
+                    start_beat,
+                    target: BackgroundChangeTarget::File(PathBuf::from(index.to_string())),
+                };
+                linear_upsert(&mut expected, change.clone());
+                upsert_bgchange(&mut actual, change, &mut beats_ordered);
+            }
+
+            assert_eq!(actual.len(), expected.len());
+            for (actual, expected) in actual.iter().zip(&expected) {
+                assert_eq!(actual.start_beat.to_bits(), expected.start_beat.to_bits());
+                assert_eq!(actual.target, expected.target);
+            }
+        }
     }
 
     #[test]
