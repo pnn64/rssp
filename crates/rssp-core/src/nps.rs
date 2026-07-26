@@ -64,9 +64,11 @@ pub fn compute_chart_peak_nps(
         .unwrap_or("");
     let cleaned_global_fakes = clean_timing_map(global_fakes_raw);
 
-    let mut results = Vec::new();
+    let entries = parsed_data.notes_list;
+    let mut results = Vec::with_capacity(entries.len());
+    let mut global_timing = None;
 
-    for entry in parsed_data.notes_list {
+    for entry in entries {
         if entry.field_count < 5 {
             continue;
         }
@@ -145,27 +147,53 @@ pub fn compute_chart_peak_nps(
         } else {
             None
         };
-        let timing_segments = compute_timing_segments(
-            chart_bpms.as_deref(),
-            timing_src.global_bpms,
-            chart_stops.as_deref(),
-            timing_src.global_stops,
-            chart_delays.as_deref(),
-            timing_src.global_delays,
-            chart_warps.as_deref(),
-            timing_src.global_warps,
-            chart_speeds.as_deref(),
-            timing_src.global_speeds,
-            chart_scrolls.as_deref(),
-            timing_src.global_scrolls,
-            chart_fakes.as_deref(),
-            timing_src.global_fakes,
-            timing_format,
-            true,
-        );
-        let timing = timing_data_from_segments(chart_offset, 0.0, &timing_segments);
+        let chart_timing;
+        let timing = if timing_src.chart_has_own_timing {
+            let timing_segments = compute_timing_segments(
+                chart_bpms.as_deref(),
+                timing_src.global_bpms,
+                chart_stops.as_deref(),
+                timing_src.global_stops,
+                chart_delays.as_deref(),
+                timing_src.global_delays,
+                chart_warps.as_deref(),
+                timing_src.global_warps,
+                chart_speeds.as_deref(),
+                timing_src.global_speeds,
+                chart_scrolls.as_deref(),
+                timing_src.global_scrolls,
+                chart_fakes.as_deref(),
+                timing_src.global_fakes,
+                timing_format,
+                true,
+            );
+            chart_timing = timing_data_from_segments(chart_offset, 0.0, &timing_segments);
+            &chart_timing
+        } else {
+            global_timing.get_or_insert_with(|| {
+                let timing_segments = compute_timing_segments(
+                    None,
+                    &cleaned_global_bpms,
+                    None,
+                    &cleaned_global_stops,
+                    None,
+                    &cleaned_global_delays,
+                    None,
+                    &cleaned_global_warps,
+                    None,
+                    &cleaned_global_speeds,
+                    None,
+                    &cleaned_global_scrolls,
+                    None,
+                    &cleaned_global_fakes,
+                    timing_format,
+                    true,
+                );
+                timing_data_from_segments(song_offset, 0.0, &timing_segments)
+            })
+        };
 
-        let measure_nps_vec = compute_measure_nps_vec_with_timing(&measure_densities, &timing);
+        let measure_nps_vec = compute_measure_nps_vec_with_timing(&measure_densities, timing);
         let (max_nps, _median_nps) = get_nps_stats(&measure_nps_vec);
 
         results.push(ChartNpsInfo {
@@ -176,6 +204,34 @@ pub fn compute_chart_peak_nps(
     }
 
     Ok(results)
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::compute_chart_peak_nps;
+
+    const INHERITED_TIMING_FIXTURE: &[u8] =
+        include_bytes!("../../rssp/benches/fixtures/camellia_mix.ssc");
+
+    #[test]
+    fn inherited_timing_cache_preserves_peak_nps() {
+        let charts =
+            compute_chart_peak_nps(INHERITED_TIMING_FIXTURE, "ssc").expect("fixture should parse");
+        let expected = [
+            ("Beginner", 10.938_223_250_845_647),
+            ("Easy", 11.669_515_669_515_67),
+            ("Medium", 14.583_648_582_491_433),
+            ("Hard", 14.586_894_586_894_587),
+            ("Challenge", 14.586_894_586_894_587),
+        ];
+
+        assert_eq!(charts.len(), expected.len());
+        for (chart, (difficulty, peak_nps)) in charts.iter().zip(expected) {
+            assert_eq!(chart.step_type, "dance-single");
+            assert_eq!(chart.difficulty, difficulty);
+            assert!((chart.peak_nps - peak_nps).abs() < 1.0e-12);
+        }
+    }
 }
 
 #[must_use]

@@ -9,9 +9,8 @@ use crate::step_parity;
 
 use crate::bpm::{
     clean_and_normalize_float_digits, clean_and_normalize_speeds_float_digits,
-    clean_timing_map_cow, compute_bpm_map_stats, compute_bpm_range,
-    compute_measure_nps_vec_with_timing, compute_tier_bpm, get_nps_stats_with_scratch,
-    normalize_float_digits,
+    clean_timing_map_cow, compute_bpm_range_and_stats, compute_measure_nps_vec_with_timing,
+    compute_tier_bpm, get_nps_stats_with_scratch, normalize_float_digits,
 };
 use crate::hash::{compute_chart_hash, compute_chart_hash_pair};
 use crate::math::{round_dp, round_sig_figs_6};
@@ -1059,8 +1058,8 @@ pub fn analyze(
         .iter()
         .map(|(beat, bpm)| (f64::from(*beat), f64::from(*bpm)))
         .collect();
-    let (min_bpm_i32, max_bpm_i32) = compute_bpm_range(&global_bpm_map);
-    let (median_bpm_raw, average_bpm_raw) = compute_bpm_map_stats(&global_bpm_map);
+    let (min_bpm_i32, max_bpm_i32, median_bpm_raw, average_bpm_raw) =
+        compute_bpm_range_and_stats(&global_bpm_map);
     let median_bpm = round_dp(median_bpm_raw, 2);
     let average_bpm = round_dp(average_bpm_raw, 2);
 
@@ -1179,9 +1178,10 @@ pub fn compute_all_hashes(
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"")).unwrap_or("");
     let normalized_global_bpms = normalize_float_digits(global_bpms_raw);
 
-    let mut results = Vec::new();
+    let entries = parsed_data.notes_list;
+    let mut results = Vec::with_capacity(entries.len());
 
-    for entry in parsed_data.notes_list {
+    for entry in entries {
         // 3. Split fields to get Metadata (StepType, Difficulty)
         if entry.field_count < 5 {
             continue;
@@ -1232,7 +1232,7 @@ pub fn compute_all_hashes(
 
 #[cfg(test)]
 mod tests {
-    use super::{AnalysisOptions, analyze};
+    use super::{AnalysisOptions, analyze, compute_all_hashes};
 
     const FIXTURE: &[u8] = include_bytes!("../benches/fixtures/hash_fixture.ssc");
 
@@ -1273,6 +1273,20 @@ mod tests {
                 combined_chart.note_annotations,
                 annotations_chart.note_annotations
             );
+        }
+    }
+
+    #[test]
+    fn batch_hashes_match_analysis_outputs() {
+        let hashes = compute_all_hashes(FIXTURE, "ssc").expect("hashing should succeed");
+        let summary =
+            analyze(FIXTURE, "ssc", &AnalysisOptions::default()).expect("analysis should succeed");
+
+        assert_eq!(hashes.len(), summary.charts.len());
+        for (hash, chart) in hashes.iter().zip(&summary.charts) {
+            assert_eq!(hash.step_type, chart.step_type_str);
+            assert_eq!(hash.difficulty, chart.difficulty_str);
+            assert_eq!(hash.hash, chart.short_hash);
         }
     }
 }

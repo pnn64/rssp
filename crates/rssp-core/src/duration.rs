@@ -79,9 +79,11 @@ pub fn compute_chart_durations(
         .unwrap_or("");
     let cleaned_global_fakes = clean_timing_map(global_fakes_raw);
 
-    let mut results = Vec::new();
+    let entries = parsed_data.notes_list;
+    let mut results = Vec::with_capacity(entries.len());
+    let mut global_timing = None;
 
-    for entry in parsed_data.notes_list {
+    for entry in entries {
         if entry.field_count < 5 {
             continue;
         }
@@ -160,27 +162,52 @@ pub fn compute_chart_durations(
         } else {
             None
         };
-        let timing_segments = compute_timing_segments(
-            chart_bpms.as_deref(),
-            timing_src.global_bpms,
-            chart_stops.as_deref(),
-            timing_src.global_stops,
-            chart_delays.as_deref(),
-            timing_src.global_delays,
-            chart_warps.as_deref(),
-            timing_src.global_warps,
-            chart_speeds.as_deref(),
-            timing_src.global_speeds,
-            chart_scrolls.as_deref(),
-            timing_src.global_scrolls,
-            chart_fakes.as_deref(),
-            timing_src.global_fakes,
-            timing_format,
-            true,
-        );
-
-        let timing = timing_data_from_segments(chart_offset, 0.0, &timing_segments);
-        let duration_seconds = chart_duration_seconds(last_beat, &timing, offsets);
+        let chart_timing;
+        let timing = if timing_src.chart_has_own_timing {
+            let timing_segments = compute_timing_segments(
+                chart_bpms.as_deref(),
+                timing_src.global_bpms,
+                chart_stops.as_deref(),
+                timing_src.global_stops,
+                chart_delays.as_deref(),
+                timing_src.global_delays,
+                chart_warps.as_deref(),
+                timing_src.global_warps,
+                chart_speeds.as_deref(),
+                timing_src.global_speeds,
+                chart_scrolls.as_deref(),
+                timing_src.global_scrolls,
+                chart_fakes.as_deref(),
+                timing_src.global_fakes,
+                timing_format,
+                true,
+            );
+            chart_timing = timing_data_from_segments(chart_offset, 0.0, &timing_segments);
+            &chart_timing
+        } else {
+            global_timing.get_or_insert_with(|| {
+                let timing_segments = compute_timing_segments(
+                    None,
+                    &cleaned_global_bpms,
+                    None,
+                    &cleaned_global_stops,
+                    None,
+                    &cleaned_global_delays,
+                    None,
+                    &cleaned_global_warps,
+                    None,
+                    &cleaned_global_speeds,
+                    None,
+                    &cleaned_global_scrolls,
+                    None,
+                    &cleaned_global_fakes,
+                    timing_format,
+                    true,
+                );
+                timing_data_from_segments(song_offset, 0.0, &timing_segments)
+            })
+        };
+        let duration_seconds = chart_duration_seconds(last_beat, timing, offsets);
 
         results.push(ChartDuration {
             step_type,
@@ -190,4 +217,34 @@ pub fn compute_chart_durations(
     }
 
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TimingOffsets, compute_chart_durations};
+
+    const INHERITED_TIMING_FIXTURE: &[u8] =
+        include_bytes!("../../rssp/benches/fixtures/camellia_mix.ssc");
+
+    #[test]
+    fn inherited_timing_cache_preserves_chart_durations() {
+        let charts =
+            compute_chart_durations(INHERITED_TIMING_FIXTURE, "ssc", TimingOffsets::default())
+                .expect("fixture should parse");
+        let difficulties: Vec<_> = charts
+            .iter()
+            .map(|chart| chart.difficulty.as_str())
+            .collect();
+
+        assert_eq!(
+            difficulties,
+            ["Beginner", "Easy", "Medium", "Hard", "Challenge"]
+        );
+        assert!(charts.iter().all(|chart| chart.step_type == "dance-single"));
+        assert!(
+            charts
+                .iter()
+                .all(|chart| chart.duration_seconds == 7_367.31)
+        );
+    }
 }

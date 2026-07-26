@@ -175,6 +175,22 @@ fn large_stop_map(entries: usize) -> String {
 }
 
 #[cfg(windows)]
+fn sorted_bpm_stats_reference(map: &[(f64, f64)]) -> (f64, f64) {
+    let mut values: Vec<_> = map
+        .iter()
+        .map(|&(_, bpm)| bpm)
+        .filter(|&bpm| bpm > 0.0 && bpm < 10_000.0)
+        .collect();
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = if values.len() % 2 == 0 {
+        f64::midpoint(values[values.len() / 2 - 1], values[values.len() / 2])
+    } else {
+        values[values.len() / 2]
+    };
+    (median, values.iter().sum::<f64>() / values.len() as f64)
+}
+
+#[cfg(windows)]
 fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     const ENTRIES: usize = 4_096;
     let cpu = platform::stabilize_thread();
@@ -268,6 +284,26 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     normalization.bench_function("bpm_stats_map", |b| {
         b.iter(|| {
             black_box(rssp::bpm::compute_bpm_map_stats(black_box(&bpm_stats_map)));
+        });
+    });
+    normalization.bench_function("bpm_stats_sorted_reference", |b| {
+        b.iter(|| {
+            black_box(sorted_bpm_stats_reference(black_box(&bpm_stats_map)));
+        });
+    });
+    normalization.bench_function("bpm_summary_separate", |b| {
+        b.iter(|| {
+            black_box((
+                rssp::bpm::compute_bpm_range(black_box(&bpm_stats_map)),
+                rssp::bpm::compute_bpm_map_stats(black_box(&bpm_stats_map)),
+            ));
+        });
+    });
+    normalization.bench_function("bpm_summary_combined", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::compute_bpm_range_and_stats(black_box(
+                &bpm_stats_map,
+            )));
         });
     });
     normalization.finish();

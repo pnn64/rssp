@@ -5,6 +5,37 @@ use std::time::Duration;
 const FIXTURE: &str = include_str!("fixtures/watch_yo_step.ssc");
 const EXTENSION: &str = "ssc";
 
+fn inherited_timing_fixture(chart_count: usize, bpm_count: usize) -> String {
+    use std::fmt::Write;
+
+    let mut fixture = String::with_capacity(chart_count * 160 + bpm_count * 20);
+    fixture.push_str("#VERSION:0.83;\n#OFFSET:0;\n#BPMS:");
+    for idx in 0..bpm_count {
+        if idx != 0 {
+            fixture.push(',');
+        }
+        write!(&mut fixture, "{}={}", idx * 4, 120 + idx % 180).unwrap();
+    }
+    fixture.push_str(";\n");
+    for idx in 0..chart_count {
+        write!(
+            &mut fixture,
+            concat!(
+                "#NOTEDATA:;\n",
+                "#STEPSTYPE:dance-single;\n",
+                "#DESCRIPTION:cache-{};\n",
+                "#DIFFICULTY:Challenge;\n",
+                "#METER:10;\n",
+                "#CREDIT:;\n",
+                "#NOTES:\n1000\n0000\n0000\n0000\n;\n"
+            ),
+            idx
+        )
+        .unwrap();
+    }
+    fixture
+}
+
 #[derive(Clone)]
 struct NpsChartInput {
     chart_data: Vec<u8>,
@@ -206,6 +237,7 @@ fn build_nps_timing_inputs(charts: &[NpsChartInput], globals: &NpsGlobals) -> Ve
 
 fn bench_nps_pipeline(c: &mut Criterion) {
     let fixture = FIXTURE.as_bytes();
+    let inherited_fixture = inherited_timing_fixture(32, 256);
     let mut group = c.benchmark_group("nps_pipeline");
     group.sample_size(200);
     group.measurement_time(Duration::from_secs(2));
@@ -213,6 +245,16 @@ fn bench_nps_pipeline(c: &mut Criterion) {
         b.iter(|| {
             let nps = rssp::compute_chart_peak_nps(black_box(fixture), black_box(EXTENSION))
                 .expect("nps should succeed");
+            black_box(nps);
+        });
+    });
+    group.bench_function("compute_chart_peak_nps_many_inherited", |b| {
+        b.iter(|| {
+            let nps = rssp::compute_chart_peak_nps(
+                black_box(inherited_fixture.as_bytes()),
+                black_box(EXTENSION),
+            )
+            .expect("nps should succeed");
             black_box(nps);
         });
     });

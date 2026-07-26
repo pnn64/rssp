@@ -5,6 +5,37 @@ use std::time::Duration;
 const FIXTURE: &str = include_str!("fixtures/watch_yo_step.ssc");
 const EXTENSION: &str = "ssc";
 
+fn inherited_timing_fixture(chart_count: usize, bpm_count: usize) -> String {
+    use std::fmt::Write;
+
+    let mut fixture = String::with_capacity(chart_count * 160 + bpm_count * 20);
+    fixture.push_str("#VERSION:0.83;\n#OFFSET:0;\n#BPMS:");
+    for idx in 0..bpm_count {
+        if idx != 0 {
+            fixture.push(',');
+        }
+        write!(&mut fixture, "{}={}", idx * 4, 120 + idx % 180).unwrap();
+    }
+    fixture.push_str(";\n");
+    for idx in 0..chart_count {
+        write!(
+            &mut fixture,
+            concat!(
+                "#NOTEDATA:;\n",
+                "#STEPSTYPE:dance-single;\n",
+                "#DESCRIPTION:cache-{};\n",
+                "#DIFFICULTY:Challenge;\n",
+                "#METER:10;\n",
+                "#CREDIT:;\n",
+                "#NOTES:\n1000\n0000\n0000\n0000\n;\n"
+            ),
+            idx
+        )
+        .unwrap();
+    }
+    fixture
+}
+
 #[derive(Clone)]
 struct DurationChartInput {
     chart_data: Vec<u8>,
@@ -178,6 +209,7 @@ fn build_timing_eval_inputs(
 
 fn bench_duration_pipeline(c: &mut Criterion) {
     let fixture = FIXTURE.as_bytes();
+    let inherited_fixture = inherited_timing_fixture(32, 256);
     let mut group = c.benchmark_group("duration_pipeline");
     group.sample_size(200);
     group.measurement_time(Duration::from_secs(2));
@@ -185,6 +217,17 @@ fn bench_duration_pipeline(c: &mut Criterion) {
         b.iter(|| {
             let durations = rssp::compute_chart_durations(
                 black_box(fixture),
+                black_box(EXTENSION),
+                rssp::TimingOffsets::default(),
+            )
+            .expect("duration compute should succeed");
+            black_box(durations);
+        });
+    });
+    group.bench_function("compute_chart_durations_many_inherited", |b| {
+        b.iter(|| {
+            let durations = rssp::compute_chart_durations(
+                black_box(inherited_fixture.as_bytes()),
                 black_box(EXTENSION),
                 rssp::TimingOffsets::default(),
             )

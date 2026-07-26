@@ -810,7 +810,54 @@ pub fn compute_bpm_stats(values: &[f64]) -> (f64, f64) {
 
 #[must_use]
 pub fn compute_bpm_map_stats(map: &[(f64, f64)]) -> (f64, f64) {
-    compute_bpm_stats_iter(map.iter().map(|&(_, bpm)| bpm))
+    if map.is_empty() {
+        return (0.0, 0.0);
+    }
+    let mut filtered = Vec::with_capacity(map.len());
+    filtered.extend(
+        map.iter()
+            .map(|&(_, bpm)| bpm)
+            .filter(|&bpm| is_display_bpm(bpm)),
+    );
+    let all_values_are_displayable = !filtered.is_empty();
+    if !all_values_are_displayable {
+        filtered.extend(map.iter().map(|&(_, bpm)| bpm));
+    }
+    bpm_stats_from_values(filtered, all_values_are_displayable)
+}
+
+#[must_use]
+pub fn compute_bpm_range_and_stats(map: &[(f64, f64)]) -> (i32, i32, f64, f64) {
+    if map.is_empty() {
+        return (0, 0, 0.0, 0.0);
+    }
+
+    let mut values = Vec::with_capacity(map.len());
+    let (mut min, mut max) = (f64::MAX, f64::MIN);
+    for &(_, bpm) in map {
+        if is_display_bpm(bpm) {
+            min = min.min(bpm);
+            max = max.max(bpm);
+            values.push(bpm);
+        }
+    }
+
+    let all_values_are_displayable = !values.is_empty();
+    if !all_values_are_displayable {
+        for &(_, bpm) in map {
+            min = min.min(bpm);
+            max = max.max(bpm);
+            values.push(bpm);
+        }
+    }
+
+    let (median, average) = bpm_stats_from_values(values, all_values_are_displayable);
+    (
+        min.max(0.0).round() as i32,
+        max.max(0.0).round() as i32,
+        median,
+        average,
+    )
 }
 
 fn compute_bpm_stats_iter<I>(values: I) -> (f64, f64)
@@ -820,17 +867,45 @@ where
     if values.clone().next().is_none() {
         return (0.0, 0.0);
     }
-    let mut v: Vec<_> = values.clone().filter(|&b| is_display_bpm(b)).collect();
-    if v.is_empty() {
-        v.extend(values);
+    let mut filtered: Vec<_> = values.clone().filter(|&b| is_display_bpm(b)).collect();
+    let all_values_are_displayable = !filtered.is_empty();
+    if !all_values_are_displayable {
+        filtered.extend(values);
     }
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let med = if v.len() % 2 == 0 {
-        f64::midpoint(v[v.len() / 2 - 1], v[v.len() / 2])
+    bpm_stats_from_values(filtered, all_values_are_displayable)
+}
+
+fn bpm_stats_from_values(mut values: Vec<f64>, can_select: bool) -> (f64, f64) {
+    const SELECTION_MIN_VALUES: usize = 64;
+
+    if can_select && values.len() >= SELECTION_MIN_VALUES {
+        let average = values.iter().sum::<f64>() / values.len() as f64;
+        let mid = values.len() / 2;
+        let even = mid * 2 == values.len();
+        let (_, upper, _) = values.select_nth_unstable_by(mid, |a, b| {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let upper = *upper;
+        let median = if even {
+            let lower = values[..mid]
+                .iter()
+                .copied()
+                .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                .unwrap_or(upper);
+            f64::midpoint(lower, upper)
+        } else {
+            upper
+        };
+        return (median, average);
+    }
+
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = if values.len().is_multiple_of(2) {
+        f64::midpoint(values[values.len() / 2 - 1], values[values.len() / 2])
     } else {
-        v[v.len() / 2]
+        values[values.len() / 2]
     };
-    (med, v.iter().sum::<f64>() / v.len() as f64)
+    (median, values.iter().sum::<f64>() / values.len() as f64)
 }
 
 pub fn compute_tier_bpm(densities: &[usize], bpms: &[(f64, f64)], bpm: f64) -> f64 {
@@ -1107,6 +1182,74 @@ mod tests {
                 .map(|(idx, &bpm)| (idx as f64 * 4.0, bpm))
                 .collect();
             assert_eq!(compute_bpm_map_stats(&map), compute_bpm_stats(&values));
+        }
+    }
+
+    fn sorted_bpm_stats_reference(map: &[(f64, f64)]) -> (f64, f64) {
+        if map.is_empty() {
+            return (0.0, 0.0);
+        }
+        let mut values: Vec<_> = map
+            .iter()
+            .map(|&(_, bpm)| bpm)
+            .filter(|&bpm| is_display_bpm(bpm))
+            .collect();
+        if values.is_empty() {
+            values.extend(map.iter().map(|&(_, bpm)| bpm));
+        }
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median = if values.len() % 2 == 0 {
+            f64::midpoint(values[values.len() / 2 - 1], values[values.len() / 2])
+        } else {
+            values[values.len() / 2]
+        };
+        (median, values.iter().sum::<f64>() / values.len() as f64)
+    }
+
+    #[test]
+    fn selected_bpm_stats_match_sorted_reference() {
+        let map: Vec<_> = (0..4_096)
+            .map(|idx| {
+                (
+                    idx as f64 * 4.0,
+                    60.125 + ((idx * 977) % 1_000) as f64 / 8.0,
+                )
+            })
+            .collect();
+        let expected = sorted_bpm_stats_reference(&map);
+        let actual = compute_bpm_map_stats(&map);
+
+        assert_eq!(actual.0, expected.0);
+        assert!((actual.1 - expected.1).abs() < 1.0e-10);
+    }
+
+    #[test]
+    fn combined_bpm_summary_matches_independent_paths() {
+        let large_map: Vec<_> = (0..4_096)
+            .map(|idx| {
+                (
+                    idx as f64 * 4.0,
+                    60.125 + ((idx * 977) % 1_000) as f64 / 8.0,
+                )
+            })
+            .collect();
+        let cases = [
+            Vec::new(),
+            vec![(0.0, 120.0)],
+            vec![(0.0, 120.0), (4.0, 180.0), (8.0, 150.0)],
+            vec![(0.0, -10.0), (4.0, 0.0), (8.0, 20_000.0)],
+            vec![(0.0, -10.0), (4.0, 120.0), (8.0, 10_000.0), (12.0, 180.0)],
+            large_map,
+        ];
+
+        for map in cases {
+            let expected_range = compute_bpm_range(&map);
+            let expected_stats = sorted_bpm_stats_reference(&map);
+            let actual = compute_bpm_range_and_stats(&map);
+
+            assert_eq!((actual.0, actual.1), expected_range);
+            assert_eq!(actual.2, expected_stats.0);
+            assert!((actual.3 - expected_stats.1).abs() < 1.0e-10);
         }
     }
 

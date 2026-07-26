@@ -74,6 +74,9 @@ enum Mode {
     Fast,
     Full,
     Annotations,
+    Hashes,
+    Durations,
+    Nps,
     ParitySingle,
     ParityDouble,
     ParitySingleHolds,
@@ -131,6 +134,9 @@ fn parse_args() -> (Mode, usize) {
                     "parse" => Mode::Parse,
                     "fast" => Mode::Fast,
                     "annotations" => Mode::Annotations,
+                    "hashes" => Mode::Hashes,
+                    "durations" => Mode::Durations,
+                    "nps" => Mode::Nps,
                     "parity-single" => Mode::ParitySingle,
                     "parity-double" => Mode::ParityDouble,
                     "parity-single-holds" => Mode::ParitySingleHolds,
@@ -161,12 +167,14 @@ fn load_corpus() -> Vec<SimInput> {
 
 fn options_for(mode: Mode) -> rssp::AnalysisOptions {
     match mode {
-        Mode::Fast | Mode::Parse => rssp::AnalysisOptions {
-            mono_threshold: 6,
-            compute_tech_counts: false,
-            compute_pattern_counts: false,
-            ..rssp::AnalysisOptions::default()
-        },
+        Mode::Fast | Mode::Parse | Mode::Hashes | Mode::Durations | Mode::Nps => {
+            rssp::AnalysisOptions {
+                mono_threshold: 6,
+                compute_tech_counts: false,
+                compute_pattern_counts: false,
+                ..rssp::AnalysisOptions::default()
+            }
+        }
         Mode::Full => rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
@@ -194,6 +202,34 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
                 )
                 .expect("fixture should parse");
                 checksum = checksum.wrapping_add(parsed.notes_list.len());
+            }
+            Mode::Hashes => {
+                let hashes = rssp::compute_all_hashes(
+                    black_box(sim.raw.as_slice()),
+                    black_box(sim.extension),
+                )
+                .expect("fixture should hash");
+                checksum = checksum.wrapping_add(hashes.len());
+                black_box(hashes);
+            }
+            Mode::Durations => {
+                let durations = rssp::compute_chart_durations(
+                    black_box(sim.raw.as_slice()),
+                    black_box(sim.extension),
+                    rssp::TimingOffsets::default(),
+                )
+                .expect("fixture durations should compute");
+                checksum = checksum.wrapping_add(durations.len());
+                black_box(durations);
+            }
+            Mode::Nps => {
+                let nps = rssp::compute_chart_peak_nps(
+                    black_box(sim.raw.as_slice()),
+                    black_box(sim.extension),
+                )
+                .expect("fixture NPS should compute");
+                checksum = checksum.wrapping_add(nps.len());
+                black_box(nps);
             }
             Mode::ParitySingle
             | Mode::ParityDouble
@@ -228,6 +264,9 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Fast => "fast",
         Mode::Full => "full",
         Mode::Annotations => "annotations",
+        Mode::Hashes => "hashes",
+        Mode::Durations => "durations",
+        Mode::Nps => "nps",
         Mode::ParitySingle => "parity-single",
         Mode::ParityDouble => "parity-double",
         Mode::ParitySingleHolds => "parity-single-holds",
