@@ -74,8 +74,6 @@ enum PropValue<'a> {
     Number(f64),
     NumberOpt(Option<f64>),
     Bool(bool),
-    NormalizedList(&'a str),
-    NormalizedListOpt(Option<&'a str>),
     RadarValues(Option<[f32; crate::stats::RADAR_CATEGORY_COUNT]>, bool),
 }
 
@@ -105,28 +103,6 @@ impl<'a> PropValue<'a> {
                     write_all!(out, b"NO")
                 }
             }
-            PropValue::NormalizedList(items_str) => {
-                let items = items_str.as_bytes();
-                let mut written_bytes = 0;
-                let mut start = 0;
-
-                while let Some(offset) = items[start..].iter().position(|&b| b == b',') {
-                    let comma = start + offset;
-                    written_bytes += write_all!(out, &items[start..=comma])?;
-                    written_bytes += write_all!(out, b"\n")?;
-                    start = comma + 1;
-                    while start < items.len() && items[start].is_ascii_whitespace() {
-                        start += 1;
-                    }
-                }
-
-                written_bytes += write_all!(out, &items[start..])?;
-                Ok(written_bytes)
-            }
-            PropValue::NormalizedListOpt(opt_items_str) => match opt_items_str {
-                None => Ok(0),
-                Some(items_str) => PropValue::NormalizedList(items_str).serialize(out),
-            },
             PropValue::RadarValues(rv, per_player) => match rv {
                 Some(values) => {
                     let mut written_bytes = 0;
@@ -163,8 +139,6 @@ impl<'a> PropValue<'a> {
             PropValue::Number(_) => false,
             PropValue::NumberOpt(opt) => opt.is_none(),
             PropValue::Bool(_) => false,
-            PropValue::NormalizedList(s) => s.is_empty(),
-            PropValue::NormalizedListOpt(opt) => opt.as_ref().is_none_or(|s| s.is_empty()),
             PropValue::RadarValues(rv, _) => rv.is_none(),
         }
     }
@@ -327,21 +301,21 @@ pub fn serialize_simfile(
         Prop::new(b"SAMPLELENGTH", PropValue::Number(summary.sample_length)),
         Prop::new(b"SELECTABLE", PropValue::Bool(summary.selectable)),
         Prop::nonempty_only(b"DISPLAYBPM", PropValue::StrNoEscape(&summary.display_bpm_str)),
-        Prop::new_with_default(b"BPMS", DEFAULT_BPMS, PropValue::NormalizedList(&summary.normalized_bpms)),
-        Prop::new(b"STOPS", PropValue::NormalizedList(&summary.normalized_stops)),
-        Prop::ssc_only(b"DELAYS", PropValue::NormalizedList(&summary.normalized_delays)),
-        Prop::ssc_only(b"WARPS", PropValue::NormalizedList(&summary.normalized_warps)),
-        Prop::ssc_only_with_default(b"TIMESIGNATURES", DEFAULT_TIME_SIGNATURES, PropValue::NormalizedList(&summary.normalized_time_signatures)),
-        Prop::ssc_only_with_default(b"TICKCOUNTS", DEFAULT_TICKCOUNTS, PropValue::NormalizedList(&summary.normalized_tickcounts)),
-        Prop::ssc_only_with_default(b"COMBOS", DEFAULT_COMBOS, PropValue::NormalizedList(&summary.normalized_combos)),
-        Prop::ssc_only_with_default(b"SPEEDS", DEFAULT_SPEEDS, PropValue::NormalizedList(&summary.normalized_speeds)),
-        Prop::ssc_only_with_default(b"SCROLLS", DEFAULT_SCROLLS, PropValue::NormalizedList(&summary.normalized_scrolls)),
-        Prop::ssc_only(b"FAKES", PropValue::NormalizedList(&summary.normalized_fakes)),
-        Prop::ssc_only_with_default(b"LABELS", DEFAULT_LABELS, PropValue::NormalizedList(&summary.normalized_labels)),
+        Prop::new_with_default(b"BPMS", DEFAULT_BPMS, PropValue::StrNoEscape(&summary.normalized_bpms)),
+        Prop::new(b"STOPS", PropValue::StrNoEscape(&summary.normalized_stops)),
+        Prop::ssc_only(b"DELAYS", PropValue::StrNoEscape(&summary.normalized_delays)),
+        Prop::ssc_only(b"WARPS", PropValue::StrNoEscape(&summary.normalized_warps)),
+        Prop::ssc_only_with_default(b"TIMESIGNATURES", DEFAULT_TIME_SIGNATURES, PropValue::StrNoEscape(&summary.normalized_time_signatures)),
+        Prop::ssc_only_with_default(b"TICKCOUNTS", DEFAULT_TICKCOUNTS, PropValue::StrNoEscape(&summary.normalized_tickcounts)),
+        Prop::ssc_only_with_default(b"COMBOS", DEFAULT_COMBOS, PropValue::StrNoEscape(&summary.normalized_combos)),
+        Prop::ssc_only_with_default(b"SPEEDS", DEFAULT_SPEEDS, PropValue::StrNoEscape(&summary.normalized_speeds)),
+        Prop::ssc_only_with_default(b"SCROLLS", DEFAULT_SCROLLS, PropValue::StrNoEscape(&summary.normalized_scrolls)),
+        Prop::ssc_only(b"FAKES", PropValue::StrNoEscape(&summary.normalized_fakes)),
+        Prop::ssc_only_with_default(b"LABELS", DEFAULT_LABELS, PropValue::StrNoEscape(&summary.normalized_labels)),
         Prop::ssc_nonempty_only(b"LASTSECONDHINT", PropValue::NumberOpt(summary.last_second_hint)),
         Prop::new(b"BGCHANGES", PropValue::StrNoEscape(&summary.normalized_bgchanges)),
         Prop::nonempty_only(b"FGCHANGES", PropValue::StrNoEscape(&summary.normalized_fgchanges)),
-        Prop::new(b"KEYSOUNDS", PropValue::NormalizedList(&summary.normalized_keysounds)),
+        Prop::new(b"KEYSOUNDS", PropValue::StrNoEscape(&summary.normalized_keysounds)),
         Prop::new(b"ATTACKS", PropValue::StrNoEscape(&summary.normalized_attacks)), // Commas aren't always row separators
     ];
 
@@ -352,6 +326,7 @@ pub fn serialize_simfile(
     written_bytes += write_all!(out, b"\n")?;
 
     for chart in &summary.charts {
+        written_bytes += write_chart_comment_prefix(out, chart)?;
         written_bytes += if ssc {
             serialize_ssc_chart(out, chart)
         } else {
@@ -359,6 +334,35 @@ pub fn serialize_simfile(
         }?;
         written_bytes += write_all!(out, b"\n")?;
     }
+
+    Ok(written_bytes)
+}
+
+#[must_use]
+fn write_chart_comment_prefix(
+    out: &mut dyn io::Write,
+    chart: &crate::ChartSummary,
+) -> io::Result<usize> {
+    let mut written_bytes: usize = 0;
+
+    written_bytes += write_all!(out, b"//---------------")?;
+    match chart.step_type_str.as_ref() {
+        "" => {
+            written_bytes += write_all!(out, DEFAULT_STEPSTYPE)?;
+        }
+        s => {
+            // Passively strip newlines to ensure that we never terminate the comment prematurely
+            for line in s.lines() {
+                written_bytes += write_all!(out, line.as_bytes())?;
+            }
+        }
+    };
+    written_bytes += write_all!(out, b" - ")?;
+    // Passively strip newlines again
+    for line in chart.description_str.lines() {
+        written_bytes += write_all!(out, line.as_bytes())?;
+    }
+    written_bytes += write_all!(out, b"----------------\n")?;
 
     Ok(written_bytes)
 }
@@ -411,17 +415,17 @@ fn serialize_ssc_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> 
         Prop::new(b"RADARVALUES", PropValue::RadarValues(chart.cached_radar_values, true)),
         Prop::new(b"CREDIT", PropValue::Str(&chart.step_artist_str)),
         Prop::own_timing_only(b"OFFSET", PropValue::Number(chart.chart_offset_seconds)),
-        Prop::own_timing_only_with_default(b"BPMS", DEFAULT_BPMS, PropValue::NormalizedListOpt(chart.chart_bpms.as_deref())),
-        Prop::own_timing_only(b"STOPS", PropValue::NormalizedListOpt(chart.chart_stops.as_deref())),
-        Prop::own_timing_only(b"DELAYS", PropValue::NormalizedListOpt(chart.chart_delays.as_deref())),
-        Prop::own_timing_only(b"WARPS", PropValue::NormalizedListOpt(chart.chart_warps.as_deref())),
-        Prop::own_timing_only_with_default(b"TIMESIGNATURES", DEFAULT_TIME_SIGNATURES, PropValue::NormalizedListOpt(chart.chart_time_signatures.as_deref())),
-        Prop::own_timing_only_with_default(b"TICKCOUNTS", DEFAULT_TICKCOUNTS, PropValue::NormalizedListOpt(chart.chart_tickcounts.as_deref())),
-        Prop::own_timing_only_with_default(b"COMBOS", DEFAULT_COMBOS, PropValue::NormalizedListOpt(chart.chart_combos.as_deref())),
-        Prop::own_timing_only_with_default(b"SPEEDS", DEFAULT_SPEEDS, PropValue::NormalizedListOpt(chart.chart_speeds.as_deref())),
-        Prop::own_timing_only_with_default(b"SCROLLS", DEFAULT_SCROLLS, PropValue::NormalizedListOpt(chart.chart_scrolls.as_deref())),
-        Prop::own_timing_only(b"FAKES", PropValue::NormalizedListOpt(chart.chart_fakes.as_deref())),
-        Prop::own_timing_only_with_default(b"LABELS", DEFAULT_LABELS, PropValue::NormalizedListOpt(chart.chart_labels.as_deref())),
+        Prop::own_timing_only_with_default(b"BPMS", DEFAULT_BPMS, PropValue::StrNoEscapeOpt(chart.chart_bpms.as_deref())),
+        Prop::own_timing_only(b"STOPS", PropValue::StrNoEscapeOpt(chart.chart_stops.as_deref())),
+        Prop::own_timing_only(b"DELAYS", PropValue::StrNoEscapeOpt(chart.chart_delays.as_deref())),
+        Prop::own_timing_only(b"WARPS", PropValue::StrNoEscapeOpt(chart.chart_warps.as_deref())),
+        Prop::own_timing_only_with_default(b"TIMESIGNATURES", DEFAULT_TIME_SIGNATURES, PropValue::StrNoEscapeOpt(chart.chart_time_signatures.as_deref())),
+        Prop::own_timing_only_with_default(b"TICKCOUNTS", DEFAULT_TICKCOUNTS, PropValue::StrNoEscapeOpt(chart.chart_tickcounts.as_deref())),
+        Prop::own_timing_only_with_default(b"COMBOS", DEFAULT_COMBOS, PropValue::StrNoEscapeOpt(chart.chart_combos.as_deref())),
+        Prop::own_timing_only_with_default(b"SPEEDS", DEFAULT_SPEEDS, PropValue::StrNoEscapeOpt(chart.chart_speeds.as_deref())),
+        Prop::own_timing_only_with_default(b"SCROLLS", DEFAULT_SCROLLS, PropValue::StrNoEscapeOpt(chart.chart_scrolls.as_deref())),
+        Prop::own_timing_only(b"FAKES", PropValue::StrNoEscapeOpt(chart.chart_fakes.as_deref())),
+        Prop::own_timing_only_with_default(b"LABELS", DEFAULT_LABELS, PropValue::StrNoEscapeOpt(chart.chart_labels.as_deref())),
         Prop::nonempty_only(b"ATTACKS", PropValue::StrNoEscapeOpt(chart.chart_attacks.as_deref())),
         Prop::nonempty_only(b"DISPLAYBPM", PropValue::StrNoEscapeOpt(chart.chart_display_bpm.as_deref())),
         Prop::nonempty_only(b"NOTES", PropValue::NoteData(&chart.minimized_note_data)),
@@ -513,6 +517,7 @@ mod tests {
             #KEYSOUNDS:;\n\
             #ATTACKS:;\n\
             \n\
+            //---------------dance-single - Description----------------\n\
             #NOTEDATA:;\n\
             #CHARTNAME:Chart name;\n\
             #STEPSTYPE:dance-single;\n\
@@ -530,6 +535,7 @@ mod tests {
             0000\n\
             ;\n\
             \n\
+            //---------------dance-single - Description----------------\n\
             #NOTEDATA:;\n\
             #CHARTNAME:Chart name;\n\
             #STEPSTYPE:dance-single;\n\
@@ -657,6 +663,7 @@ mod tests {
             #KEYSOUNDS:;\n\
             #ATTACKS:Attacks;\n\
             \n\
+            //---------------dance-single - Description----------------\n\
             #NOTEDATA:;\n\
             #CHARTNAME:Chart name;\n\
             #STEPSTYPE:dance-single;\n\
@@ -677,6 +684,7 @@ mod tests {
             0000\n\
             ;\n\
             \n\
+            //---------------dance-single - Description----------------\n\
             #NOTEDATA:;\n\
             #CHARTNAME:Chart name;\n\
             #STEPSTYPE:dance-single;\n\
@@ -791,6 +799,7 @@ mod tests {
             #KEYSOUNDS:;\n\
             #ATTACKS:;\n\
             \n\
+            //---------------dance-single - Description----------------\n\
             #NOTEDATA:;\n\
             #CHARTNAME:Chart name;\n\
             #STEPSTYPE:dance-single;\n\
@@ -808,6 +817,7 @@ mod tests {
             0000\n\
             ;\n\
             \n\
+            //---------------dance-single - Description----------------\n\
             #NOTEDATA:;\n\
             #CHARTNAME:Chart name;\n\
             #STEPSTYPE:dance-single;\n\
@@ -888,6 +898,7 @@ mod tests {
         #KEYSOUNDS:;\n\
         #ATTACKS:;\n\
         \n\
+        //---------------dance-single - Description----------------\n\
         #NOTES:\n     dance-single:\n     Description:\n     Challenge:\n     17:\n     0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000:\n\
         0000\n\
         0000\n\
@@ -944,6 +955,7 @@ mod tests {
         #KEYSOUNDS:;\n\
         #ATTACKS:Attacks;\n\
         \n\
+        //---------------dance-single - Description----------------\n\
         #NOTES:\n     dance-single:\n     Description:\n     Challenge:\n     17:\n     0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000:\n\
         0000\n\
         0000\n\
@@ -996,6 +1008,7 @@ mod tests {
         #KEYSOUNDS:;\n\
         #ATTACKS:;\n\
         \n\
+        //---------------dance-single - Description----------------\n\
         #NOTES:\n     dance-single:\n     Description:\n     Beginner:\n     1:\n     0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000:\n\
         0000\n\
         0000\n\
@@ -1049,37 +1062,37 @@ mod tests {
             artisttranslit_str: String::from("Artist translit"),
             offset: 0.123,
             normalized_bpms: match trigger_defaults {
-                false => String::from("0.000=120.000,16.000=240.000,48.000=120.000"),
+                false => String::from("0.000=120.000,\n16.000=240.000,\n48.000=120.000"),
                 true => String::from(""),
             },
-            normalized_stops: String::from("1.000=1.250,1.500=1.750"),
-            normalized_delays: String::from("2.000=2.250,2.500=2.750"),
-            normalized_warps: String::from("3.000=3.250,3.500=3.750"),
+            normalized_stops: String::from("1.000=1.250,\n1.500=1.750"),
+            normalized_delays: String::from("2.000=2.250,\n2.500=2.750"),
+            normalized_warps: String::from("3.000=3.250,\n3.500=3.750"),
             normalized_speeds: match trigger_defaults {
-                false => {
-                    String::from("0.000=1.000=0.000=0,12.000=0.500=4.000=0,48.000=1.000=0.000=1")
-                }
+                false => String::from(
+                    "0.000=1.000=0.000=0,\n12.000=0.500=4.000=0,\n48.000=1.000=0.000=1",
+                ),
                 true => String::from(""),
             },
             normalized_scrolls: match trigger_defaults {
-                false => String::from("0.000=1.000,16.000=2.000,48.000=1.000"),
+                false => String::from("0.000=1.000,\n16.000=2.000,\n48.000=1.000"),
                 true => String::from(""),
             },
-            normalized_fakes: String::from("4.000=4.250,4.500=4.750"),
+            normalized_fakes: String::from("4.000=4.250,\n4.500=4.750"),
             normalized_time_signatures: match trigger_defaults {
-                false => String::from("0.000=4=4,16.000=8=4,48.000=4=4"),
+                false => String::from("0.000=4=4,\n16.000=8=4,\n48.000=4=4"),
                 true => String::from(""),
             },
             normalized_labels: match trigger_defaults {
-                false => String::from("0.000=Song Start,16.000=Speedup"),
+                false => String::from("0.000=Song Start,\n16.000=Speedup"),
                 true => String::from(""),
             },
             normalized_tickcounts: match trigger_defaults {
-                false => String::from("0.000=4,16.000=2,48.000=4"),
+                false => String::from("0.000=4,\n16.000=2,\n48.000=4"),
                 true => String::from(""),
             },
             normalized_combos: match trigger_defaults {
-                false => String::from("0.000=1,16.000=2,48.000=1"),
+                false => String::from("0.000=1,\n16.000=2,\n48.000=1"),
                 true => String::from(""),
             },
             ssc_version: 0.83,
@@ -1168,24 +1181,24 @@ mod tests {
             // Timing fields
             chart_has_own_timing: has_own_timing,
             chart_bpms: (has_own_timing && !trigger_defaults)
-                .then(|| String::from("0.000=120.000,16.000=240.000,48.000=120.000")),
-            chart_stops: has_own_timing.then(|| String::from("1.000=1.250,1.500=1.750")),
-            chart_delays: has_own_timing.then(|| String::from("2.000=2.250,2.500=2.750")),
-            chart_warps: has_own_timing.then(|| String::from("3.000=3.250,3.500=3.750")),
+                .then(|| String::from("0.000=120.000,\n16.000=240.000,\n48.000=120.000")),
+            chart_stops: has_own_timing.then(|| String::from("1.000=1.250,\n1.500=1.750")),
+            chart_delays: has_own_timing.then(|| String::from("2.000=2.250,\n2.500=2.750")),
+            chart_warps: has_own_timing.then(|| String::from("3.000=3.250,\n3.500=3.750")),
             chart_speeds: (has_own_timing && !trigger_defaults).then(|| {
-                String::from("0.000=1.000=0.000=0,12.000=0.500=4.000=0,48.000=1.000=0.000=1")
+                String::from("0.000=1.000=0.000=0,\n12.000=0.500=4.000=0,\n48.000=1.000=0.000=1")
             }),
             chart_scrolls: (has_own_timing && !trigger_defaults)
-                .then(|| String::from("0.000=1.000,16.000=2.000,48.000=1.000")),
-            chart_fakes: has_own_timing.then(|| String::from("4.000=4.250,4.500=4.750")),
+                .then(|| String::from("0.000=1.000,\n16.000=2.000,\n48.000=1.000")),
+            chart_fakes: has_own_timing.then(|| String::from("4.000=4.250,\n4.500=4.750")),
             chart_time_signatures: (has_own_timing && !trigger_defaults)
-                .then(|| String::from("0.000=4=4,16.000=8=4,48.000=4=4")),
+                .then(|| String::from("0.000=4=4,\n16.000=8=4,\n48.000=4=4")),
             chart_labels: (has_own_timing && !trigger_defaults)
-                .then(|| String::from("0.000=Song Start,16.000=Speedup")),
+                .then(|| String::from("0.000=Song Start,\n16.000=Speedup")),
             chart_tickcounts: (has_own_timing && !trigger_defaults)
-                .then(|| String::from("0.000=4,16.000=2,48.000=4")),
+                .then(|| String::from("0.000=4,\n16.000=2,\n48.000=4")),
             chart_combos: (has_own_timing && !trigger_defaults)
-                .then(|| String::from("0.000=1,16.000=2,48.000=1")),
+                .then(|| String::from("0.000=1,\n16.000=2,\n48.000=1")),
             chart_attacks: include_nonempty.then(|| String::from("Attacks")), // TODO
             chart_display_bpm: include_nonempty.then(|| String::from("300")),
 
