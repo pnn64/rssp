@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
+#[path = "support/assets.rs"]
+mod assets_bench;
 #[path = "support/course.rs"]
 mod course_bench;
 #[path = "support/metadata.rs"]
@@ -95,6 +97,7 @@ enum Mode {
     CourseJson,
     CourseAnalyze,
     PackScan,
+    BackgroundChanges,
     MetadataAnalyze,
     CustomCompile,
     ParitySingle,
@@ -167,6 +170,7 @@ fn parse_args() -> (Mode, usize) {
                     "course-json" => Mode::CourseJson,
                     "course-analyze" => Mode::CourseAnalyze,
                     "pack-scan" => Mode::PackScan,
+                    "background-changes" => Mode::BackgroundChanges,
                     "metadata-analyze" => Mode::MetadataAnalyze,
                     "custom-compile" => Mode::CustomCompile,
                     "parity-single" => Mode::ParitySingle,
@@ -224,6 +228,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         },
         Mode::CourseAnalyze => rssp::AnalysisOptions::default(),
         Mode::PackScan => rssp::AnalysisOptions::default(),
+        Mode::BackgroundChanges => rssp::AnalysisOptions::default(),
         Mode::MetadataAnalyze => rssp::AnalysisOptions::default(),
         Mode::CustomCompile => rssp::AnalysisOptions::default(),
         Mode::JsonFull => rssp::AnalysisOptions {
@@ -316,6 +321,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::JsonTiming => {
                 unreachable!("timing JSON mode uses its dedicated allocation runner")
+            }
+            Mode::BackgroundChanges => {
+                unreachable!("background change mode uses its dedicated allocation runner")
             }
             Mode::CourseJson => {
                 unreachable!("course report mode uses its dedicated allocation runner")
@@ -501,6 +509,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::CourseJson => "course-json",
         Mode::CourseAnalyze => "course-analyze",
         Mode::PackScan => "pack-scan",
+        Mode::BackgroundChanges => "background-changes",
         Mode::MetadataAnalyze => "metadata-analyze",
         Mode::CustomCompile => "custom-compile",
         Mode::ParitySingle => "parity-single",
@@ -848,6 +857,50 @@ fn run_timing_json_alloc(iterations: usize) {
     );
 }
 
+fn run_background_changes_alloc(iterations: usize) {
+    let fixture = assets_bench::AssetFixture::new();
+    black_box(rssp::assets::resolve_background_changes_like_itg(
+        fixture.song_dir(),
+        fixture.simfile(),
+    ));
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let changes = rssp::assets::resolve_background_changes_like_itg(
+            black_box(fixture.song_dir()),
+            black_box(fixture.simfile()),
+        );
+        checksum = checksum.wrapping_add(changes.len());
+        black_box(changes);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=background-changes iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_changes_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        assets_bench::CHANGE_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
 fn main() {
     let (mode, iterations) = parse_args();
     match mode {
@@ -861,6 +914,10 @@ fn main() {
         }
         Mode::PackScan => {
             run_pack_scan_alloc(iterations);
+            return;
+        }
+        Mode::BackgroundChanges => {
+            run_background_changes_alloc(iterations);
             return;
         }
         Mode::MetadataAnalyze => {

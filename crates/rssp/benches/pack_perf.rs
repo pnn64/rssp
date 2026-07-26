@@ -3,6 +3,8 @@ use std::hint::black_box;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[path = "support/assets.rs"]
+mod assets_bench;
 #[path = "support/pack.rs"]
 mod pack_bench;
 
@@ -22,6 +24,24 @@ fn bench_pack_scan(c: &mut Criterion) {
             .expect("benchmark pack should scan")
             .expect("benchmark pack should contain songs");
             black_box(scan);
+        });
+    });
+    group.finish();
+}
+
+fn bench_background_changes(c: &mut Criterion) {
+    let fixture = assets_bench::AssetFixture::new();
+
+    let mut group = c.benchmark_group("background_changes");
+    group.sample_size(30);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(assets_bench::CHANGE_COUNT as u64));
+    group.bench_function("resolve_256_changes", |b| {
+        b.iter(|| {
+            black_box(rssp::assets::resolve_background_changes_like_itg(
+                black_box(fixture.song_dir()),
+                black_box(fixture.simfile()),
+            ))
         });
     });
     group.finish();
@@ -108,5 +128,10 @@ fn bench_selection_algorithms(c: &mut Criterion) {
     masks.finish();
 }
 
-criterion_group!(benches, bench_pack_scan, bench_selection_algorithms);
+criterion_group!(
+    benches,
+    bench_pack_scan,
+    bench_background_changes,
+    bench_selection_algorithms
+);
 criterion_main!(benches);

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fs;
 use std::io;
 use std::io::Read;
@@ -460,12 +461,16 @@ fn list_song_dir_rel_files(song_dir: &Path) -> Vec<String> {
     files
 }
 
-fn strip_newlines(s: &str) -> String {
+fn strip_newlines(s: &str) -> Cow<'_, str> {
+    if !s.contains('\n') {
+        return Cow::Borrowed(s);
+    }
+
     let mut out = String::with_capacity(s.len());
     for line in s.lines() {
         out.push_str(line);
     }
-    out
+    Cow::Owned(out)
 }
 
 fn match_bg_file<'a>(changes: &'a str, start: usize, files: &[String]) -> Option<&'a str> {
@@ -484,48 +489,68 @@ fn match_bg_file<'a>(changes: &'a str, start: usize, files: &[String]) -> Option
     None
 }
 
-fn split_bgchange_sets(changes: &str, files: &[String]) -> Vec<Vec<String>> {
+fn for_each_bgchange_pair(changes: &str, files: &[String], mut handle: impl FnMut(&str, &str)) {
     let changes = strip_newlines(changes);
     if changes.is_empty() {
-        return Vec::new();
+        return;
     }
-    let mut out: Vec<Vec<String>> = Vec::new();
+
+    let changes = changes.as_ref();
     let mut start = 0usize;
     let mut pnum = 0u8;
+    let mut start_beat = None;
+    let mut target = None;
     while start <= changes.len() {
-        if matches!(pnum, 1 | 7)
-            && let Some(found) = match_bg_file(&changes, start, files)
+        let (field, delimiter) = if (pnum == 1 || pnum == 7)
+            && let Some(found) = match_bg_file(changes, start, files)
         {
-            out.last_mut().unwrap().push(found.to_string());
             start += found.len();
-            if let Some(&delim) = changes.as_bytes().get(start) {
-                pnum = if delim == b'=' { pnum + 1 } else { 0 };
+            let delimiter = changes.as_bytes().get(start).copied();
+            if delimiter.is_some() {
                 start += 1;
             }
-            continue;
-        }
-        if pnum == 0 {
-            out.push(Vec::new());
-        }
-        let rem = &changes[start..];
-        let eq = rem.find('=').map(|i| start + i);
-        let comma = rem.find(',').map(|i| start + i);
-        let Some((end, next_pnum)) = eq
-            .zip(comma)
-            .map(|(e, c)| if e < c { (e, pnum + 1) } else { (c, 0) })
-            .or_else(|| eq.map(|e| (e, pnum + 1)))
-            .or_else(|| comma.map(|c| (c, 0)))
-        else {
-            out.last_mut().unwrap().push(changes[start..].to_string());
-            break;
+            (found, delimiter)
+        } else {
+            let rem = &changes[start..];
+            let eq = rem.find('=').map(|index| start + index);
+            let comma = rem.find(',').map(|index| start + index);
+            let end = match (eq, comma) {
+                (Some(eq), Some(comma)) => eq.min(comma),
+                (Some(eq), None) => eq,
+                (None, Some(comma)) => comma,
+                (None, None) => changes.len(),
+            };
+            let field = &changes[start..end];
+            let delimiter = changes.as_bytes().get(end).copied();
+            start = end + usize::from(delimiter.is_some());
+            (field, delimiter)
         };
-        out.last_mut()
-            .unwrap()
-            .push(changes[start..end].to_string());
-        start = end + 1;
-        pnum = next_pnum;
+
+        match pnum {
+            0 => start_beat = Some(field),
+            1 => target = Some(field),
+            _ => {}
+        }
+
+        match delimiter {
+            Some(b'=') => pnum += 1,
+            Some(b',') => {
+                if let (Some(start_beat), Some(target)) = (start_beat, target) {
+                    handle(start_beat, target);
+                }
+                start_beat = None;
+                target = None;
+                pnum = 0;
+            }
+            None => {
+                if let (Some(start_beat), Some(target)) = (start_beat, target) {
+                    handle(start_beat, target);
+                }
+                break;
+            }
+            Some(_) => unreachable!("background change delimiter must be '=' or ','"),
+        }
     }
-    out
 }
 
 fn resolve_bgchange_target(song_dir: &Path, file1: &str) -> Option<BackgroundChangeTarget> {
@@ -542,9 +567,13 @@ fn resolve_bgchange_target(song_dir: &Path, file1: &str) -> Option<BackgroundCha
     resolve_asset(song_dir, file1).map(BackgroundChangeTarget::File)
 }
 
-fn parse_bgchange_set(song_dir: &Path, fields: &[String]) -> Option<ResolvedBackgroundChange> {
-    let start_beat = fields.first()?.trim().parse::<f32>().unwrap_or(0.0);
-    let target = resolve_bgchange_target(song_dir, fields.get(1)?)?;
+fn parse_bgchange_pair(
+    song_dir: &Path,
+    start_beat: &str,
+    target: &str,
+) -> Option<ResolvedBackgroundChange> {
+    let start_beat = start_beat.trim().parse::<f32>().unwrap_or(0.0);
+    let target = resolve_bgchange_target(song_dir, target)?;
     Some(ResolvedBackgroundChange { start_beat, target })
 }
 
@@ -569,17 +598,18 @@ pub fn resolve_background_changes_like_itg(
     let mut out: Vec<ResolvedBackgroundChange> = Vec::new();
     let mut saw_no_song_bg = false;
     for raw in extract_bgchanges_values(simfile_data) {
-        let text = unescape_tag(decode_bytes(raw).as_ref()).into_owned();
-        for fields in split_bgchange_sets(&text, &files) {
-            let Some(change) = parse_bgchange_set(song_dir, &fields) else {
-                continue;
+        let decoded = decode_bytes(raw);
+        let text = unescape_tag(decoded.as_ref());
+        for_each_bgchange_pair(text.as_ref(), &files, |start_beat, target| {
+            let Some(change) = parse_bgchange_pair(song_dir, start_beat, target) else {
+                return;
             };
             if matches!(change.target, BackgroundChangeTarget::NoSongBg) {
                 saw_no_song_bg = true;
-                continue;
+                return;
             }
             upsert_bgchange(&mut out, change);
-        }
+        });
     }
     let has_explicit_movie = out.iter().any(|change| {
         matches!(
@@ -626,4 +656,177 @@ pub fn resolve_background_changes_like_itg(
     }
     out.sort_by(|a, b| a.start_beat.total_cmp(&b.start_beat));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{
+        BackgroundChangeTarget, ResolvedBackgroundChange, for_each_bgchange_pair, match_bg_file,
+        resolve_background_changes_like_itg, strip_newlines,
+    };
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            let unique = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should follow the Unix epoch")
+                .as_nanos();
+            let path = std::env::temp_dir()
+                .join(format!("rssp-assets-test-{}-{unique}", std::process::id()));
+            std::fs::create_dir_all(path.join("Visuals"))
+                .expect("asset test directory should be creatable");
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn split_bgchange_sets_materialized(changes: &str, files: &[String]) -> Vec<Vec<String>> {
+        let changes = strip_newlines(changes).into_owned();
+        if changes.is_empty() {
+            return Vec::new();
+        }
+        let mut out: Vec<Vec<String>> = Vec::new();
+        let mut start = 0usize;
+        let mut pnum = 0u8;
+        while start <= changes.len() {
+            if matches!(pnum, 1 | 7)
+                && let Some(found) = match_bg_file(&changes, start, files)
+            {
+                out.last_mut().unwrap().push(found.to_string());
+                start += found.len();
+                if let Some(&delimiter) = changes.as_bytes().get(start) {
+                    pnum = if delimiter == b'=' { pnum + 1 } else { 0 };
+                    start += 1;
+                }
+                continue;
+            }
+            if pnum == 0 {
+                out.push(Vec::new());
+            }
+            let remaining = &changes[start..];
+            let equals = remaining.find('=').map(|index| start + index);
+            let comma = remaining.find(',').map(|index| start + index);
+            let Some((end, next_pnum)) = equals
+                .zip(comma)
+                .map(|(equals, comma)| {
+                    if equals < comma {
+                        (equals, pnum + 1)
+                    } else {
+                        (comma, 0)
+                    }
+                })
+                .or_else(|| equals.map(|equals| (equals, pnum + 1)))
+                .or_else(|| comma.map(|comma| (comma, 0)))
+            else {
+                out.last_mut().unwrap().push(changes[start..].to_string());
+                break;
+            };
+            out.last_mut()
+                .unwrap()
+                .push(changes[start..end].to_string());
+            start = end + 1;
+            pnum = next_pnum;
+        }
+        out
+    }
+
+    fn assert_streamed_pairs_match(changes: &str, files: &[String]) {
+        let expected = split_bgchange_sets_materialized(changes, files)
+            .into_iter()
+            .filter_map(|fields| Some((fields.first()?.clone(), fields.get(1)?.clone())))
+            .collect::<Vec<_>>();
+        let mut actual = Vec::new();
+        for_each_bgchange_pair(changes, files, |start_beat, target| {
+            actual.push((start_beat.to_string(), target.to_string()));
+        });
+        assert_eq!(actual, expected, "changes={changes:?}");
+    }
+
+    #[test]
+    fn streamed_bgchange_pairs_match_materialized_sets() {
+        let files = [
+            "Visuals/Background,Layer.png",
+            "Visuals/Overlay,Layer.png",
+            "Visuals/A=B, C.png",
+            "first.png",
+        ]
+        .map(str::to_string);
+        let cases = [
+            "",
+            "0=first.png",
+            "0=Visuals/Background,Layer.png=1.000=0=0=1=StretchNoLoop==",
+            concat!(
+                "0=first.png=1=0=0=0=0=Visuals/Overlay,Layer.png,",
+                "4=Visuals/A=B, C.png"
+            ),
+            "0=\nVisuals/Background,Layer.png,\r\n4=first.png",
+            ",0=,4,8=first.png,12=first.png=1=0=0=0=0=",
+        ];
+
+        for changes in cases {
+            assert_streamed_pairs_match(changes, &files);
+        }
+
+        let alphabet = b"01=,\n\r abcXYZ/";
+        let mut state = 0x7265_7373_7062_6763u64;
+        for case_index in 0..2_048 {
+            let len = case_index % 96;
+            let mut changes = String::with_capacity(len);
+            for _ in 0..len {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
+                changes.push(char::from(alphabet[state as usize % alphabet.len()]));
+            }
+            assert_streamed_pairs_match(&changes, &files);
+        }
+    }
+
+    #[test]
+    fn streamed_bgchanges_preserve_resolution_and_upsert_behavior() {
+        let temp = TempDir::new();
+        for relative in [
+            "first.png",
+            "replacement.png",
+            "Visuals/Background,Layer.png",
+        ] {
+            std::fs::write(temp.0.join(relative), []).expect("asset test file should be writable");
+        }
+        let simfile = concat!(
+            "#BGCHANGES:",
+            "0=first.png,",
+            "4=Visuals/Background,Layer.png,",
+            "-1=-random-,",
+            "0=replacement.png,",
+            "8=missing.png,",
+            "12=-nosongbg-;\n"
+        );
+
+        let actual = resolve_background_changes_like_itg(&temp.0, simfile.as_bytes());
+        let expected = vec![
+            ResolvedBackgroundChange {
+                start_beat: -1.0,
+                target: BackgroundChangeTarget::Random,
+            },
+            ResolvedBackgroundChange {
+                start_beat: 0.0,
+                target: BackgroundChangeTarget::File(temp.0.join("replacement.png")),
+            },
+            ResolvedBackgroundChange {
+                start_beat: 4.0,
+                target: BackgroundChangeTarget::File(temp.0.join("Visuals/Background,Layer.png")),
+            },
+        ];
+
+        assert_eq!(actual, expected);
+    }
 }
