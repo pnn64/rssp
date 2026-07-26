@@ -1,4 +1,4 @@
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -7,6 +7,8 @@ const EXTENSION: &str = "ssc";
 
 #[path = "support/metadata.rs"]
 mod metadata_bench;
+#[path = "support/translate.rs"]
+mod translate_bench;
 
 type MetadataStrings = (String, String, String, String, String, String, String);
 
@@ -287,10 +289,42 @@ fn bench_chart_metadata_strings(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_marker_translation(c: &mut Criterion) {
+    let unknown = translate_bench::unknown_input();
+    let aliases = translate_bench::alias_input();
+
+    let mut group = c.benchmark_group("marker_translation");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(translate_bench::MARKER_COUNT as u64));
+    group.bench_function("unknown_512", |b| {
+        b.iter_batched(
+            || unknown.clone(),
+            |mut input| {
+                rssp::translate::replace_markers_in_place(black_box(&mut input));
+                black_box(input);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("aliases_512", |b| {
+        b.iter_batched(
+            || aliases.clone(),
+            |mut input| {
+                rssp::translate::replace_markers_in_place(black_box(&mut input));
+                black_box(input);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_metadata_pipeline,
     bench_chart_metadata_analysis,
-    bench_chart_metadata_strings
+    bench_chart_metadata_strings,
+    bench_marker_translation
 );
 criterion_main!(benches);

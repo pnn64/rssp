@@ -17,6 +17,8 @@ mod pack_bench;
 mod report_timing_bench;
 #[path = "support/step_parity.rs"]
 mod step_parity_bench;
+#[path = "support/translate.rs"]
+mod translate_bench;
 
 const FIXTURES: [(&str, &str); 4] = [
     ("fixtures/camellia_mix.ssc", "ssc"),
@@ -100,6 +102,7 @@ enum Mode {
     BackgroundChanges,
     AssetFallbacks,
     SongAssets,
+    TranslateMarkers,
     MetadataAnalyze,
     CustomCompile,
     ParitySingle,
@@ -175,6 +178,7 @@ fn parse_args() -> (Mode, usize) {
                     "background-changes" => Mode::BackgroundChanges,
                     "asset-fallbacks" => Mode::AssetFallbacks,
                     "song-assets" => Mode::SongAssets,
+                    "translate-markers" => Mode::TranslateMarkers,
                     "metadata-analyze" => Mode::MetadataAnalyze,
                     "custom-compile" => Mode::CustomCompile,
                     "parity-single" => Mode::ParitySingle,
@@ -235,6 +239,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         Mode::BackgroundChanges => rssp::AnalysisOptions::default(),
         Mode::AssetFallbacks => rssp::AnalysisOptions::default(),
         Mode::SongAssets => rssp::AnalysisOptions::default(),
+        Mode::TranslateMarkers => rssp::AnalysisOptions::default(),
         Mode::MetadataAnalyze => rssp::AnalysisOptions::default(),
         Mode::CustomCompile => rssp::AnalysisOptions::default(),
         Mode::JsonFull => rssp::AnalysisOptions {
@@ -336,6 +341,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::SongAssets => {
                 unreachable!("song asset mode uses its dedicated allocation runner")
+            }
+            Mode::TranslateMarkers => {
+                unreachable!("marker translation mode uses its dedicated allocation runner")
             }
             Mode::CourseJson => {
                 unreachable!("course report mode uses its dedicated allocation runner")
@@ -524,6 +532,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::BackgroundChanges => "background-changes",
         Mode::AssetFallbacks => "asset-fallbacks",
         Mode::SongAssets => "song-assets",
+        Mode::TranslateMarkers => "translate-markers",
         Mode::MetadataAnalyze => "metadata-analyze",
         Mode::CustomCompile => "custom-compile",
         Mode::ParitySingle => "parity-single",
@@ -1013,6 +1022,50 @@ fn run_song_assets_alloc(iterations: usize) {
     );
 }
 
+fn run_translate_markers_alloc(iterations: usize) {
+    let unknown_input = translate_bench::unknown_input();
+    let alias_input = translate_bench::alias_input();
+    let mut unknown = unknown_input.clone();
+    let mut aliases = String::with_capacity(alias_input.len());
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        rssp::translate::replace_markers_in_place(black_box(&mut unknown));
+        aliases.clear();
+        aliases.push_str(&alias_input);
+        rssp::translate::replace_markers_in_place(black_box(&mut aliases));
+        checksum = checksum
+            .wrapping_add(unknown.len())
+            .wrapping_add(aliases.len());
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=translate-markers iters={} checksum={} elapsed_s={:.6} ",
+            "markers_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        2.0 * translate_bench::MARKER_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
 fn main() {
     let (mode, iterations) = parse_args();
     match mode {
@@ -1038,6 +1091,10 @@ fn main() {
         }
         Mode::SongAssets => {
             run_song_assets_alloc(iterations);
+            return;
+        }
+        Mode::TranslateMarkers => {
+            run_translate_markers_alloc(iterations);
             return;
         }
         Mode::MetadataAnalyze => {

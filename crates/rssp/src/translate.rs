@@ -1,5 +1,7 @@
 use std::sync::OnceLock;
 
+use memchr::memchr2;
+
 const INTERNAL_CODEPOINT: u32 = 0xE000;
 const INVALID_CODEPOINT: u32 = 0xFFFD;
 
@@ -263,60 +265,76 @@ const fn lower_byte(b: u8) -> u8 {
     if b'A' <= b && b <= b'Z' { b + 32 } else { b }
 }
 
-#[inline(always)]
-fn ascii_eq_ignore_case(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut i = 0usize;
-    while i < a.len() {
-        if lower_byte(a[i]) != b[i] {
-            return false;
+const ALIAS_TABLE_LEN: usize = 512;
+
+const fn alias_lengths_by_initial() -> [u16; 256] {
+    let mut lengths = [0u16; 256];
+    let mut index = 0;
+    while index < ALIAS_ENTRIES.len() {
+        let bytes = ALIAS_ENTRIES[index].0.as_bytes();
+        if !bytes.is_empty() {
+            lengths[lower_byte(bytes[0]) as usize] |= 1 << bytes.len();
         }
-        i += 1;
+        index += 1;
     }
-    true
+    lengths
 }
 
-fn alias_table() -> &'static [Vec<AliasEntry>] {
-    static TABLE: OnceLock<Vec<Vec<AliasEntry>>> = OnceLock::new();
-    TABLE
-        .get_or_init(|| {
-            let mut table: Vec<Vec<AliasEntry>> = vec![Vec::new(); 256];
-            let mut next_internal = INTERNAL_CODEPOINT;
-            let invalid = char::REPLACEMENT_CHARACTER;
-            for (alias, codepoint) in ALIAS_ENTRIES {
-                let bytes = alias.as_bytes();
-                if bytes.is_empty() {
-                    continue;
-                }
-                let value = if *codepoint == INTERNAL_CODEPOINT {
-                    let current = next_internal;
-                    next_internal += 1;
-                    current
-                } else {
-                    *codepoint
-                };
-                let ch = char::from_u32(value).unwrap_or(invalid);
-                let bucket = &mut table[bytes[0] as usize];
-                let mut found = false;
-                for entry in bucket.iter_mut() {
-                    if entry.key == *alias {
+const ALIAS_LENGTHS_BY_INITIAL: [u16; 256] = alias_lengths_by_initial();
+
+#[inline(always)]
+fn alias_hash(bytes: &[u8]) -> usize {
+    let mut hash = 2_166_136_261u32;
+    for &byte in bytes {
+        hash ^= u32::from(lower_byte(byte));
+        hash = hash.wrapping_mul(16_777_619);
+    }
+    hash as usize & (ALIAS_TABLE_LEN - 1)
+}
+
+fn alias_table() -> &'static [Option<AliasEntry>; ALIAS_TABLE_LEN] {
+    static TABLE: OnceLock<[Option<AliasEntry>; ALIAS_TABLE_LEN]> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table: [Option<AliasEntry>; ALIAS_TABLE_LEN] = [None; ALIAS_TABLE_LEN];
+        let mut next_internal = INTERNAL_CODEPOINT;
+        let invalid = char::REPLACEMENT_CHARACTER;
+        for (alias, codepoint) in ALIAS_ENTRIES {
+            let bytes = alias.as_bytes();
+            if bytes.is_empty() {
+                continue;
+            }
+            let value = if *codepoint == INTERNAL_CODEPOINT {
+                let current = next_internal;
+                next_internal += 1;
+                current
+            } else {
+                *codepoint
+            };
+            let ch = char::from_u32(value).unwrap_or(invalid);
+            let mut index = alias_hash(bytes);
+            let mut inserted = false;
+            for _ in 0..ALIAS_TABLE_LEN {
+                match &mut table[index] {
+                    Some(entry) if entry.key == *alias => {
                         entry.value = ch;
-                        found = true;
+                        inserted = true;
+                        break;
+                    }
+                    Some(_) => index = (index + 1) & (ALIAS_TABLE_LEN - 1),
+                    slot @ None => {
+                        *slot = Some(AliasEntry {
+                            key: alias,
+                            value: ch,
+                        });
+                        inserted = true;
                         break;
                     }
                 }
-                if !found {
-                    bucket.push(AliasEntry {
-                        key: alias,
-                        value: ch,
-                    });
-                }
             }
-            table
-        })
-        .as_slice()
+            assert!(inserted, "alias lookup table capacity is too small");
+        }
+        table
+    })
 }
 
 #[inline(always)]
@@ -325,22 +343,26 @@ fn alias_lookup(element: &str) -> Option<char> {
     if bytes.is_empty() {
         return None;
     }
-    let table = alias_table();
-    let bucket = &table[lower_byte(bytes[0]) as usize];
-    if bytes.iter().all(|b| !b.is_ascii_uppercase()) {
-        for entry in bucket {
-            if entry.key.as_bytes() == bytes {
-                return Some(entry.value);
-            }
-        }
+    if bytes.len() >= u16::BITS as usize
+        || ALIAS_LENGTHS_BY_INITIAL[usize::from(lower_byte(bytes[0]))] & (1 << bytes.len()) == 0
+    {
         return None;
     }
-    for entry in bucket {
-        if ascii_eq_ignore_case(bytes, entry.key.as_bytes()) {
-            return Some(entry.value);
+    let table = alias_table();
+    let mut index = alias_hash(bytes);
+    for _ in 0..ALIAS_TABLE_LEN {
+        match table[index] {
+            Some(entry) if entry.key.eq_ignore_ascii_case(element) => return Some(entry.value),
+            Some(_) => index = (index + 1) & (ALIAS_TABLE_LEN - 1),
+            None => return None,
         }
     }
     None
+}
+
+#[inline(always)]
+fn marker_end(remaining: &[u8]) -> Option<usize> {
+    memchr2(b'&', b';', remaining).filter(|&index| remaining[index] == b';')
 }
 
 #[inline(always)]
@@ -415,53 +437,52 @@ pub fn replace_markers_in_place(text: &mut String) {
     let input = text.as_str();
     let len = input.len();
     let invalid = char::REPLACEMENT_CHARACTER;
-    let mut out = String::with_capacity(len);
-    let mut offset = 0usize;
+    let mut out: Option<String> = None;
+    let mut scan = 0usize;
+    let mut copy_from = 0usize;
 
-    while offset < len {
-        let start = if let Some(pos) = input[offset..].find('&') {
-            offset + pos
+    while scan < len {
+        let start = if let Some(pos) = input[scan..].find('&') {
+            scan + pos
         } else {
-            out.push_str(&input[offset..]);
-            *text = out;
-            return;
+            break;
         };
-        out.push_str(&input[offset..start]);
         let after_amp = start + 1;
         if after_amp >= len {
-            out.push('&');
-            offset = after_amp;
             break;
         }
         let rest = &input[after_amp..];
-        let next_amp = rest.find('&');
-        let next_semi = rest.find(';');
-        let end = match (next_amp, next_semi) {
-            (Some(a), Some(s)) => (a >= s).then_some(after_amp + s),
-            (Some(_), None) | (None, None) => None,
-            (None, Some(s)) => Some(after_amp + s),
-        };
-        let Some(end_idx) = end else {
-            out.push('&');
-            offset = after_amp;
+        let Some(end_idx) = marker_end(rest.as_bytes()).map(|end| after_amp + end) else {
+            scan = after_amp;
             continue;
         };
         let element = &input[after_amp..end_idx];
-        let repl = alias_lookup(element).or_else(|| parse_numeric_marker(element, invalid));
+        let repl = match element.as_bytes().first() {
+            Some(b'#' | b'x' | b'X') => parse_numeric_marker(element, invalid),
+            _ => alias_lookup(element),
+        };
         if let Some(repl) = repl {
-            out.push(repl);
-            offset = end_idx + 1;
+            let output = out.get_or_insert_with(|| {
+                let mut output = String::with_capacity(len);
+                output.push_str(&input[..start]);
+                output
+            });
+            if copy_from != 0 {
+                output.push_str(&input[copy_from..start]);
+            }
+            output.push(repl);
+            copy_from = end_idx + 1;
+            scan = copy_from;
             continue;
         }
 
-        out.push_str(&input[start..=end_idx]);
-        offset = end_idx + 1;
+        scan = end_idx + 1;
     }
 
-    if offset < len {
-        out.push_str(&input[offset..]);
+    if let Some(mut out) = out {
+        out.push_str(&input[copy_from..]);
+        *text = out;
     }
-    *text = out;
 }
 
 /// Replace &alias; markers and unicode markers, returning an updated string.
@@ -470,4 +491,145 @@ pub fn replace_markers(text: &str) -> String {
     let mut out = text.to_string();
     replace_markers_in_place(&mut out);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ALIAS_ENTRIES, alias_table, parse_numeric_marker, replace_markers_in_place};
+
+    fn alias_lookup_linear(element: &str) -> Option<char> {
+        alias_table()
+            .iter()
+            .flatten()
+            .find(|entry| entry.key.eq_ignore_ascii_case(element))
+            .map(|entry| entry.value)
+    }
+
+    fn replace_markers_materialized(text: &str) -> String {
+        if !text.contains('&') {
+            return text.to_string();
+        }
+        let len = text.len();
+        let invalid = char::REPLACEMENT_CHARACTER;
+        let mut out = String::with_capacity(len);
+        let mut offset = 0usize;
+
+        while offset < len {
+            let start = if let Some(position) = text[offset..].find('&') {
+                offset + position
+            } else {
+                out.push_str(&text[offset..]);
+                return out;
+            };
+            out.push_str(&text[offset..start]);
+            let after_amp = start + 1;
+            if after_amp >= len {
+                out.push('&');
+                offset = after_amp;
+                break;
+            }
+            let remaining = &text[after_amp..];
+            let next_amp = remaining.find('&');
+            let next_semicolon = remaining.find(';');
+            let end = match (next_amp, next_semicolon) {
+                (Some(amp), Some(semicolon)) => (amp >= semicolon).then_some(after_amp + semicolon),
+                (Some(_), None) | (None, None) => None,
+                (None, Some(semicolon)) => Some(after_amp + semicolon),
+            };
+            let Some(end) = end else {
+                out.push('&');
+                offset = after_amp;
+                continue;
+            };
+            let element = &text[after_amp..end];
+            if let Some(replacement) =
+                alias_lookup_linear(element).or_else(|| parse_numeric_marker(element, invalid))
+            {
+                out.push(replacement);
+                offset = end + 1;
+                continue;
+            }
+            out.push_str(&text[start..=end]);
+            offset = end + 1;
+        }
+
+        if offset < len {
+            out.push_str(&text[offset..]);
+        }
+        out
+    }
+
+    fn assert_matches_materialized(input: &str) {
+        let expected = replace_markers_materialized(input);
+        let mut actual = input.to_string();
+        replace_markers_in_place(&mut actual);
+        assert_eq!(actual, expected, "input={input:?}");
+    }
+
+    #[test]
+    fn marker_translation_matches_linear_materialized_pipeline() {
+        for input in [
+            "",
+            "plain text",
+            "&",
+            "&&",
+            "&unknown;",
+            "before &unknown; after",
+            "&hka;",
+            "&KRO;",
+            "&#9733;",
+            "&#x266F;",
+            "&#999999999999999999999;",
+            "&bad&hka;",
+            "&hka;&unknown;&#65;&",
+            "café &omega; 二",
+        ] {
+            assert_matches_materialized(input);
+        }
+
+        for (alias, _) in ALIAS_ENTRIES {
+            assert_matches_materialized(&format!("left&{alias};right"));
+            assert_matches_materialized(&format!("left&{};right", alias.to_ascii_uppercase()));
+        }
+
+        const TOKENS: [&str; 12] = [
+            "plain",
+            "&",
+            ";",
+            "&&",
+            "&hka;",
+            "&KRO;",
+            "&unknown;",
+            "&#65;",
+            "&#x266F;",
+            "&bad&hka;",
+            "café",
+            "二",
+        ];
+        let mut state = 0x7472_616e_736c_6174u64;
+        for case_index in 0..2_048 {
+            let mut input = String::new();
+            for _ in 0..case_index % 24 {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
+                input.push_str(TOKENS[state as usize % TOKENS.len()]);
+            }
+            assert_matches_materialized(&input);
+        }
+    }
+
+    #[test]
+    fn unknown_markers_preserve_the_existing_buffer() {
+        let mut text = String::with_capacity(1_024);
+        text.push_str("prefix &unknown; suffix && trailing &");
+        let pointer = text.as_ptr();
+        let capacity = text.capacity();
+
+        replace_markers_in_place(&mut text);
+
+        assert_eq!(text, "prefix &unknown; suffix && trailing &");
+        assert_eq!(text.as_ptr(), pointer);
+        assert_eq!(text.capacity(), capacity);
+    }
 }
