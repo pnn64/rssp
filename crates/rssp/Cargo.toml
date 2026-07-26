@@ -145,6 +145,10 @@ harness = false
 name = "report_perf"
 harness = false
 
+[[bench]]
+name = "course_perf"
+harness = false
+
 [lints.clippy]
 pedantic = "warn"
 

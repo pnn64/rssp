@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -810,11 +810,24 @@ fn avg_meter(meters: &[i32]) -> i32 {
     (f64::from(sum) / (meters.len() as f64)).round() as i32
 }
 
-fn dedup_push(vec: &mut Vec<String>, seen: &mut HashSet<String>, value: &str) {
+#[derive(Debug, Hash, PartialEq, Eq)]
+enum CourseHashKey {
+    Short([u8; 16]),
+    Other(String),
+}
+
+impl CourseHashKey {
+    fn from_str(value: &str) -> Self {
+        <[u8; 16]>::try_from(value.as_bytes())
+            .map_or_else(|_| Self::Other(value.to_string()), Self::Short)
+    }
+}
+
+fn dedup_push(vec: &mut Vec<String>, seen: &mut HashSet<CourseHashKey>, value: &str) {
     if value.is_empty() {
         return;
     }
-    if seen.insert(value.to_string()) {
+    if seen.insert(CourseHashKey::from_str(value)) {
         vec.push(value.to_string());
     }
 }
@@ -839,14 +852,17 @@ pub fn analyze_crs_path(
         .ok_or_else(|| format!("Invalid course difficulty: {course_difficulty}"))?;
     let step_type = normalize_stepstype(target_step_type);
 
-    let mut sim_cache: HashMap<PathBuf, SimfileSummary> = HashMap::new();
-    let mut entries = Vec::new();
+    let entry_count = course.entries.len();
+    let bounded_cache_capacity = entry_count.min(128);
+    let mut sim_cache: HashMap<PathBuf, SimfileSummary> =
+        HashMap::with_capacity(bounded_cache_capacity);
+    let mut entries = Vec::with_capacity(entry_count);
     let mut hash_list = Vec::new();
     let mut hash_seen = HashSet::new();
     let mut bpm_neutral_hash_list = Vec::new();
     let mut bpm_neutral_hash_seen = HashSet::new();
 
-    let mut meters = Vec::new();
+    let mut meters = Vec::with_capacity(entry_count);
     let mut measure_nps_all = Vec::new();
 
     let mut total = empty_course_chart(&step_type, course_diff, 0);
@@ -871,16 +887,13 @@ pub fn analyze_crs_path(
             .map_err(|e| format!("Failed scanning {}: {e:?}", song_dir.display()))?;
         let scan = scan.ok_or_else(|| format!("No simfile in {}", song_dir.display()))?;
 
-        let sim = if let Some(cached) = sim_cache.get(&scan.simfile) {
-            cached
-        } else {
-            let opened = simfile::open(&scan.simfile).map_err(|e| e.to_string())?;
-            let summary =
-                crate::analysis::analyze(&opened.data, opened.extension, &options.clone())?;
-            sim_cache.insert(scan.simfile.clone(), summary);
-            sim_cache
-                .get(&scan.simfile)
-                .ok_or_else(|| format!("Internal cache error for {}", scan.simfile.display()))?
+        let sim: &SimfileSummary = match sim_cache.entry(scan.simfile) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let opened = simfile::open(entry.key()).map_err(|e| e.to_string())?;
+                let summary = crate::analysis::analyze(&opened.data, opened.extension, &options)?;
+                entry.insert(summary)
+            }
         };
 
         let base_chart = select_chart(sim, &step_type, base_diff).ok_or_else(|| {
@@ -962,4 +975,124 @@ pub fn analyze_crs_path(
         tech_counts_enabled: options.compute_tech_counts,
         total_elapsed: elapsed,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CourseHashKey, analyze_crs_path, dedup_push};
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    const SIMFILE: &[u8] = include_bytes!("../benches/fixtures/hash_fixture.ssc");
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+    struct TempRoot(PathBuf);
+
+    impl TempRoot {
+        fn new() -> Self {
+            let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+            let path =
+                std::env::temp_dir().join(format!("rssp-course-test-{}-{id}", std::process::id()));
+            std::fs::create_dir(&path).expect("test root should be creatable");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn dedup_push_materialized(output: &mut Vec<String>, seen: &mut HashSet<String>, value: &str) {
+        if !value.is_empty() && seen.insert(value.to_string()) {
+            output.push(value.to_string());
+        }
+    }
+
+    #[test]
+    fn compact_hash_dedup_matches_materialized_strings() {
+        let values = [
+            "",
+            "0123456789abcdef",
+            "0123456789abcdef",
+            "fedcba9876543210",
+            "short",
+            "short",
+            "é234567890abcdef",
+        ];
+        let mut expected = Vec::new();
+        let mut expected_seen = HashSet::new();
+        let mut actual = Vec::new();
+        let mut actual_seen: HashSet<CourseHashKey> = HashSet::new();
+
+        for value in values {
+            dedup_push_materialized(&mut expected, &mut expected_seen, value);
+            dedup_push(&mut actual, &mut actual_seen, value);
+        }
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn course_analysis_caches_songs_and_deduplicates_hashes() {
+        let root = TempRoot::new();
+        let songs_dir = root.path().join("Songs");
+        let group_dir = songs_dir.join("Group");
+        std::fs::create_dir_all(&group_dir).expect("group directory should be creatable");
+
+        for song in ["SongA", "SongB"] {
+            let song_dir = group_dir.join(song);
+            std::fs::create_dir(&song_dir).expect("song directory should be creatable");
+            std::fs::write(song_dir.join(format!("{song}.ssc")), SIMFILE)
+                .expect("simfile should be writable");
+        }
+        let course_path = root.path().join("test.crs");
+        std::fs::write(
+            &course_path,
+            concat!(
+                "#COURSE:Optimization Test;\n",
+                "#SONG:Group/SongA:Challenge:;\n",
+                "#SONG:Group/SongB:Challenge:;\n",
+                "#SONG:Group/SongA:Challenge:;\n",
+            ),
+        )
+        .expect("course should be writable");
+
+        let options = crate::AnalysisOptions {
+            custom_patterns: vec!["LDU".to_string(), "RUR".to_string()],
+            compute_pattern_counts: false,
+            compute_tech_counts: false,
+            ..crate::AnalysisOptions::default()
+        };
+        let summary = analyze_crs_path(
+            &course_path,
+            Some(&songs_dir),
+            "dance-single",
+            "Medium",
+            options,
+        )
+        .expect("course should analyze");
+
+        assert_eq!(summary.course, "Optimization Test");
+        assert_eq!(summary.entries.len(), 3);
+        assert_eq!(summary.entries[0].song_dir, "SongA");
+        assert_eq!(summary.entries[1].song_dir, "SongB");
+        assert_eq!(summary.entries[2].song_dir, "SongA");
+        assert_eq!(summary.sha1_hashes.len(), 1);
+        assert_eq!(summary.bpm_neutral_sha1_hashes.len(), 1);
+        assert_eq!(summary.chart.short_hash, summary.sha1_hashes[0]);
+        assert_eq!(
+            summary.chart.bpm_neutral_hash,
+            summary.bpm_neutral_sha1_hashes[0]
+        );
+        assert!(summary.chart.custom_patterns.is_empty());
+        assert!(!summary.pattern_counts_enabled);
+        assert!(!summary.tech_counts_enabled);
+    }
 }

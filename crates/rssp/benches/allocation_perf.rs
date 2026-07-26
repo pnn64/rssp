@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
+#[path = "support/course.rs"]
+mod course_bench;
 #[path = "support/step_parity.rs"]
 mod step_parity_bench;
 
@@ -84,6 +86,7 @@ enum Mode {
     Json,
     JsonFull,
     CourseJson,
+    CourseAnalyze,
     CustomCompile,
     ParitySingle,
     ParityDouble,
@@ -152,6 +155,7 @@ fn parse_args() -> (Mode, usize) {
                     "json" => Mode::Json,
                     "json-full" => Mode::JsonFull,
                     "course-json" => Mode::CourseJson,
+                    "course-analyze" => Mode::CourseAnalyze,
                     "custom-compile" => Mode::CustomCompile,
                     "parity-single" => Mode::ParitySingle,
                     "parity-double" => Mode::ParityDouble,
@@ -206,6 +210,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
         },
+        Mode::CourseAnalyze => rssp::AnalysisOptions::default(),
         Mode::CustomCompile => rssp::AnalysisOptions::default(),
         Mode::JsonFull => rssp::AnalysisOptions {
             mono_threshold: 6,
@@ -296,6 +301,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::CourseJson => {
                 unreachable!("course report mode uses its dedicated allocation runner")
+            }
+            Mode::CourseAnalyze => {
+                unreachable!("course analysis mode uses its dedicated allocation runner")
             }
             Mode::CustomCompile => {
                 unreachable!("custom pattern modes use their dedicated allocation runner")
@@ -466,6 +474,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Json => "json",
         Mode::JsonFull => "json-full",
         Mode::CourseJson => "course-json",
+        Mode::CourseAnalyze => "course-analyze",
         Mode::CustomCompile => "custom-compile",
         Mode::ParitySingle => "parity-single",
         Mode::ParityDouble => "parity-double",
@@ -618,11 +627,70 @@ fn run_custom_pattern_alloc(iterations: usize) {
     );
 }
 
+fn run_course_analyze_alloc(iterations: usize) {
+    let fixture = course_bench::CourseFixture::new();
+    let options = course_bench::clone_heavy_options();
+    black_box(
+        rssp::course::analyze_crs_path(
+            fixture.course_path(),
+            Some(fixture.songs_dir()),
+            "dance-single",
+            "Medium",
+            options.clone(),
+        )
+        .expect("benchmark course should analyze"),
+    );
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let summary = rssp::course::analyze_crs_path(
+            black_box(fixture.course_path()),
+            Some(black_box(fixture.songs_dir())),
+            black_box("dance-single"),
+            black_box("Medium"),
+            black_box(options.clone()),
+        )
+        .expect("benchmark course should analyze");
+        checksum = checksum.wrapping_add(summary.entries.len());
+        black_box(summary);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=course-analyze iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_entries_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        course_bench::SONG_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
 fn main() {
     let (mode, iterations) = parse_args();
     match mode {
         Mode::CustomCompile => {
             run_custom_pattern_alloc(iterations);
+            return;
+        }
+        Mode::CourseAnalyze => {
+            run_course_analyze_alloc(iterations);
             return;
         }
         Mode::ParitySingle => {
