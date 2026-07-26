@@ -6,6 +6,29 @@ pub mod report;
 pub mod simfile;
 pub mod translate;
 
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+pub mod profile {
+    use std::path::{Path, PathBuf};
+
+    #[must_use]
+    pub fn first_path_ci(paths: &[PathBuf]) -> Option<&Path> {
+        let mut first = None;
+        for path in paths {
+            let key = crate::assets::lc_name(path);
+            if first.as_ref().is_none_or(|(first_key, _)| key < *first_key) {
+                first = Some((key, path.as_path()));
+            }
+        }
+        first.map(|(_, path)| path)
+    }
+
+    #[must_use]
+    pub fn match_mask_ci(name: &str, mask: &str) -> bool {
+        crate::assets::match_mask_ci(name, mask)
+    }
+}
+
 pub use rssp_core::{
     bpm, duration, hash, math, matrix, nps, parse, patterns, stats, step_parity, streams, tech,
     timing,

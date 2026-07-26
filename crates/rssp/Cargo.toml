@@ -149,6 +149,11 @@ harness = false
 name = "course_perf"
 harness = false
 
+[[bench]]
+name = "pack_perf"
+harness = false
+required-features = ["profile"]
+
 [lints.clippy]
 pedantic = "warn"
 

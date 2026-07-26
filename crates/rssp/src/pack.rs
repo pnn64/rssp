@@ -68,6 +68,16 @@ fn sort_paths_ci(paths: &mut [PathBuf]) {
     paths.sort_by_cached_key(|p| assets::lc_name(p));
 }
 
+fn keep_first_path(first: &mut Option<(String, PathBuf)>, candidate: PathBuf) {
+    let key = assets::lc_name(&candidate);
+    if first
+        .as_ref()
+        .is_none_or(|(current_key, _)| key < *current_key)
+    {
+        *first = Some((key, candidate));
+    }
+}
+
 fn pack_ini_path(pack_dir: &Path) -> PathBuf {
     pack_dir.join("Pack.ini")
 }
@@ -165,10 +175,29 @@ fn pick_pack_parent_img(pack_dir: &Path, group_name: &str) -> Option<PathBuf> {
     None
 }
 
+fn pick_first_img(dir: &Path, mut matches: impl FnMut(&Path) -> bool) -> Option<PathBuf> {
+    let entries = fs::read_dir(dir).ok()?;
+    let mut first = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if assets::is_mac_resource_fork(&path) || !path.is_file() {
+            continue;
+        }
+        let Some(ext) = path.extension().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if assets::img_rank(ext).is_none() {
+            continue;
+        }
+        if matches(&path) {
+            keep_first_path(&mut first, path);
+        }
+    }
+    first.map(|(_, path)| path)
+}
+
 fn pick_pack_dir_img(pack_dir: &Path) -> Option<PathBuf> {
-    let mut files = assets::list_img_files(pack_dir);
-    files.sort_by_cached_key(|p| assets::lc_name(p));
-    files.into_iter().next()
+    pick_first_img(pack_dir, |_| true)
 }
 
 fn pick_ini_img(pack_dir: &Path, hint: &str) -> Option<PathBuf> {
@@ -183,14 +212,95 @@ fn pick_ini_img(pack_dir: &Path, hint: &str) -> Option<PathBuf> {
     } else {
         assets::is_dir_ci(pack_dir, subdir).unwrap_or_else(|| pack_dir.join(subdir))
     };
-    let mut files = assets::list_img_files(&dir);
-    files.retain(|p| {
-        p.file_name()
-            .and_then(|s| s.to_str())
-            .is_some_and(|n| assets::match_mask_ci(n, mask))
-    });
-    files.sort_by_cached_key(|p| assets::lc_name(p));
-    files.into_iter().next()
+    pick_first_img(&dir, |path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| assets::match_mask_ci(name, mask))
+    })
+}
+
+fn simfile_paths(dir: &Path) -> io::Result<impl Iterator<Item = (&'static str, PathBuf)>> {
+    Ok(fs::read_dir(dir)?.filter_map(|entry| {
+        let Ok(entry) = entry else {
+            return None;
+        };
+        let path = entry.path();
+        if assets::is_mac_resource_fork(&path) {
+            return None;
+        }
+        if !path.is_file() {
+            return None;
+        }
+        let ext = path.extension().and_then(|s| s.to_str())?;
+        if ext.eq_ignore_ascii_case("ssc") {
+            Some(("ssc", path))
+        } else if ext.eq_ignore_ascii_case("sm") {
+            Some(("sm", path))
+        } else {
+            None
+        }
+    }))
+}
+
+fn song_scan(dir: &Path, simfile: PathBuf, extension: &'static str) -> SongScan {
+    SongScan {
+        dir: dir.to_path_buf(),
+        simfile,
+        extension,
+    }
+}
+
+fn scan_song_dir_first(dir: &Path) -> Result<Option<SongScan>, ScanError> {
+    let mut first_sm = None;
+    let mut first_ssc = None;
+    for (extension, path) in simfile_paths(dir)? {
+        if extension == "ssc" {
+            keep_first_path(&mut first_ssc, path);
+        } else {
+            keep_first_path(&mut first_sm, path);
+        }
+    }
+
+    Ok(first_ssc
+        .map(|(_, path)| song_scan(dir, path, "ssc"))
+        .or_else(|| first_sm.map(|(_, path)| song_scan(dir, path, "sm"))))
+}
+
+fn scan_song_dir_duplicates(dir: &Path) -> Result<Option<SongScan>, ScanError> {
+    let mut sms = Vec::new();
+    let mut sscs = Vec::new();
+    for (extension, path) in simfile_paths(dir)? {
+        if extension == "ssc" {
+            sscs.push(path);
+        } else {
+            sms.push(path);
+        }
+    }
+    sort_paths_ci(&mut sms);
+    sort_paths_ci(&mut sscs);
+
+    if let Some(simfile) = sscs.pop() {
+        if !sscs.is_empty() {
+            sscs.push(simfile);
+            return Err(ScanError::DuplicateSimfile {
+                ext: "ssc",
+                paths: sscs,
+            });
+        }
+        return Ok(Some(song_scan(dir, simfile, "ssc")));
+    }
+
+    let Some(simfile) = sms.pop() else {
+        return Ok(None);
+    };
+    if !sms.is_empty() {
+        sms.push(simfile);
+        return Err(ScanError::DuplicateSimfile {
+            ext: "sm",
+            paths: sms,
+        });
+    }
+    Ok(Some(song_scan(dir, simfile, "sm")))
 }
 
 pub fn scan_song_dir(dir: &Path, opt: ScanOpt) -> Result<Option<SongScan>, ScanError> {
@@ -198,64 +308,10 @@ pub fn scan_song_dir(dir: &Path, opt: ScanOpt) -> Result<Option<SongScan>, ScanE
         return Ok(None);
     }
 
-    let mut sms = Vec::new();
-    let mut sscs = Vec::new();
-
-    for entry in fs::read_dir(dir)? {
-        let Ok(entry) = entry else {
-            continue;
-        };
-        let path = entry.path();
-        if assets::is_mac_resource_fork(&path) {
-            continue;
-        }
-        if !path.is_file() {
-            continue;
-        }
-        let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        if ext.eq_ignore_ascii_case("ssc") {
-            sscs.push(path);
-        } else if ext.eq_ignore_ascii_case("sm") {
-            sms.push(path);
-        }
+    match opt.dup {
+        DupPolicy::First => scan_song_dir_first(dir),
+        DupPolicy::Error => scan_song_dir_duplicates(dir),
     }
-
-    if sms.is_empty() && sscs.is_empty() {
-        return Ok(None);
-    }
-
-    sort_paths_ci(&mut sms);
-    sort_paths_ci(&mut sscs);
-
-    if !sscs.is_empty() {
-        if opt.dup == DupPolicy::Error && sscs.len() > 1 {
-            return Err(ScanError::DuplicateSimfile {
-                ext: "ssc",
-                paths: sscs,
-            });
-        }
-        let simfile = sscs[0].clone();
-        return Ok(Some(SongScan {
-            dir: dir.to_path_buf(),
-            simfile,
-            extension: "ssc",
-        }));
-    }
-
-    if opt.dup == DupPolicy::Error && sms.len() > 1 {
-        return Err(ScanError::DuplicateSimfile {
-            ext: "sm",
-            paths: sms,
-        });
-    }
-    let simfile = sms[0].clone();
-    Ok(Some(SongScan {
-        dir: dir.to_path_buf(),
-        simfile,
-        extension: "sm",
-    }))
 }
 
 pub fn scan_pack_dir(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, ScanError> {
@@ -410,7 +466,10 @@ pub fn find_simfiles(root: &Path, opt: ScanOpt) -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScanOpt, find_simfiles, scan_pack_dir, scan_song_dir, scan_songs_dir};
+    use super::{
+        DupPolicy, ScanError, ScanOpt, find_simfiles, scan_pack_dir, scan_song_dir, scan_songs_dir,
+    };
+    use crate::assets;
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -448,6 +507,93 @@ mod tests {
         assert!(scan_song_dir(&root, ScanOpt::default()).unwrap().is_none());
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scan_song_dir_uses_case_insensitive_first_ssc() {
+        let root = test_dir("case-insensitive-first");
+        for name in [
+            "Aardvark.sm",
+            "zebra.SM",
+            "Chart.ssc",
+            "backup.SSC",
+            "alpha.sSc",
+        ] {
+            write_file(&root.join(name));
+        }
+
+        let scan = scan_song_dir(&root, ScanOpt::default()).unwrap().unwrap();
+        assert_eq!(scan.simfile, root.join("alpha.sSc"));
+        assert_eq!(scan.extension, "ssc");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn duplicate_error_paths_remain_case_insensitively_sorted() {
+        let root = test_dir("sorted-duplicate-error");
+        for name in ["Zulu.ssc", "beta.SSC", "Alpha.sSc", "fallback.sm"] {
+            write_file(&root.join(name));
+        }
+
+        let error = scan_song_dir(
+            &root,
+            ScanOpt {
+                dup: DupPolicy::Error,
+            },
+        )
+        .unwrap_err();
+        let ScanError::DuplicateSimfile { ext, paths } = error else {
+            panic!("expected a duplicate simfile error");
+        };
+        assert_eq!(ext, "ssc");
+        assert_eq!(
+            paths,
+            ["Alpha.sSc", "beta.SSC", "Zulu.ssc"].map(|name| root.join(name))
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pack_image_selection_uses_case_insensitive_first_matches() {
+        let root = test_dir("first-pack-images");
+        fs::write(
+            root.join("Pack.ini"),
+            b"[Group]\nVersion=1\nBanner=missing*.png\nBackground=back*.jpg\n",
+        )
+        .unwrap();
+        for name in ["Zeta.png", "alpha.png", "BackB.jpg", "backA.jpg"] {
+            write_file(&root.join(name));
+        }
+        let song = root.join("Song");
+        fs::create_dir(&song).unwrap();
+        write_file(&song.join("chart.ssc"));
+
+        let scan = scan_pack_dir(&root, ScanOpt::default()).unwrap().unwrap();
+        assert_eq!(scan.banner_path, Some(root.join("alpha.png")));
+        assert_eq!(scan.background_path, Some(root.join("backA.jpg")));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pack_image_masks_match_ascii_case_without_allocated_normalization() {
+        for (name, mask, expected) in [
+            ("Banner.PNG", "banner.png", true),
+            ("Background-Wide.JPG", "back*.jpg", true),
+            ("back.jpg", "back*.jpg", true),
+            ("back.png", "back*.jpg", false),
+            ("prefix-MIDDLE-suffix.PNG", "PRE*middle*FIX.png", true),
+            ("prefix-other-suffix.png", "pre*middle*fix.png", false),
+            ("é-BANNER.PNG", "é-*.png", true),
+        ] {
+            assert_eq!(
+                assets::match_mask_ci(name, mask),
+                expected,
+                "{name:?} against {mask:?}"
+            );
+        }
     }
 
     #[test]

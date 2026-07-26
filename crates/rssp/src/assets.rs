@@ -85,23 +85,41 @@ pub(crate) fn is_file_ci(dir: &Path, name: &str) -> Option<PathBuf> {
 }
 
 pub(crate) fn match_mask_ci(name: &str, mask: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    let mask = mask.to_ascii_lowercase();
     let Some(first) = mask.find('*') else {
-        return name == mask;
+        return name.eq_ignore_ascii_case(mask);
     };
     let Some(second) = mask[first + 1..].find('*').map(|i| i + first + 1) else {
         let (a, b) = (&mask[..first], &mask[first + 1..]);
-        return name.starts_with(a) && name.ends_with(b) && name.len() >= a.len() + b.len();
+        return name.len() >= a.len() + b.len()
+            && name
+                .as_bytes()
+                .get(..a.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(a.as_bytes()))
+            && name
+                .as_bytes()
+                .get(name.len() - b.len()..)
+                .is_some_and(|tail| tail.eq_ignore_ascii_case(b.as_bytes()));
     };
     let a = &mask[..first];
     let b = &mask[first + 1..second];
     let c = &mask[second + 1..];
-    if !name.starts_with(a) || !name.ends_with(c) || name.len() < a.len() + b.len() + c.len() {
+    if name.len() < a.len() + b.len() + c.len()
+        || !name
+            .as_bytes()
+            .get(..a.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(a.as_bytes()))
+        || !name
+            .as_bytes()
+            .get(name.len() - c.len()..)
+            .is_some_and(|tail| tail.eq_ignore_ascii_case(c.as_bytes()))
+    {
         return false;
     }
-    let mid = &name[a.len()..name.len() - c.len()];
-    mid.contains(b)
+    let mid = &name.as_bytes()[a.len()..name.len() - c.len()];
+    b.is_empty()
+        || mid
+            .windows(b.len())
+            .any(|window| window.eq_ignore_ascii_case(b.as_bytes()))
 }
 
 pub(crate) fn list_img_files(dir: &Path) -> Vec<PathBuf> {

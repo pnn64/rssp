@@ -7,6 +7,8 @@ use std::time::Instant;
 
 #[path = "support/course.rs"]
 mod course_bench;
+#[path = "support/pack.rs"]
+mod pack_bench;
 #[path = "support/step_parity.rs"]
 mod step_parity_bench;
 
@@ -87,6 +89,7 @@ enum Mode {
     JsonFull,
     CourseJson,
     CourseAnalyze,
+    PackScan,
     CustomCompile,
     ParitySingle,
     ParityDouble,
@@ -156,6 +159,7 @@ fn parse_args() -> (Mode, usize) {
                     "json-full" => Mode::JsonFull,
                     "course-json" => Mode::CourseJson,
                     "course-analyze" => Mode::CourseAnalyze,
+                    "pack-scan" => Mode::PackScan,
                     "custom-compile" => Mode::CustomCompile,
                     "parity-single" => Mode::ParitySingle,
                     "parity-double" => Mode::ParityDouble,
@@ -211,6 +215,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             ..rssp::AnalysisOptions::default()
         },
         Mode::CourseAnalyze => rssp::AnalysisOptions::default(),
+        Mode::PackScan => rssp::AnalysisOptions::default(),
         Mode::CustomCompile => rssp::AnalysisOptions::default(),
         Mode::JsonFull => rssp::AnalysisOptions {
             mono_threshold: 6,
@@ -304,6 +309,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::CourseAnalyze => {
                 unreachable!("course analysis mode uses its dedicated allocation runner")
+            }
+            Mode::PackScan => {
+                unreachable!("pack scan mode uses its dedicated allocation runner")
             }
             Mode::CustomCompile => {
                 unreachable!("custom pattern modes use their dedicated allocation runner")
@@ -475,6 +483,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::JsonFull => "json-full",
         Mode::CourseJson => "course-json",
         Mode::CourseAnalyze => "course-analyze",
+        Mode::PackScan => "pack-scan",
         Mode::CustomCompile => "custom-compile",
         Mode::ParitySingle => "parity-single",
         Mode::ParityDouble => "parity-double",
@@ -682,6 +691,49 @@ fn run_course_analyze_alloc(iterations: usize) {
     );
 }
 
+fn run_pack_scan_alloc(iterations: usize) {
+    let fixture = pack_bench::PackFixture::new();
+    black_box(
+        rssp::pack::scan_pack_dir(fixture.pack_dir(), rssp::pack::ScanOpt::default())
+            .expect("benchmark pack should scan"),
+    );
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let scan = rssp::pack::scan_pack_dir(fixture.pack_dir(), rssp::pack::ScanOpt::default())
+            .expect("benchmark pack should scan")
+            .expect("benchmark pack should contain songs");
+        checksum = checksum.wrapping_add(scan.songs.len());
+        black_box(scan);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=pack-scan iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_songs_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        pack_bench::SONG_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
 fn main() {
     let (mode, iterations) = parse_args();
     match mode {
@@ -691,6 +743,10 @@ fn main() {
         }
         Mode::CourseAnalyze => {
             run_course_analyze_alloc(iterations);
+            return;
+        }
+        Mode::PackScan => {
+            run_pack_scan_alloc(iterations);
             return;
         }
         Mode::ParitySingle => {
