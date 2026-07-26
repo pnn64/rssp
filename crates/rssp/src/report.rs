@@ -990,7 +990,7 @@ mod tests {
         CsvRow, SpeedUnit, build_timing_snapshot, chart_or_global, normalize_scrolls_like_itg,
         normalize_speeds_like_itg, parse_combos, parse_labels, parse_tickcounts,
         parse_time_signatures, push_num, push_str, steps_timing_allowed, timing_fixed_6,
-        write_json_all, write_json_all_materialized,
+        write_json_all, write_json_all_materialized, write_json_stream_sequences,
     };
 
     fn timing_fixed_6_materialized(value: f64) -> f64 {
@@ -1192,13 +1192,8 @@ mod tests {
 
     #[test]
     fn json_streaming_matches_materialized_report() {
-        const FIXTURE: &[u8] = include_bytes!("../benches/fixtures/hash_fixture.ssc");
-        let mut fast_options = crate::AnalysisOptions::default();
-        fast_options.compute_tech_counts = false;
-        fast_options.compute_pattern_counts = false;
-
-        for options in [crate::AnalysisOptions::default(), fast_options] {
-            let summary = crate::analyze(FIXTURE, "ssc", &options).expect("fixture should analyze");
+        fn assert_matches(fixture: &[u8], options: &crate::AnalysisOptions) {
+            let summary = crate::analyze(fixture, "ssc", options).expect("fixture should analyze");
 
             let mut expected = Vec::new();
             write_json_all_materialized(&summary, &mut expected)
@@ -1209,6 +1204,58 @@ mod tests {
             assert_eq!(actual, expected);
             serde_json::from_slice::<serde_json::Value>(&actual)
                 .expect("streaming output should be valid JSON");
+        }
+
+        const HASH_FIXTURE: &[u8] = include_bytes!("../benches/fixtures/hash_fixture.ssc");
+        const REPORT_FIXTURE: &[u8] = include_bytes!("../benches/fixtures/camellia_mix.ssc");
+        let mut fast_options = crate::AnalysisOptions::default();
+        fast_options.compute_tech_counts = false;
+        fast_options.compute_pattern_counts = false;
+        let mut custom_options = crate::AnalysisOptions::default();
+        custom_options.custom_patterns = vec!["LDU".to_string(), "RUR".to_string()];
+
+        for options in &[
+            crate::AnalysisOptions::default(),
+            fast_options.clone(),
+            custom_options,
+        ] {
+            assert_matches(HASH_FIXTURE, options);
+        }
+        assert_matches(REPORT_FIXTURE, &fast_options);
+        assert_matches(REPORT_FIXTURE, &crate::AnalysisOptions::default());
+    }
+
+    #[test]
+    fn streamed_sequence_objects_match_materialized_segments() {
+        let densities = [0, 12, 15, 16, 20, 0, 24, 0, 0, 32];
+        let mut state = 0x243f_6a88_85a3_08d3_u64;
+
+        for len in 0..128 {
+            let measures: Vec<_> = (0..len)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    densities[state as usize % densities.len()]
+                })
+                .collect();
+            let expected = crate::stats::stream_sequences(&measures)
+                .into_iter()
+                .map(|segment| {
+                    serde_json::json!({
+                        "stream_start": segment.start as u32,
+                        "stream_end": segment.end as u32,
+                        "is_break": segment.is_break,
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            let mut actual = Vec::new();
+            write_json_stream_sequences(&mut actual, &measures, 0)
+                .expect("stream sequences should write");
+            let actual: Vec<serde_json::Value> =
+                serde_json::from_slice(&actual).expect("stream sequences should be valid JSON");
+            assert_eq!(actual, expected, "{measures:?}");
         }
     }
 }
@@ -2814,6 +2861,16 @@ impl<'a, W: Write> JsonObjectWriter<'a, W> {
         })
     }
 
+    fn field_u32(&mut self, key: &str, value: u32) -> io::Result<()> {
+        self.field_with(key, |writer, _| write_json_raw_u32(writer, value))
+    }
+
+    fn field_bool(&mut self, key: &str, value: bool) -> io::Result<()> {
+        self.field_with(key, |writer, _| {
+            writer.write_all(if value { b"true" } else { b"false" })
+        })
+    }
+
     fn finish(self) -> io::Result<()> {
         if !self.first {
             self.writer.write_all(b"\n")?;
@@ -2821,6 +2878,255 @@ impl<'a, W: Write> JsonObjectWriter<'a, W> {
         write_indent(self.writer, self.indent)?;
         self.writer.write_all(b"}")
     }
+}
+
+fn write_json_u32_object<W: Write>(
+    writer: &mut W,
+    indent: usize,
+    fields: &[(&str, u32)],
+) -> io::Result<()> {
+    let mut object = JsonObjectWriter::new(writer, indent)?;
+    for &(key, value) in fields {
+        object.field_u32(key, value)?;
+    }
+    object.finish()
+}
+
+fn write_json_raw_u32<W: Write>(writer: &mut W, mut value: u32) -> io::Result<()> {
+    let mut buffer = [0u8; 10];
+    let mut start = buffer.len();
+    loop {
+        start -= 1;
+        buffer[start] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            return writer.write_all(&buffer[start..]);
+        }
+    }
+}
+
+fn write_json_chart_info<W: Write>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    indent: usize,
+) -> io::Result<()> {
+    let mut object = JsonObjectWriter::new(writer, indent)?;
+    object.field_string("step_type", &chart.step_type_str)?;
+    object.field_string("difficulty", &chart.difficulty_str)?;
+    object.field_f64("tier_bpm", chart.tier_bpm)?;
+    object.field_string("rating", &chart.rating_str)?;
+    object.field_f64("matrix_rating", chart.matrix_rating)?;
+    object.field_string("step_artists", &chart.step_artist_str)?;
+    object.field_string("tech_notation", &chart.tech_notation_str)?;
+    object.field_string("sha1", &chart.short_hash)?;
+    object.field_string("bpm_neutral_sha1", &chart.bpm_neutral_hash)?;
+    object.finish()
+}
+
+fn write_json_arrow_stats<W: Write>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    indent: usize,
+) -> io::Result<()> {
+    let (mines_judgable, _) = chart_mine_fake_counts(chart);
+    write_json_u32_object(
+        writer,
+        indent,
+        &[
+            ("total_arrows", chart.stats.total_arrows),
+            ("left_arrows", chart.stats.left),
+            ("down_arrows", chart.stats.down),
+            ("up_arrows", chart.stats.up),
+            ("right_arrows", chart.stats.right),
+            ("total_steps", chart.stats.total_steps),
+            ("jumps", chart.stats.jumps),
+            ("hands", chart.stats.hands),
+            ("holds", chart.stats.holds),
+            ("rolls", chart.stats.rolls),
+            ("mines", mines_judgable),
+        ],
+    )
+}
+
+fn write_json_gimmicks<W: Write>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    simfile: &SimfileSummary,
+    indent: usize,
+) -> io::Result<()> {
+    let (_, fakes) = chart_mine_fake_counts(chart);
+    let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
+    let stops = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_stops,
+        &simfile.normalized_stops,
+    );
+    let delays = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_delays,
+        &simfile.normalized_delays,
+    );
+    let warps = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_warps,
+        &simfile.normalized_warps,
+    );
+    let speeds = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_speeds,
+        &simfile.normalized_speeds,
+    );
+    let scrolls = chart_or_global(
+        allow_steps_timing,
+        chart.chart_has_own_timing,
+        &chart.chart_scrolls,
+        &simfile.normalized_scrolls,
+    );
+    write_json_u32_object(
+        writer,
+        indent,
+        &[
+            ("lifts", chart.stats.lifts),
+            ("fakes", fakes),
+            ("stops_freezes", count_timing_segments(stops)),
+            ("speeds", count_gimmick_speed_segments(speeds)),
+            ("scrolls", count_gimmick_scroll_segments(scrolls)),
+            ("delays", count_timing_segments(delays)),
+            ("warps", count_timing_segments(warps)),
+        ],
+    )
+}
+
+fn write_json_stream_segment<W: Write>(
+    writer: &mut W,
+    indent: usize,
+    start: usize,
+    end: usize,
+    is_break: bool,
+) -> io::Result<()> {
+    let mut object = JsonObjectWriter::new(writer, indent)?;
+    object.field_u32("stream_start", start as u32)?;
+    object.field_u32("stream_end", end as u32)?;
+    object.field_bool("is_break", is_break)?;
+    object.finish()
+}
+
+fn write_json_stream_sequences<W: Write>(
+    writer: &mut W,
+    measures: &[usize],
+    indent: usize,
+) -> io::Result<()> {
+    let segments = stream_sequences(measures);
+    write_json_multiline_array(
+        writer,
+        segments.len(),
+        indent,
+        |writer, index, item_indent| {
+            let segment = segments[index];
+            write_json_stream_segment(
+                writer,
+                item_indent,
+                segment.start,
+                segment.end,
+                segment.is_break,
+            )
+        },
+    )
+}
+
+fn write_json_stream_info<W: Write>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    indent: usize,
+) -> io::Result<()> {
+    let total_stream = chart.total_streams;
+    let total_break = chart.stream_counts.total_breaks;
+    let (stream_percent, adj_stream_percent, break_percent) =
+        compute_stream_percentages(total_stream, total_break, chart.total_measures);
+
+    let mut object = JsonObjectWriter::new(writer, indent)?;
+    object.field_u32("total_streams", total_stream)?;
+    object.field_u32("16th_streams", chart.stream_counts.run16_streams)?;
+    object.field_u32("20th_streams", chart.stream_counts.run20_streams)?;
+    object.field_u32("24th_streams", chart.stream_counts.run24_streams)?;
+    object.field_u32("32nd_streams", chart.stream_counts.run32_streams)?;
+    object.field_u32("total_breaks", total_break)?;
+    object.field_u32("sn_breaks", chart.stream_counts.sn_breaks)?;
+    object.field_f64("stream_percent", stream_percent)?;
+    object.field_f64("adj_stream_percent", adj_stream_percent)?;
+    object.field_f64("break_percent", break_percent)?;
+    object.field_with("stream_sequences", |writer, indent| {
+        write_json_stream_sequences(writer, &chart.measure_densities, indent)
+    })?;
+    object.finish()
+}
+
+fn write_json_sn_breakdown<W: Write>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    indent: usize,
+) -> io::Result<()> {
+    let mut object = JsonObjectWriter::new(writer, indent)?;
+    object.field_string("sn_detailed_breakdown", &chart.sn_detailed_breakdown)?;
+    object.field_string("sn_partial_breakdown", &chart.sn_partial_breakdown)?;
+    object.field_string("sn_simple_breakdown", &chart.sn_simple_breakdown)?;
+    object.finish()
+}
+
+fn write_json_stream_breakdown<W: Write>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    indent: usize,
+) -> io::Result<()> {
+    let mut object = JsonObjectWriter::new(writer, indent)?;
+    object.field_string("detailed_breakdown", &chart.detailed_breakdown)?;
+    object.field_string("partial_breakdown", &chart.partial_breakdown)?;
+    object.field_string("simple_breakdown", &chart.simple_breakdown)?;
+    object.finish()
+}
+
+fn write_json_mono_candle_stats<W: Write>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    indent: usize,
+) -> io::Result<()> {
+    let left = count(&chart.detected_patterns, PatternVariant::CandleLeft);
+    let right = count(&chart.detected_patterns, PatternVariant::CandleRight);
+    let mut object = JsonObjectWriter::new(writer, indent)?;
+    object.field_u32("total_candles", left + right)?;
+    object.field_u32("left_foot_candles", left)?;
+    object.field_u32("right_foot_candles", right)?;
+    object.field_f64("candles_percent", chart.candle_percent)?;
+    object.field_u32("total_mono", chart.mono_total)?;
+    object.field_u32("left_face_mono", chart.facing_left)?;
+    object.field_u32("right_face_mono", chart.facing_right)?;
+    object.field_f64("mono_percent", chart.mono_percent)?;
+    object.finish()
+}
+
+fn write_json_tech_counts<W: Write>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    indent: usize,
+) -> io::Result<()> {
+    write_json_u32_object(
+        writer,
+        indent,
+        &[
+            ("crossovers", chart.tech_counts.crossovers),
+            ("footswitches", chart.tech_counts.footswitches),
+            ("up_footswitches", chart.tech_counts.up_footswitches),
+            ("down_footswitches", chart.tech_counts.down_footswitches),
+            ("sideswitches", chart.tech_counts.sideswitches),
+            ("jacks", chart.tech_counts.jacks),
+            ("brackets", chart.tech_counts.brackets),
+            ("doublesteps", chart.tech_counts.doublesteps),
+        ],
+    )
 }
 
 fn write_json_raw_f64<W: Write>(writer: &mut W, value: f64) -> io::Result<()> {
@@ -3015,7 +3321,7 @@ fn write_json_nps<W: Write>(writer: &mut W, chart: &ChartSummary, indent: usize)
         write_json_scalar_iter(
             writer,
             chart.measure_densities.iter().copied(),
-            |writer, value| write!(writer, "{}", value as u32),
+            |writer, value| write_json_raw_u32(writer, value as u32),
         )
     })?;
     object.field_with("nps_per_measure", |writer, _| {
@@ -3033,6 +3339,320 @@ fn write_json_nps<W: Write>(writer: &mut W, chart: &ChartSummary, indent: usize)
     object.finish()
 }
 
+fn write_json_pattern_counts<W: Write>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    indent: usize,
+) -> io::Result<()> {
+    let mut object = JsonObjectWriter::new(writer, indent)?;
+
+    let boxes = compute_box_parts(&chart.detected_patterns);
+    let corner_boxes = boxes.ld + boxes.lu + boxes.rd + boxes.ru;
+    object.field_with("boxes", |writer, indent| {
+        write_json_u32_object(
+            writer,
+            indent,
+            &[
+                ("total_boxes", boxes.lr + boxes.ud + corner_boxes),
+                ("lr_boxes", boxes.lr),
+                ("ud_boxes", boxes.ud),
+                ("corner_boxes", corner_boxes),
+                ("ld_boxes", boxes.ld),
+                ("lu_boxes", boxes.lu),
+                ("rd_boxes", boxes.rd),
+                ("ru_boxes", boxes.ru),
+            ],
+        )
+    })?;
+
+    object.field_with("anchors", |writer, indent| {
+        write_json_u32_object(
+            writer,
+            indent,
+            &[
+                (
+                    "total_anchors",
+                    chart.anchor_left + chart.anchor_down + chart.anchor_up + chart.anchor_right,
+                ),
+                ("left_anchors", chart.anchor_left),
+                ("down_anchors", chart.anchor_down),
+                ("up_anchors", chart.anchor_up),
+                ("right_anchors", chart.anchor_right),
+            ],
+        )
+    })?;
+
+    let towers = compute_tower_parts(&chart.detected_patterns);
+    let corner_towers = towers.ld + towers.lu + towers.rd + towers.ru;
+    object.field_with("towers", |writer, indent| {
+        write_json_u32_object(
+            writer,
+            indent,
+            &[
+                ("total_towers", towers.lr + towers.ud + corner_towers),
+                ("lr_towers", towers.lr),
+                ("ud_towers", towers.ud),
+                ("corner_towers", corner_towers),
+                ("ld_towers", towers.ld),
+                ("lu_towers", towers.lu),
+                ("rd_towers", towers.rd),
+                ("ru_towers", towers.ru),
+            ],
+        )
+    })?;
+
+    let triangles = compute_triangle_parts(&chart.detected_patterns);
+    object.field_with("triangles", |writer, indent| {
+        write_json_u32_object(
+            writer,
+            indent,
+            &[
+                (
+                    "total_triangles",
+                    triangles.ldl + triangles.lul + triangles.rdr + triangles.rur,
+                ),
+                ("ldl_triangles", triangles.ldl),
+                ("lul_triangles", triangles.lul),
+                ("rdr_triangles", triangles.rdr),
+                ("rur_triangles", triangles.rur),
+            ],
+        )
+    })?;
+
+    let stairs = compute_stair_parts(
+        &chart.detected_patterns,
+        PatternVariant::StaircaseLeft,
+        PatternVariant::StaircaseRight,
+        PatternVariant::StaircaseInvLeft,
+        PatternVariant::StaircaseInvRight,
+    );
+    let alt_stairs = compute_stair_parts(
+        &chart.detected_patterns,
+        PatternVariant::AltStaircasesLeft,
+        PatternVariant::AltStaircasesRight,
+        PatternVariant::AltStaircasesInvLeft,
+        PatternVariant::AltStaircasesInvRight,
+    );
+    let double_stairs = compute_stair_parts(
+        &chart.detected_patterns,
+        PatternVariant::DStaircaseLeft,
+        PatternVariant::DStaircaseRight,
+        PatternVariant::DStaircaseInvLeft,
+        PatternVariant::DStaircaseInvRight,
+    );
+    object.field_with("staircases", |writer, indent| {
+        write_json_u32_object(
+            writer,
+            indent,
+            &[
+                (
+                    "total_staircases",
+                    stairs.left + stairs.right + stairs.left_inv + stairs.right_inv,
+                ),
+                ("left_staircases", stairs.left),
+                ("right_staircases", stairs.right),
+                ("left_inv_staircases", stairs.left_inv),
+                ("right_inv_staircases", stairs.right_inv),
+                (
+                    "total_alt_staircases",
+                    alt_stairs.left + alt_stairs.right + alt_stairs.left_inv + alt_stairs.right_inv,
+                ),
+                ("left_alt_staircases", alt_stairs.left),
+                ("right_alt_staircases", alt_stairs.right),
+                ("left_inv_alt_staircases", alt_stairs.left_inv),
+                ("right_inv_alt_staircases", alt_stairs.right_inv),
+                (
+                    "total_double_staircases",
+                    double_stairs.left
+                        + double_stairs.right
+                        + double_stairs.left_inv
+                        + double_stairs.right_inv,
+                ),
+                ("left_double_staircases", double_stairs.left),
+                ("right_double_staircases", double_stairs.right),
+                ("left_inv_double_staircases", double_stairs.left_inv),
+                ("right_inv_double_staircases", double_stairs.right_inv),
+            ],
+        )
+    })?;
+
+    let sweeps = compute_sweep_parts(
+        &chart.detected_patterns,
+        PatternVariant::SweepLeft,
+        PatternVariant::SweepRight,
+        PatternVariant::SweepInvLeft,
+        PatternVariant::SweepInvRight,
+    );
+    object.field_with("sweeps", |writer, indent| {
+        write_json_u32_object(
+            writer,
+            indent,
+            &[
+                (
+                    "total_sweeps",
+                    sweeps.left + sweeps.right + sweeps.left_inv + sweeps.right_inv,
+                ),
+                ("left_sweeps", sweeps.left),
+                ("right_sweeps", sweeps.right),
+                ("left_inv_sweeps", sweeps.left_inv),
+                ("right_inv_sweeps", sweeps.right_inv),
+            ],
+        )
+    })?;
+
+    let candle_sweeps = compute_sweep_parts(
+        &chart.detected_patterns,
+        PatternVariant::SweepCandleLeft,
+        PatternVariant::SweepCandleRight,
+        PatternVariant::SweepCandleInvLeft,
+        PatternVariant::SweepCandleInvRight,
+    );
+    object.field_with("candle_sweeps", |writer, indent| {
+        write_json_u32_object(
+            writer,
+            indent,
+            &[
+                (
+                    "total_candle_sweeps",
+                    candle_sweeps.left
+                        + candle_sweeps.right
+                        + candle_sweeps.left_inv
+                        + candle_sweeps.right_inv,
+                ),
+                ("left_candle_sweeps", candle_sweeps.left),
+                ("right_candle_sweeps", candle_sweeps.right),
+                ("left_inv_candle_sweeps", candle_sweeps.left_inv),
+                ("right_inv_candle_sweeps", candle_sweeps.right_inv),
+            ],
+        )
+    })?;
+
+    {
+        let mut write_quad = |key: &str,
+                              total_key: &str,
+                              left_key: &str,
+                              right_key: &str,
+                              left_inv_key: &str,
+                              right_inv_key: &str,
+                              values: SimpleQuadParts|
+         -> io::Result<()> {
+            object.field_with(key, |writer, indent| {
+                write_json_u32_object(
+                    writer,
+                    indent,
+                    &[
+                        (total_key, values.a + values.b + values.c + values.d),
+                        (left_key, values.a),
+                        (right_key, values.b),
+                        (left_inv_key, values.c),
+                        (right_inv_key, values.d),
+                    ],
+                )
+            })
+        };
+
+        write_quad(
+            "copters",
+            "total_copters",
+            "left_copters",
+            "right_copters",
+            "left_inv_copters",
+            "right_inv_copters",
+            compute_simple_quad_parts(
+                &chart.detected_patterns,
+                PatternVariant::CopterLeft,
+                PatternVariant::CopterRight,
+                PatternVariant::CopterInvLeft,
+                PatternVariant::CopterInvRight,
+            ),
+        )?;
+        write_quad(
+            "spirals",
+            "total_spirals",
+            "left_spirals",
+            "right_spirals",
+            "left_inv_spirals",
+            "right_inv_spirals",
+            compute_simple_quad_parts(
+                &chart.detected_patterns,
+                PatternVariant::SpiralLeft,
+                PatternVariant::SpiralRight,
+                PatternVariant::SpiralInvLeft,
+                PatternVariant::SpiralInvRight,
+            ),
+        )?;
+        write_quad(
+            "turbo_candles",
+            "total_turbo_candles",
+            "left_turbo_candles",
+            "right_turbo_candles",
+            "left_inv_turbo_candles",
+            "right_inv_turbo_candles",
+            compute_simple_quad_parts(
+                &chart.detected_patterns,
+                PatternVariant::TurboCandleLeft,
+                PatternVariant::TurboCandleRight,
+                PatternVariant::TurboCandleInvLeft,
+                PatternVariant::TurboCandleInvRight,
+            ),
+        )?;
+        write_quad(
+            "hip_breakers",
+            "total_hip_breakers",
+            "left_hip_breakers",
+            "right_hip_breakers",
+            "left_inv_hip_breakers",
+            "right_inv_hip_breakers",
+            compute_simple_quad_parts(
+                &chart.detected_patterns,
+                PatternVariant::HipBreakerLeft,
+                PatternVariant::HipBreakerRight,
+                PatternVariant::HipBreakerInvLeft,
+                PatternVariant::HipBreakerInvRight,
+            ),
+        )?;
+        write_quad(
+            "doritos",
+            "total_doritos",
+            "left_doritos",
+            "right_doritos",
+            "left_inv_doritos",
+            "right_inv_doritos",
+            compute_simple_quad_parts(
+                &chart.detected_patterns,
+                PatternVariant::DoritoLeft,
+                PatternVariant::DoritoRight,
+                PatternVariant::DoritoInvLeft,
+                PatternVariant::DoritoInvRight,
+            ),
+        )?;
+        write_quad(
+            "luchis",
+            "total_luchis",
+            "left_du_luchis",
+            "left_ud_luchis",
+            "right_du_luchis",
+            "right_ud_luchis",
+            compute_simple_quad_parts(
+                &chart.detected_patterns,
+                PatternVariant::LuchiLeftDU,
+                PatternVariant::LuchiLeftUD,
+                PatternVariant::LuchiRightDU,
+                PatternVariant::LuchiRightUD,
+            ),
+        )?;
+    }
+
+    if !chart.custom_patterns.is_empty() {
+        let mut custom = JsonMap::new();
+        for pattern in &chart.custom_patterns {
+            custom.insert(pattern.pattern.clone(), JsonValue::from(pattern.count));
+        }
+        object.field_value("custom_patterns", &JsonValue::Object(custom))?;
+    }
+    object.finish()
+}
+
 fn write_json_chart<W: Write>(
     writer: &mut W,
     chart: &ChartSummary,
@@ -3040,24 +3660,42 @@ fn write_json_chart<W: Write>(
     indent: usize,
 ) -> io::Result<()> {
     let mut object = JsonObjectWriter::new(writer, indent)?;
-    object.field_value("chart_info", &json_chart_info(chart))?;
-    object.field_value("arrow_stats", &json_arrow_stats(chart))?;
-    object.field_value("gimmicks", &json_gimmicks(chart, simfile))?;
+    object.field_with("chart_info", |writer, indent| {
+        write_json_chart_info(writer, chart, indent)
+    })?;
+    object.field_with("arrow_stats", |writer, indent| {
+        write_json_arrow_stats(writer, chart, indent)
+    })?;
+    object.field_with("gimmicks", |writer, indent| {
+        write_json_gimmicks(writer, chart, simfile, indent)
+    })?;
     object.field_with("timing", |writer, indent| {
         write_json_timing(writer, chart, simfile, indent)
     })?;
-    object.field_value("stream_info", &json_stream_info(chart))?;
+    object.field_with("stream_info", |writer, indent| {
+        write_json_stream_info(writer, chart, indent)
+    })?;
     object.field_with("nps", |writer, indent| {
         write_json_nps(writer, chart, indent)
     })?;
-    object.field_value("breakdown", &json_sn_breakdown(chart))?;
-    object.field_value("stream_breakdown", &json_stream_breakdown(chart))?;
+    object.field_with("breakdown", |writer, indent| {
+        write_json_sn_breakdown(writer, chart, indent)
+    })?;
+    object.field_with("stream_breakdown", |writer, indent| {
+        write_json_stream_breakdown(writer, chart, indent)
+    })?;
     if simfile.pattern_counts_enabled {
-        object.field_value("mono_candle_stats", &json_mono_candle_stats(chart))?;
-        object.field_value("pattern_counts", &json_pattern_counts(chart))?;
+        object.field_with("mono_candle_stats", |writer, indent| {
+            write_json_mono_candle_stats(writer, chart, indent)
+        })?;
+        object.field_with("pattern_counts", |writer, indent| {
+            write_json_pattern_counts(writer, chart, indent)
+        })?;
     }
     if simfile.tech_counts_enabled {
-        object.field_value("tech_counts", &json_tech_counts(chart))?;
+        object.field_with("tech_counts", |writer, indent| {
+            write_json_tech_counts(writer, chart, indent)
+        })?;
     }
     object.finish()
 }
