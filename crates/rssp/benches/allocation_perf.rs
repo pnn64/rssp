@@ -99,6 +99,7 @@ enum Mode {
     PackScan,
     BackgroundChanges,
     AssetFallbacks,
+    SongAssets,
     MetadataAnalyze,
     CustomCompile,
     ParitySingle,
@@ -173,6 +174,7 @@ fn parse_args() -> (Mode, usize) {
                     "pack-scan" => Mode::PackScan,
                     "background-changes" => Mode::BackgroundChanges,
                     "asset-fallbacks" => Mode::AssetFallbacks,
+                    "song-assets" => Mode::SongAssets,
                     "metadata-analyze" => Mode::MetadataAnalyze,
                     "custom-compile" => Mode::CustomCompile,
                     "parity-single" => Mode::ParitySingle,
@@ -232,6 +234,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         Mode::PackScan => rssp::AnalysisOptions::default(),
         Mode::BackgroundChanges => rssp::AnalysisOptions::default(),
         Mode::AssetFallbacks => rssp::AnalysisOptions::default(),
+        Mode::SongAssets => rssp::AnalysisOptions::default(),
         Mode::MetadataAnalyze => rssp::AnalysisOptions::default(),
         Mode::CustomCompile => rssp::AnalysisOptions::default(),
         Mode::JsonFull => rssp::AnalysisOptions {
@@ -330,6 +333,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::AssetFallbacks => {
                 unreachable!("asset fallback mode uses its dedicated allocation runner")
+            }
+            Mode::SongAssets => {
+                unreachable!("song asset mode uses its dedicated allocation runner")
             }
             Mode::CourseJson => {
                 unreachable!("course report mode uses its dedicated allocation runner")
@@ -517,6 +523,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::PackScan => "pack-scan",
         Mode::BackgroundChanges => "background-changes",
         Mode::AssetFallbacks => "asset-fallbacks",
+        Mode::SongAssets => "song-assets",
         Mode::MetadataAnalyze => "metadata-analyze",
         Mode::CustomCompile => "custom-compile",
         Mode::ParitySingle => "parity-single",
@@ -957,6 +964,55 @@ fn run_asset_fallbacks_alloc(iterations: usize) {
     );
 }
 
+fn run_song_assets_alloc(iterations: usize) {
+    let fixture = assets_bench::AssetFixture::new();
+    black_box(rssp::assets::resolve_song_assets(
+        fixture.image_dir(),
+        "",
+        "",
+    ));
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let (banner, background) = rssp::assets::resolve_song_assets(
+            black_box(fixture.image_dir()),
+            black_box(""),
+            black_box(""),
+        );
+        checksum = checksum
+            .wrapping_add(usize::from(banner.is_some()))
+            .wrapping_add(usize::from(background.is_some()));
+        black_box((banner, background));
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=song-assets iters={} checksum={} elapsed_s={:.6} ",
+            "entries_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        (assets_bench::IMAGE_COUNT + assets_bench::NON_IMAGE_COUNT) as f64 * divisor
+            / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
 fn main() {
     let (mode, iterations) = parse_args();
     match mode {
@@ -978,6 +1034,10 @@ fn main() {
         }
         Mode::AssetFallbacks => {
             run_asset_fallbacks_alloc(iterations);
+            return;
+        }
+        Mode::SongAssets => {
+            run_song_assets_alloc(iterations);
             return;
         }
         Mode::MetadataAnalyze => {

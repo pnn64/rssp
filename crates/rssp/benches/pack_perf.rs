@@ -93,6 +93,27 @@ fn bench_asset_fallbacks(c: &mut Criterion) {
     fallbacks.finish();
 }
 
+fn bench_song_assets(c: &mut Criterion) {
+    let fixture = assets_bench::AssetFixture::new();
+
+    let mut group = c.benchmark_group("song_assets");
+    group.sample_size(30);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(
+        (assets_bench::IMAGE_COUNT + assets_bench::NON_IMAGE_COUNT) as u64,
+    ));
+    group.bench_function("resolve_256_images_256_other", |b| {
+        b.iter(|| {
+            black_box(rssp::assets::resolve_song_assets(
+                black_box(fixture.image_dir()),
+                black_box(""),
+                black_box(""),
+            ))
+        });
+    });
+    group.finish();
+}
+
 fn lowercase_name(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().to_ascii_lowercase())
@@ -229,6 +250,7 @@ criterion_group!(
     bench_pack_scan,
     bench_background_changes,
     bench_asset_fallbacks,
+    bench_song_assets,
     bench_selection_algorithms
 );
 criterion_main!(benches);

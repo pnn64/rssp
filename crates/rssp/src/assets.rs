@@ -125,21 +125,43 @@ pub(crate) fn match_mask_ci(name: &str, mask: &str) -> bool {
             .any(|window| window.eq_ignore_ascii_case(b.as_bytes()))
 }
 
-pub(crate) fn list_img_files(dir: &Path) -> Vec<PathBuf> {
+fn list_image_candidates(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
-    entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            !is_mac_resource_fork(p)
-                && p.is_file()
-                && p.extension()
-                    .and_then(|s| s.to_str())
-                    .is_some_and(|e| img_rank(e).is_some())
-        })
-        .collect()
+    let mut candidates = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(extension) = Path::new(&name)
+            .extension()
+            .and_then(|extension| extension.to_str())
+        else {
+            continue;
+        };
+        if name.to_string_lossy().starts_with("._") || img_rank(extension).is_none() {
+            continue;
+        }
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        candidates.push(path);
+    }
+    candidates.sort_by(|left, right| cmp_name_ci(left, right));
+    candidates
+}
+
+fn image_hint_matches(path: &Path, contains: &[u8], suffix: &[u8]) -> bool {
+    let Some(stem) = path.file_stem() else {
+        return false;
+    };
+    let stem = stem.to_string_lossy();
+    let stem = stem.as_bytes();
+    stem.get(stem.len().saturating_sub(suffix.len())..)
+        .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
+        || stem
+            .windows(contains.len())
+            .any(|window| window.eq_ignore_ascii_case(contains))
 }
 
 fn resolve_rel_ci(base: &Path, rel: &str) -> Option<PathBuf> {
@@ -300,33 +322,6 @@ pub fn resolve_music_path_like_itg(song_dir: &Path, music_tag: &str) -> Option<P
     Some(first)
 }
 
-fn file_stem_lc(path: &Path) -> Option<String> {
-    Some(path.file_stem()?.to_string_lossy().to_ascii_lowercase())
-}
-
-fn find_hint(
-    files: &[PathBuf],
-    starts_with: &[&str],
-    contains: &[&str],
-    ends_with: &[&str],
-) -> Option<PathBuf> {
-    for path in files {
-        let Some(stem) = file_stem_lc(path) else {
-            continue;
-        };
-        if starts_with.iter().any(|s| stem.starts_with(s)) {
-            return Some(path.clone());
-        }
-        if ends_with.iter().any(|s| stem.ends_with(s)) {
-            return Some(path.clone());
-        }
-        if contains.iter().any(|s| stem.contains(s)) {
-            return Some(path.clone());
-        }
-    }
-    None
-}
-
 fn png_dims(mut f: fs::File) -> Option<(u32, u32)> {
     let mut header = [0u8; 24];
     f.read_exact(&mut header).ok()?;
@@ -437,40 +432,48 @@ pub fn resolve_song_assets(
         return (banner, background);
     }
 
-    let mut imgs = list_img_files(song_dir);
-    imgs.sort_by_cached_key(|p| lc_name(p));
-
-    if banner.is_none() {
-        banner = find_hint(&imgs, &[], &["banner"], &["bn"]);
-    }
-    if background.is_none() {
-        background = find_hint(&imgs, &[], &["background"], &["bg"]);
+    let images = list_image_candidates(song_dir);
+    if banner.is_none() || background.is_none() {
+        for image in &images {
+            if banner.is_none() && image_hint_matches(image, b"banner", b"bn") {
+                banner = Some(image.clone());
+            }
+            if background.is_none() && image_hint_matches(image, b"background", b"bg") {
+                background = Some(image.clone());
+            }
+            if banner.is_some() && background.is_some() {
+                break;
+            }
+        }
     }
 
     if banner.is_some() && background.is_some() {
         return (banner, background);
     }
 
-    for img in &imgs {
-        if background.as_ref().is_some_and(|p| p == img) {
+    for image in &images {
+        if banner.is_some() && background.is_some() {
+            break;
+        }
+        if background.as_ref().is_some_and(|path| path == image) {
             continue;
         }
-        if banner.as_ref().is_some_and(|p| p == img) {
+        if banner.as_ref().is_some_and(|path| path == image) {
             continue;
         }
-        let Some((w, h)) = img_dims(img) else {
+        let Some((w, h)) = img_dims(image) else {
             continue;
         };
         if background.is_none() && w >= 320 && h >= 240 {
-            background = Some(img.clone());
+            background = Some(image.clone());
             continue;
         }
         if banner.is_none() && (100..=320).contains(&w) && (50..=240).contains(&h) {
-            banner = Some(img.clone());
+            banner = Some(image.clone());
             continue;
         }
         if banner.is_none() && w > 200 && h > 0 && (w as f32 / h as f32) > 2.0 {
-            banner = Some(img.clone());
+            banner = Some(image.clone());
         }
     }
 
@@ -701,8 +704,9 @@ mod tests {
 
     use super::{
         BackgroundChangeTarget, ResolvedBackgroundChange, cmp_name_ci, for_each_bgchange_pair,
-        is_dir_ci, is_file_ci, lc_name, match_bg_file, resolve_background_changes_like_itg,
-        resolve_music_path_like_itg, strip_newlines,
+        is_dir_ci, is_file_ci, lc_name, list_image_candidates, match_bg_file,
+        resolve_background_changes_like_itg, resolve_music_path_like_itg, resolve_song_assets,
+        strip_newlines,
     };
 
     struct TempDir(PathBuf);
@@ -939,5 +943,79 @@ mod tests {
         std::fs::write(temp.0.join("Second.mkv"), [])
             .expect("second asset test movie should be writable");
         assert!(resolve_background_changes_like_itg(&temp.0, b"").is_empty());
+    }
+
+    fn png_header(width: u32, height: u32) -> [u8; 24] {
+        let mut header = [0u8; 24];
+        header[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        header[12..16].copy_from_slice(b"IHDR");
+        header[16..20].copy_from_slice(&width.to_be_bytes());
+        header[20..24].copy_from_slice(&height.to_be_bytes());
+        header
+    }
+
+    #[test]
+    fn image_catalog_and_song_asset_selection_match_materialized_order() {
+        let temp = TempDir::new();
+        let hints = temp.0.join("Hints");
+        std::fs::create_dir(&hints).expect("hint directory should be creatable");
+        for name in [
+            "00-background.PNG",
+            "01-Banner.png",
+            "02-bn.png",
+            "03-bg.png",
+        ] {
+            std::fs::write(hints.join(name), png_header(64, 64))
+                .expect("hint image should be writable");
+        }
+        std::fs::write(hints.join("._ignored.png"), png_header(64, 64))
+            .expect("resource fork fixture should be writable");
+        std::fs::write(hints.join("not-an-image.dat"), [])
+            .expect("non-image fixture should be writable");
+
+        let mut expected_paths = std::fs::read_dir(&hints)
+            .expect("hint directory should be readable")
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                !super::is_mac_resource_fork(path)
+                    && path.is_file()
+                    && path
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        .is_some_and(|extension| super::img_rank(extension).is_some())
+            })
+            .collect::<Vec<_>>();
+        expected_paths.sort_by_cached_key(|path| lc_name(path));
+        let actual_paths = list_image_candidates(&hints);
+        assert_eq!(actual_paths, expected_paths);
+        assert_eq!(
+            resolve_song_assets(&hints, "", ""),
+            (
+                Some(hints.join("01-Banner.png")),
+                Some(hints.join("00-background.PNG")),
+            )
+        );
+
+        let dimensions = temp.0.join("Dimensions");
+        std::fs::create_dir(&dimensions).expect("dimension directory should be creatable");
+        std::fs::write(dimensions.join("00.png"), png_header(640, 480))
+            .expect("background dimension fixture should be writable");
+        std::fs::write(dimensions.join("01.png"), png_header(300, 100))
+            .expect("banner dimension fixture should be writable");
+        for index in 2..16 {
+            std::fs::write(
+                dimensions.join(format!("{index:02}.png")),
+                png_header(640, 480),
+            )
+            .expect("trailing dimension fixture should be writable");
+        }
+        assert_eq!(
+            resolve_song_assets(&dimensions, "", ""),
+            (
+                Some(dimensions.join("01.png")),
+                Some(dimensions.join("00.png")),
+            )
+        );
     }
 }
