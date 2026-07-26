@@ -1077,10 +1077,11 @@ mod tests {
 
     use super::{
         CourseEntrySummary, CourseSummary, CsvRow, SpeedUnit, build_timing_snapshot,
-        chart_or_global, normalize_scrolls_like_itg, normalize_speeds_like_itg, parse_combos,
-        parse_labels, parse_tickcounts, parse_time_signatures, push_num, push_str,
-        steps_timing_allowed, timing_fixed_6, write_json_all, write_json_all_materialized,
-        write_json_course, write_json_course_materialized, write_json_stream_sequences,
+        chart_or_global, format_duration, normalize_scrolls_like_itg, normalize_speeds_like_itg,
+        parse_combos, parse_labels, parse_tickcounts, parse_time_signatures, push_bpm_range,
+        push_duration, push_num, push_str, steps_timing_allowed, timing_fixed_6, write_json_all,
+        write_json_all_materialized, write_json_course, write_json_course_materialized,
+        write_json_stream_sequences,
     };
 
     fn timing_fixed_6_materialized(value: f64) -> f64 {
@@ -1278,6 +1279,46 @@ mod tests {
         row.finish().expect("in-memory CSV row should write");
 
         assert_eq!(actual, expected.as_bytes());
+    }
+
+    #[test]
+    fn csv_numeric_fields_match_materialized_formatting() {
+        for seconds in [
+            i32::MIN,
+            -3_661,
+            -61,
+            -60,
+            -1,
+            0,
+            1,
+            59,
+            60,
+            61,
+            3_661,
+            i32::MAX,
+        ] {
+            let expected = format!("{}\n", format_duration(seconds));
+            let mut actual = Vec::new();
+            let mut row = CsvRow::new(&mut actual);
+            push_duration(&mut row, seconds);
+            row.finish().expect("in-memory CSV row should write");
+            assert_eq!(actual, expected.as_bytes(), "seconds={seconds}");
+        }
+
+        for (min_bpm, max_bpm) in [
+            (-0.0, 0.0),
+            (-123.5, 456.25),
+            (f64::MIN, f64::MAX),
+            (f64::NEG_INFINITY, f64::INFINITY),
+            (f64::NAN, f64::NAN),
+        ] {
+            let expected = format!("{min_bpm}-{max_bpm}\n");
+            let mut actual = Vec::new();
+            let mut row = CsvRow::new(&mut actual);
+            push_bpm_range(&mut row, min_bpm, max_bpm);
+            row.finish().expect("in-memory CSV row should write");
+            assert_eq!(actual, expected.as_bytes());
+        }
     }
 
     #[test]
@@ -4237,6 +4278,18 @@ fn push_num<W: Write, T: std::fmt::Display>(out: &mut CsvRow<'_, W>, value: T) {
     out.write_field(|writer| write!(writer, "{value}"));
 }
 
+fn push_duration<W: Write>(out: &mut CsvRow<'_, W>, seconds: i32) {
+    out.write_field(|writer| {
+        let minutes = seconds / 60;
+        let seconds = seconds % 60;
+        write!(writer, "{minutes}m {seconds:02}s")
+    });
+}
+
+fn push_bpm_range<W: Write>(out: &mut CsvRow<'_, W>, min_bpm: f64, max_bpm: f64) {
+    out.write_field(|writer| write!(writer, "{min_bpm}-{max_bpm}"));
+}
+
 fn write_csv_row<W: Write>(
     writer: &mut W,
     simfile: &SimfileSummary,
@@ -4250,15 +4303,12 @@ fn write_csv_row<W: Write>(
     push_str(&mut row, &simfile.titletranslit_str);
     push_str(&mut row, &simfile.subtitletranslit_str);
     push_str(&mut row, &simfile.artisttranslit_str);
-    push_str(&mut row, &format_duration(simfile.total_length));
+    push_duration(&mut row, simfile.total_length);
 
     if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
         push_num(&mut row, simfile.min_bpm);
     } else {
-        push_str(
-            &mut row,
-            &format!("{}-{}", simfile.min_bpm, simfile.max_bpm),
-        );
+        push_bpm_range(&mut row, simfile.min_bpm, simfile.max_bpm);
     }
 
     push_num(&mut row, simfile.min_bpm);
