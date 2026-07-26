@@ -1,4 +1,5 @@
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use std::ffi::{OsStr, OsString};
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -47,6 +48,51 @@ fn bench_background_changes(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_asset_fallbacks(c: &mut Criterion) {
+    let fixture = assets_bench::AssetFixture::new();
+
+    let mut lookup = c.benchmark_group("asset_ci_lookup");
+    lookup.sample_size(30);
+    lookup.measurement_time(Duration::from_secs(3));
+    lookup.throughput(Throughput::Elements(assets_bench::LOOKUP_COUNT as u64));
+    lookup.bench_function("find_last_of_256", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::profile::file_ci(
+                    black_box(fixture.lookup_dir()),
+                    black_box(assets_bench::AssetFixture::lookup_name()),
+                )
+                .expect("case-insensitive benchmark asset should resolve"),
+            )
+        });
+    });
+    lookup.finish();
+
+    let mut fallbacks = c.benchmark_group("asset_fallbacks");
+    fallbacks.sample_size(30);
+    fallbacks.measurement_time(Duration::from_secs(3));
+    fallbacks.bench_function("music_129_sounds", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::assets::resolve_music_path_like_itg(
+                    black_box(fixture.song_dir()),
+                    black_box(""),
+                )
+                .expect("music fallback should resolve"),
+            )
+        });
+    });
+    fallbacks.bench_function("movie_128_candidates", |b| {
+        b.iter(|| {
+            black_box(rssp::assets::resolve_background_changes_like_itg(
+                black_box(fixture.song_dir()),
+                black_box(b""),
+            ))
+        });
+    });
+    fallbacks.finish();
+}
+
 fn lowercase_name(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().to_ascii_lowercase())
@@ -57,6 +103,12 @@ fn legacy_first_path(paths: &[PathBuf]) -> &Path {
     let mut candidates: Vec<_> = paths.iter().map(PathBuf::as_path).collect();
     candidates.sort_by_cached_key(|path| lowercase_name(path));
     candidates[0]
+}
+
+fn legacy_first_two_paths(paths: &[PathBuf]) -> (&Path, &Path) {
+    let mut candidates: Vec<_> = paths.iter().map(PathBuf::as_path).collect();
+    candidates.sort_by_cached_key(|path| lowercase_name(path));
+    (candidates[0], candidates[1])
 }
 
 fn legacy_match_mask_ci(name: &str, mask: &str) -> bool {
@@ -83,6 +135,21 @@ fn legacy_match_mask_ci(name: &str, mask: &str) -> bool {
     name[prefix.len()..name.len() - suffix.len()].contains(middle)
 }
 
+fn legacy_find_name_ci<'a>(names: &'a [OsString], expected: &str) -> Option<&'a OsStr> {
+    let expected = expected.to_ascii_lowercase();
+    names
+        .iter()
+        .find(|name| name.to_string_lossy().to_ascii_lowercase() == expected)
+        .map(OsString::as_os_str)
+}
+
+fn allocation_free_find_name_ci<'a>(names: &'a [OsString], expected: &str) -> Option<&'a OsStr> {
+    names
+        .iter()
+        .find(|name| rssp::profile::name_eq_ci(name, expected))
+        .map(OsString::as_os_str)
+}
+
 fn bench_selection_algorithms(c: &mut Criterion) {
     let paths: Vec<_> = (0..256)
         .rev()
@@ -92,7 +159,7 @@ fn bench_selection_algorithms(c: &mut Criterion) {
     selection.bench_function("legacy_key_sort", |b| {
         b.iter(|| black_box(legacy_first_path(black_box(&paths))));
     });
-    selection.bench_function("cached_single_pass", |b| {
+    selection.bench_function("allocation_free_first", |b| {
         b.iter(|| {
             black_box(
                 rssp::profile::first_path_ci(black_box(&paths))
@@ -100,7 +167,36 @@ fn bench_selection_algorithms(c: &mut Criterion) {
             )
         });
     });
+    selection.bench_function("legacy_key_sort_first_two", |b| {
+        b.iter(|| black_box(legacy_first_two_paths(black_box(&paths))));
+    });
+    selection.bench_function("allocation_free_first_two", |b| {
+        b.iter(|| black_box(rssp::profile::first_two_paths_ci(black_box(&paths))));
+    });
     selection.finish();
+
+    let names: Vec<_> = (0..256)
+        .map(|index| OsString::from(format!("Asset-{index:03}.DAT")))
+        .collect();
+    let expected = "asset-255.dat";
+    let mut name_lookup = c.benchmark_group("asset_name_lookup_256");
+    name_lookup.bench_function("legacy_lowercase", |b| {
+        b.iter(|| {
+            black_box(
+                legacy_find_name_ci(black_box(&names), black_box(expected))
+                    .expect("legacy benchmark name should resolve"),
+            )
+        });
+    });
+    name_lookup.bench_function("allocation_free", |b| {
+        b.iter(|| {
+            black_box(
+                allocation_free_find_name_ci(black_box(&names), black_box(expected))
+                    .expect("allocation-free benchmark name should resolve"),
+            )
+        });
+    });
+    name_lookup.finish();
 
     let names: Vec<_> = (0..256)
         .map(|index| format!("Background-Middle-{index:03}.JPG"))
@@ -132,6 +228,7 @@ criterion_group!(
     benches,
     bench_pack_scan,
     bench_background_changes,
+    bench_asset_fallbacks,
     bench_selection_algorithms
 );
 criterion_main!(benches);

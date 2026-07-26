@@ -9,23 +9,48 @@ pub mod translate;
 #[cfg(feature = "profile")]
 #[doc(hidden)]
 pub mod profile {
+    use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
 
     #[must_use]
     pub fn first_path_ci(paths: &[PathBuf]) -> Option<&Path> {
+        paths
+            .iter()
+            .map(PathBuf::as_path)
+            .min_by(|left, right| crate::assets::cmp_name_ci(left, right))
+    }
+
+    #[must_use]
+    pub fn first_two_paths_ci(paths: &[PathBuf]) -> (Option<&Path>, Option<&Path>) {
         let mut first = None;
-        for path in paths {
-            let key = crate::assets::lc_name(path);
-            if first.as_ref().is_none_or(|(first_key, _)| key < *first_key) {
-                first = Some((key, path.as_path()));
+        let mut second = None;
+        for path in paths.iter().map(PathBuf::as_path) {
+            if first.is_none_or(|candidate| {
+                crate::assets::cmp_name_ci(path, candidate) == std::cmp::Ordering::Less
+            }) {
+                second = first.replace(path);
+            } else if second.is_none_or(|candidate| {
+                crate::assets::cmp_name_ci(path, candidate) == std::cmp::Ordering::Less
+            }) {
+                second = Some(path);
             }
         }
-        first.map(|(_, path)| path)
+        (first, second)
     }
 
     #[must_use]
     pub fn match_mask_ci(name: &str, mask: &str) -> bool {
         crate::assets::match_mask_ci(name, mask)
+    }
+
+    #[must_use]
+    pub fn file_ci(dir: &Path, name: &str) -> Option<PathBuf> {
+        crate::assets::is_file_ci(dir, name)
+    }
+
+    #[must_use]
+    pub fn name_eq_ci(actual: &OsStr, expected: &str) -> bool {
+        crate::assets::name_eq_ci(actual, expected)
     }
 }
 

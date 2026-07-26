@@ -1,4 +1,6 @@
 use std::borrow::Cow;
+use std::cmp::Ordering;
+use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::io::Read;
@@ -33,6 +35,10 @@ pub(crate) fn is_mac_resource_fork(path: &Path) -> bool {
         .is_some_and(|name| name.to_string_lossy().starts_with("._"))
 }
 
+pub(crate) fn name_eq_ci(actual: &OsStr, expected: &str) -> bool {
+    actual.to_string_lossy().eq_ignore_ascii_case(expected)
+}
+
 pub(crate) const fn img_rank(ext: &str) -> Option<u8> {
     if ext.eq_ignore_ascii_case("png") {
         Some(0)
@@ -54,32 +60,28 @@ pub(crate) fn to_slash(s: &str) -> String {
 }
 
 pub(crate) fn is_dir_ci(dir: &Path, name: &str) -> Option<PathBuf> {
-    let want = name.to_ascii_lowercase();
     let entries = fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
-        let path = entry.path();
-        if is_mac_resource_fork(&path) {
-            continue;
-        }
         let fname = entry.file_name();
-        if fname.to_string_lossy().to_ascii_lowercase() == want && path.is_dir() {
-            return Some(path);
+        if !fname.to_string_lossy().starts_with("._") && name_eq_ci(&fname, name) {
+            let path = entry.path();
+            if path.is_dir() {
+                return Some(path);
+            }
         }
     }
     None
 }
 
 pub(crate) fn is_file_ci(dir: &Path, name: &str) -> Option<PathBuf> {
-    let want = name.to_ascii_lowercase();
     let entries = fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
-        let path = entry.path();
-        if is_mac_resource_fork(&path) {
-            continue;
-        }
         let fname = entry.file_name();
-        if fname.to_string_lossy().to_ascii_lowercase() == want && path.is_file() {
-            return Some(path);
+        if !fname.to_string_lossy().starts_with("._") && name_eq_ci(&fname, name) {
+            let path = entry.path();
+            if path.is_file() {
+                return Some(path);
+            }
         }
     }
     None
@@ -202,32 +204,70 @@ fn is_movie_ext(path: &Path) -> bool {
         .is_some_and(|ext| MOVIE_EXTS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
 }
 
-#[inline(always)]
-fn list_sound_files(song_dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(song_dir) else {
-        return Vec::new();
-    };
-    let mut files: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| !is_mac_resource_fork(p) && p.is_file() && is_sound_ext(p))
-        .collect();
-    files.sort_by_cached_key(|p| lc_name(p));
-    files
+pub(crate) fn cmp_name_ci(left: &Path, right: &Path) -> Ordering {
+    let left = left
+        .file_name()
+        .map_or_else(Cow::default, |name| name.to_string_lossy());
+    let right = right
+        .file_name()
+        .map_or_else(Cow::default, |name| name.to_string_lossy());
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    for index in 0..left.len().min(right.len()) {
+        let ordering = left[index]
+            .to_ascii_lowercase()
+            .cmp(&right[index].to_ascii_lowercase());
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+    left.len().cmp(&right.len())
 }
 
 #[inline(always)]
-fn list_movie_files(song_dir: &Path) -> Vec<PathBuf> {
+fn first_two_sound_files(song_dir: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
     let Ok(entries) = fs::read_dir(song_dir) else {
-        return Vec::new();
+        return (None, None);
     };
-    let mut files: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| !is_mac_resource_fork(p) && p.is_file() && is_movie_ext(p))
-        .collect();
-    files.sort_by_cached_key(|p| lc_name(p));
-    files
+    let mut first: Option<PathBuf> = None;
+    let mut second: Option<PathBuf> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if is_mac_resource_fork(&path) || !path.is_file() || !is_sound_ext(&path) {
+            continue;
+        }
+        if first
+            .as_ref()
+            .is_none_or(|candidate| cmp_name_ci(&path, candidate) == Ordering::Less)
+        {
+            second = first.replace(path);
+        } else if second
+            .as_ref()
+            .is_none_or(|candidate| cmp_name_ci(&path, candidate) == Ordering::Less)
+        {
+            second = Some(path);
+        }
+    }
+    (first, second)
+}
+
+#[inline(always)]
+fn only_movie_file(song_dir: &Path) -> Option<PathBuf> {
+    let Ok(entries) = fs::read_dir(song_dir) else {
+        return None;
+    };
+    let mut movie = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if is_mac_resource_fork(&path) || !path.is_file() || !is_movie_ext(&path) {
+            continue;
+        }
+        if movie.is_some() {
+            return None;
+        }
+        movie = Some(path);
+    }
+    movie
 }
 
 /// Resolves `#MUSIC` like ITGmania's Song::TidyUpData fallback behavior.
@@ -245,20 +285,19 @@ pub fn resolve_music_path_like_itg(song_dir: &Path, music_tag: &str) -> Option<P
         return Some(path);
     }
 
-    let sounds = list_sound_files(song_dir);
-    if sounds.is_empty() {
-        return None;
-    }
-    if sounds.len() > 1
-        && sounds[0].file_name().is_some_and(|n| {
-            n.to_string_lossy()
-                .to_ascii_lowercase()
-                .starts_with("intro")
+    let (first, second) = first_two_sound_files(song_dir);
+    let first = first?;
+    if second.is_some()
+        && first.file_name().is_some_and(|name| {
+            name.to_string_lossy()
+                .as_bytes()
+                .get(..5)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"intro"))
         })
     {
-        return Some(sounds[1].clone());
+        return second;
     }
-    Some(sounds[0].clone())
+    Some(first)
 }
 
 fn file_stem_lc(path: &Path) -> Option<String> {
@@ -635,9 +674,7 @@ pub fn resolve_background_changes_like_itg(
     let has_any_file = out
         .iter()
         .any(|change| matches!(change.target, BackgroundChangeTarget::File(_)));
-    let movies = list_movie_files(song_dir);
-    if movies.len() == 1 && !has_explicit_movie {
-        let movie = movies[0].clone();
+    if !has_explicit_movie && let Some(movie) = only_movie_file(song_dir) {
         if saw_no_song_bg {
             if let Some(ix) = beat_zero_still_ix {
                 out[ix].target = BackgroundChangeTarget::File(movie);
@@ -663,8 +700,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        BackgroundChangeTarget, ResolvedBackgroundChange, for_each_bgchange_pair, match_bg_file,
-        resolve_background_changes_like_itg, strip_newlines,
+        BackgroundChangeTarget, ResolvedBackgroundChange, cmp_name_ci, for_each_bgchange_pair,
+        is_dir_ci, is_file_ci, lc_name, match_bg_file, resolve_background_changes_like_itg,
+        resolve_music_path_like_itg, strip_newlines,
     };
 
     struct TempDir(PathBuf);
@@ -828,5 +866,78 @@ mod tests {
         ];
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn allocation_free_name_comparison_matches_lowercase_keys() {
+        let paths = [
+            PathBuf::from(""),
+            PathBuf::from("Alpha.OGG"),
+            PathBuf::from("alpha.ogg"),
+            PathBuf::from("INTRO-theme.ogg"),
+            PathBuf::from("Track-010.ogg"),
+            PathBuf::from("café.OGG"),
+            PathBuf::from("二.ogg"),
+        ];
+
+        for left in &paths {
+            for right in &paths {
+                assert_eq!(
+                    cmp_name_ci(left, right),
+                    lc_name(left).cmp(&lc_name(right)),
+                    "left={left:?}, right={right:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn case_insensitive_lookup_and_music_fallback_preserve_selection() {
+        let temp = TempDir::new();
+        let album = temp.0.join("MixedCaseAlbum");
+        std::fs::create_dir(&album).expect("asset test album should be creatable");
+        let chart = album.join("Chart.DAT");
+        std::fs::write(&chart, []).expect("asset test chart should be writable");
+
+        assert_eq!(is_dir_ci(&temp.0, "mixedcasealbum"), Some(album.clone()));
+        assert_eq!(is_file_ci(&album, "chart.dat"), Some(chart));
+        assert_eq!(resolve_music_path_like_itg(&album, ""), None);
+
+        let track_b = album.join("Track-B.ogg");
+        std::fs::write(&track_b, []).expect("asset test sound should be writable");
+        assert_eq!(
+            resolve_music_path_like_itg(&album, ""),
+            Some(track_b.clone())
+        );
+
+        std::fs::write(album.join("INTRO-theme.OGG"), [])
+            .expect("asset test intro should be writable");
+        assert_eq!(
+            resolve_music_path_like_itg(&album, ""),
+            Some(track_b.clone())
+        );
+
+        let track_a = album.join("track-A.ogg");
+        std::fs::write(&track_a, []).expect("asset test sound should be writable");
+        assert_eq!(resolve_music_path_like_itg(&album, ""), Some(track_a));
+    }
+
+    #[test]
+    fn movie_fallback_only_applies_to_exactly_one_candidate() {
+        let temp = TempDir::new();
+        let movie = temp.0.join("Movie.MP4");
+        std::fs::write(&movie, []).expect("asset test movie should be writable");
+
+        assert_eq!(
+            resolve_background_changes_like_itg(&temp.0, b""),
+            vec![ResolvedBackgroundChange {
+                start_beat: 0.0,
+                target: BackgroundChangeTarget::File(movie),
+            }]
+        );
+
+        std::fs::write(temp.0.join("Second.mkv"), [])
+            .expect("second asset test movie should be writable");
+        assert!(resolve_background_changes_like_itg(&temp.0, b"").is_empty());
     }
 }
