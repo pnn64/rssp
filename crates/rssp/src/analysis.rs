@@ -16,9 +16,9 @@ use crate::hash::{compute_chart_hash, compute_chart_hash_pair};
 use crate::math::{round_dp, round_sig_figs_6};
 use crate::matrix::compute_matrix_rating;
 use crate::parse::{
-    ParsedChartEntry, clean_tag, decode_bytes, decode_unescape_trim, extract_sections,
-    normalize_chart_desc, normalize_chart_desc_ref, normalize_chart_name, parse_offset_seconds,
-    parse_version, strip_title_tags, unescape_tag, unescape_trim,
+    ParsedChartEntry, SSC_VERSION_CHART_NAME_TAG, clean_tag, decode_bytes, decode_unescape_trim,
+    extract_sections, normalize_chart_desc_ref, parse_offset_seconds, parse_version,
+    strip_title_tags, unescape_tag,
 };
 use crate::patterns::{
     CompiledCustomPatterns, PATTERN_COUNT, PatternCounts, PatternVariant,
@@ -373,6 +373,91 @@ fn compute_derived_chart_metrics(
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ChartMetadataStrings {
+    step_type: String,
+    step_artist: String,
+    description: String,
+    chart_name: String,
+    difficulty: String,
+    rating: String,
+    tech_notation: String,
+}
+
+#[inline(always)]
+fn chart_metadata_strings(
+    fields: [&[u8]; 5],
+    chart_name: Option<&[u8]>,
+    timing_format: TimingFormat,
+    ssc_version: f32,
+    extension: &str,
+) -> ChartMetadataStrings {
+    let step_type = decode_unescape_trim(fields[0]).into_owned();
+    let description_raw = decode_unescape_trim(fields[1]);
+    let legacy_ssc = timing_format == TimingFormat::Ssc && ssc_version < SSC_VERSION_CHART_NAME_TAG;
+    let (description, chart_name) = if legacy_ssc {
+        (String::new(), description_raw.into_owned())
+    } else {
+        (
+            description_raw.into_owned(),
+            chart_name
+                .map(|bytes| decode_unescape_trim(bytes).into_owned())
+                .unwrap_or_default(),
+        )
+    };
+    let difficulty_raw = decode_unescape_trim(fields[2]);
+    let rating = decode_unescape_trim(fields[3]).into_owned();
+    let difficulty =
+        resolve_difficulty_label(difficulty_raw.as_ref(), &description, &rating, extension);
+    let is_ssc = extension.eq_ignore_ascii_case("ssc");
+    let credit_decoded = if is_ssc {
+        decode_bytes(fields[4])
+    } else {
+        Cow::Borrowed("")
+    };
+    let credit = unescape_tag(credit_decoded.as_ref());
+    let tech_notation = parse_tech_notation(credit.as_ref(), &description);
+    let step_artist = if is_ssc {
+        credit.into_owned()
+    } else {
+        description.clone()
+    };
+
+    ChartMetadataStrings {
+        step_type,
+        step_artist,
+        description,
+        chart_name,
+        difficulty,
+        rating,
+        tech_notation,
+    }
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+#[inline(always)]
+#[must_use]
+pub fn profile_chart_metadata_strings(
+    fields: [&[u8]; 5],
+    chart_name: Option<&[u8]>,
+    timing_format: TimingFormat,
+    ssc_version: f32,
+    extension: &str,
+) -> (String, String, String, String, String, String, String) {
+    let metadata =
+        chart_metadata_strings(fields, chart_name, timing_format, ssc_version, extension);
+    (
+        metadata.step_type,
+        metadata.step_artist,
+        metadata.description,
+        metadata.chart_name,
+        metadata.difficulty,
+        metadata.rating,
+        metadata.tech_notation,
+    )
+}
+
 /// Processes a single chart's data to produce a `ChartSummary`.
 fn build_chart_summary(
     entry: &ParsedChartEntry<'_>,
@@ -429,33 +514,13 @@ fn build_chart_summary(
         .map(|bytes| unescape_tag(decode_bytes(bytes).as_ref()).into_owned())
         .unwrap_or_default();
 
-    let step_type_str = unescape_trim(decode_bytes(fields[0]).as_ref());
-
-    let description_raw = unescape_trim(decode_bytes(fields[1]).as_ref());
-    let chart_name_raw = entry.chart_name.as_ref().map_or_else(String::new, |bytes| {
-        unescape_trim(decode_bytes(bytes).as_ref())
-    });
-    let description = normalize_chart_desc(description_raw.clone(), timing_format, ssc_version);
-    let chart_name =
-        normalize_chart_name(chart_name_raw, &description_raw, timing_format, ssc_version);
-    let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
-    let rating_raw = unescape_trim(decode_bytes(fields[3]).as_ref());
-    let difficulty_str =
-        resolve_difficulty_label(&difficulty_raw, &description, &rating_raw, extension);
-    let rating_str = rating_raw;
-    let is_ssc = extension.eq_ignore_ascii_case("ssc");
-    let credit_decoded = if is_ssc {
-        decode_bytes(fields[4])
-    } else {
-        Cow::Borrowed("")
-    };
-    let credit = unescape_tag(credit_decoded.as_ref());
-    let tech_notation_str = parse_tech_notation(credit.as_ref(), &description);
-    let step_artist_str = if is_ssc {
-        credit.into_owned()
-    } else {
-        description.clone()
-    };
+    let metadata = chart_metadata_strings(
+        fields,
+        entry.chart_name,
+        timing_format,
+        ssc_version,
+        extension,
+    );
 
     let compute_patterns = lanes == 4 && options.compute_pattern_counts;
     let want_parity_rows = options.compute_tech_counts || options.compute_note_annotations;
@@ -698,7 +763,7 @@ fn build_chart_summary(
     let (tech_counts, mut timing_stats, note_annotations) = match lanes {
         4 => {
             let timing_stats = if reuse_base_stats {
-                stats.clone()
+                std::mem::take(&mut stats)
             } else if !rows_collected {
                 compute_timing_aware_stats_with_row_to_beat(
                     &minimized_chart,
@@ -727,7 +792,7 @@ fn build_chart_summary(
         }
         8 => {
             let timing_stats = if reuse_base_stats {
-                stats.clone()
+                std::mem::take(&mut stats)
             } else if !rows_collected {
                 compute_timing_aware_stats_with_row_to_beat(
                     &minimized_chart,
@@ -761,7 +826,7 @@ fn build_chart_summary(
                 step_parity::TechCounts::default()
             };
             let timing_stats = if reuse_base_stats {
-                stats.clone()
+                std::mem::take(&mut stats)
             } else {
                 compute_timing_aware_stats_with_row_to_beat(
                     &minimized_chart,
@@ -782,13 +847,13 @@ fn build_chart_summary(
 
     Some((
         ChartSummary {
-            step_type_str,
-            step_artist_str,
-            description_str: description,
-            chart_name_str: chart_name,
-            difficulty_str,
-            rating_str,
-            tech_notation_str,
+            step_type_str: metadata.step_type,
+            step_artist_str: metadata.step_artist,
+            description_str: metadata.description,
+            chart_name_str: metadata.chart_name,
+            difficulty_str: metadata.difficulty,
+            rating_str: metadata.rating,
+            tech_notation_str: metadata.tech_notation,
             tier_bpm: metrics.tier_bpm,
             matrix_rating: metrics.matrix_rating,
             stats,
@@ -1237,9 +1302,126 @@ pub fn compute_all_hashes(
 
 #[cfg(test)]
 mod tests {
-    use super::{AnalysisOptions, analyze, compute_all_hashes};
+    use super::{
+        AnalysisOptions, ChartMetadataStrings, analyze, chart_metadata_strings, compute_all_hashes,
+    };
+    use crate::parse::{
+        decode_bytes, normalize_chart_desc, normalize_chart_name, unescape_tag, unescape_trim,
+    };
+    use crate::tech::parse_tech_notation;
+    use crate::{resolve_difficulty_label, timing::TimingFormat};
+    use std::borrow::Cow;
 
     const FIXTURE: &[u8] = include_bytes!("../benches/fixtures/hash_fixture.ssc");
+
+    fn materialized_chart_metadata(
+        fields: [&[u8]; 5],
+        chart_name: Option<&[u8]>,
+        timing_format: TimingFormat,
+        ssc_version: f32,
+        extension: &str,
+    ) -> ChartMetadataStrings {
+        let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());
+        let description_raw = unescape_trim(decode_bytes(fields[1]).as_ref());
+        let chart_name_raw = chart_name.map_or_else(String::new, |bytes| {
+            unescape_trim(decode_bytes(bytes).as_ref())
+        });
+        let description = normalize_chart_desc(description_raw.clone(), timing_format, ssc_version);
+        let chart_name =
+            normalize_chart_name(chart_name_raw, &description_raw, timing_format, ssc_version);
+        let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
+        let rating = unescape_trim(decode_bytes(fields[3]).as_ref());
+        let difficulty =
+            resolve_difficulty_label(&difficulty_raw, &description, &rating, extension);
+        let is_ssc = extension.eq_ignore_ascii_case("ssc");
+        let credit_decoded = if is_ssc {
+            decode_bytes(fields[4])
+        } else {
+            Cow::Borrowed("")
+        };
+        let credit = unescape_tag(credit_decoded.as_ref());
+        let tech_notation = parse_tech_notation(credit.as_ref(), &description);
+        let step_artist = if is_ssc {
+            credit.into_owned()
+        } else {
+            description.clone()
+        };
+
+        ChartMetadataStrings {
+            step_type,
+            step_artist,
+            description,
+            chart_name,
+            difficulty,
+            rating,
+            tech_notation,
+        }
+    }
+
+    #[test]
+    fn borrowed_chart_metadata_matches_materialized_pipeline() {
+        let cases = [
+            (
+                [
+                    b" dance-single " as &[u8],
+                    b" BR+ Description ",
+                    b"Hard",
+                    b"12",
+                    b"Artist\\: Name",
+                ],
+                Some(b" Modern\\: Name " as &[u8]),
+                TimingFormat::Ssc,
+                0.83,
+                "ssc",
+            ),
+            (
+                [
+                    b"dance-single" as &[u8],
+                    b" Legacy Description ",
+                    b"Challenge",
+                    b"10",
+                    b"Credit",
+                ],
+                Some(b"Ignored Chart Name" as &[u8]),
+                TimingFormat::Ssc,
+                0.70,
+                "ssc",
+            ),
+            (
+                [
+                    b"dance-single" as &[u8],
+                    b" smaniac ",
+                    b"Hard",
+                    b"13",
+                    b"0,0,0,0,0",
+                ],
+                None,
+                TimingFormat::Sm,
+                0.0,
+                "sm",
+            ),
+            (
+                [
+                    b"dance-single" as &[u8],
+                    b"\x93CP1252\x94",
+                    b"Expert",
+                    b" 9 ",
+                    b"\x96 Credit",
+                ],
+                Some(b"\x93Name\x94" as &[u8]),
+                TimingFormat::Ssc,
+                0.83,
+                "SSC",
+            ),
+        ];
+
+        for (fields, chart_name, timing_format, version, extension) in cases {
+            assert_eq!(
+                chart_metadata_strings(fields, chart_name, timing_format, version, extension,),
+                materialized_chart_metadata(fields, chart_name, timing_format, version, extension,)
+            );
+        }
+    }
 
     #[test]
     fn combined_parity_outputs_match_independent_analysis_options() {

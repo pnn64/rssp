@@ -100,6 +100,7 @@ harness = false
 [[bench]]
 name = "metadata_perf"
 harness = false
+required-features = ["profile"]
 
 [[bench]]
 name = "mono_perf"

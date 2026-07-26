@@ -1,9 +1,62 @@
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
 const FIXTURE: &str = include_str!("fixtures/camellia_mix.ssc");
 const EXTENSION: &str = "ssc";
+
+#[path = "support/metadata.rs"]
+mod metadata_bench;
+
+type MetadataStrings = (String, String, String, String, String, String, String);
+
+fn legacy_chart_metadata_strings(
+    fields: [&[u8]; 5],
+    chart_name: Option<&[u8]>,
+    timing_format: rssp::timing::TimingFormat,
+    ssc_version: f32,
+    extension: &str,
+) -> MetadataStrings {
+    let step_type = rssp::parse::unescape_trim(rssp::parse::decode_bytes(fields[0]).as_ref());
+    let description_raw = rssp::parse::unescape_trim(rssp::parse::decode_bytes(fields[1]).as_ref());
+    let chart_name_raw = chart_name.map_or_else(String::new, |bytes| {
+        rssp::parse::unescape_trim(rssp::parse::decode_bytes(bytes).as_ref())
+    });
+    let description =
+        rssp::parse::normalize_chart_desc(description_raw.clone(), timing_format, ssc_version);
+    let chart_name = rssp::parse::normalize_chart_name(
+        chart_name_raw,
+        &description_raw,
+        timing_format,
+        ssc_version,
+    );
+    let difficulty_raw = rssp::parse::unescape_trim(rssp::parse::decode_bytes(fields[2]).as_ref());
+    let rating = rssp::parse::unescape_trim(rssp::parse::decode_bytes(fields[3]).as_ref());
+    let difficulty =
+        rssp::resolve_difficulty_label(&difficulty_raw, &description, &rating, extension);
+    let is_ssc = extension.eq_ignore_ascii_case("ssc");
+    let credit_decoded = if is_ssc {
+        rssp::parse::decode_bytes(fields[4])
+    } else {
+        std::borrow::Cow::Borrowed("")
+    };
+    let credit = rssp::parse::unescape_tag(credit_decoded.as_ref());
+    let tech_notation = rssp::tech::parse_tech_notation(credit.as_ref(), &description);
+    let step_artist = if is_ssc {
+        credit.into_owned()
+    } else {
+        description.clone()
+    };
+    (
+        step_type,
+        step_artist,
+        description,
+        chart_name,
+        difficulty,
+        rating,
+        tech_notation,
+    )
+}
 
 fn bench_metadata_pipeline(c: &mut Criterion) {
     let fixture = FIXTURE.as_bytes();
@@ -128,5 +181,116 @@ fn bench_metadata_pipeline(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_metadata_pipeline);
+fn bench_chart_metadata_analysis(c: &mut Criterion) {
+    let modern = metadata_bench::fixture("0.83");
+    let legacy = metadata_bench::fixture("0.70");
+    let options = metadata_bench::options();
+
+    let mut group = c.benchmark_group("chart_metadata_analysis");
+    group.sample_size(30);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(metadata_bench::CHART_COUNT as u64));
+    group.bench_function("analyze_256_modern_ssc", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::analyze(
+                    black_box(modern.as_bytes()),
+                    black_box(EXTENSION),
+                    black_box(&options),
+                )
+                .expect("modern metadata fixture should analyze"),
+            );
+        });
+    });
+    group.bench_function("analyze_256_legacy_ssc", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::analyze(
+                    black_box(legacy.as_bytes()),
+                    black_box(EXTENSION),
+                    black_box(&options),
+                )
+                .expect("legacy metadata fixture should analyze"),
+            );
+        });
+    });
+    group.finish();
+}
+
+fn bench_chart_metadata_strings(c: &mut Criterion) {
+    let modern = metadata_bench::fixture("0.83");
+    let legacy = metadata_bench::fixture("0.70");
+    let modern_entries = rssp::parse::extract_sections(modern.as_bytes(), EXTENSION)
+        .expect("modern metadata fixture should parse")
+        .notes_list;
+    let legacy_entries = rssp::parse::extract_sections(legacy.as_bytes(), EXTENSION)
+        .expect("legacy metadata fixture should parse")
+        .notes_list;
+    let timing_format = rssp::timing::TimingFormat::Ssc;
+
+    let mut group = c.benchmark_group("chart_metadata_strings_256");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(metadata_bench::CHART_COUNT as u64));
+    group.bench_function("legacy_materialized_modern", |b| {
+        b.iter(|| {
+            for entry in black_box(&modern_entries) {
+                black_box(legacy_chart_metadata_strings(
+                    entry.fields,
+                    entry.chart_name,
+                    timing_format,
+                    0.83,
+                    EXTENSION,
+                ));
+            }
+        });
+    });
+    group.bench_function("borrowed_owned_modern", |b| {
+        b.iter(|| {
+            for entry in black_box(&modern_entries) {
+                black_box(rssp::analysis::profile_chart_metadata_strings(
+                    entry.fields,
+                    entry.chart_name,
+                    timing_format,
+                    0.83,
+                    EXTENSION,
+                ));
+            }
+        });
+    });
+    group.bench_function("legacy_materialized_old_ssc", |b| {
+        b.iter(|| {
+            for entry in black_box(&legacy_entries) {
+                black_box(legacy_chart_metadata_strings(
+                    entry.fields,
+                    entry.chart_name,
+                    timing_format,
+                    0.70,
+                    EXTENSION,
+                ));
+            }
+        });
+    });
+    group.bench_function("borrowed_owned_old_ssc", |b| {
+        b.iter(|| {
+            for entry in black_box(&legacy_entries) {
+                black_box(rssp::analysis::profile_chart_metadata_strings(
+                    entry.fields,
+                    entry.chart_name,
+                    timing_format,
+                    0.70,
+                    EXTENSION,
+                ));
+            }
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_metadata_pipeline,
+    bench_chart_metadata_analysis,
+    bench_chart_metadata_strings
+);
 criterion_main!(benches);
