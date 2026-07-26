@@ -918,40 +918,23 @@ fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
         .collect()
 }
 
-#[must_use]
-pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> TimingSnapshot {
+struct NormalizedTimingTables {
+    time_signatures: Vec<(f64, i32, i32)>,
+    labels: Vec<(f64, String)>,
+    tickcounts: Vec<(f64, i32)>,
+    combos: Vec<(f64, i32, i32)>,
+    speeds: Vec<(f64, f64, f64, i32)>,
+    scrolls: Vec<(f64, f64)>,
+}
+
+fn build_normalized_timing_tables(
+    chart: &ChartSummary,
+    simfile: &SimfileSummary,
+) -> NormalizedTimingTables {
     let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
     let timing = &chart.timing_segments;
-    // The local harness serializes timing tables as ITG float values with fixed
-    // six decimal places, not six significant digits.
     let finalize = |value: f64| timing_fixed_6(value);
-    let bpms_formatted = format_bpm_segments_f32_like_itg(&timing.bpms);
-    let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw_f32(&timing.bpms);
-    let bpms = timing
-        .bpms
-        .iter()
-        .map(|(beat, bpm)| {
-            (
-                finalize(f64::from(*beat)),
-                finalize(roundtrip_bpm_itg(f64::from(*bpm))),
-            )
-        })
-        .collect();
-    let stops = timing
-        .stops
-        .iter()
-        .map(|(beat, duration)| (finalize(f64::from(*beat)), finalize(f64::from(*duration))))
-        .collect();
-    let delays = timing
-        .delays
-        .iter()
-        .map(|(beat, duration)| (finalize(f64::from(*beat)), finalize(f64::from(*duration))))
-        .collect();
-    let warps = timing
-        .warps
-        .iter()
-        .map(|(beat, length)| (finalize(f64::from(*beat)), finalize(f64::from(*length))))
-        .collect();
+
     let mut speeds = timing
         .speeds
         .iter()
@@ -966,6 +949,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         *ratio = finalize(*ratio);
         *delay = finalize(*delay);
     }
+
     let mut scrolls = timing
         .scrolls
         .iter()
@@ -976,11 +960,6 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         *beat = finalize(*beat);
         *ratio = finalize(*ratio);
     }
-    let fakes = timing
-        .fakes
-        .iter()
-        .map(|(beat, length)| (finalize(f64::from(*beat)), finalize(f64::from(*length))))
-        .collect();
 
     let mut time_signatures = parse_time_signatures(chart_or_global(
         allow_steps_timing,
@@ -1019,6 +998,57 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         *beat = finalize(*beat);
     }
 
+    NormalizedTimingTables {
+        time_signatures,
+        labels,
+        tickcounts,
+        combos,
+        speeds,
+        scrolls,
+    }
+}
+
+#[must_use]
+pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> TimingSnapshot {
+    let timing = &chart.timing_segments;
+    // The local harness serializes timing tables as ITG float values with fixed
+    // six decimal places, not six significant digits.
+    let finalize = |value: f64| timing_fixed_6(value);
+    let bpms_formatted = format_bpm_segments_f32_like_itg(&timing.bpms);
+    let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw_f32(&timing.bpms);
+    let bpms = timing
+        .bpms
+        .iter()
+        .map(|(beat, bpm)| {
+            (
+                finalize(f64::from(*beat)),
+                finalize(roundtrip_bpm_itg(f64::from(*bpm))),
+            )
+        })
+        .collect();
+    let stops = timing
+        .stops
+        .iter()
+        .map(|(beat, duration)| (finalize(f64::from(*beat)), finalize(f64::from(*duration))))
+        .collect();
+    let delays = timing
+        .delays
+        .iter()
+        .map(|(beat, duration)| (finalize(f64::from(*beat)), finalize(f64::from(*duration))))
+        .collect();
+    let warps = timing
+        .warps
+        .iter()
+        .map(|(beat, length)| (finalize(f64::from(*beat)), finalize(f64::from(*length))))
+        .collect();
+    let fakes = timing
+        .fakes
+        .iter()
+        .map(|(beat, length)| (finalize(f64::from(*beat)), finalize(f64::from(*length))))
+        .collect();
+
+    let tables = build_normalized_timing_tables(chart, simfile);
+
     TimingSnapshot {
         beat0_offset_seconds: finalize(
             chart.chart_offset_seconds + f64::from(timing.beat0_offset_adjust),
@@ -1030,19 +1060,21 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         bpm_max_raw,
         stops,
         delays,
-        time_signatures,
+        time_signatures: tables.time_signatures,
         warps,
-        labels,
-        tickcounts,
-        combos,
-        speeds,
-        scrolls,
+        labels: tables.labels,
+        tickcounts: tables.tickcounts,
+        combos: tables.combos,
+        speeds: tables.speeds,
+        scrolls: tables.scrolls,
         fakes,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
     use super::{
         CourseEntrySummary, CourseSummary, CsvRow, SpeedUnit, build_timing_snapshot,
         chart_or_global, normalize_scrolls_like_itg, normalize_speeds_like_itg, parse_combos,
@@ -1264,6 +1296,78 @@ mod tests {
                 .expect("streaming output should be valid JSON");
         }
 
+        fn dense_timing_fixture(segment_count: usize) -> String {
+            fn push_pairs(
+                out: &mut String,
+                segment_count: usize,
+                mut value: impl FnMut(usize) -> f64,
+            ) {
+                for index in 0..segment_count {
+                    if index != 0 {
+                        out.push(',');
+                    }
+                    write!(out, "{}={}", index * 4, value(index)).unwrap();
+                }
+                out.push_str(";\n");
+            }
+
+            let mut fixture = String::new();
+            fixture.push_str("#VERSION:0.83;\n#OFFSET:-0.125;\n#BPMS:");
+            push_pairs(&mut fixture, segment_count, |index| {
+                90.0 + (index % 211) as f64
+            });
+            fixture.push_str("#STOPS:");
+            push_pairs(&mut fixture, segment_count, |index| {
+                0.01 + (index % 17) as f64 / 100.0
+            });
+            fixture.push_str("#DELAYS:");
+            push_pairs(&mut fixture, segment_count, |index| {
+                0.02 + (index % 13) as f64 / 100.0
+            });
+            fixture.push_str("#WARPS:");
+            push_pairs(&mut fixture, segment_count, |index| {
+                0.5 + (index % 7) as f64
+            });
+            fixture.push_str("#SPEEDS:");
+            for index in 0..segment_count {
+                if index != 0 {
+                    fixture.push(',');
+                }
+                write!(
+                    &mut fixture,
+                    "{}={}=0.25={}",
+                    index * 4,
+                    1.25 + (index % 9) as f64 / 10.0,
+                    index & 1
+                )
+                .unwrap();
+            }
+            fixture.push_str(";\n#SCROLLS:");
+            push_pairs(&mut fixture, segment_count, |index| {
+                0.75 + (index % 11) as f64 / 10.0
+            });
+            fixture.push_str("#FAKES:");
+            push_pairs(&mut fixture, segment_count, |index| {
+                0.25 + (index % 5) as f64
+            });
+            fixture.push_str(concat!(
+                "#TIMESIGNATURES:0=4=4,64=3=4,128=7=8;\n",
+                "#LABELS:0=Song Start,64=Middle,128=Finale;\n",
+                "#TICKCOUNTS:0=4,64=8,128=12;\n",
+                "#COMBOS:0=1=1,64=2=3,128=4=5;\n",
+                "#NOTEDATA:;\n",
+                "#STEPSTYPE:dance-single;\n",
+                "#DESCRIPTION:dense timing oracle;\n",
+                "#DIFFICULTY:Challenge;\n",
+                "#METER:10;\n",
+                "#CREDIT:;\n",
+                "#NOTES:\n",
+                "1000\n0100\n0010\n0001\n",
+                ";\n"
+            ));
+            fixture
+        }
+
         const HASH_FIXTURE: &[u8] = include_bytes!("../benches/fixtures/hash_fixture.ssc");
         const REPORT_FIXTURE: &[u8] = include_bytes!("../benches/fixtures/camellia_mix.ssc");
         let mut fast_options = crate::AnalysisOptions::default();
@@ -1281,6 +1385,7 @@ mod tests {
         }
         assert_matches(REPORT_FIXTURE, &fast_options);
         assert_matches(REPORT_FIXTURE, &crate::AnalysisOptions::default());
+        assert_matches(dense_timing_fixture(32).as_bytes(), &fast_options);
     }
 
     #[test]
@@ -3320,19 +3425,40 @@ fn write_json_multiline_array<W: Write>(
     writer.write_all(b"]")
 }
 
+fn write_json_pair_iter<W: Write>(
+    writer: &mut W,
+    values: impl IntoIterator<Item = (f64, f64)>,
+    indent: usize,
+) -> io::Result<()> {
+    let mut values = values.into_iter().peekable();
+    if values.peek().is_none() {
+        return writer.write_all(b"[]");
+    }
+
+    writer.write_all(b"[\n")?;
+    let item_indent = indent + 2;
+    for (index, (a, b)) in values.enumerate() {
+        if index != 0 {
+            writer.write_all(b",\n")?;
+        }
+        write_indent(writer, item_indent)?;
+        writer.write_all(b"[")?;
+        write_json_raw_f64(writer, a)?;
+        writer.write_all(b", ")?;
+        write_json_raw_f64(writer, b)?;
+        writer.write_all(b"]")?;
+    }
+    writer.write_all(b"\n")?;
+    write_indent(writer, indent)?;
+    writer.write_all(b"]")
+}
+
 fn write_json_pair_array<W: Write>(
     writer: &mut W,
     values: &[(f64, f64)],
     indent: usize,
 ) -> io::Result<()> {
-    write_json_multiline_array(writer, values.len(), indent, |writer, idx, _| {
-        let (a, b) = values[idx];
-        writer.write_all(b"[")?;
-        write_json_raw_f64(writer, a)?;
-        writer.write_all(b", ")?;
-        write_json_raw_f64(writer, b)?;
-        writer.write_all(b"]")
-    })
+    write_json_pair_iter(writer, values.iter().copied(), indent)
 }
 
 fn write_json_timing<W: Write>(
@@ -3341,24 +3467,20 @@ fn write_json_timing<W: Write>(
     simfile: &SimfileSummary,
     indent: usize,
 ) -> io::Result<()> {
-    let TimingSnapshot {
-        beat0_offset_seconds,
-        beat0_group_offset_seconds,
-        bpms,
-        bpms_formatted,
-        bpm_min_raw,
-        bpm_max_raw,
-        stops,
-        delays,
+    let timing = &chart.timing_segments;
+    let beat0_offset_seconds =
+        timing_fixed_6(chart.chart_offset_seconds + f64::from(timing.beat0_offset_adjust));
+    let beat0_group_offset_seconds = 0.0;
+    let bpms_formatted = format_bpm_segments_f32_like_itg(&timing.bpms);
+    let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw_f32(&timing.bpms);
+    let NormalizedTimingTables {
         time_signatures,
-        warps,
         labels,
         tickcounts,
         combos,
         speeds,
         scrolls,
-        fakes,
-    } = build_timing_snapshot(chart, simfile);
+    } = build_normalized_timing_tables(chart, simfile);
 
     let bpm_min = round_sig_figs_6(round_sig_figs_itg(bpm_min_raw));
     let bpm_max = round_sig_figs_6(round_sig_figs_itg(bpm_max_raw));
@@ -3390,13 +3512,40 @@ fn write_json_timing<W: Write>(
     object.field_f64("display_bpm_min", display_bpm_min)?;
     object.field_f64("display_bpm_max", display_bpm_max)?;
     object.field_with("bpms", |writer, indent| {
-        write_json_pair_array(writer, &bpms, indent)
+        write_json_pair_iter(
+            writer,
+            timing.bpms.iter().map(|(beat, bpm)| {
+                (
+                    timing_fixed_6(f64::from(*beat)),
+                    timing_fixed_6(roundtrip_bpm_itg(f64::from(*bpm))),
+                )
+            }),
+            indent,
+        )
     })?;
     object.field_with("stops", |writer, indent| {
-        write_json_pair_array(writer, &stops, indent)
+        write_json_pair_iter(
+            writer,
+            timing.stops.iter().map(|(beat, duration)| {
+                (
+                    timing_fixed_6(f64::from(*beat)),
+                    timing_fixed_6(f64::from(*duration)),
+                )
+            }),
+            indent,
+        )
     })?;
     object.field_with("delays", |writer, indent| {
-        write_json_pair_array(writer, &delays, indent)
+        write_json_pair_iter(
+            writer,
+            timing.delays.iter().map(|(beat, duration)| {
+                (
+                    timing_fixed_6(f64::from(*beat)),
+                    timing_fixed_6(f64::from(*duration)),
+                )
+            }),
+            indent,
+        )
     })?;
     object.field_with("time_signatures", |writer, indent| {
         write_json_multiline_array(writer, time_signatures.len(), indent, |writer, idx, _| {
@@ -3407,7 +3556,16 @@ fn write_json_timing<W: Write>(
         })
     })?;
     object.field_with("warps", |writer, indent| {
-        write_json_pair_array(writer, &warps, indent)
+        write_json_pair_iter(
+            writer,
+            timing.warps.iter().map(|(beat, length)| {
+                (
+                    timing_fixed_6(f64::from(*beat)),
+                    timing_fixed_6(f64::from(*length)),
+                )
+            }),
+            indent,
+        )
     })?;
     object.field_with("labels", |writer, indent| {
         write_json_multiline_array(writer, labels.len(), indent, |writer, idx, _| {
@@ -3451,7 +3609,16 @@ fn write_json_timing<W: Write>(
         write_json_pair_array(writer, &scrolls, indent)
     })?;
     object.field_with("fakes", |writer, indent| {
-        write_json_pair_array(writer, &fakes, indent)
+        write_json_pair_iter(
+            writer,
+            timing.fakes.iter().map(|(beat, length)| {
+                (
+                    timing_fixed_6(f64::from(*beat)),
+                    timing_fixed_6(f64::from(*length)),
+                )
+            }),
+            indent,
+        )
     })?;
     object.field_f64("duration_seconds", chart.duration_seconds)?;
     object.finish()

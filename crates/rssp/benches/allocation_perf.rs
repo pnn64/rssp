@@ -11,6 +11,8 @@ mod course_bench;
 mod metadata_bench;
 #[path = "support/pack.rs"]
 mod pack_bench;
+#[path = "support/report_timing.rs"]
+mod report_timing_bench;
 #[path = "support/step_parity.rs"]
 mod step_parity_bench;
 
@@ -89,6 +91,7 @@ enum Mode {
     Csv,
     Json,
     JsonFull,
+    JsonTiming,
     CourseJson,
     CourseAnalyze,
     PackScan,
@@ -160,6 +163,7 @@ fn parse_args() -> (Mode, usize) {
                     "csv" => Mode::Csv,
                     "json" => Mode::Json,
                     "json-full" => Mode::JsonFull,
+                    "json-timing" => Mode::JsonTiming,
                     "course-json" => Mode::CourseJson,
                     "course-analyze" => Mode::CourseAnalyze,
                     "pack-scan" => Mode::PackScan,
@@ -226,6 +230,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
         },
+        Mode::JsonTiming => rssp::AnalysisOptions::default(),
         Mode::Annotations => rssp::AnalysisOptions {
             mono_threshold: 6,
             compute_note_annotations: true,
@@ -308,6 +313,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::JsonFull => {
                 unreachable!("report modes use their dedicated allocation runner")
+            }
+            Mode::JsonTiming => {
+                unreachable!("timing JSON mode uses its dedicated allocation runner")
             }
             Mode::CourseJson => {
                 unreachable!("course report mode uses its dedicated allocation runner")
@@ -489,6 +497,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Csv => "csv",
         Mode::Json => "json",
         Mode::JsonFull => "json-full",
+        Mode::JsonTiming => "json-timing",
         Mode::CourseJson => "course-json",
         Mode::CourseAnalyze => "course-analyze",
         Mode::PackScan => "pack-scan",
@@ -790,6 +799,55 @@ fn run_metadata_analyze_alloc(iterations: usize) {
     );
 }
 
+fn run_timing_json_alloc(iterations: usize) {
+    let fixture = report_timing_bench::fixture();
+    let summary = rssp::analyze(fixture.as_bytes(), "ssc", &report_timing_bench::options())
+        .expect("timing JSON benchmark should analyze");
+    let mut warm_output = Vec::new();
+    rssp::report::write_reports(&summary, rssp::report::OutputMode::JSON, &mut warm_output)
+        .expect("timing JSON benchmark should write");
+    black_box(warm_output);
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let mut output = Vec::new();
+        rssp::report::write_reports(
+            black_box(&summary),
+            rssp::report::OutputMode::JSON,
+            black_box(&mut output),
+        )
+        .expect("timing JSON benchmark should write");
+        checksum = checksum.wrapping_add(output.len());
+        black_box(output);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=json-timing iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_segments_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        report_timing_bench::SEGMENT_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
 fn main() {
     let (mode, iterations) = parse_args();
     match mode {
@@ -807,6 +865,10 @@ fn main() {
         }
         Mode::MetadataAnalyze => {
             run_metadata_analyze_alloc(iterations);
+            return;
+        }
+        Mode::JsonTiming => {
+            run_timing_json_alloc(iterations);
             return;
         }
         Mode::ParitySingle => {
