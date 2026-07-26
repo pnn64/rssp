@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 // ============================================================================
@@ -133,6 +133,38 @@ fn ac_output_slice<T>(dfa: &AcDfa<T>, state: u32) -> &[T] {
     &dfa.flat_outputs[start..start + len]
 }
 
+const AC_OUTPUT_NONE: u32 = u32::MAX;
+
+fn ac_finalize_output<T: Copy>(
+    state: usize,
+    fail_target: usize,
+    direct_heads: &[u32],
+    direct_outputs: &[(T, u32)],
+    output_starts: &mut [u32],
+    output_lens: &mut [u32],
+    flat_outputs: &mut Vec<T>,
+) {
+    let output_start = flat_outputs.len();
+    let mut node = direct_heads[state];
+    while node != AC_OUTPUT_NONE {
+        let (value, next) = direct_outputs[node as usize];
+        flat_outputs.push(value);
+        node = next;
+    }
+    flat_outputs[output_start..].reverse();
+
+    if fail_target != 0 {
+        let inherited_start = output_starts[fail_target] as usize;
+        let inherited_end = inherited_start + output_lens[fail_target] as usize;
+        for index in inherited_start..inherited_end {
+            flat_outputs.push(flat_outputs[index]);
+        }
+    }
+
+    output_starts[state] = output_start as u32;
+    output_lens[state] = (flat_outputs.len() - output_start) as u32;
+}
+
 fn ac_build<T, P>(
     patterns: impl IntoIterator<Item = (T, P)>,
     mut pattern_symbol: impl FnMut(u8) -> u8,
@@ -141,8 +173,10 @@ where
     T: Copy,
     P: AsRef<[u8]>,
 {
+    let patterns = patterns.into_iter();
     let mut goto: Vec<[u32; AC_ALPHA]> = vec![[u32::MAX; AC_ALPHA]];
-    let mut output: Vec<Vec<T>> = vec![vec![]];
+    let mut direct_heads = vec![AC_OUTPUT_NONE];
+    let mut direct_outputs = Vec::with_capacity(patterns.size_hint().0.min(256));
 
     for (id, pat) in patterns {
         let pat = pat.as_ref();
@@ -155,17 +189,20 @@ where
             if goto[state][sym] == u32::MAX {
                 goto[state][sym] = goto.len() as u32;
                 goto.push([u32::MAX; AC_ALPHA]);
-                output.push(vec![]);
+                direct_heads.push(AC_OUTPUT_NONE);
             }
             state = goto[state][sym] as usize;
         }
-        output[state].push(id);
+        let output_index = direct_outputs.len() as u32;
+        direct_outputs.push((id, direct_heads[state]));
+        direct_heads[state] = output_index;
     }
 
     let n = goto.len();
     if n == 1 {
+        goto[0] = [0; AC_ALPHA];
         return AcDfa {
-            goto: vec![0; AC_ALPHA],
+            goto: goto.into_flattened(),
             output_starts: vec![0],
             output_lens: vec![0],
             flat_outputs: Vec::new(),
@@ -173,84 +210,63 @@ where
     }
 
     let mut fail = vec![0u32; n];
-    let mut queue: VecDeque<usize> = (0..AC_ALPHA)
-        .filter_map(|s| {
-            let next = goto[0][s];
-            (next != u32::MAX).then_some(next as usize)
-        })
-        .collect();
+    let mut queue = Vec::with_capacity(n.saturating_sub(1));
+    let mut output_starts = vec![0; n];
+    let mut output_lens = vec![0; n];
+    let mut flat_outputs = Vec::with_capacity(direct_outputs.len());
 
-    while let Some(state) = queue.pop_front() {
-        for (sym, &child) in goto[state].iter().enumerate() {
-            if child == u32::MAX {
-                continue;
-            }
-            let child_idx = child as usize;
-            queue.push_back(child_idx);
-
-            let mut f = fail[state] as usize;
-            while f != 0 && goto[f][sym] == u32::MAX {
-                f = fail[f] as usize;
-            }
-
-            let fail_target = match goto[f][sym] {
-                t if t != u32::MAX && t as usize != child_idx => t,
-                _ => 0,
-            };
-            fail[child_idx] = fail_target;
-
-            if fail_target != 0 {
-                let ft = fail_target as usize;
-
-                if child_idx != ft {
-                    let (dst, src) = if child_idx < ft {
-                        let (l, r) = output.split_at_mut(ft);
-                        (&mut l[child_idx], &r[0])
-                    } else {
-                        let (l, r) = output.split_at_mut(child_idx);
-                        (&mut r[0], &l[ft])
-                    };
-
-                    dst.extend_from_slice(src);
-                }
-            }
+    for sym in 0..AC_ALPHA {
+        let next = goto[0][sym];
+        if next == u32::MAX {
+            goto[0][sym] = 0;
+            continue;
         }
+        let next = next as usize;
+        queue.push(next);
+        ac_finalize_output(
+            next,
+            0,
+            &direct_heads,
+            &direct_outputs,
+            &mut output_starts,
+            &mut output_lens,
+            &mut flat_outputs,
+        );
     }
 
-    for state in 0..n {
+    let mut queue_index = 0;
+    while let Some(&state) = queue.get(queue_index) {
+        queue_index += 1;
+        let fail_state = fail[state] as usize;
         let mut row = goto[state];
-
-        for sym in 0..AC_ALPHA {
-            if row[sym] != u32::MAX {
+        for (sym, child) in row.iter_mut().enumerate() {
+            if *child == u32::MAX {
+                *child = goto[fail_state][sym];
                 continue;
             }
+            let child_idx = *child as usize;
+            queue.push(child_idx);
 
-            let mut f = state;
-            while f != 0 && goto[f][sym] == u32::MAX {
-                f = fail[f] as usize;
-            }
-
-            let t = goto[f][sym];
-            row[sym] = if t == u32::MAX { 0 } else { t };
+            let fail_target = goto[fail_state][sym];
+            fail[child_idx] = fail_target;
+            ac_finalize_output(
+                child_idx,
+                fail_target as usize,
+                &direct_heads,
+                &direct_outputs,
+                &mut output_starts,
+                &mut output_lens,
+                &mut flat_outputs,
+            );
         }
-
         goto[state] = row;
     }
 
-    let mut flat_goto = Vec::with_capacity(goto.len() * AC_ALPHA);
-    for row in &goto {
-        flat_goto.extend_from_slice(row);
-    }
+    debug_assert!(goto
+        .iter()
+        .all(|row| row.iter().all(|&child| child != u32::MAX)));
 
-    let output_count: usize = output.iter().map(Vec::len).sum();
-    let mut output_starts = Vec::with_capacity(output.len());
-    let mut output_lens = Vec::with_capacity(output.len());
-    let mut flat_outputs = Vec::with_capacity(output_count);
-    for state_output in output {
-        output_starts.push(flat_outputs.len() as u32);
-        output_lens.push(state_output.len() as u32);
-        flat_outputs.extend_from_slice(&state_output);
-    }
+    let flat_goto = goto.into_flattened();
 
     AcDfa {
         goto: flat_goto,
@@ -507,18 +523,14 @@ pub fn compile_custom_patterns(patterns: &[String]) -> CompiledCustomPatterns {
         pattern_indexes.insert(upper.into_owned(), next_index);
     }
 
-    let mut ordered_patterns: Vec<Option<String>> = std::iter::repeat_with(|| None)
-        .take(pattern_indexes.len())
-        .collect();
+    let mut compiled: Vec<_> = std::iter::repeat_with(|| CompiledPattern {
+        pattern: String::new(),
+    })
+    .take(pattern_indexes.len())
+    .collect();
     for (pattern, index) in pattern_indexes {
-        ordered_patterns[index] = Some(pattern);
+        compiled[index].pattern = pattern;
     }
-    let compiled: Vec<_> = ordered_patterns
-        .into_iter()
-        .map(|pattern| CompiledPattern {
-            pattern: pattern.expect("custom pattern indexes should be contiguous"),
-        })
-        .collect();
 
     let dfa = ac_build(
         compiled
@@ -924,9 +936,10 @@ pub const fn compute_box_counts(counts: &PatternCounts) -> BoxCounts {
 #[cfg(test)]
 mod tests {
     use super::{
-        AC_ALPHA, CompiledCustomPatterns, CompiledPattern, CustomPatternSummary, ac_build,
-        ac_output_slice, analyze_patterns_from_rows, compile_custom_patterns, count_anchors,
-        count_facing_steps, detect_custom_patterns_compiled, detect_default_patterns, pattern_bit,
+        ac_build, ac_output_slice, ac_search_vec, analyze_patterns_from_rows,
+        compile_custom_patterns, count_anchors, count_facing_steps,
+        detect_custom_patterns_compiled, detect_default_patterns, pattern_bit,
+        CompiledCustomPatterns, CompiledPattern, CustomPatternSummary, AC_ALPHA,
     };
     use std::collections::HashSet;
 
@@ -1033,6 +1046,37 @@ mod tests {
             combined.custom_patterns,
             detect_custom_patterns_compiled(&bitmasks, &custom)
         );
+    }
+
+    #[test]
+    fn compact_dfa_outputs_match_naive_overlapping_search() {
+        let patterns: &[(usize, &[u8])] = &[
+            (0, &[1]),
+            (1, &[2, 1]),
+            (2, &[1]),
+            (3, &[]),
+            (4, &[3, 2, 1]),
+        ];
+        let text = [3, 2, 1, 2, 1, 1, 3, 2, 1];
+        let dfa = ac_build(patterns.iter().copied(), |byte| byte);
+        let actual = ac_search_vec(&text, &dfa, patterns.len());
+        let suffix_state = [3, 2, 1].into_iter().fold(0u32, |state, symbol| {
+            dfa.goto[state as usize * AC_ALPHA + symbol]
+        });
+
+        let mut expected = vec![0; patterns.len()];
+        for &(id, pattern) in patterns {
+            if pattern.is_empty() {
+                continue;
+            }
+            expected[id] = text
+                .windows(pattern.len())
+                .filter(|window| *window == pattern)
+                .count() as u32;
+        }
+
+        assert_eq!(actual, expected);
+        assert_eq!(ac_output_slice(&dfa, suffix_state), &[4, 1, 0, 2]);
     }
 
     #[test]
