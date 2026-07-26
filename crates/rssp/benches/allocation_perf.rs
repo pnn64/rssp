@@ -81,6 +81,7 @@ enum Mode {
     Tech,
     Snapshot,
     Csv,
+    Json,
     ParitySingle,
     ParityDouble,
     ParitySingleHolds,
@@ -145,6 +146,7 @@ fn parse_args() -> (Mode, usize) {
                     "tech" => Mode::Tech,
                     "snapshot" => Mode::Snapshot,
                     "csv" => Mode::Csv,
+                    "json" => Mode::Json,
                     "parity-single" => Mode::ParitySingle,
                     "parity-double" => Mode::ParityDouble,
                     "parity-single-holds" => Mode::ParitySingleHolds,
@@ -183,7 +185,8 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         | Mode::Bpms
         | Mode::Tech
         | Mode::Snapshot
-        | Mode::Csv => rssp::AnalysisOptions {
+        | Mode::Csv
+        | Mode::Json => rssp::AnalysisOptions {
             mono_threshold: 6,
             compute_tech_counts: false,
             compute_pattern_counts: false,
@@ -270,6 +273,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             Mode::Csv => {
                 unreachable!("report modes use their dedicated allocation runner")
             }
+            Mode::Json => {
+                unreachable!("report modes use their dedicated allocation runner")
+            }
             Mode::ParitySingle
             | Mode::ParityDouble
             | Mode::ParitySingleHolds
@@ -331,6 +337,13 @@ fn run_report_once(mode: Mode, summaries: &[rssp::report::SimfileSummary]) -> us
                 checksum = checksum.wrapping_add(output.len());
                 black_box(output);
             }
+            Mode::Json => {
+                let mut output = Vec::new();
+                rssp::report::write_reports(summary, rssp::report::OutputMode::JSON, &mut output)
+                    .expect("JSON report should write");
+                checksum = checksum.wrapping_add(output.len());
+                black_box(output);
+            }
             _ => unreachable!("only report modes use report summaries"),
         }
     }
@@ -343,7 +356,7 @@ fn run_benchmark_once(
     options: &rssp::AnalysisOptions,
     summaries: &[rssp::report::SimfileSummary],
 ) -> usize {
-    if matches!(mode, Mode::Snapshot | Mode::Csv) {
+    if matches!(mode, Mode::Snapshot | Mode::Csv | Mode::Json) {
         run_report_once(mode, summaries)
     } else {
         run_once(mode, corpus, options)
@@ -363,6 +376,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Tech => "tech",
         Mode::Snapshot => "snapshot",
         Mode::Csv => "csv",
+        Mode::Json => "json",
         Mode::ParitySingle => "parity-single",
         Mode::ParityDouble => "parity-double",
         Mode::ParitySingleHolds => "parity-single-holds",
@@ -506,7 +520,7 @@ fn main() {
     let corpus = load_corpus();
     let options = options_for(mode);
     let bytes: usize = corpus.iter().map(|sim| sim.raw.len()).sum();
-    let report_summaries = if matches!(mode, Mode::Snapshot | Mode::Csv) {
+    let report_summaries = if matches!(mode, Mode::Snapshot | Mode::Csv | Mode::Json) {
         build_report_summaries(&corpus, &options)
     } else {
         Vec::new()

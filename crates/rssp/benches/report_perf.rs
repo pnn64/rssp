@@ -125,5 +125,27 @@ fn bench_csv(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_timing_snapshot, bench_csv);
+fn bench_json(c: &mut Criterion) {
+    let summary =
+        rssp::analyze(FIXTURE.as_bytes(), "ssc", &fast_options()).expect("fixture should analyze");
+
+    let mut group = c.benchmark_group("report_json");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("write_fixture", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::report::write_reports(
+                black_box(&summary),
+                rssp::report::OutputMode::JSON,
+                black_box(&mut output),
+            )
+            .expect("JSON report should write");
+            black_box(output);
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(benches, bench_timing_snapshot, bench_csv, bench_json);
 criterion_main!(benches);

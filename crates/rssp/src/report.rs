@@ -990,6 +990,7 @@ mod tests {
         CsvRow, SpeedUnit, build_timing_snapshot, chart_or_global, normalize_scrolls_like_itg,
         normalize_speeds_like_itg, parse_combos, parse_labels, parse_tickcounts,
         parse_time_signatures, push_num, push_str, steps_timing_allowed, timing_fixed_6,
+        write_json_all, write_json_all_materialized,
     };
 
     fn timing_fixed_6_materialized(value: f64) -> f64 {
@@ -1187,6 +1188,28 @@ mod tests {
         row.finish().expect("in-memory CSV row should write");
 
         assert_eq!(actual, expected.as_bytes());
+    }
+
+    #[test]
+    fn json_streaming_matches_materialized_report() {
+        const FIXTURE: &[u8] = include_bytes!("../benches/fixtures/hash_fixture.ssc");
+        let mut fast_options = crate::AnalysisOptions::default();
+        fast_options.compute_tech_counts = false;
+        fast_options.compute_pattern_counts = false;
+
+        for options in [crate::AnalysisOptions::default(), fast_options] {
+            let summary = crate::analyze(FIXTURE, "ssc", &options).expect("fixture should analyze");
+
+            let mut expected = Vec::new();
+            write_json_all_materialized(&summary, &mut expected)
+                .expect("materialized JSON should write");
+            let mut actual = Vec::new();
+            write_json_all(&summary, &mut actual).expect("streaming JSON should write");
+
+            assert_eq!(actual, expected);
+            serde_json::from_slice::<serde_json::Value>(&actual)
+                .expect("streaming output should be valid JSON");
+        }
     }
 }
 
@@ -2732,19 +2755,328 @@ fn write_json_object<W: Write>(
     writer.write_all(b"}")
 }
 
-pub fn write_json_all<W: Write>(simfile: &SimfileSummary, writer: &mut W) -> io::Result<()> {
+struct JsonObjectWriter<'a, W> {
+    writer: &'a mut W,
+    indent: usize,
+    first: bool,
+}
+
+impl<'a, W: Write> JsonObjectWriter<'a, W> {
+    fn new(writer: &'a mut W, indent: usize) -> io::Result<Self> {
+        writer.write_all(b"{\n")?;
+        Ok(Self {
+            writer,
+            indent,
+            first: true,
+        })
+    }
+
+    fn field_with(
+        &mut self,
+        key: &str,
+        write_value: impl FnOnce(&mut W, usize) -> io::Result<()>,
+    ) -> io::Result<()> {
+        if !self.first {
+            self.writer.write_all(b",\n")?;
+        }
+        self.first = false;
+        let value_indent = self.indent + 2;
+        write_indent(self.writer, value_indent)?;
+        write_json_string(self.writer, key)?;
+        self.writer.write_all(b": ")?;
+        write_value(self.writer, value_indent)
+    }
+
+    fn field_value(&mut self, key: &str, value: &JsonValue) -> io::Result<()> {
+        self.field_with(key, |writer, indent| {
+            write_json_value_with_key(writer, Some(key), value, indent)
+        })
+    }
+
+    fn field_string(&mut self, key: &str, value: &str) -> io::Result<()> {
+        self.field_with(key, |writer, _| write_json_string(writer, value))
+    }
+
+    fn field_display_string(&mut self, key: &str, value: impl std::fmt::Display) -> io::Result<()> {
+        self.field_with(key, |writer, _| {
+            writer.write_all(b"\"")?;
+            write!(writer, "{value}")?;
+            writer.write_all(b"\"")
+        })
+    }
+
+    fn field_f64(&mut self, key: &str, value: f64) -> io::Result<()> {
+        self.field_with(key, |writer, _| {
+            let Some(number) = JsonNumber::from_f64(value) else {
+                return writer.write_all(b"null");
+            };
+            write_json_number_for_key(writer, Some(key), &number)
+        })
+    }
+
+    fn finish(self) -> io::Result<()> {
+        if !self.first {
+            self.writer.write_all(b"\n")?;
+        }
+        write_indent(self.writer, self.indent)?;
+        self.writer.write_all(b"}")
+    }
+}
+
+fn write_json_raw_f64<W: Write>(writer: &mut W, value: f64) -> io::Result<()> {
+    let Some(number) = JsonNumber::from_f64(value) else {
+        return writer.write_all(b"null");
+    };
+    write_json_number_for_key(writer, None, &number)
+}
+
+fn write_json_scalar_iter<W: Write, T>(
+    writer: &mut W,
+    values: impl IntoIterator<Item = T>,
+    mut write_value: impl FnMut(&mut W, T) -> io::Result<()>,
+) -> io::Result<()> {
+    writer.write_all(b"[")?;
+    for (idx, value) in values.into_iter().enumerate() {
+        if idx != 0 {
+            writer.write_all(b", ")?;
+        }
+        write_value(writer, value)?;
+    }
+    writer.write_all(b"]")
+}
+
+fn write_json_multiline_array<W: Write>(
+    writer: &mut W,
+    len: usize,
+    indent: usize,
+    mut write_value: impl FnMut(&mut W, usize, usize) -> io::Result<()>,
+) -> io::Result<()> {
+    if len == 0 {
+        return writer.write_all(b"[]");
+    }
+    writer.write_all(b"[\n")?;
+    let item_indent = indent + 2;
+    for idx in 0..len {
+        if idx != 0 {
+            writer.write_all(b",\n")?;
+        }
+        write_indent(writer, item_indent)?;
+        write_value(writer, idx, item_indent)?;
+    }
+    writer.write_all(b"\n")?;
+    write_indent(writer, indent)?;
+    writer.write_all(b"]")
+}
+
+fn write_json_pair_array<W: Write>(
+    writer: &mut W,
+    values: &[(f64, f64)],
+    indent: usize,
+) -> io::Result<()> {
+    write_json_multiline_array(writer, values.len(), indent, |writer, idx, _| {
+        let (a, b) = values[idx];
+        writer.write_all(b"[")?;
+        write_json_raw_f64(writer, a)?;
+        writer.write_all(b", ")?;
+        write_json_raw_f64(writer, b)?;
+        writer.write_all(b"]")
+    })
+}
+
+fn write_json_timing<W: Write>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    simfile: &SimfileSummary,
+    indent: usize,
+) -> io::Result<()> {
+    let TimingSnapshot {
+        beat0_offset_seconds,
+        beat0_group_offset_seconds,
+        bpms,
+        bpms_formatted,
+        bpm_min_raw,
+        bpm_max_raw,
+        stops,
+        delays,
+        time_signatures,
+        warps,
+        labels,
+        tickcounts,
+        combos,
+        speeds,
+        scrolls,
+        fakes,
+    } = build_timing_snapshot(chart, simfile);
+
+    let bpm_min = round_sig_figs_6(round_sig_figs_itg(bpm_min_raw));
+    let bpm_max = round_sig_figs_6(round_sig_figs_itg(bpm_max_raw));
+    let display_tag = chart
+        .chart_display_bpm
+        .as_deref()
+        .filter(|s| !s.trim().is_empty());
+    let (display_bpm_min_raw, display_bpm_max_raw, display_bpm) =
+        resolve_display_bpm(display_tag, bpm_min_raw, bpm_max_raw, 1.0);
+    let display_bpm_min = round_sig_figs_6(round_sig_figs_itg(display_bpm_min_raw));
+    let display_bpm_max = round_sig_figs_6(round_sig_figs_itg(display_bpm_max_raw));
+    let hash_bpms_owned = chart
+        .chart_bpms
+        .as_deref()
+        .map(normalize_float_digits)
+        .filter(|value| !value.is_empty());
+    let hash_bpms = hash_bpms_owned
+        .as_deref()
+        .unwrap_or(&simfile.normalized_bpms);
+
+    let mut object = JsonObjectWriter::new(writer, indent)?;
+    object.field_f64("beat0_offset_seconds", beat0_offset_seconds)?;
+    object.field_f64("beat0_group_offset_seconds", beat0_group_offset_seconds)?;
+    object.field_string("hash_bpms", hash_bpms)?;
+    object.field_string("bpms_formatted", &bpms_formatted)?;
+    object.field_f64("bpm_min", bpm_min)?;
+    object.field_f64("bpm_max", bpm_max)?;
+    object.field_string("display_bpm", &display_bpm)?;
+    object.field_f64("display_bpm_min", display_bpm_min)?;
+    object.field_f64("display_bpm_max", display_bpm_max)?;
+    object.field_with("bpms", |writer, indent| {
+        write_json_pair_array(writer, &bpms, indent)
+    })?;
+    object.field_with("stops", |writer, indent| {
+        write_json_pair_array(writer, &stops, indent)
+    })?;
+    object.field_with("delays", |writer, indent| {
+        write_json_pair_array(writer, &delays, indent)
+    })?;
+    object.field_with("time_signatures", |writer, indent| {
+        write_json_multiline_array(writer, time_signatures.len(), indent, |writer, idx, _| {
+            let (beat, numerator, denominator) = time_signatures[idx];
+            writer.write_all(b"[")?;
+            write_json_raw_f64(writer, beat)?;
+            write!(writer, ", {numerator}, {denominator}]")
+        })
+    })?;
+    object.field_with("warps", |writer, indent| {
+        write_json_pair_array(writer, &warps, indent)
+    })?;
+    object.field_with("labels", |writer, indent| {
+        write_json_multiline_array(writer, labels.len(), indent, |writer, idx, _| {
+            let (beat, label) = &labels[idx];
+            writer.write_all(b"[")?;
+            write_json_raw_f64(writer, *beat)?;
+            writer.write_all(b", ")?;
+            write_json_string(writer, label)?;
+            writer.write_all(b"]")
+        })
+    })?;
+    object.field_with("tickcounts", |writer, indent| {
+        write_json_multiline_array(writer, tickcounts.len(), indent, |writer, idx, _| {
+            let (beat, count) = tickcounts[idx];
+            writer.write_all(b"[")?;
+            write_json_raw_f64(writer, beat)?;
+            write!(writer, ", {count}]")
+        })
+    })?;
+    object.field_with("combos", |writer, indent| {
+        write_json_multiline_array(writer, combos.len(), indent, |writer, idx, _| {
+            let (beat, combo, miss) = combos[idx];
+            writer.write_all(b"[")?;
+            write_json_raw_f64(writer, beat)?;
+            write!(writer, ", {combo}, {miss}]")
+        })
+    })?;
+    object.field_with("speeds", |writer, indent| {
+        write_json_multiline_array(writer, speeds.len(), indent, |writer, idx, _| {
+            let (beat, ratio, delay, unit) = speeds[idx];
+            writer.write_all(b"[")?;
+            write_json_raw_f64(writer, beat)?;
+            writer.write_all(b", ")?;
+            write_json_raw_f64(writer, ratio)?;
+            writer.write_all(b", ")?;
+            write_json_raw_f64(writer, delay)?;
+            write!(writer, ", {unit}]")
+        })
+    })?;
+    object.field_with("scrolls", |writer, indent| {
+        write_json_pair_array(writer, &scrolls, indent)
+    })?;
+    object.field_with("fakes", |writer, indent| {
+        write_json_pair_array(writer, &fakes, indent)
+    })?;
+    object.field_f64("duration_seconds", chart.duration_seconds)?;
+    object.finish()
+}
+
+fn write_json_nps<W: Write>(writer: &mut W, chart: &ChartSummary, indent: usize) -> io::Result<()> {
+    let lanes = crate::step_type_lanes(&chart.step_type_str);
+    let equally_spaced = measure_equally_spaced(&chart.minimized_note_data, lanes);
+    let mut object = JsonObjectWriter::new(writer, indent)?;
+    object.field_f64("max_nps", chart.max_nps)?;
+    object.field_f64("median_nps", chart.median_nps)?;
+    object.field_with("notes_per_measure", |writer, _| {
+        write_json_scalar_iter(
+            writer,
+            chart.measure_densities.iter().copied(),
+            |writer, value| write!(writer, "{}", value as u32),
+        )
+    })?;
+    object.field_with("nps_per_measure", |writer, _| {
+        write_json_scalar_iter(
+            writer,
+            chart.measure_nps_vec.iter().copied(),
+            |writer, value| write_json_raw_f64(writer, value),
+        )
+    })?;
+    object.field_with("equally_spaced_per_measure", |writer, _| {
+        write_json_scalar_iter(writer, equally_spaced, |writer, value| {
+            writer.write_all(if value { b"true" } else { b"false" })
+        })
+    })?;
+    object.finish()
+}
+
+fn write_json_chart<W: Write>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    simfile: &SimfileSummary,
+    indent: usize,
+) -> io::Result<()> {
+    let mut object = JsonObjectWriter::new(writer, indent)?;
+    object.field_value("chart_info", &json_chart_info(chart))?;
+    object.field_value("arrow_stats", &json_arrow_stats(chart))?;
+    object.field_value("gimmicks", &json_gimmicks(chart, simfile))?;
+    object.field_with("timing", |writer, indent| {
+        write_json_timing(writer, chart, simfile, indent)
+    })?;
+    object.field_value("stream_info", &json_stream_info(chart))?;
+    object.field_with("nps", |writer, indent| {
+        write_json_nps(writer, chart, indent)
+    })?;
+    object.field_value("breakdown", &json_sn_breakdown(chart))?;
+    object.field_value("stream_breakdown", &json_stream_breakdown(chart))?;
+    if simfile.pattern_counts_enabled {
+        object.field_value("mono_candle_stats", &json_mono_candle_stats(chart))?;
+        object.field_value("pattern_counts", &json_pattern_counts(chart))?;
+    }
+    if simfile.tech_counts_enabled {
+        object.field_value("tech_counts", &json_tech_counts(chart))?;
+    }
+    object.finish()
+}
+
+#[cfg(test)]
+fn write_json_all_materialized<W: Write>(
+    simfile: &SimfileSummary,
+    writer: &mut W,
+) -> io::Result<()> {
     let bpm_value = if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
         JsonValue::from(simfile.min_bpm)
     } else {
         JsonValue::from(format!("{:.0}-{:.0}", simfile.min_bpm, simfile.max_bpm))
     };
-
     let charts: Vec<JsonValue> = simfile
         .charts
         .iter()
         .map(|chart| {
             let mut chart_obj = JsonMap::new();
-
             chart_obj.insert("chart_info".to_string(), json_chart_info(chart));
             chart_obj.insert("arrow_stats".to_string(), json_arrow_stats(chart));
             chart_obj.insert("gimmicks".to_string(), json_gimmicks(chart, simfile));
@@ -2763,7 +3095,6 @@ pub fn write_json_all<W: Write>(simfile: &SimfileSummary, writer: &mut W) -> io:
             if simfile.tech_counts_enabled {
                 chart_obj.insert("tech_counts".to_string(), json_tech_counts(chart));
             }
-
             JsonValue::Object(chart_obj)
         })
         .collect();
@@ -2814,12 +3145,46 @@ pub fn write_json_all<W: Write>(simfile: &SimfileSummary, writer: &mut W) -> io:
     );
     root_obj.insert("offset".to_string(), JsonValue::from(simfile.offset));
     root_obj.insert("charts".to_string(), JsonValue::from(charts));
+    write_json_value_with_key(writer, None, &JsonValue::Object(root_obj), 0)?;
+    writeln!(writer)
+}
 
-    let root = JsonValue::Object(root_obj);
-
-    write_json_value_with_key(writer, None, &root, 0)?;
-    writeln!(writer)?;
-    Ok(())
+pub fn write_json_all<W: Write>(simfile: &SimfileSummary, writer: &mut W) -> io::Result<()> {
+    let mut root = JsonObjectWriter::new(writer, 0)?;
+    root.field_string("title", &simfile.title_str)?;
+    root.field_string("subtitle", &simfile.subtitle_str)?;
+    root.field_string("artist", &simfile.artist_str)?;
+    root.field_string("title_trans", &simfile.titletranslit_str)?;
+    root.field_string("subtitle_trans", &simfile.subtitletranslit_str)?;
+    root.field_string("artist_trans", &simfile.artisttranslit_str)?;
+    root.field_display_string("length", simfile.total_length)?;
+    if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
+        root.field_f64("bpm", simfile.min_bpm)?;
+    } else {
+        root.field_with("bpm", |writer, _| {
+            writer.write_all(b"\"")?;
+            write!(writer, "{:.0}-{:.0}", simfile.min_bpm, simfile.max_bpm)?;
+            writer.write_all(b"\"")
+        })?;
+    }
+    root.field_f64("min_bpm", simfile.min_bpm)?;
+    root.field_f64("max_bpm", simfile.max_bpm)?;
+    root.field_f64("average_bpm", simfile.average_bpm)?;
+    root.field_f64("median_bpm", simfile.median_bpm)?;
+    root.field_string("bpm_data", &simfile.normalized_bpms)?;
+    root.field_f64("offset", simfile.offset)?;
+    root.field_with("charts", |writer, indent| {
+        write_json_multiline_array(
+            writer,
+            simfile.charts.len(),
+            indent,
+            |writer, idx, item_indent| {
+                write_json_chart(writer, &simfile.charts[idx], simfile, item_indent)
+            },
+        )
+    })?;
+    root.finish()?;
+    writeln!(writer)
 }
 
 const CSV_HEADER_BASE: &str = "Title,Subtitle,Artist,Title trans,Subtitle trans,Artist trans,Length,BPM,BPM Tier,min_bpm,max_bpm,average_bpm,median bpm,BPM-data,offset,file_md5_hash,step_type,difficulty,rating,step_artist,tech_notation,sha1_hash,bpm_neutral_hash,total_arrows,left_arrows,down_arrows,up_arrows,right_arrows,total_steps,jumps,hands,holds,rolls,mines,lifts,fakes,stops_freezes,delays,warps,speeds,scrolls,total_streams,16th_streams,20th_streams,24th_streams,32nd_streams,total_breaks,sn_breaks,stream_percent,adj_stream_percent,max_nps,median_nps,matrix_rating";
