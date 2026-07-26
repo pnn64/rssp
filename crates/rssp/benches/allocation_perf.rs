@@ -77,6 +77,8 @@ enum Mode {
     Hashes,
     Durations,
     Nps,
+    Bpms,
+    Tech,
     ParitySingle,
     ParityDouble,
     ParitySingleHolds,
@@ -137,6 +139,8 @@ fn parse_args() -> (Mode, usize) {
                     "hashes" => Mode::Hashes,
                     "durations" => Mode::Durations,
                     "nps" => Mode::Nps,
+                    "bpms" => Mode::Bpms,
+                    "tech" => Mode::Tech,
                     "parity-single" => Mode::ParitySingle,
                     "parity-double" => Mode::ParityDouble,
                     "parity-single-holds" => Mode::ParitySingleHolds,
@@ -167,14 +171,18 @@ fn load_corpus() -> Vec<SimInput> {
 
 fn options_for(mode: Mode) -> rssp::AnalysisOptions {
     match mode {
-        Mode::Fast | Mode::Parse | Mode::Hashes | Mode::Durations | Mode::Nps => {
-            rssp::AnalysisOptions {
-                mono_threshold: 6,
-                compute_tech_counts: false,
-                compute_pattern_counts: false,
-                ..rssp::AnalysisOptions::default()
-            }
-        }
+        Mode::Fast
+        | Mode::Parse
+        | Mode::Hashes
+        | Mode::Durations
+        | Mode::Nps
+        | Mode::Bpms
+        | Mode::Tech => rssp::AnalysisOptions {
+            mono_threshold: 6,
+            compute_tech_counts: false,
+            compute_pattern_counts: false,
+            ..rssp::AnalysisOptions::default()
+        },
         Mode::Full => rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
@@ -231,6 +239,25 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
                 checksum = checksum.wrapping_add(nps.len());
                 black_box(nps);
             }
+            Mode::Bpms => {
+                let bpms = rssp::bpm::chart_bpm_snapshots(
+                    black_box(sim.raw.as_slice()),
+                    black_box(sim.extension),
+                )
+                .expect("fixture BPM snapshots should compute");
+                checksum = checksum.wrapping_add(bpms.len());
+                black_box(bpms);
+            }
+            Mode::Tech => {
+                for _ in 0..256 {
+                    let notation = rssp::tech::parse_tech_notation(
+                        black_box("BR+ FS- 24ths XO+ SKT-"),
+                        black_box("32nds DS++ JA- WA+ BXF- No Tech"),
+                    );
+                    checksum = checksum.wrapping_add(notation.len());
+                    black_box(notation);
+                }
+            }
             Mode::ParitySingle
             | Mode::ParityDouble
             | Mode::ParitySingleHolds
@@ -267,6 +294,8 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Hashes => "hashes",
         Mode::Durations => "durations",
         Mode::Nps => "nps",
+        Mode::Bpms => "bpms",
+        Mode::Tech => "tech",
         Mode::ParitySingle => "parity-single",
         Mode::ParityDouble => "parity-double",
         Mode::ParitySingleHolds => "parity-single-holds",

@@ -3,8 +3,8 @@ use std::cmp::Ordering;
 use crate::bpm::{clean_timing_map, is_display_bpm};
 use crate::math::lrint_f32;
 use crate::parse::{
-    decode_bytes, extract_sections, normalize_chart_desc, parse_offset_seconds, parse_version,
-    unescape_trim,
+    decode_unescape_trim, extract_sections, normalize_chart_desc_ref, parse_offset_seconds,
+    parse_version,
 };
 use crate::timing::{
     BeatTimeCursorF32, ROWS_PER_BEAT, TimingData, compute_timing_segments, fixed_timing_parts,
@@ -78,13 +78,18 @@ pub fn compute_chart_peak_nps(
         let Some(lanes) = crate::supported_stepstype_lanes_bytes(fields[0]) else {
             continue;
         };
-        let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());
-        let description_raw = unescape_trim(decode_bytes(fields[1]).as_ref());
-        let description = normalize_chart_desc(description_raw, timing_format, ssc_version);
-        let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
-        let meter_raw = unescape_trim(decode_bytes(fields[3]).as_ref());
-        let difficulty =
-            crate::resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
+        let step_type = decode_unescape_trim(fields[0]).into_owned();
+        let description_raw = decode_unescape_trim(fields[1]);
+        let description =
+            normalize_chart_desc_ref(description_raw.as_ref(), timing_format, ssc_version);
+        let difficulty_raw = decode_unescape_trim(fields[2]);
+        let meter_raw = decode_unescape_trim(fields[3]);
+        let difficulty = crate::resolve_difficulty_label(
+            difficulty_raw.as_ref(),
+            description,
+            meter_raw.as_ref(),
+            extension,
+        );
 
         let measure_densities = crate::stats::measure_densities(chart_data, lanes);
 

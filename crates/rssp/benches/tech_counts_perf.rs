@@ -291,6 +291,26 @@ fn bench_tech_counts_step_parity(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_tech_notation(c: &mut Criterion) {
+    let credit = "BR+ FS- 24ths XO+ SKT- ".repeat(64);
+    let description = "32nds DS++ JA- WA+ BXF- No Tech ".repeat(64);
+    let mut group = c.benchmark_group("tech_notation");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(2));
+    group.throughput(criterion::Throughput::Bytes(
+        (credit.len() + description.len()) as u64,
+    ));
+    group.bench_function("parse", |b| {
+        b.iter(|| {
+            black_box(rssp::tech::parse_tech_notation(
+                black_box(&credit),
+                black_box(&description),
+            ));
+        });
+    });
+    group.finish();
+}
+
 fn bench_counts_with_annotations(c: &mut Criterion) {
     let (charts, globals) = build_tech_inputs();
     let input = build_annotation_input(&charts, &globals);
@@ -335,6 +355,7 @@ fn bench_counts_with_annotations(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_tech_counts_pipeline,
+    bench_tech_notation,
     bench_tech_counts_inner,
     bench_tech_counts_step_parity,
     bench_counts_with_annotations

@@ -695,8 +695,23 @@ pub fn normalize_scrolls_like_itg(mut scrolls: Vec<(f64, f64)>) -> Vec<(f64, f64
 
 #[must_use]
 pub fn format_bpm_segments_like_itg(bpms: &[(f64, f64)]) -> String {
-    let mut out = String::with_capacity(bpms.len().saturating_mul(24));
-    for (idx, &(beat, bpm)) in bpms.iter().enumerate() {
+    format_bpm_segments_iter(bpms.iter().copied(), bpms.len())
+}
+
+pub(crate) fn format_bpm_segments_f32_like_itg(bpms: &[(f32, f32)]) -> String {
+    format_bpm_segments_iter(
+        bpms.iter()
+            .map(|&(beat, bpm)| (f64::from(beat), f64::from(bpm))),
+        bpms.len(),
+    )
+}
+
+fn format_bpm_segments_iter(
+    bpms: impl Iterator<Item = (f64, f64)>,
+    segment_count: usize,
+) -> String {
+    let mut out = String::with_capacity(segment_count.saturating_mul(24));
+    for (idx, (beat, bpm)) in bpms.enumerate() {
         if idx > 0 {
             out.push(',');
         }

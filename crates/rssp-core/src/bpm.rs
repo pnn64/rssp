@@ -2,11 +2,11 @@ use std::borrow::Cow;
 
 use crate::math::{fmt_dec3_half_up, push_dec3_half_up, round_sig_figs_itg, roundtrip_bpm_itg};
 use crate::parse::{
-    ParsedChartEntry, ParsedSimfileData, decode_bytes, extract_sections, parse_version,
-    unescape_trim,
+    ParsedChartEntry, ParsedSimfileData, decode_bytes, decode_unescape_trim, extract_sections,
+    parse_version,
 };
 use crate::timing::{
-    ROWS_PER_BEAT, TimingFormat, compute_timing_segments, format_bpm_segments_like_itg,
+    ROWS_PER_BEAT, TimingFormat, compute_timing_segments, format_bpm_segments_f32_like_itg,
     steps_timing_allowed, timing_format_from_ext,
 };
 
@@ -373,7 +373,7 @@ pub fn resolve_display_bpm(
     (smin, smax, display)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChartBpmSnapshot {
     pub step_type: String,
     pub difficulty: String,
@@ -421,6 +421,12 @@ struct ChartTags {
     fakes: Option<String>,
 }
 
+struct BpmSnapshotTiming {
+    bpms_formatted: String,
+    bpm_min_raw: f64,
+    bpm_max_raw: f64,
+}
+
 fn chart_tags_from_entry(e: &ParsedChartEntry<'_>) -> ChartTags {
     ChartTags {
         bpms: map_tag_opt(e.chart_bpms.as_deref(), clean_timing_map),
@@ -462,14 +468,14 @@ fn chart_metadata(fields: &[&[u8]], fmt: TimingFormat) -> Option<(String, String
         return None;
     }
     let _lanes = crate::supported_stepstype_lanes_bytes(fields[0])?;
-    let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());
-    let desc = unescape_trim(decode_bytes(fields[1]).as_ref());
-    let diff_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
-    let meter = unescape_trim(decode_bytes(fields[3]).as_ref());
+    let step_type = decode_unescape_trim(fields[0]).into_owned();
+    let desc = decode_unescape_trim(fields[1]);
+    let diff_raw = decode_unescape_trim(fields[2]);
+    let meter = decode_unescape_trim(fields[3]);
     let ext = if fmt == TimingFormat::Sm { "sm" } else { "ssc" };
     Some((
         step_type,
-        crate::resolve_difficulty_label(&diff_raw, &desc, &meter, ext),
+        crate::resolve_difficulty_label(diff_raw.as_ref(), desc.as_ref(), meter.as_ref(), ext),
     ))
 }
 
@@ -479,6 +485,7 @@ fn chart_bpm_snapshot(
     bpms_norm: &str,
     fmt: TimingFormat,
     use_chart: bool,
+    global_timing: &mut Option<BpmSnapshotTiming>,
 ) -> Option<ChartBpmSnapshot> {
     if entry.field_count < 4 {
         return None;
@@ -492,34 +499,90 @@ fn chart_bpm_snapshot(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| bpms_norm.to_string());
 
-    let r = resolve_chart_tags(&chart, global, use_chart);
-    let segments = compute_timing_segments(
-        r[0].1, r[0].0, r[1].1, r[1].0, r[2].1, r[2].0, r[3].1, r[3].0, r[4].1, r[4].0, r[5].1,
-        r[5].0, r[6].1, r[6].0, fmt, true,
-    );
-
-    let bpms: Vec<_> = segments
-        .bpms
-        .iter()
-        .map(|&(b, v)| (f64::from(b), f64::from(v)))
-        .collect();
-    let bpms_formatted = format_bpm_segments_like_itg(&bpms);
-    let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw(&bpms);
+    let has_chart_timing = use_chart
+        && (chart.bpms.is_some()
+            || chart.stops.is_some()
+            || chart.delays.is_some()
+            || chart.warps.is_some()
+            || chart.speeds.is_some()
+            || chart.scrolls.is_some()
+            || chart.fakes.is_some());
+    let timing = if has_chart_timing {
+        bpm_snapshot_timing(&chart, global, fmt, true)
+    } else {
+        let cached =
+            global_timing.get_or_insert_with(|| bpm_snapshot_timing(&chart, global, fmt, false));
+        BpmSnapshotTiming {
+            bpms_formatted: cached.bpms_formatted.clone(),
+            bpm_min_raw: cached.bpm_min_raw,
+            bpm_max_raw: cached.bpm_max_raw,
+        }
+    };
     let chart_dbpm = decode_display_bpm_tag(entry.chart_display_bpm.as_deref());
-    let (display_bpm_min_raw, display_bpm_max_raw, display_bpm) =
-        resolve_display_bpm(chart_dbpm.as_deref(), bpm_min_raw, bpm_max_raw, 1.0);
+    let (display_bpm_min_raw, display_bpm_max_raw, display_bpm) = resolve_display_bpm(
+        chart_dbpm.as_deref(),
+        timing.bpm_min_raw,
+        timing.bpm_max_raw,
+        1.0,
+    );
 
     Some(ChartBpmSnapshot {
         step_type,
         difficulty,
         hash_bpms,
-        bpms_formatted,
-        bpm_min: round_sig_figs_itg(bpm_min_raw),
-        bpm_max: round_sig_figs_itg(bpm_max_raw),
+        bpms_formatted: timing.bpms_formatted,
+        bpm_min: round_sig_figs_itg(timing.bpm_min_raw),
+        bpm_max: round_sig_figs_itg(timing.bpm_max_raw),
         display_bpm,
         display_bpm_min: round_sig_figs_itg(display_bpm_min_raw),
         display_bpm_max: round_sig_figs_itg(display_bpm_max_raw),
     })
+}
+
+fn bpm_snapshot_timing(
+    chart: &ChartTags,
+    global: &TimingTags,
+    fmt: TimingFormat,
+    use_chart: bool,
+) -> BpmSnapshotTiming {
+    let r = resolve_chart_tags(chart, global, use_chart);
+    let segments = compute_timing_segments(
+        r[0].1, r[0].0, r[1].1, r[1].0, r[2].1, r[2].0, r[3].1, r[3].0, r[4].1, r[4].0, r[5].1,
+        r[5].0, r[6].1, r[6].0, fmt, true,
+    );
+    let bpms_formatted = format_bpm_segments_f32_like_itg(&segments.bpms);
+    let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw_f32(&segments.bpms);
+    BpmSnapshotTiming {
+        bpms_formatted,
+        bpm_min_raw,
+        bpm_max_raw,
+    }
+}
+
+fn actual_bpm_range_raw_f32(map: &[(f32, f32)]) -> (f64, f64) {
+    if map.is_empty() {
+        return (0.0, 0.0);
+    }
+    let (mut min, mut max, mut count) = (f64::MAX, f64::MIN, 0);
+    for &(_, bpm) in map {
+        let bpm = f64::from(bpm);
+        if bpm.is_finite() {
+            min = min.min(bpm);
+            max = max.max(bpm);
+            count += 1;
+        }
+    }
+    if count == 0 {
+        for &(_, bpm) in map {
+            let bpm = f64::from(bpm);
+            min = min.min(bpm);
+            max = max.max(bpm);
+        }
+    }
+    (
+        roundtrip_bpm_itg(min.max(0.0)),
+        roundtrip_bpm_itg(max.max(0.0)),
+    )
 }
 
 pub fn chart_bpm_snapshots(data: &[u8], ext: &str) -> Result<Vec<ChartBpmSnapshot>, String> {
@@ -528,11 +591,21 @@ pub fn chart_bpm_snapshots(data: &[u8], ext: &str) -> Result<Vec<ChartBpmSnapsho
     let use_chart = steps_timing_allowed(parse_version(parsed.version, fmt), fmt);
     let global = timing_tags_from_global(&parsed);
     let bpms_norm = map_tag(parsed.bpms, normalize_float_digits);
-    Ok(parsed
-        .notes_list
-        .iter()
-        .filter_map(|e| chart_bpm_snapshot(e, &global, &bpms_norm, fmt, use_chart))
-        .collect())
+    let mut snapshots = Vec::with_capacity(parsed.notes_list.len());
+    let mut global_timing = None;
+    for entry in &parsed.notes_list {
+        if let Some(snapshot) = chart_bpm_snapshot(
+            entry,
+            &global,
+            &bpms_norm,
+            fmt,
+            use_chart,
+            &mut global_timing,
+        ) {
+            snapshots.push(snapshot);
+        }
+    }
+    Ok(snapshots)
 }
 
 // BPM parsing - consolidated
@@ -1251,6 +1324,53 @@ mod tests {
             assert_eq!(actual.2, expected_stats.0);
             assert!((actual.3 - expected_stats.1).abs() < 1.0e-10);
         }
+    }
+
+    #[test]
+    fn f32_bpm_snapshot_derivations_match_materialized_f64_path() {
+        let f32_map = vec![
+            (0.0, 120.0),
+            (4.0, 150.555_5),
+            (8.0, -10.0),
+            (12.0, f32::INFINITY),
+            (16.0, 180.0),
+        ];
+        let f64_map: Vec<_> = f32_map
+            .iter()
+            .map(|&(beat, bpm)| (f64::from(beat), f64::from(bpm)))
+            .collect();
+
+        assert_eq!(
+            crate::timing::format_bpm_segments_f32_like_itg(&f32_map),
+            crate::timing::format_bpm_segments_like_itg(&f64_map)
+        );
+        assert_eq!(
+            actual_bpm_range_raw_f32(&f32_map),
+            actual_bpm_range_raw(&f64_map)
+        );
+    }
+
+    #[test]
+    fn inherited_bpm_snapshot_cache_does_not_leak_chart_timing() {
+        let mut fixture = "#VERSION:0.83;\n#BPMS:0=120,4=180;\n".to_string();
+        for idx in 0..3 {
+            fixture.push_str(
+                "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DESCRIPTION:Cache;\n\
+                 #DIFFICULTY:Challenge;\n#METER:10;\n#CREDIT:;\n",
+            );
+            if idx == 1 {
+                fixture.push_str("#BPMS:0=240;\n");
+            }
+            fixture.push_str("#NOTES:\n1000\n0000\n0000\n0000\n;\n");
+        }
+
+        let snapshots =
+            chart_bpm_snapshots(fixture.as_bytes(), "ssc").expect("fixture should parse");
+        assert_eq!(snapshots.len(), 3);
+        assert_eq!(snapshots[0], snapshots[2]);
+        assert_ne!(snapshots[0].bpms_formatted, snapshots[1].bpms_formatted);
+        assert_eq!((snapshots[0].bpm_min, snapshots[0].bpm_max), (120.0, 180.0));
+        assert_eq!((snapshots[1].bpm_min, snapshots[1].bpm_max), (240.0, 240.0));
     }
 
     #[test]

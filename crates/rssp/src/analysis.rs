@@ -16,9 +16,9 @@ use crate::hash::{compute_chart_hash, compute_chart_hash_pair};
 use crate::math::{round_dp, round_sig_figs_6};
 use crate::matrix::compute_matrix_rating;
 use crate::parse::{
-    ParsedChartEntry, clean_tag, decode_bytes, extract_sections, normalize_chart_desc,
-    normalize_chart_name, parse_offset_seconds, parse_version, strip_title_tags, unescape_tag,
-    unescape_trim,
+    ParsedChartEntry, clean_tag, decode_bytes, decode_unescape_trim, extract_sections,
+    normalize_chart_desc, normalize_chart_desc_ref, normalize_chart_name, parse_offset_seconds,
+    parse_version, strip_title_tags, unescape_tag, unescape_trim,
 };
 use crate::patterns::{
     CompiledCustomPatterns, PATTERN_COUNT, PatternCounts, PatternVariant,
@@ -1192,13 +1192,18 @@ pub fn compute_all_hashes(
             continue;
         };
 
-        let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());
-        let description_raw = unescape_trim(decode_bytes(fields[1]).as_ref());
-        let description = normalize_chart_desc(description_raw, timing_format, ssc_version);
-        let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
-        let meter_raw = unescape_trim(decode_bytes(fields[3]).as_ref());
-        let difficulty =
-            resolve_difficulty_label(&difficulty_raw, &description, &meter_raw, extension);
+        let step_type = decode_unescape_trim(fields[0]).into_owned();
+        let description_raw = decode_unescape_trim(fields[1]);
+        let description =
+            normalize_chart_desc_ref(description_raw.as_ref(), timing_format, ssc_version);
+        let difficulty_raw = decode_unescape_trim(fields[2]);
+        let meter_raw = decode_unescape_trim(fields[3]);
+        let difficulty = resolve_difficulty_label(
+            difficulty_raw.as_ref(),
+            description,
+            meter_raw.as_ref(),
+            extension,
+        );
 
         // 4. Minimize Chart (Required for Hash consistency)
         // This strips comments, whitespace, and empty measures.

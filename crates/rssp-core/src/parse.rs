@@ -64,13 +64,42 @@ pub fn unescape_tag(tag: &str) -> Cow<'_, str> {
 }
 
 #[must_use]
+pub fn unescape_trim_cow(tag: &str) -> Cow<'_, str> {
+    match unescape_tag(tag) {
+        Cow::Borrowed(value) => Cow::Borrowed(value.trim()),
+        Cow::Owned(mut value) => {
+            trim_string_in_place(&mut value);
+            Cow::Owned(value)
+        }
+    }
+}
+
+#[must_use]
 pub fn unescape_trim(tag: &str) -> String {
-    let s = unescape_tag(tag);
-    let t = s.trim();
-    if t.len() == s.len() {
-        s.into_owned()
-    } else {
-        t.to_string()
+    unescape_trim_cow(tag).into_owned()
+}
+
+#[must_use]
+pub fn decode_unescape_trim(bytes: &[u8]) -> Cow<'_, str> {
+    match decode_bytes(bytes) {
+        Cow::Borrowed(value) => unescape_trim_cow(value),
+        Cow::Owned(mut value) => {
+            if value.as_bytes().contains(&b'\\') {
+                value = unescape_tag(&value).into_owned();
+            }
+            trim_string_in_place(&mut value);
+            Cow::Owned(value)
+        }
+    }
+}
+
+fn trim_string_in_place(value: &mut String) {
+    let trimmed = value.trim();
+    let start = trimmed.as_ptr() as usize - value.as_ptr() as usize;
+    let end = start + trimmed.len();
+    value.truncate(end);
+    if start != 0 {
+        value.drain(..start);
     }
 }
 
@@ -136,8 +165,17 @@ pub const SSC_VERSION_CHART_NAME_TAG: f32 = 0.74;
 
 #[must_use]
 pub fn normalize_chart_desc(desc: String, fmt: TimingFormat, ver: f32) -> String {
-    if fmt == TimingFormat::Ssc && ver < SSC_VERSION_CHART_NAME_TAG {
+    if normalize_chart_desc_ref(&desc, fmt, ver).is_empty() && !desc.is_empty() {
         String::new()
+    } else {
+        desc
+    }
+}
+
+#[must_use]
+pub fn normalize_chart_desc_ref(desc: &str, fmt: TimingFormat, ver: f32) -> &str {
+    if fmt == TimingFormat::Ssc && ver < SSC_VERSION_CHART_NAME_TAG {
+        ""
     } else {
         desc
     }
@@ -836,4 +874,35 @@ fn split_notes6(block: &[u8]) -> (u8, [&[u8]; 5], &[u8]) {
     let end = find_unescaped_colon(rest).unwrap_or(rest.len());
 
     (count, fields, &rest[..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    use super::{decode_unescape_trim, unescape_trim_cow};
+
+    #[test]
+    fn decoded_unescaped_trim_borrows_clean_utf8() {
+        let value = decode_unescape_trim(b"  dance-single  ");
+        assert!(matches!(value, Cow::Borrowed(_)));
+        assert_eq!(value, "dance-single");
+    }
+
+    #[test]
+    fn decoded_unescaped_trim_owns_transformed_values() {
+        let escaped = decode_unescape_trim(b"  Fixture\\ Artist  ");
+        assert!(matches!(escaped, Cow::Owned(_)));
+        assert_eq!(escaped, "Fixture Artist");
+
+        let cp1252 = decode_unescape_trim(&[b' ', 0x80, b' ']);
+        assert!(matches!(cp1252, Cow::Owned(_)));
+        assert_eq!(cp1252, "\u{20ac}");
+    }
+
+    #[test]
+    fn unescaped_trim_cow_preserves_unicode_trim_behavior() {
+        assert_eq!(unescape_trim_cow("\u{2003}Title\u{2003}"), "Title");
+        assert_eq!(unescape_trim_cow(r" A\ B "), "A B");
+    }
 }

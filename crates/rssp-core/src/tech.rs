@@ -66,25 +66,29 @@ fn tech_prefixes() -> &'static [Vec<&'static str>] {
         .as_slice()
 }
 
-/// Parses a chunk into a sequence of known tech notations using greedy longest prefix matching.
 #[inline(always)]
-fn parse_chunk_as_tech(chunk: &str) -> Option<Vec<&'static str>> {
+fn append_chunk_as_tech(chunk: &str, out: &mut String, reserve: usize) {
     let mut remainder = chunk;
-    let mut results = Vec::new();
+    let original_len = out.len();
 
     while !remainder.is_empty() {
-        let best = best_prefix(remainder)?;
-        results.push(best);
+        let Some(best) = best_prefix(remainder) else {
+            out.truncate(original_len);
+            return;
+        };
+        if out.capacity() == 0 {
+            out.reserve(reserve);
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(best);
         remainder = &remainder[best.len()..];
     }
-
-    Some(results)
 }
 
-/// Parses a single input string into tech notations, skipping measure data and "No Tech".
 #[inline(always)]
-fn parse_single_tech(input: &str) -> Vec<&'static str> {
-    let mut tech_notations = Vec::new();
+fn append_single_tech(input: &str, out: &mut String, reserve: usize) {
     let mut chunks = input
         .split(|c: char| c.is_whitespace() || c == ',')
         .filter(|s| !s.is_empty())
@@ -100,18 +104,76 @@ fn parse_single_tech(input: &str) -> Vec<&'static str> {
             continue;
         }
 
-        if let Some(parsed_list) = parse_chunk_as_tech(chunk) {
-            tech_notations.extend(parsed_list);
-        }
+        append_chunk_as_tech(chunk, out, reserve);
     }
-
-    tech_notations
 }
 
 /// Parses credit and description into a formatted tech notation string.
 #[must_use]
 pub fn parse_tech_notation(credit: &str, description: &str) -> String {
-    let mut tech_notations = parse_single_tech(credit);
-    tech_notations.extend(parse_single_tech(description));
-    tech_notations.join(" ")
+    let reserve = credit
+        .len()
+        .saturating_add(description.len())
+        .saturating_add(1);
+    let mut out = String::new();
+    append_single_tech(credit, &mut out, reserve);
+    append_single_tech(description, &mut out, reserve);
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{best_prefix, is_measure_data, parse_tech_notation};
+
+    fn parse_single_reference(input: &str) -> Vec<&'static str> {
+        let mut results = Vec::new();
+        let mut chunks = input
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|chunk| !chunk.is_empty())
+            .peekable();
+
+        while let Some(chunk) = chunks.next() {
+            if chunk == "No" && chunks.peek() == Some(&"Tech") {
+                let _ = chunks.next();
+                continue;
+            }
+            if is_measure_data(chunk) {
+                continue;
+            }
+
+            let mut remainder = chunk;
+            let start = results.len();
+            while !remainder.is_empty() {
+                let Some(best) = best_prefix(remainder) else {
+                    results.truncate(start);
+                    break;
+                };
+                results.push(best);
+                remainder = &remainder[best.len()..];
+            }
+        }
+        results
+    }
+
+    fn parse_reference(credit: &str, description: &str) -> String {
+        let mut results = parse_single_reference(credit);
+        results.extend(parse_single_reference(description));
+        results.join(" ")
+    }
+
+    #[test]
+    fn streaming_tech_notation_matches_materialized_reference() {
+        let cases = [
+            ("", ""),
+            ("BR+ FS- 24ths", "XO+ SKT-"),
+            ("No Tech 16/24 BR+garbage", "32nds,DS++ JA-"),
+            ("BXF-BR+ 1.2.3", "WA+ unknown B+X-F"),
+        ];
+        for (credit, description) in cases {
+            assert_eq!(
+                parse_tech_notation(credit, description),
+                parse_reference(credit, description)
+            );
+        }
+    }
 }
