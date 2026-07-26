@@ -698,7 +698,9 @@ pub fn format_bpm_segments_like_itg(bpms: &[(f64, f64)]) -> String {
     format_bpm_segments_iter(bpms.iter().copied(), bpms.len())
 }
 
-pub(crate) fn format_bpm_segments_f32_like_itg(bpms: &[(f32, f32)]) -> String {
+/// Formats native timing BPM segments using ITG-compatible fixed decimal notation.
+#[must_use]
+pub fn format_bpm_segments_f32_like_itg(bpms: &[(f32, f32)]) -> String {
     format_bpm_segments_iter(
         bpms.iter()
             .map(|&(beat, bpm)| (f64::from(beat), f64::from(bpm))),

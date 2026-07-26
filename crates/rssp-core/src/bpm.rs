@@ -559,7 +559,9 @@ fn bpm_snapshot_timing(
     }
 }
 
-fn actual_bpm_range_raw_f32(map: &[(f32, f32)]) -> (f64, f64) {
+/// Returns the raw ITG-compatible minimum and maximum BPM from native timing segments.
+#[must_use]
+pub fn actual_bpm_range_raw_f32(map: &[(f32, f32)]) -> (f64, f64) {
     if map.is_empty() {
         return (0.0, 0.0);
     }

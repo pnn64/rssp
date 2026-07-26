@@ -4,17 +4,15 @@ use std::time::Duration;
 
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
-use crate::bpm::{actual_bpm_range_raw, normalize_float_digits, resolve_display_bpm};
-use crate::math::{
-    fmt_dec6_itg, round_dp, round_sig_figs_6, round_sig_figs_itg, roundtrip_bpm_itg,
-};
+use crate::bpm::{actual_bpm_range_raw_f32, normalize_float_digits, resolve_display_bpm};
+use crate::math::{round_dp, round_sig_figs_6, round_sig_figs_itg, roundtrip_bpm_itg};
 use crate::patterns::{CustomPatternSummary, PatternCounts, PatternVariant};
 use crate::stats::{
     ArrowStats, RADAR_CATEGORY_COUNT, StreamCounts, measure_equally_spaced, stream_sequences,
 };
 use crate::step_parity::{RowAnnotation, TechCounts};
 use crate::timing::{
-    SpeedUnit, TimingFormat, TimingSegments, beat_to_note_row, format_bpm_segments_like_itg,
+    SpeedUnit, TimingFormat, TimingSegments, beat_to_note_row, format_bpm_segments_f32_like_itg,
     normalize_scrolls_like_itg, normalize_speeds_like_itg, note_row_to_beat, steps_timing_allowed,
 };
 
@@ -46,10 +44,13 @@ fn compute_stream_percentages(
 }
 
 #[inline(always)]
+#[allow(clippy::cast_possible_truncation)] // ITG serializes timing values through f32.
 fn timing_fixed_6(value: f64) -> f64 {
-    fmt_dec6_itg(value)
-        .parse()
-        .expect("fixed 6-decimal timing formatting should always parse")
+    let value = f64::from(value as f32);
+    if !value.is_finite() || value.abs() >= 8_388_608.0 {
+        return value;
+    }
+    (value * 1_000_000.0).round_ties_even() / 1_000_000.0
 }
 
 #[derive(Clone, Copy)]
@@ -867,16 +868,17 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
     // The local harness serializes timing tables as ITG float values with fixed
     // six decimal places, not six significant digits.
     let finalize = |value: f64| timing_fixed_6(value);
-    let bpms_raw: Vec<(f64, f64)> = timing
+    let bpms_formatted = format_bpm_segments_f32_like_itg(&timing.bpms);
+    let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw_f32(&timing.bpms);
+    let bpms = timing
         .bpms
         .iter()
-        .map(|(beat, bpm)| (f64::from(*beat), roundtrip_bpm_itg(f64::from(*bpm))))
-        .collect();
-    let bpms_formatted = format_bpm_segments_like_itg(&bpms_raw);
-    let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw(&bpms_raw);
-    let bpms: Vec<(f64, f64)> = bpms_raw
-        .iter()
-        .map(|(beat, bpm)| (finalize(*beat), finalize(*bpm)))
+        .map(|(beat, bpm)| {
+            (
+                finalize(f64::from(*beat)),
+                finalize(roundtrip_bpm_itg(f64::from(*bpm))),
+            )
+        })
         .collect();
     let stops = timing
         .stops
@@ -893,7 +895,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
         .iter()
         .map(|(beat, length)| (finalize(f64::from(*beat)), finalize(f64::from(*length))))
         .collect();
-    let speeds = timing
+    let mut speeds = timing
         .speeds
         .iter()
         .map(|(beat, ratio, delay, unit)| {
@@ -901,63 +903,64 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
             (f64::from(*beat), f64::from(*ratio), f64::from(*delay), unit)
         })
         .collect();
-    let speeds = normalize_speeds_like_itg(speeds);
-    let speeds: Vec<(f64, f64, f64, i32)> = speeds
-        .into_iter()
-        .map(|(beat, ratio, delay, unit)| (finalize(beat), finalize(ratio), finalize(delay), unit))
-        .collect();
-    let scrolls = timing
+    speeds = normalize_speeds_like_itg(speeds);
+    for (beat, ratio, delay, _) in &mut speeds {
+        *beat = finalize(*beat);
+        *ratio = finalize(*ratio);
+        *delay = finalize(*delay);
+    }
+    let mut scrolls = timing
         .scrolls
         .iter()
         .map(|(beat, ratio)| (f64::from(*beat), f64::from(*ratio)))
         .collect();
-    let scrolls = normalize_scrolls_like_itg(scrolls);
-    let scrolls: Vec<(f64, f64)> = scrolls
-        .into_iter()
-        .map(|(beat, ratio)| (finalize(beat), finalize(ratio)))
-        .collect();
+    scrolls = normalize_scrolls_like_itg(scrolls);
+    for (beat, ratio) in &mut scrolls {
+        *beat = finalize(*beat);
+        *ratio = finalize(*ratio);
+    }
     let fakes = timing
         .fakes
         .iter()
         .map(|(beat, length)| (finalize(f64::from(*beat)), finalize(f64::from(*length))))
         .collect();
 
-    let time_signatures: Vec<(f64, i32, i32)> = parse_time_signatures(chart_or_global(
+    let mut time_signatures = parse_time_signatures(chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
         &chart.chart_time_signatures,
         &simfile.normalized_time_signatures,
-    ))
-    .into_iter()
-    .map(|(beat, numerator, denominator)| (finalize(beat), numerator, denominator))
-    .collect();
-    let labels: Vec<(f64, String)> = parse_labels(chart_or_global(
+    ));
+    for (beat, _, _) in &mut time_signatures {
+        *beat = finalize(*beat);
+    }
+    let mut labels = parse_labels(chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
         &chart.chart_labels,
         &simfile.normalized_labels,
-    ))
-    .into_iter()
-    .map(|(beat, label)| (finalize(beat), label))
-    .collect();
-    let tickcounts: Vec<(f64, i32)> = parse_tickcounts(chart_or_global(
+    ));
+    for (beat, _) in &mut labels {
+        *beat = finalize(*beat);
+    }
+    let mut tickcounts = parse_tickcounts(chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
         &chart.chart_tickcounts,
         &simfile.normalized_tickcounts,
-    ))
-    .into_iter()
-    .map(|(beat, ticks)| (finalize(beat), ticks))
-    .collect();
-    let combos: Vec<(f64, i32, i32)> = parse_combos(chart_or_global(
+    ));
+    for (beat, _) in &mut tickcounts {
+        *beat = finalize(*beat);
+    }
+    let mut combos = parse_combos(chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
         &chart.chart_combos,
         &simfile.normalized_combos,
-    ))
-    .into_iter()
-    .map(|(beat, combo, miss)| (finalize(beat), combo, miss))
-    .collect();
+    ));
+    for (beat, _, _) in &mut combos {
+        *beat = finalize(*beat);
+    }
 
     TimingSnapshot {
         beat0_offset_seconds: finalize(
@@ -983,7 +986,17 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::timing_fixed_6;
+    use super::{
+        CsvRow, SpeedUnit, build_timing_snapshot, chart_or_global, normalize_scrolls_like_itg,
+        normalize_speeds_like_itg, parse_combos, parse_labels, parse_tickcounts,
+        parse_time_signatures, push_num, push_str, steps_timing_allowed, timing_fixed_6,
+    };
+
+    fn timing_fixed_6_materialized(value: f64) -> f64 {
+        format!("{:.6}", value as f32)
+            .parse()
+            .expect("fixed 6-decimal timing formatting should always parse")
+    }
 
     #[test]
     fn timing_fixed_6_matches_harness_style_values() {
@@ -991,6 +1004,189 @@ mod tests {
         assert_eq!(timing_fixed_6(4231.5625), 4231.5625);
         assert_eq!(timing_fixed_6(171.39500427246094), 171.395004);
         assert_eq!(timing_fixed_6(159.7899932861328), 159.789993);
+    }
+
+    #[test]
+    fn timing_fixed_6_matches_materialized_f32_formatting() {
+        for bits in (0..=u32::MAX).step_by(65_537) {
+            let value = f64::from(f32::from_bits(bits));
+            let actual = timing_fixed_6(value);
+            let expected = timing_fixed_6_materialized(value);
+            if expected.is_nan() {
+                assert!(actual.is_nan(), "bits={bits:#010x}");
+            } else {
+                assert_eq!(actual.to_bits(), expected.to_bits(), "bits={bits:#010x}");
+            }
+        }
+
+        for value in [
+            -0.0,
+            0.0,
+            0.000_000_5,
+            -0.000_000_5,
+            8_388_607.5,
+            8_388_608.0,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ] {
+            let actual = timing_fixed_6(value);
+            let expected = timing_fixed_6_materialized(value);
+            if expected.is_nan() {
+                assert!(actual.is_nan());
+            } else {
+                assert_eq!(actual.to_bits(), expected.to_bits(), "value={value:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn timing_snapshot_matches_materialized_vector_pipeline() {
+        const FIXTURE: &[u8] = include_bytes!("../benches/fixtures/watch_yo_step.ssc");
+        let options = crate::AnalysisOptions {
+            compute_tech_counts: false,
+            compute_pattern_counts: false,
+            ..crate::AnalysisOptions::default()
+        };
+        let summary = crate::analyze(FIXTURE, "ssc", &options).expect("fixture should analyze");
+        let allow_steps_timing = steps_timing_allowed(summary.ssc_version, summary.timing_format);
+
+        for chart in &summary.charts {
+            let actual = build_timing_snapshot(chart, &summary);
+            let timing = &chart.timing_segments;
+            let finalize = timing_fixed_6;
+
+            let bpms_raw: Vec<_> = timing
+                .bpms
+                .iter()
+                .map(|&(beat, bpm)| {
+                    (
+                        f64::from(beat),
+                        crate::math::roundtrip_bpm_itg(f64::from(bpm)),
+                    )
+                })
+                .collect();
+            let expected_bpms: Vec<_> = bpms_raw
+                .iter()
+                .map(|&(beat, bpm)| (finalize(beat), finalize(bpm)))
+                .collect();
+            assert_eq!(actual.bpms, expected_bpms);
+            assert_eq!(
+                actual.bpms_formatted,
+                crate::timing::format_bpm_segments_like_itg(&bpms_raw)
+            );
+            assert_eq!(
+                (actual.bpm_min_raw, actual.bpm_max_raw),
+                crate::bpm::actual_bpm_range_raw(&bpms_raw)
+            );
+
+            let expected_speeds = normalize_speeds_like_itg(
+                timing
+                    .speeds
+                    .iter()
+                    .map(|&(beat, ratio, delay, unit)| {
+                        (
+                            f64::from(beat),
+                            f64::from(ratio),
+                            f64::from(delay),
+                            i32::from(unit == SpeedUnit::Seconds),
+                        )
+                    })
+                    .collect(),
+            )
+            .into_iter()
+            .map(|(beat, ratio, delay, unit)| {
+                (finalize(beat), finalize(ratio), finalize(delay), unit)
+            })
+            .collect::<Vec<_>>();
+            assert_eq!(actual.speeds, expected_speeds);
+
+            let expected_scrolls = normalize_scrolls_like_itg(
+                timing
+                    .scrolls
+                    .iter()
+                    .map(|&(beat, ratio)| (f64::from(beat), f64::from(ratio)))
+                    .collect(),
+            )
+            .into_iter()
+            .map(|(beat, ratio)| (finalize(beat), finalize(ratio)))
+            .collect::<Vec<_>>();
+            assert_eq!(actual.scrolls, expected_scrolls);
+
+            let time_signatures = chart_or_global(
+                allow_steps_timing,
+                chart.chart_has_own_timing,
+                &chart.chart_time_signatures,
+                &summary.normalized_time_signatures,
+            );
+            let expected_time_signatures = parse_time_signatures(time_signatures)
+                .into_iter()
+                .map(|(beat, numerator, denominator)| (finalize(beat), numerator, denominator))
+                .collect::<Vec<_>>();
+            assert_eq!(actual.time_signatures, expected_time_signatures);
+
+            let labels = chart_or_global(
+                allow_steps_timing,
+                chart.chart_has_own_timing,
+                &chart.chart_labels,
+                &summary.normalized_labels,
+            );
+            let expected_labels = parse_labels(labels)
+                .into_iter()
+                .map(|(beat, label)| (finalize(beat), label))
+                .collect::<Vec<_>>();
+            assert_eq!(actual.labels, expected_labels);
+
+            let tickcounts = chart_or_global(
+                allow_steps_timing,
+                chart.chart_has_own_timing,
+                &chart.chart_tickcounts,
+                &summary.normalized_tickcounts,
+            );
+            let expected_tickcounts = parse_tickcounts(tickcounts)
+                .into_iter()
+                .map(|(beat, count)| (finalize(beat), count))
+                .collect::<Vec<_>>();
+            assert_eq!(actual.tickcounts, expected_tickcounts);
+
+            let combos = chart_or_global(
+                allow_steps_timing,
+                chart.chart_has_own_timing,
+                &chart.chart_combos,
+                &summary.normalized_combos,
+            );
+            let expected_combos = parse_combos(combos)
+                .into_iter()
+                .map(|(beat, combo, miss)| (finalize(beat), combo, miss))
+                .collect::<Vec<_>>();
+            assert_eq!(actual.combos, expected_combos);
+        }
+    }
+
+    #[test]
+    fn csv_row_streaming_matches_materialized_fields() {
+        fn escaped(value: &str) -> String {
+            if value.contains('"') || value.contains(',') {
+                format!("\"{}\"", value.replace('"', "\"\""))
+            } else {
+                value.to_string()
+            }
+        }
+
+        let values = ["plain", "a,b", "a\"b", "line\nbreak", "", "café"];
+        let mut expected = values.map(escaped).join(",");
+        expected.push_str(",42,-3.5\n");
+
+        let mut actual = Vec::new();
+        let mut row = CsvRow::new(&mut actual);
+        for value in values {
+            push_str(&mut row, value);
+        }
+        push_num(&mut row, 42);
+        push_num(&mut row, -3.5);
+        row.finish().expect("in-memory CSV row should write");
+
+        assert_eq!(actual, expected.as_bytes());
     }
 }
 
@@ -2634,27 +2830,27 @@ const CSV_HEADER_TECH: &str = "crossovers,half_crossovers,full_crossovers,footsw
 const CSV_HEADER_PATTERN_3: &str = "total staircases,left_staircases,right_staircases,left_inv_staircases,right_inv_staircases,total_alt_staircases,left_alt_staircases,right_alt_staircases,left_inv_alt_staircases,right_inv_alt_staircases,total_double_staircases,left_double_staircases,right_double_staircases,left_inv_double_staircases,right_inv_double_staircases,total_sweeps,left_sweeps,right_sweeps,left_inv_sweeps,right_inv_sweeps,total_candle_sweeps,left_candle_sweeps,right_candle_sweeps,left_inv_candle_sweeps,right_inv_candle_sweeps,total copters,left_copters,right_copters,left_inv_copters,right_inv_copters,total_spirals,left_spirals,right_spirals,left_inv_spirals,right_inv_spirals,total_turbo_candles,left_turbo_candles,right_turbo_candles,left_inv_turbo_candles,right_inv_turbo_candles,total_hip_breakers,left_hip_breakers,right_hip_breakers,left_inv_hip_breakers,right_inv_hip_breakers,total_doritos,left_doritos,right_doritos,left_inv_doritos,right_inv_doritos,total_luchis,left_du_luchis,left_ud_luchis,right_du_luchis,right_ud_luchis";
 
 fn write_csv_all<W: Write>(writer: &mut W, simfile: &SimfileSummary) -> io::Result<()> {
-    let mut header: Vec<String> = CSV_HEADER_BASE.split(',').map(str::to_string).collect();
+    writer.write_all(CSV_HEADER_BASE.as_bytes())?;
     if simfile.pattern_counts_enabled {
-        header.extend(CSV_HEADER_PATTERN_1.split(',').map(str::to_string));
+        write!(writer, ",{CSV_HEADER_PATTERN_1}")?;
     }
-    header.extend(CSV_HEADER_BREAKDOWNS.split(',').map(str::to_string));
+    write!(writer, ",{CSV_HEADER_BREAKDOWNS}")?;
     if simfile.pattern_counts_enabled {
-        header.extend(CSV_HEADER_PATTERN_2.split(',').map(str::to_string));
+        write!(writer, ",{CSV_HEADER_PATTERN_2}")?;
     }
     if simfile.tech_counts_enabled {
-        header.extend(CSV_HEADER_TECH.split(',').map(str::to_string));
+        write!(writer, ",{CSV_HEADER_TECH}")?;
     }
     if simfile.pattern_counts_enabled {
-        header.extend(CSV_HEADER_PATTERN_3.split(',').map(str::to_string));
+        write!(writer, ",{CSV_HEADER_PATTERN_3}")?;
         if let Some(first_chart) = simfile.charts.first() {
             for cp in &first_chart.custom_patterns {
-                header.push(format!("custom_pattern_{}", cp.pattern));
+                write!(writer, ",custom_pattern_{}", cp.pattern)?;
             }
         }
     }
 
-    writeln!(writer, "{}", header.join(","))?;
+    writeln!(writer)?;
 
     for chart in &simfile.charts {
         write_csv_row(writer, simfile, chart)?;
@@ -2663,28 +2859,74 @@ fn write_csv_all<W: Write>(writer: &mut W, simfile: &SimfileSummary) -> io::Resu
     Ok(())
 }
 
+struct CsvRow<'a, W> {
+    writer: &'a mut W,
+    first: bool,
+    error: Option<io::Error>,
+}
+
+impl<'a, W: Write> CsvRow<'a, W> {
+    fn new(writer: &'a mut W) -> Self {
+        Self {
+            writer,
+            first: true,
+            error: None,
+        }
+    }
+
+    fn write_field(&mut self, write_value: impl FnOnce(&mut W) -> io::Result<()>) {
+        if self.error.is_some() {
+            return;
+        }
+        let result = (|| {
+            if self.first {
+                self.first = false;
+            } else {
+                self.writer.write_all(b",")?;
+            }
+            write_value(self.writer)
+        })();
+        if let Err(error) = result {
+            self.error = Some(error);
+        }
+    }
+
+    fn finish(self) -> io::Result<()> {
+        if let Some(error) = self.error {
+            return Err(error);
+        }
+        self.writer.write_all(b"\n")
+    }
+}
+
+fn push_str<W: Write>(out: &mut CsvRow<'_, W>, value: &str) {
+    out.write_field(|writer| {
+        if !value.contains(['"', ',']) {
+            return writer.write_all(value.as_bytes());
+        }
+
+        writer.write_all(b"\"")?;
+        let mut rest = value;
+        while let Some(quote) = rest.find('"') {
+            writer.write_all(&rest.as_bytes()[..quote])?;
+            writer.write_all(b"\"\"")?;
+            rest = &rest[quote + 1..];
+        }
+        writer.write_all(rest.as_bytes())?;
+        writer.write_all(b"\"")
+    });
+}
+
+fn push_num<W: Write, T: std::fmt::Display>(out: &mut CsvRow<'_, W>, value: T) {
+    out.write_field(|writer| write!(writer, "{value}"));
+}
+
 fn write_csv_row<W: Write>(
     writer: &mut W,
     simfile: &SimfileSummary,
     chart: &ChartSummary,
 ) -> io::Result<()> {
-    fn esc_csv(s: &str) -> String {
-        if s.contains('"') || s.contains(',') {
-            format!("\"{}\"", s.replace('"', "\"\""))
-        } else {
-            s.to_string()
-        }
-    }
-
-    fn push_str(out: &mut Vec<String>, value: &str) {
-        out.push(esc_csv(value));
-    }
-
-    fn push_num<T: ToString>(out: &mut Vec<String>, value: T) {
-        out.push(value.to_string());
-    }
-
-    let mut row = Vec::new();
+    let mut row = CsvRow::new(writer);
 
     push_str(&mut row, &simfile.title_str);
     push_str(&mut row, &simfile.subtitle_str);
@@ -2709,7 +2951,7 @@ fn write_csv_row<W: Write>(
     push_num(&mut row, simfile.median_bpm);
     push_str(&mut row, &simfile.normalized_bpms);
     push_num(&mut row, simfile.offset);
-    row.push(String::new());
+    push_str(&mut row, "");
 
     push_str(&mut row, &chart.step_type_str);
     push_str(&mut row, &chart.difficulty_str);
@@ -2793,7 +3035,7 @@ fn write_csv_row<W: Write>(
     push_num(&mut row, total_breaks);
     push_num(&mut row, chart.stream_counts.sn_breaks);
     push_num(&mut row, adj_stream_percent);
-    row.push(String::new());
+    push_str(&mut row, "");
 
     push_num(&mut row, chart.max_nps);
     push_num(&mut row, chart.median_nps);
@@ -3046,6 +3288,5 @@ fn write_csv_row<W: Write>(
         }
     }
 
-    writeln!(writer, "{}", row.join(","))?;
-    Ok(())
+    row.finish()
 }

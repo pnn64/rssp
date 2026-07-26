@@ -79,6 +79,8 @@ enum Mode {
     Nps,
     Bpms,
     Tech,
+    Snapshot,
+    Csv,
     ParitySingle,
     ParityDouble,
     ParitySingleHolds,
@@ -141,6 +143,8 @@ fn parse_args() -> (Mode, usize) {
                     "nps" => Mode::Nps,
                     "bpms" => Mode::Bpms,
                     "tech" => Mode::Tech,
+                    "snapshot" => Mode::Snapshot,
+                    "csv" => Mode::Csv,
                     "parity-single" => Mode::ParitySingle,
                     "parity-double" => Mode::ParityDouble,
                     "parity-single-holds" => Mode::ParitySingleHolds,
@@ -177,7 +181,9 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         | Mode::Durations
         | Mode::Nps
         | Mode::Bpms
-        | Mode::Tech => rssp::AnalysisOptions {
+        | Mode::Tech
+        | Mode::Snapshot
+        | Mode::Csv => rssp::AnalysisOptions {
             mono_threshold: 6,
             compute_tech_counts: false,
             compute_pattern_counts: false,
@@ -258,6 +264,12 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
                     black_box(notation);
                 }
             }
+            Mode::Snapshot => {
+                unreachable!("report modes use their dedicated allocation runner")
+            }
+            Mode::Csv => {
+                unreachable!("report modes use their dedicated allocation runner")
+            }
             Mode::ParitySingle
             | Mode::ParityDouble
             | Mode::ParitySingleHolds
@@ -285,6 +297,59 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
     checksum
 }
 
+fn build_report_summaries(
+    corpus: &[SimInput],
+    options: &rssp::AnalysisOptions,
+) -> Vec<rssp::report::SimfileSummary> {
+    corpus
+        .iter()
+        .map(|sim| {
+            rssp::analyze(sim.raw.as_slice(), sim.extension, options)
+                .expect("fixture should analyze")
+        })
+        .collect()
+}
+
+fn run_report_once(mode: Mode, summaries: &[rssp::report::SimfileSummary]) -> usize {
+    let mut checksum = 0usize;
+    for summary in summaries {
+        match mode {
+            Mode::Snapshot => {
+                for chart in &summary.charts {
+                    let snapshot = rssp::report::build_timing_snapshot(chart, summary);
+                    checksum = checksum
+                        .wrapping_add(snapshot.bpms.len())
+                        .wrapping_add(snapshot.stops.len())
+                        .wrapping_add(snapshot.speeds.len());
+                    black_box(snapshot);
+                }
+            }
+            Mode::Csv => {
+                let mut output = Vec::new();
+                rssp::report::write_reports(summary, rssp::report::OutputMode::CSV, &mut output)
+                    .expect("CSV report should write");
+                checksum = checksum.wrapping_add(output.len());
+                black_box(output);
+            }
+            _ => unreachable!("only report modes use report summaries"),
+        }
+    }
+    checksum
+}
+
+fn run_benchmark_once(
+    mode: Mode,
+    corpus: &[SimInput],
+    options: &rssp::AnalysisOptions,
+    summaries: &[rssp::report::SimfileSummary],
+) -> usize {
+    if matches!(mode, Mode::Snapshot | Mode::Csv) {
+        run_report_once(mode, summaries)
+    } else {
+        run_once(mode, corpus, options)
+    }
+}
+
 fn mode_name(mode: Mode) -> &'static str {
     match mode {
         Mode::Parse => "parse",
@@ -296,6 +361,8 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Nps => "nps",
         Mode::Bpms => "bpms",
         Mode::Tech => "tech",
+        Mode::Snapshot => "snapshot",
+        Mode::Csv => "csv",
         Mode::ParitySingle => "parity-single",
         Mode::ParityDouble => "parity-double",
         Mode::ParitySingleHolds => "parity-single-holds",
@@ -439,14 +506,29 @@ fn main() {
     let corpus = load_corpus();
     let options = options_for(mode);
     let bytes: usize = corpus.iter().map(|sim| sim.raw.len()).sum();
+    let report_summaries = if matches!(mode, Mode::Snapshot | Mode::Csv) {
+        build_report_summaries(&corpus, &options)
+    } else {
+        Vec::new()
+    };
 
-    black_box(run_once(mode, &corpus, &options));
+    black_box(run_benchmark_once(
+        mode,
+        &corpus,
+        &options,
+        &report_summaries,
+    ));
     reset_counters();
     let before = Counters::read();
     let start = Instant::now();
     let mut checksum = 0usize;
     for _ in 0..iterations {
-        checksum = checksum.wrapping_add(run_once(mode, &corpus, &options));
+        checksum = checksum.wrapping_add(run_benchmark_once(
+            mode,
+            &corpus,
+            &options,
+            &report_summaries,
+        ));
     }
     let elapsed = start.elapsed();
     let after = Counters::read();
