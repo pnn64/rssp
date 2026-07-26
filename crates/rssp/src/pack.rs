@@ -68,13 +68,12 @@ fn sort_paths_ci(paths: &mut [PathBuf]) {
     paths.sort_by_cached_key(|p| assets::lc_name(p));
 }
 
-fn keep_first_path(first: &mut Option<(String, PathBuf)>, candidate: PathBuf) {
-    let key = assets::lc_name(&candidate);
+fn keep_first_path(first: &mut Option<PathBuf>, candidate: PathBuf) {
     if first
         .as_ref()
-        .is_none_or(|(current_key, _)| key < *current_key)
+        .is_none_or(|current| assets::cmp_name_ci(&candidate, current).is_lt())
     {
-        *first = Some((key, candidate));
+        *first = Some(candidate);
     }
 }
 
@@ -90,7 +89,7 @@ fn parse_sync_pref(s: &str) -> SyncPref {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct PackIniRaw {
     version: String,
     display_title: String,
@@ -124,25 +123,32 @@ fn parse_pack_ini(text: &str) -> PackIniRaw {
             continue;
         };
         let key = k.trim();
-        let val = v.trim().to_string();
-        match key.to_ascii_lowercase().as_str() {
-            "version" => out.version = val,
-            "displaytitle" => out.display_title = val,
-            "sorttitle" => out.sort_title = val,
-            "translittitle" => out.translit_title = val,
-            "series" => out.series = val,
-            "banner" => out.banner = val,
-            "background" => out.background = val,
-            "syncoffset" => out.sync_offset = val,
-            "year" => out.year = val,
-            _ => {}
+        let value = v.trim();
+        if key.eq_ignore_ascii_case("version") {
+            out.version = value.to_string();
+        } else if key.eq_ignore_ascii_case("displaytitle") {
+            out.display_title = value.to_string();
+        } else if key.eq_ignore_ascii_case("sorttitle") {
+            out.sort_title = value.to_string();
+        } else if key.eq_ignore_ascii_case("translittitle") {
+            out.translit_title = value.to_string();
+        } else if key.eq_ignore_ascii_case("series") {
+            out.series = value.to_string();
+        } else if key.eq_ignore_ascii_case("banner") {
+            out.banner = value.to_string();
+        } else if key.eq_ignore_ascii_case("background") {
+            out.background = value.to_string();
+        } else if key.eq_ignore_ascii_case("syncoffset") {
+            out.sync_offset = value.to_string();
+        } else if key.eq_ignore_ascii_case("year") {
+            out.year = value.to_string();
         }
     }
 
     out
 }
 
-fn read_pack_ini(pack_dir: &Path, group_name: &str) -> (PackIniRaw, bool) {
+fn read_pack_ini(pack_dir: &Path) -> (PackIniRaw, bool) {
     let path = pack_ini_path(pack_dir);
     let Ok(text) = fs::read_to_string(path) else {
         return (PackIniRaw::default(), false);
@@ -151,28 +157,44 @@ fn read_pack_ini(pack_dir: &Path, group_name: &str) -> (PackIniRaw, bool) {
     if raw.version.trim().is_empty() {
         return (PackIniRaw::default(), false);
     }
-    let mut raw = raw;
-    if raw.display_title.trim().is_empty() {
-        raw.display_title = group_name.to_string();
-    }
-    if raw.sort_title.trim().is_empty() {
-        raw.sort_title = group_name.to_string();
-    }
-    if raw.translit_title.trim().is_empty() {
-        raw.translit_title = raw.display_title.clone();
-    }
     (raw, true)
 }
 
 fn pick_pack_parent_img(pack_dir: &Path, group_name: &str) -> Option<PathBuf> {
     let parent = pack_dir.parent()?;
-    for ext in ["png", "jpg", "jpeg", "gif", "bmp"] {
-        let name = format!("{group_name}.{ext}");
-        if let Some(p) = assets::is_file_ci(parent, &name) {
-            return Some(p);
+    let entries = fs::read_dir(parent).ok()?;
+    let mut first = None;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with("._") {
+            continue;
+        }
+        let path = entry.path();
+        if !path.is_file()
+            || !path
+                .file_stem()
+                .is_some_and(|stem| assets::name_eq_ci(stem, group_name))
+        {
+            continue;
+        }
+        let Some(rank) = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .and_then(assets::img_rank)
+        else {
+            continue;
+        };
+        if rank == 0 {
+            return Some(path);
+        }
+        if first
+            .as_ref()
+            .is_none_or(|(current_rank, _)| rank < *current_rank)
+        {
+            first = Some((rank, path));
         }
     }
-    None
+    first.map(|(_, path)| path)
 }
 
 fn pick_first_img(dir: &Path, mut matches: impl FnMut(&Path) -> bool) -> Option<PathBuf> {
@@ -193,7 +215,7 @@ fn pick_first_img(dir: &Path, mut matches: impl FnMut(&Path) -> bool) -> Option<
             keep_first_path(&mut first, path);
         }
     }
-    first.map(|(_, path)| path)
+    first
 }
 
 fn pick_pack_dir_img(pack_dir: &Path) -> Option<PathBuf> {
@@ -262,8 +284,8 @@ fn scan_song_dir_first(dir: &Path) -> Result<Option<SongScan>, ScanError> {
     }
 
     Ok(first_ssc
-        .map(|(_, path)| song_scan(dir, path, "ssc"))
-        .or_else(|| first_sm.map(|(_, path)| song_scan(dir, path, "sm"))))
+        .map(|path| song_scan(dir, path, "ssc"))
+        .or_else(|| first_sm.map(|path| song_scan(dir, path, "sm"))))
 }
 
 fn scan_song_dir_duplicates(dir: &Path) -> Result<Option<SongScan>, ScanError> {
@@ -322,45 +344,52 @@ pub fn scan_pack_dir(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, ScanE
         return Err(ScanError::InvalidUtf8Path);
     };
 
-    let (ini, has_pack_ini) = read_pack_ini(dir, group_name);
-    let display_title = if has_pack_ini {
-        ini.display_title.clone()
+    let (ini, has_pack_ini) = read_pack_ini(dir);
+    let PackIniRaw {
+        version,
+        display_title,
+        sort_title,
+        translit_title,
+        series,
+        banner,
+        background,
+        sync_offset,
+        year,
+    } = ini;
+    let display_title = if has_pack_ini && !display_title.is_empty() {
+        display_title
     } else {
         group_name.to_string()
     };
-    let sort_title = if has_pack_ini {
-        ini.sort_title.clone()
+    let sort_title = if has_pack_ini && !sort_title.is_empty() {
+        sort_title
     } else {
         group_name.to_string()
     };
-    let translit_title = if has_pack_ini {
-        ini.translit_title.clone()
+    let translit_title = if has_pack_ini && !translit_title.is_empty() {
+        translit_title
     } else {
         display_title.clone()
     };
-    let series = if has_pack_ini {
-        ini.series.clone()
-    } else {
-        String::new()
-    };
+    let series = if has_pack_ini { series } else { String::new() };
     let year = if has_pack_ini {
-        ini.year.trim().parse().unwrap_or(0)
+        year.parse().unwrap_or(0)
     } else {
         0
     };
     let version = if has_pack_ini {
-        ini.version.trim().parse().unwrap_or(0)
+        version.parse().unwrap_or(0)
     } else {
         0
     };
     let sync_pref = if has_pack_ini {
-        parse_sync_pref(&ini.sync_offset)
+        parse_sync_pref(&sync_offset)
     } else {
         SyncPref::Default
     };
 
-    let ini_banner = pick_ini_img(dir, &ini.banner);
-    let ini_background = pick_ini_img(dir, &ini.background);
+    let ini_banner = pick_ini_img(dir, &banner);
+    let ini_background = pick_ini_img(dir, &background);
     let auto_background = if ini_background.is_none() {
         assets::resolve_song_assets(dir, "", "").1
     } else {
@@ -467,7 +496,8 @@ pub fn find_simfiles(root: &Path, opt: ScanOpt) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DupPolicy, ScanError, ScanOpt, find_simfiles, scan_pack_dir, scan_song_dir, scan_songs_dir,
+        DupPolicy, PackIniRaw, ScanError, ScanOpt, find_simfiles, parse_pack_ini,
+        pick_pack_parent_img, scan_pack_dir, scan_song_dir, scan_songs_dir,
     };
     use crate::assets;
     use std::fs;
@@ -551,6 +581,91 @@ mod tests {
             paths,
             ["Alpha.sSc", "beta.SSC", "Zulu.ssc"].map(|name| root.join(name))
         );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pack_ini_parsing_preserves_group_and_key_behavior() {
+        let parsed = parse_pack_ini(
+            "\
+                Version=ignored\n\
+                [Other]\n\
+                Version=also ignored\n\
+                [gRoUp]\n\
+                VERSION = 2\n\
+                displayTITLE = First title\n\
+                UnknownKey = ignored value\n\
+                DisplayTitle = Final title\n\
+                SORTTITLE = Sort me\n\
+                translittitle = Translit\n\
+                Series = Series name\n\
+                Banner = banner*.png\n\
+                BACKGROUND = background.jpg\n\
+                SyncOffset = ITG\n\
+                Year = 2026\n\
+                [Other]\n\
+                Year=1900\n",
+        );
+
+        assert_eq!(
+            parsed,
+            PackIniRaw {
+                version: "2".to_string(),
+                display_title: "Final title".to_string(),
+                sort_title: "Sort me".to_string(),
+                translit_title: "Translit".to_string(),
+                series: "Series name".to_string(),
+                banner: "banner*.png".to_string(),
+                background: "background.jpg".to_string(),
+                sync_offset: "ITG".to_string(),
+                year: "2026".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn pack_metadata_defaults_survive_owned_field_transfer() {
+        let root = test_dir("pack-metadata-defaults");
+        fs::write(
+            root.join("Pack.ini"),
+            b"[Group]\nVersion=7\nDisplayTitle=Display\nSeries=Series\nYear=2026\n",
+        )
+        .unwrap();
+        let song = root.join("Song");
+        fs::create_dir(&song).unwrap();
+        write_file(&song.join("chart.ssc"));
+
+        let scan = scan_pack_dir(&root, ScanOpt::default()).unwrap().unwrap();
+        let group_name = root.file_name().unwrap().to_str().unwrap();
+        assert_eq!(scan.display_title, "Display");
+        assert_eq!(scan.sort_title, group_name);
+        assert_eq!(scan.translit_title, "Display");
+        assert_eq!(scan.series, "Series");
+        assert_eq!(scan.version, 7);
+        assert_eq!(scan.year, 2026);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parent_image_selection_preserves_extension_priority_in_one_scan() {
+        let root = test_dir("parent-image");
+        let pack = root.join("Performance.Pack");
+        fs::create_dir(&pack).unwrap();
+        let jpg = root.join("performance.pack.JPG");
+        let png = root.join("PERFORMANCE.PACK.PNG");
+        write_file(&root.join("Performance.Pack.GIF"));
+        write_file(&root.join("._Performance.Pack.png"));
+        write_file(&jpg);
+        write_file(&png);
+
+        assert_eq!(
+            pick_pack_parent_img(&pack, "Performance.Pack"),
+            Some(png.clone())
+        );
+        fs::remove_file(png).unwrap();
+        assert_eq!(pick_pack_parent_img(&pack, "Performance.Pack"), Some(jpg));
 
         let _ = fs::remove_dir_all(root);
     }
