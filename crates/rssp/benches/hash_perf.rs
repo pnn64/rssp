@@ -93,6 +93,38 @@ fn bench_hash_inner(c: &mut Criterion) {
             black_box(hashes);
         });
     });
+    group.bench_function("streaming_minimize_bpm_hash", |b| {
+        b.iter(|| {
+            let mut hashes = Vec::with_capacity(charts.len());
+            for entry in &charts {
+                if entry.field_count < 5 {
+                    continue;
+                }
+
+                let step_type = std::str::from_utf8(entry.fields[0]).unwrap_or("").trim();
+                if step_type == "lights-cabinet" {
+                    continue;
+                }
+
+                let lanes = step_type_lanes(step_type);
+                let bpms_to_use = if let Some(chart_bpms) = entry.chart_bpms.as_ref() {
+                    let normalized = rssp::bpm::normalize_float_digits(
+                        std::str::from_utf8(chart_bpms).unwrap_or(""),
+                    );
+                    Cow::Owned(normalized)
+                } else {
+                    Cow::Borrowed(normalized_global_bpms.as_str())
+                };
+
+                hashes.push(rssp::hash::compute_note_data_hash(
+                    entry.note_data,
+                    lanes,
+                    bpms_to_use.as_ref(),
+                ));
+            }
+            black_box(hashes);
+        });
+    });
     group.finish();
 }
 

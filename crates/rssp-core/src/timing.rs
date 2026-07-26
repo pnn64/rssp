@@ -196,25 +196,36 @@ fn parse_f64_fast(s: &str) -> Option<f64> {
 
 // --- Unified parsing ---
 fn parse_segments(s: &str) -> Vec<Segment> {
-    s.trim()
-        .split(',')
-        .filter_map(|part| {
-            let (beat_str, val_str) = part.trim().split_once('=')?;
-            let beat = parse_beat_or_row(beat_str)?;
-            let value = parse_f64_fast(val_str)?;
-            (beat.is_finite() && value.is_finite()).then(|| Segment {
+    let component_count = if s.is_empty() {
+        0
+    } else {
+        s.bytes().filter(|&byte| byte == b',').count() + 1
+    };
+    let mut segments = Vec::with_capacity(component_count);
+    for part in s.trim().split(',') {
+        let Some((beat_str, val_str)) = part.trim().split_once('=') else {
+            continue;
+        };
+        let Some(beat) = parse_beat_or_row(beat_str) else {
+            continue;
+        };
+        let Some(value) = parse_f64_fast(val_str) else {
+            continue;
+        };
+        if beat.is_finite() && value.is_finite() {
+            segments.push(Segment {
                 beat,
                 value: f64::from(value as f32),
-            })
-        })
-        .collect()
+            });
+        }
+    }
+    segments
 }
 
 fn parse_segments_positive(s: &str) -> Vec<Segment> {
-    parse_segments(s)
-        .into_iter()
-        .filter(|s| s.value > 0.0)
-        .collect()
+    let mut segments = parse_segments(s);
+    segments.retain(|segment| segment.value > 0.0);
+    segments
 }
 
 fn parse_speeds(s: &str) -> Vec<SpeedSegment> {

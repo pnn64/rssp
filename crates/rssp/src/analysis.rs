@@ -12,7 +12,7 @@ use crate::bpm::{
     clean_timing_map_cow, compute_bpm_range_and_stats, compute_measure_nps_vec_with_timing,
     compute_tier_bpm, get_nps_stats_with_scratch, normalize_float_digits,
 };
-use crate::hash::{compute_chart_hash, compute_chart_hash_pair};
+use crate::hash::compute_chart_hash_pair;
 use crate::math::{round_dp, round_sig_figs_6};
 use crate::matrix::compute_matrix_rating;
 use crate::parse::{
@@ -28,7 +28,7 @@ use crate::stats::{
     RADAR_CATEGORY_COUNT, StreamCounts, compute_stream_outputs,
     compute_timing_aware_stats_from_rows_with_row_to_beat,
     compute_timing_aware_stats_no_holds_from_rows, compute_timing_aware_stats_with_row_to_beat,
-    minimize_chart_count_rows, minimize_chart_for_hash, minimize_rows_typed,
+    minimize_chart_count_rows, minimize_rows_typed,
 };
 use crate::tech::parse_tech_notation;
 use crate::timing::{
@@ -1270,14 +1270,7 @@ pub fn compute_all_hashes(
             extension,
         );
 
-        // 4. Minimize Chart (Required for Hash consistency)
-        // This strips comments, whitespace, and empty measures.
-        let mut minimized_chart = minimize_chart_for_hash(chart_data, lanes);
-        if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
-            minimized_chart.truncate(pos + 1);
-        }
-
-        // 5. Normalize BPMs (Required for Hash consistency)
+        // 4. Normalize BPMs (Required for Hash consistency)
         let bpms_to_use = entry.chart_bpms.as_deref().map_or(
             Cow::Borrowed(normalized_global_bpms.as_str()),
             |chart_bpms| {
@@ -1287,8 +1280,8 @@ pub fn compute_all_hashes(
             },
         );
 
-        // 6. Compute SHA-1
-        let hash = compute_chart_hash(&minimized_chart, bpms_to_use.as_ref());
+        // 5. Minimize rows directly into SHA-1 without materializing the chart.
+        let hash = crate::hash::compute_note_data_hash(chart_data, lanes, bpms_to_use.as_ref());
 
         results.push(ChartHashInfo {
             step_type,

@@ -406,6 +406,18 @@ fn bench_nps_stats(c: &mut Criterion) {
             black_box(outputs);
         });
     });
+    group.bench_function("peak_only_with_timing", |b| {
+        b.iter(|| {
+            let mut outputs = Vec::with_capacity(timing_inputs.len());
+            for entry in &timing_inputs {
+                outputs.push(rssp::nps::compute_peak_nps_with_timing(
+                    black_box(&entry.measure_densities),
+                    black_box(&entry.timing),
+                ));
+            }
+            black_box(outputs);
+        });
+    });
     group.finish();
 }
 

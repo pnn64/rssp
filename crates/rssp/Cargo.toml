@@ -138,6 +138,7 @@ harness = false
 [[bench]]
 name = "allocation_perf"
 harness = false
+required-features = ["profile"]
 
 [[bench]]
 name = "cycle_perf"

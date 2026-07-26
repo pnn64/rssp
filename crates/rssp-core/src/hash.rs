@@ -13,6 +13,72 @@ const SHA1_K: [[u32; 4]; 4] = [
     [0xca62_c1d6; 4],
 ];
 
+const STREAM_BUFFER_LEN: usize = 8 * 1024;
+
+struct Sha1Stream {
+    state: [u32; 5],
+    block: [u8; 64],
+    block_len: usize,
+    total_len: usize,
+    staging: [u8; STREAM_BUFFER_LEN],
+    staging_len: usize,
+}
+
+impl Sha1Stream {
+    fn new() -> Self {
+        Self {
+            state: SHA1_INIT,
+            block: [0; 64],
+            block_len: 0,
+            total_len: 0,
+            staging: [0; STREAM_BUFFER_LEN],
+            staging_len: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn write(&mut self, bytes: &[u8]) {
+        if bytes.len() > self.staging.len() {
+            self.flush();
+            sha1_update(&mut self.state, &mut self.block, &mut self.block_len, bytes);
+            self.total_len += bytes.len();
+            return;
+        }
+        if bytes.len() > self.staging.len() - self.staging_len {
+            self.flush();
+        }
+        let end = self.staging_len + bytes.len();
+        self.staging[self.staging_len..end].copy_from_slice(bytes);
+        self.staging_len = end;
+    }
+
+    #[inline(always)]
+    fn flush(&mut self) {
+        if self.staging_len == 0 {
+            return;
+        }
+        sha1_update(
+            &mut self.state,
+            &mut self.block,
+            &mut self.block_len,
+            &self.staging[..self.staging_len],
+        );
+        self.total_len += self.staging_len;
+        self.staging_len = 0;
+    }
+
+    fn finish(mut self, suffix: &[u8]) -> [u8; 20] {
+        self.flush();
+        sha1_digest_suffix(
+            self.state,
+            self.block,
+            self.block_len,
+            self.total_len,
+            suffix,
+        )
+    }
+}
+
 #[inline(always)]
 const fn add4(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
     [
@@ -400,9 +466,47 @@ pub fn compute_chart_hash_pair(chart_data: &[u8], normalized_bpms: &str) -> (Str
     (short_hex(&hash), short_hex(&neutral))
 }
 
+/// Computes a chart hash while streaming minimized note rows into SHA-1.
+///
+/// This is equivalent to calling [`crate::stats::minimize_chart_for_hash`],
+/// trimming its trailing newline, and then calling [`compute_chart_hash`],
+/// without materializing the minimized chart.
+#[must_use]
+pub fn compute_note_data_hash(note_data: &[u8], lanes: usize, normalized_bpms: &str) -> String {
+    fn hash_lanes<const LANES: usize>(note_data: &[u8], normalized_bpms: &str) -> String {
+        let mut stream = Sha1Stream::new();
+        let mut pending_newline = false;
+
+        crate::stats::for_each_minimized_measure::<LANES, _>(note_data, |_, measure, separator| {
+            for row in measure {
+                if pending_newline {
+                    stream.write(b"\n");
+                }
+                stream.write(row);
+                pending_newline = true;
+            }
+            if separator {
+                if pending_newline {
+                    stream.write(b"\n");
+                }
+                stream.write(b",");
+                pending_newline = true;
+            }
+        });
+
+        short_hex(&stream.finish(normalized_bpms.as_bytes()))
+    }
+
+    if lanes == 8 {
+        hash_lanes::<8>(note_data, normalized_bpms)
+    } else {
+        hash_lanes::<4>(note_data, normalized_bpms)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{compute_chart_hash, compute_chart_hash_pair};
+    use super::{compute_chart_hash, compute_chart_hash_pair, compute_note_data_hash};
 
     #[test]
     fn chart_hash_pair_matches_individual_hashes() {
@@ -412,5 +516,27 @@ mod tests {
 
         assert_eq!(hash, compute_chart_hash(chart, bpms));
         assert_eq!(neutral, compute_chart_hash(chart, "0.000=0.000"));
+    }
+
+    #[test]
+    fn streamed_note_hash_matches_materialized_minimization() {
+        let cases: [(&[u8], usize); 4] = [
+            (b"// comment\n1000\n0000\n0100\n,\n0010\n0001\n;\n", 4),
+            (b"10000000\n00000000\n,\n00001000\n;\n", 8),
+            (b"\n,\n0000\n,\n;\n", 4),
+            (b" 1000 trailing\n0100\r\n", 4),
+        ];
+        let bpms = "0.000=120.000,64.000=180.000";
+
+        for (note_data, lanes) in cases {
+            let mut minimized = crate::stats::minimize_chart_for_hash(note_data, lanes);
+            if let Some(pos) = minimized.iter().rposition(|&byte| byte != b'\n') {
+                minimized.truncate(pos + 1);
+            }
+            assert_eq!(
+                compute_note_data_hash(note_data, lanes, bpms),
+                compute_chart_hash(&minimized, bpms)
+            );
+        }
     }
 }

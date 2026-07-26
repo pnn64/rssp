@@ -198,8 +198,7 @@ pub fn compute_chart_peak_nps(
             })
         };
 
-        let measure_nps_vec = compute_measure_nps_vec_with_timing(&measure_densities, timing);
-        let (max_nps, _median_nps) = get_nps_stats(&measure_nps_vec);
+        let max_nps = compute_peak_nps_with_timing(&measure_densities, timing);
 
         results.push(ChartNpsInfo {
             step_type,
@@ -261,11 +260,7 @@ pub fn compute_measure_nps_vec_with_timing(densities: &[usize], timing: &TimingD
     for (i, &d) in densities.iter().enumerate() {
         let end = cursor.time_for_beat((i as f64 + 1.0) * 4.0);
         let dur = end - start;
-        out.push(if d == 0 || dur <= 0.12 {
-            0.0
-        } else {
-            d as f64 / dur
-        });
+        out.push(nps_for_measure(d, dur));
         start = end;
     }
 
@@ -282,15 +277,45 @@ fn compute_measure_nps_vec_fixed(
     for (i, &d) in densities.iter().enumerate() {
         let end = fixed_measure_time(parts, i + 1);
         let dur = end - start;
-        out.push(if d == 0 || dur <= 0.12 {
-            0.0
-        } else {
-            d as f64 / dur
-        });
+        out.push(nps_for_measure(d, dur));
         start = end;
     }
 
     out
+}
+
+/// Computes only the peak NPS without allocating the per-measure NPS vector.
+#[must_use]
+pub fn compute_peak_nps_with_timing(densities: &[usize], timing: &TimingData) -> f64 {
+    let mut peak = 0.0f64;
+
+    if let Some(parts) = fixed_timing_parts(timing) {
+        let mut start = fixed_measure_time(parts, 0);
+        for (i, &density) in densities.iter().enumerate() {
+            let end = fixed_measure_time(parts, i + 1);
+            peak = peak.max(nps_for_measure(density, end - start));
+            start = end;
+        }
+        return peak;
+    }
+
+    let mut cursor = BeatTimeCursorF32::new(timing);
+    let mut start = cursor.time_for_beat(0.0);
+    for (i, &density) in densities.iter().enumerate() {
+        let end = cursor.time_for_beat((i as f64 + 1.0) * 4.0);
+        peak = peak.max(nps_for_measure(density, end - start));
+        start = end;
+    }
+    peak
+}
+
+#[inline(always)]
+fn nps_for_measure(density: usize, duration: f64) -> f64 {
+    if density == 0 || duration <= 0.12 {
+        0.0
+    } else {
+        density as f64 / duration
+    }
 }
 
 #[inline(always)]
@@ -397,8 +422,8 @@ fn equally_spaced_impl<const L: usize>(data: &[u8]) -> Vec<bool> {
 #[cfg(test)]
 mod tests {
     use super::{
-        NPS_MEDIAN_SCAN_MIN, compute_measure_nps_vec_with_timing, get_nps_stats,
-        get_nps_stats_with_scratch, measure_equally_spaced,
+        NPS_MEDIAN_SCAN_MIN, compute_measure_nps_vec_with_timing, compute_peak_nps_with_timing,
+        get_nps_stats, get_nps_stats_with_scratch, measure_equally_spaced,
     };
     use crate::timing::{TimingFormat, compute_timing_segments, timing_data_from_segments};
 
@@ -545,5 +570,36 @@ mod tests {
             compute_measure_nps_vec_with_timing(&[16, 0, 32], &timing),
             vec![8.0, 0.0, 16.0]
         );
+    }
+
+    #[test]
+    fn peak_only_nps_matches_materialized_stats_for_fixed_and_variable_timing() {
+        let densities = [0, 16, 48, 1, 96, 24];
+        for stops in ["", "2.000=0.500,12.000=1.250"] {
+            let segments = compute_timing_segments(
+                None,
+                "0.000=120.000,8.000=180.000",
+                None,
+                stops,
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                TimingFormat::Ssc,
+                true,
+            );
+            let timing = timing_data_from_segments(0.0, 0.0, &segments);
+            let values = compute_measure_nps_vec_with_timing(&densities, &timing);
+
+            let actual = compute_peak_nps_with_timing(&densities, &timing);
+            let expected = get_nps_stats(&values).0;
+            assert!((actual - expected).abs() <= f64::EPSILON);
+        }
     }
 }
