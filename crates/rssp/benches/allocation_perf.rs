@@ -83,6 +83,7 @@ enum Mode {
     Csv,
     Json,
     JsonFull,
+    CourseJson,
     ParitySingle,
     ParityDouble,
     ParitySingleHolds,
@@ -149,6 +150,7 @@ fn parse_args() -> (Mode, usize) {
                     "csv" => Mode::Csv,
                     "json" => Mode::Json,
                     "json-full" => Mode::JsonFull,
+                    "course-json" => Mode::CourseJson,
                     "parity-single" => Mode::ParitySingle,
                     "parity-double" => Mode::ParityDouble,
                     "parity-single-holds" => Mode::ParitySingleHolds,
@@ -195,6 +197,10 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             ..rssp::AnalysisOptions::default()
         },
         Mode::Full => rssp::AnalysisOptions {
+            mono_threshold: 6,
+            ..rssp::AnalysisOptions::default()
+        },
+        Mode::CourseJson => rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
         },
@@ -285,6 +291,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             Mode::JsonFull => {
                 unreachable!("report modes use their dedicated allocation runner")
             }
+            Mode::CourseJson => {
+                unreachable!("course report mode uses its dedicated allocation runner")
+            }
             Mode::ParitySingle
             | Mode::ParityDouble
             | Mode::ParitySingleHolds
@@ -323,6 +332,53 @@ fn build_report_summaries(
                 .expect("fixture should analyze")
         })
         .collect()
+}
+
+fn build_course_summary(
+    corpus: &[SimInput],
+    options: &rssp::AnalysisOptions,
+    entry_count: usize,
+) -> rssp::CourseSummary {
+    let sim = corpus
+        .first()
+        .expect("benchmark corpus should not be empty");
+    let mut simfile =
+        rssp::analyze(sim.raw.as_slice(), sim.extension, options).expect("fixture should analyze");
+    let chart = simfile
+        .charts
+        .pop()
+        .expect("fixture should contain a chart");
+    let entries = (0..entry_count)
+        .map(|index| rssp::CourseEntrySummary {
+            song: format!("Song {index} \"Special\""),
+            song_dir: format!("Group/Song {index}"),
+            step_type: "dance-single".to_string(),
+            difficulty: "Challenge".to_string(),
+            rating: (10 + index % 20).to_string(),
+            sha1: format!("{index:016x}"),
+            bpm_neutral_sha1: format!("{:016x}", index.wrapping_mul(31)),
+        })
+        .collect();
+    let sha1_hashes = (0..entry_count)
+        .map(|index| format!("{index:016x}"))
+        .collect();
+    let bpm_neutral_sha1_hashes = (0..entry_count)
+        .map(|index| format!("{:016x}", index.wrapping_mul(31)))
+        .collect();
+
+    rssp::CourseSummary {
+        course: "Performance \"Course\"".to_string(),
+        course_difficulty: "Challenge".to_string(),
+        step_type: "dance-single".to_string(),
+        total_length: 7_200,
+        entries,
+        chart,
+        sha1_hashes,
+        bpm_neutral_sha1_hashes,
+        pattern_counts_enabled: true,
+        tech_counts_enabled: true,
+        total_elapsed: std::time::Duration::ZERO,
+    }
 }
 
 fn run_report_once(mode: Mode, summaries: &[rssp::report::SimfileSummary]) -> usize {
@@ -364,7 +420,20 @@ fn run_benchmark_once(
     corpus: &[SimInput],
     options: &rssp::AnalysisOptions,
     summaries: &[rssp::report::SimfileSummary],
+    course: Option<&rssp::CourseSummary>,
 ) -> usize {
+    if matches!(mode, Mode::CourseJson) {
+        let mut output = Vec::new();
+        rssp::report::write_course_reports(
+            course.expect("course summary should be built"),
+            rssp::report::OutputMode::JSON,
+            &mut output,
+        )
+        .expect("course JSON report should write");
+        let len = output.len();
+        black_box(output);
+        return len;
+    }
     if matches!(
         mode,
         Mode::Snapshot | Mode::Csv | Mode::Json | Mode::JsonFull
@@ -390,6 +459,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Csv => "csv",
         Mode::Json => "json",
         Mode::JsonFull => "json-full",
+        Mode::CourseJson => "course-json",
         Mode::ParitySingle => "parity-single",
         Mode::ParityDouble => "parity-double",
         Mode::ParitySingleHolds => "parity-single-holds",
@@ -541,12 +611,15 @@ fn main() {
     } else {
         Vec::new()
     };
+    let course_summary =
+        matches!(mode, Mode::CourseJson).then(|| build_course_summary(&corpus, &options, 1_024));
 
     black_box(run_benchmark_once(
         mode,
         &corpus,
         &options,
         &report_summaries,
+        course_summary.as_ref(),
     ));
     reset_counters();
     let before = Counters::read();
@@ -558,6 +631,7 @@ fn main() {
             &corpus,
             &options,
             &report_summaries,
+            course_summary.as_ref(),
         ));
     }
     let elapsed = start.elapsed();

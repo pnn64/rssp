@@ -492,7 +492,11 @@ fn write_full_course<W: Write>(writer: &mut W, course: &CourseSummary) -> io::Re
     Ok(())
 }
 
-fn write_json_course<W: Write>(course: &CourseSummary, writer: &mut W) -> io::Result<()> {
+#[cfg(test)]
+fn write_json_course_materialized<W: Write>(
+    course: &CourseSummary,
+    writer: &mut W,
+) -> io::Result<()> {
     let mut root_obj = JsonMap::new();
     root_obj.insert("course".to_string(), JsonValue::from(course.course.clone()));
     root_obj.insert(
@@ -578,6 +582,59 @@ fn write_json_course<W: Write>(course: &CourseSummary, writer: &mut W) -> io::Re
     write_json_value_with_key(writer, None, &root, 0)?;
     writeln!(writer)?;
     Ok(())
+}
+
+fn write_json_course_hashes<W: Write>(writer: &mut W, hashes: &[String]) -> io::Result<()> {
+    write_json_scalar_iter(writer, hashes, |writer, hash| {
+        write_json_string(writer, hash)
+    })
+}
+
+fn write_json_course_entry<W: Write>(
+    writer: &mut W,
+    entry: &CourseEntrySummary,
+    indent: usize,
+) -> io::Result<()> {
+    let mut object = JsonObjectWriter::new(writer, indent)?;
+    object.field_string("song", &entry.song)?;
+    object.field_string("song_dir", &entry.song_dir)?;
+    object.field_string("step_type", &entry.step_type)?;
+    object.field_string("difficulty", &entry.difficulty)?;
+    object.field_string("rating", &entry.rating)?;
+    object.field_string("sha1", &entry.sha1)?;
+    object.field_string("bpm_neutral_sha1", &entry.bpm_neutral_sha1)?;
+    object.finish()
+}
+
+fn write_json_course<W: Write>(course: &CourseSummary, writer: &mut W) -> io::Result<()> {
+    let mut root = JsonObjectWriter::new(writer, 0)?;
+    root.field_string("course", &course.course)?;
+    root.field_string("course_difficulty", &course.course_difficulty)?;
+    root.field_string("step_type", &course.step_type)?;
+    root.field_display_string("length", course.total_length)?;
+    root.field_with("sha1_hashes", |writer, _| {
+        write_json_course_hashes(writer, &course.sha1_hashes)
+    })?;
+    root.field_with("bpm_neutral_sha1_hashes", |writer, _| {
+        write_json_course_hashes(writer, &course.bpm_neutral_sha1_hashes)
+    })?;
+    root.field_with("entries", |writer, indent| {
+        write_json_multiline_array(
+            writer,
+            course.entries.len(),
+            indent,
+            |writer, index, item_indent| {
+                write_json_course_entry(writer, &course.entries[index], item_indent)
+            },
+        )
+    })?;
+
+    let dummy = dummy_simfile_for_course(course);
+    root.field_with("chart", |writer, indent| {
+        write_json_chart(writer, &course.chart, &dummy, indent)
+    })?;
+    root.finish()?;
+    writeln!(writer)
 }
 
 fn write_csv_course<W: Write>(writer: &mut W, course: &CourseSummary) -> io::Result<()> {
@@ -987,10 +1044,11 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        CsvRow, SpeedUnit, build_timing_snapshot, chart_or_global, normalize_scrolls_like_itg,
-        normalize_speeds_like_itg, parse_combos, parse_labels, parse_tickcounts,
-        parse_time_signatures, push_num, push_str, steps_timing_allowed, timing_fixed_6,
-        write_json_all, write_json_all_materialized, write_json_stream_sequences,
+        CourseEntrySummary, CourseSummary, CsvRow, SpeedUnit, build_timing_snapshot,
+        chart_or_global, normalize_scrolls_like_itg, normalize_speeds_like_itg, parse_combos,
+        parse_labels, parse_tickcounts, parse_time_signatures, push_num, push_str,
+        steps_timing_allowed, timing_fixed_6, write_json_all, write_json_all_materialized,
+        write_json_course, write_json_course_materialized, write_json_stream_sequences,
     };
 
     fn timing_fixed_6_materialized(value: f64) -> f64 {
@@ -1223,6 +1281,83 @@ mod tests {
         }
         assert_matches(REPORT_FIXTURE, &fast_options);
         assert_matches(REPORT_FIXTURE, &crate::AnalysisOptions::default());
+    }
+
+    #[test]
+    fn course_json_streaming_matches_materialized_report() {
+        const FIXTURE: &[u8] = include_bytes!("../benches/fixtures/hash_fixture.ssc");
+
+        fn assert_matches(options: &crate::AnalysisOptions, populated: bool) {
+            let mut simfile =
+                crate::analyze(FIXTURE, "ssc", options).expect("fixture should analyze");
+            let chart = simfile
+                .charts
+                .pop()
+                .expect("fixture should contain a chart");
+            let entries = if populated {
+                vec![
+                    CourseEntrySummary {
+                        song: "Song \"One\"\n".to_string(),
+                        song_dir: "Group\\Song One".to_string(),
+                        step_type: "dance-single".to_string(),
+                        difficulty: "Challenge".to_string(),
+                        rating: "12".to_string(),
+                        sha1: "0123456789abcdef".to_string(),
+                        bpm_neutral_sha1: "fedcba9876543210".to_string(),
+                    },
+                    CourseEntrySummary {
+                        song: "Café 二".to_string(),
+                        song_dir: String::new(),
+                        step_type: "dance-double".to_string(),
+                        difficulty: "Edit".to_string(),
+                        rating: "0".to_string(),
+                        sha1: String::new(),
+                        bpm_neutral_sha1: String::new(),
+                    },
+                ]
+            } else {
+                Vec::new()
+            };
+            let course = CourseSummary {
+                course: "Course \"Parity\"\n".to_string(),
+                course_difficulty: "Challenge".to_string(),
+                step_type: "dance-single".to_string(),
+                total_length: 3_661,
+                entries,
+                chart,
+                sha1_hashes: if populated {
+                    vec!["0123456789abcdef".to_string()]
+                } else {
+                    Vec::new()
+                },
+                bpm_neutral_sha1_hashes: if populated {
+                    vec!["fedcba9876543210".to_string()]
+                } else {
+                    Vec::new()
+                },
+                pattern_counts_enabled: options.compute_pattern_counts,
+                tech_counts_enabled: options.compute_tech_counts,
+                total_elapsed: std::time::Duration::ZERO,
+            };
+
+            let mut expected = Vec::new();
+            write_json_course_materialized(&course, &mut expected)
+                .expect("materialized course JSON should write");
+            let mut actual = Vec::new();
+            write_json_course(&course, &mut actual).expect("streaming course JSON should write");
+
+            assert_eq!(actual, expected);
+            serde_json::from_slice::<serde_json::Value>(&actual)
+                .expect("streaming course output should be valid JSON");
+        }
+
+        assert_matches(&crate::AnalysisOptions::default(), true);
+        let fast_options = crate::AnalysisOptions {
+            compute_tech_counts: false,
+            compute_pattern_counts: false,
+            ..crate::AnalysisOptions::default()
+        };
+        assert_matches(&fast_options, false);
     }
 
     #[test]
@@ -2021,6 +2156,7 @@ fn write_other_patterns<W: Write>(writer: &mut W, chart: &ChartSummary) -> io::R
     Ok(())
 }
 
+#[cfg(test)]
 fn json_chart_info(chart: &ChartSummary) -> JsonValue {
     serde_json::json!({
         "step_type": chart.step_type_str,
@@ -2035,6 +2171,7 @@ fn json_chart_info(chart: &ChartSummary) -> JsonValue {
     })
 }
 
+#[cfg(test)]
 fn json_arrow_stats(chart: &ChartSummary) -> JsonValue {
     let (mines_judgable, _) = chart_mine_fake_counts(chart);
     serde_json::json!({
@@ -2052,6 +2189,7 @@ fn json_arrow_stats(chart: &ChartSummary) -> JsonValue {
     })
 }
 
+#[cfg(test)]
 fn json_stream_info(chart: &ChartSummary) -> JsonValue {
     let total_stream = chart.total_streams;
     let total_break = chart.stream_counts.total_breaks;
@@ -2085,6 +2223,7 @@ fn json_stream_info(chart: &ChartSummary) -> JsonValue {
     })
 }
 
+#[cfg(test)]
 fn json_nps(chart: &ChartSummary) -> JsonValue {
     let mut notes_per_measure = Vec::with_capacity(chart.measure_densities.len());
     for &count in &chart.measure_densities {
@@ -2112,6 +2251,7 @@ fn json_nps(chart: &ChartSummary) -> JsonValue {
     })
 }
 
+#[cfg(test)]
 fn json_sn_breakdown(chart: &ChartSummary) -> JsonValue {
     serde_json::json!({
         "sn_detailed_breakdown": chart.sn_detailed_breakdown,
@@ -2120,6 +2260,7 @@ fn json_sn_breakdown(chart: &ChartSummary) -> JsonValue {
     })
 }
 
+#[cfg(test)]
 fn json_stream_breakdown(chart: &ChartSummary) -> JsonValue {
     serde_json::json!({
         "detailed_breakdown": chart.detailed_breakdown,
@@ -2128,6 +2269,7 @@ fn json_stream_breakdown(chart: &ChartSummary) -> JsonValue {
     })
 }
 
+#[cfg(test)]
 fn json_mono_candle_stats(chart: &ChartSummary) -> JsonValue {
     let left_foot_candles = count(&chart.detected_patterns, PatternVariant::CandleLeft);
     let right_foot_candles = count(&chart.detected_patterns, PatternVariant::CandleRight);
@@ -2145,6 +2287,7 @@ fn json_mono_candle_stats(chart: &ChartSummary) -> JsonValue {
     })
 }
 
+#[cfg(test)]
 fn json_gimmicks(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
     let lifts = chart.stats.lifts;
     let (_, fakes) = chart_mine_fake_counts(chart);
@@ -2199,6 +2342,7 @@ fn json_gimmicks(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
     JsonValue::Object(obj)
 }
 
+#[cfg(test)]
 fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
     let TimingSnapshot {
         beat0_offset_seconds,
@@ -2304,6 +2448,7 @@ fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
     })
 }
 
+#[cfg(test)]
 fn json_pattern_counts(chart: &ChartSummary) -> JsonValue {
     let mut obj = JsonMap::new();
 
@@ -2592,6 +2737,7 @@ fn json_pattern_counts(chart: &ChartSummary) -> JsonValue {
     JsonValue::Object(obj)
 }
 
+#[cfg(test)]
 fn json_tech_counts(chart: &ChartSummary) -> JsonValue {
     serde_json::json!({
         "crossovers": chart.tech_counts.crossovers,
