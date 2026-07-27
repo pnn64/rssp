@@ -613,7 +613,8 @@ pub fn chart_bpm_snapshots(data: &[u8], ext: &str) -> Result<Vec<ChartBpmSnapsho
 // BPM parsing - consolidated
 #[must_use]
 pub fn parse_bpm_map(s: &str) -> Vec<(f64, f64)> {
-    let mut v = Vec::new();
+    const ESTIMATED_COMPONENT_BYTES: usize = 9;
+    let mut v = Vec::with_capacity(s.len().div_ceil(ESTIMATED_COMPONENT_BYTES));
     let (mut previous_beat, mut ordered) = (f64::NEG_INFINITY, true);
     for component in s.split(',') {
         let component = component.trim();
@@ -1239,6 +1240,15 @@ mod tests {
         assert_eq!(
             parse_bpm_map("96r=150,bad,48R=120,NaN=999,144r=nope,0=90"),
             vec![(0.0, 90.0), (1.0, 120.0), (2.0, 150.0)]
+        );
+    }
+
+    #[test]
+    fn parse_bpm_map_preserves_empty_and_sparse_component_behavior() {
+        assert!(parse_bpm_map("").is_empty());
+        assert_eq!(
+            parse_bpm_map(" , 0=120, missing, 4=150, =180, 8=nope, "),
+            vec![(0.0, 120.0), (4.0, 150.0)]
         );
     }
 
