@@ -881,7 +881,23 @@ pub fn compute_mines_nonfake(
 
 #[must_use]
 pub fn compute_bpm_stats(values: &[f64]) -> (f64, f64) {
-    compute_bpm_stats_iter(values.iter().copied())
+    if values.is_empty() {
+        return (0.0, 0.0);
+    }
+    let displayable_count = values.iter().filter(|&&bpm| is_display_bpm(bpm)).count();
+    let all_values_are_displayable = displayable_count != 0;
+    let capacity = if all_values_are_displayable {
+        displayable_count
+    } else {
+        values.len()
+    };
+    let mut filtered = Vec::with_capacity(capacity);
+    if all_values_are_displayable {
+        filtered.extend(values.iter().copied().filter(|&bpm| is_display_bpm(bpm)));
+    } else {
+        filtered.extend_from_slice(values);
+    }
+    bpm_stats_from_values(filtered, all_values_are_displayable)
 }
 
 #[must_use]
@@ -934,21 +950,6 @@ pub fn compute_bpm_range_and_stats(map: &[(f64, f64)]) -> (i32, i32, f64, f64) {
         median,
         average,
     )
-}
-
-fn compute_bpm_stats_iter<I>(values: I) -> (f64, f64)
-where
-    I: Iterator<Item = f64> + Clone,
-{
-    if values.clone().next().is_none() {
-        return (0.0, 0.0);
-    }
-    let mut filtered: Vec<_> = values.clone().filter(|&b| is_display_bpm(b)).collect();
-    let all_values_are_displayable = !filtered.is_empty();
-    if !all_values_are_displayable {
-        filtered.extend(values);
-    }
-    bpm_stats_from_values(filtered, all_values_are_displayable)
 }
 
 fn bpm_stats_from_values(mut values: Vec<f64>, can_select: bool) -> (f64, f64) {
@@ -1302,10 +1303,14 @@ mod tests {
             })
             .collect();
         let expected = sorted_bpm_stats_reference(&map);
-        let actual = compute_bpm_map_stats(&map);
+        let values: Vec<_> = map.iter().map(|&(_, bpm)| bpm).collect();
+        let map_actual = compute_bpm_map_stats(&map);
+        let slice_actual = compute_bpm_stats(&values);
 
-        assert_eq!(actual.0, expected.0);
-        assert!((actual.1 - expected.1).abs() < 1.0e-10);
+        assert_eq!(map_actual.0, expected.0);
+        assert!((map_actual.1 - expected.1).abs() < 1.0e-10);
+        assert_eq!(slice_actual.0, expected.0);
+        assert!((slice_actual.1 - expected.1).abs() < 1.0e-10);
     }
 
     #[test]

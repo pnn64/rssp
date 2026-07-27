@@ -198,6 +198,56 @@ fn sorted_bpm_stats_reference(map: &[(f64, f64)]) -> (f64, f64) {
 }
 
 #[cfg(windows)]
+#[allow(clippy::cast_precision_loss)]
+fn growing_bpm_stats_reference(values: &[f64]) -> (f64, f64) {
+    const SELECTION_MIN_VALUES: usize = 64;
+
+    if values.is_empty() {
+        return (0.0, 0.0);
+    }
+    let mut filtered: Vec<_> = values
+        .iter()
+        .copied()
+        .filter(|&bpm| bpm > 0.0 && bpm < 10_000.0)
+        .collect();
+    let can_select = !filtered.is_empty();
+    if !can_select {
+        filtered.extend_from_slice(values);
+    }
+    if can_select && filtered.len() >= SELECTION_MIN_VALUES {
+        let average = filtered.iter().sum::<f64>() / filtered.len() as f64;
+        let mid = filtered.len() / 2;
+        let even = mid * 2 == filtered.len();
+        let (_, upper, _) = filtered.select_nth_unstable_by(mid, |a, b| {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let upper = *upper;
+        let median = if even {
+            let lower = filtered[..mid]
+                .iter()
+                .copied()
+                .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                .unwrap_or(upper);
+            f64::midpoint(lower, upper)
+        } else {
+            upper
+        };
+        return (median, average);
+    }
+
+    filtered.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = if filtered.len().is_multiple_of(2) {
+        f64::midpoint(
+            filtered[filtered.len() / 2 - 1],
+            filtered[filtered.len() / 2],
+        )
+    } else {
+        filtered[filtered.len() / 2]
+    };
+    (median, filtered.iter().sum::<f64>() / filtered.len() as f64)
+}
+
+#[cfg(windows)]
 fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     const ENTRIES: usize = 4_096;
     let cpu = platform::stabilize_thread();
@@ -234,6 +284,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let bpm_stats_map: Vec<_> = (0..ENTRIES)
         .map(|idx| (idx as f64 * 4.0, 60.0 + (idx % 300) as f64))
         .collect();
+    let bpm_stats_values: Vec<_> = bpm_stats_map.iter().map(|&(_, bpm)| bpm).collect();
 
     let mut parsing = c.benchmark_group("cycles/parsing");
     parsing.throughput(Throughput::Elements(ENTRIES as u64));
@@ -323,6 +374,16 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
                 .map(|&(_, bpm)| bpm)
                 .collect();
             black_box(rssp::bpm::compute_bpm_stats(&values));
+        });
+    });
+    normalization.bench_function("bpm_stats_slice", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::compute_bpm_stats(black_box(&bpm_stats_values)));
+        });
+    });
+    normalization.bench_function("bpm_stats_slice_growing_reference", |b| {
+        b.iter(|| {
+            black_box(growing_bpm_stats_reference(black_box(&bpm_stats_values)));
         });
     });
     normalization.bench_function("bpm_stats_map", |b| {
