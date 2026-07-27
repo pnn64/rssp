@@ -44,6 +44,7 @@ type DifficultyTable = [(i32, DifficultyMeasures); 43];
 const MIN_BPM_KEY: i32 = 80;
 const MAX_BPM_KEY: i32 = 500;
 const BPM_KEY_STEP: i32 = 10;
+const HASH_AGGREGATION_MIN_SEGMENTS: usize = 32;
 
 /// Static difficulty table for matrix rating interpolation.
 const DIFFICULTY_TABLE: DifficultyTable = [
@@ -1021,7 +1022,6 @@ pub fn compute_matrix_rating(measure_densities: &[usize], bpm_map: &[(f64, f64)]
 }
 
 fn compute_matrix_variable_bpm(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> f64 {
-    const HASH_AGGREGATION_MIN_SEGMENTS: usize = 32;
     if bpm_map.len() < HASH_AGGREGATION_MIN_SEGMENTS {
         return compute_matrix_variable_bpm_small(measure_densities, bpm_map);
     }
@@ -1048,27 +1048,30 @@ fn compute_matrix_variable_bpm(measure_densities: &[usize], bpm_map: &[(f64, f64
 }
 
 fn compute_matrix_variable_bpm_small(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> f64 {
-    let mut bpm_counts: Vec<(u64, [usize; 4])> = Vec::with_capacity(bpm_map.len());
-    let mut segment_ids = Vec::with_capacity(bpm_map.len());
+    debug_assert!(bpm_map.len() < HASH_AGGREGATION_MIN_SEGMENTS);
+    let mut bpm_bits = [0u64; HASH_AGGREGATION_MIN_SEGMENTS];
+    let mut bpm_counts = [[0usize; 4]; HASH_AGGREGATION_MIN_SEGMENTS];
+    let mut segment_ids = [usize::MAX; HASH_AGGREGATION_MIN_SEGMENTS];
+    let mut unique_bpms = 0usize;
 
-    for &(_, bpm) in bpm_map {
+    for (segment_idx, &(_, bpm)) in bpm_map.iter().enumerate() {
         if bpm <= 0.0 {
-            segment_ids.push(usize::MAX);
             continue;
         }
 
         let bits = bpm.to_bits();
-        let id = bpm_counts
+        let id = bpm_bits[..unique_bpms]
             .iter()
-            .position(|&(seen, _)| seen == bits)
+            .position(|&seen| seen == bits)
             .unwrap_or_else(|| {
-                bpm_counts.push((bits, [0; 4]));
-                bpm_counts.len() - 1
+                bpm_bits[unique_bpms] = bits;
+                unique_bpms += 1;
+                unique_bpms - 1
             });
-        segment_ids.push(id);
+        segment_ids[segment_idx] = id;
     }
 
-    if bpm_counts.is_empty() {
+    if unique_bpms == 0 {
         return 0.0;
     }
 
@@ -1083,11 +1086,16 @@ fn compute_matrix_variable_bpm_small(measure_densities: &[usize], bpm_map: &[(f6
         let code = density_code(categorize_measure_density(density));
         let bpm_id = segment_ids[segment_idx];
         if code != u8::MAX && bpm_id != usize::MAX {
-            bpm_counts[bpm_id].1[code as usize] += 1;
+            bpm_counts[bpm_id][code as usize] += 1;
         }
     }
 
-    matrix_best_from_counts(bpm_counts)
+    matrix_best_from_counts(
+        bpm_bits[..unique_bpms]
+            .iter()
+            .copied()
+            .zip(bpm_counts[..unique_bpms].iter().copied()),
+    )
 }
 
 fn matrix_best_from_counts(bpm_counts: impl IntoIterator<Item = (u64, [usize; 4])>) -> f64 {
@@ -1193,6 +1201,32 @@ mod tests {
             compute_matrix_rating(&densities, &bpm_map),
             matrix_rating_generic(&densities, &bpm_map)
         );
+    }
+
+    #[test]
+    fn few_variable_bpms_match_generic_path_at_stack_boundary() {
+        let densities: Vec<_> = (0..256)
+            .map(|idx| [0, 16, 20, 24, 32, 48][idx % 6])
+            .collect();
+
+        for segment_count in 2..HASH_AGGREGATION_MIN_SEGMENTS {
+            let bpm_map: Vec<_> = (0..segment_count)
+                .map(|idx| {
+                    let bpm = if idx % 11 == 0 {
+                        -10.0
+                    } else {
+                        90.0 + (idx % 7) as f64 * 15.0
+                    };
+                    (idx as f64 * 8.0, bpm)
+                })
+                .collect();
+
+            assert_eq!(
+                compute_matrix_rating(&densities, &bpm_map),
+                matrix_rating_generic(&densities, &bpm_map),
+                "small-map result changed for {segment_count} segments"
+            );
+        }
     }
 
     #[test]

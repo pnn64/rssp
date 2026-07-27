@@ -82,5 +82,30 @@ fn bench_many_unique_bpms(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_matrix_rating, bench_many_unique_bpms);
+fn bench_few_variable_bpms(c: &mut Criterion) {
+    let densities: Vec<_> = (0..1_024).map(|idx| [16, 20, 24, 32][idx & 3]).collect();
+    let bpm_map: Vec<_> = (0..16)
+        .map(|idx| (idx as f64 * 32.0, 120.0 + (idx % 7) as f64 * 15.0))
+        .collect();
+
+    let mut group = c.benchmark_group("matrix_few_bpms");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("variable_segments", |b| {
+        b.iter(|| {
+            black_box(rssp::matrix::compute_matrix_rating(
+                black_box(&densities),
+                black_box(&bpm_map),
+            ));
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_matrix_rating,
+    bench_many_unique_bpms,
+    bench_few_variable_bpms
+);
 criterion_main!(benches);
