@@ -199,6 +199,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let pair_map = large_pair_map(ENTRIES);
     let speed_map = large_speed_map(ENTRIES);
     let stop_map = large_stop_map(ENTRIES);
+    let valid_tech = "BR+ FS- 24ths XO+ SKT- 32nds DS++ JA- WA+ BXF- ".repeat(64);
+    let invalid_tech = "BR+garbage Hard unknown ".repeat(64);
     let row_segments = rssp::timing::TimingSegments {
         beat0_offset_adjust: 0.0,
         bpms: vec![(0.0, 120.0)],
@@ -235,6 +237,29 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     parsing.finish();
+
+    let mut tech_notation = c.benchmark_group("cycles/tech_notation");
+    tech_notation.sample_size(100);
+    tech_notation.measurement_time(Duration::from_secs(2));
+    tech_notation.throughput(Throughput::Bytes(valid_tech.len() as u64));
+    tech_notation.bench_function("valid", |b| {
+        b.iter(|| {
+            black_box(rssp::tech::parse_tech_notation(
+                black_box(&valid_tech),
+                black_box(""),
+            ));
+        });
+    });
+    tech_notation.throughput(Throughput::Bytes(invalid_tech.len() as u64));
+    tech_notation.bench_function("invalid", |b| {
+        b.iter(|| {
+            black_box(rssp::tech::parse_tech_notation(
+                black_box(""),
+                black_box(&invalid_tech),
+            ));
+        });
+    });
+    tech_notation.finish();
 
     let mut normalization = c.benchmark_group("cycles/normalization");
     normalization.throughput(Throughput::Bytes(pair_map.len() as u64));

@@ -1,6 +1,8 @@
 use std::cmp::Reverse;
 use std::sync::OnceLock;
 
+const INLINE_TECH_PARTS: usize = 4;
+
 const KNOWN_TECH_LIST: &[&str] = &[
     "24ths", "32nds", "br", "BR", "BR+", "BR-", "BT", "BT+", "BT-", "bu", "BU", "BU+", "BU-",
     "BXF", "BXF+", "BXF-", "bXF", "bXF+", "bXF-", "BxF", "BXf", "BxF+", "BxF-", "bXf", "bXf+",
@@ -32,12 +34,16 @@ fn is_measure_data(chunk: &str) -> bool {
 /// Finds the longest tech prefix that matches the remainder.
 #[inline(always)]
 fn best_prefix(remainder: &str) -> Option<&'static str> {
+    best_prefix_in(remainder, tech_prefixes())
+}
+
+#[inline(always)]
+fn best_prefix_in(remainder: &str, table: &[Vec<&'static str>]) -> Option<&'static str> {
     let bytes = remainder.as_bytes();
     if bytes.is_empty() {
         return None;
     }
 
-    let table = tech_prefixes();
     let list = &table[bytes[0] as usize];
 
     list.iter().copied().find(|pat| remainder.starts_with(pat))
@@ -67,23 +73,55 @@ fn tech_prefixes() -> &'static [Vec<&'static str>] {
 }
 
 #[inline(always)]
+fn push_tech(out: &mut String, tech: &str, reserve: usize) {
+    if out.capacity() == 0 {
+        out.reserve(reserve);
+    }
+    if !out.is_empty() {
+        out.push(' ');
+    }
+    out.push_str(tech);
+}
+
+#[inline(always)]
 fn append_chunk_as_tech(chunk: &str, out: &mut String, reserve: usize) {
-    let mut remainder = chunk;
-    let original_len = out.len();
+    let Some(first) = best_prefix(chunk) else {
+        return;
+    };
+    let mut remainder = &chunk[first.len()..];
+    if remainder.is_empty() {
+        push_tech(out, first, reserve);
+        return;
+    }
+
+    let table = tech_prefixes();
+    let mut parts = [""; INLINE_TECH_PARTS];
+    parts[0] = first;
+    let mut part_count = 1usize;
+    let mut overflow = None;
 
     while !remainder.is_empty() {
-        let Some(best) = best_prefix(remainder) else {
-            out.truncate(original_len);
+        let Some(best) = best_prefix_in(remainder, table) else {
             return;
         };
-        if out.capacity() == 0 {
-            out.reserve(reserve);
+        if part_count < INLINE_TECH_PARTS {
+            parts[part_count] = best;
+            part_count += 1;
+        } else if overflow.is_none() {
+            overflow = Some(remainder);
         }
-        if !out.is_empty() {
-            out.push(' ');
-        }
-        out.push_str(best);
         remainder = &remainder[best.len()..];
+    }
+
+    for tech in &parts[..part_count] {
+        push_tech(out, tech, reserve);
+    }
+    if let Some(mut remainder) = overflow {
+        while !remainder.is_empty() {
+            let best = best_prefix_in(remainder, table).expect("validated tech prefix");
+            push_tech(out, best, reserve);
+            remainder = &remainder[best.len()..];
+        }
     }
 }
 
@@ -168,6 +206,8 @@ mod tests {
             ("BR+ FS- 24ths", "XO+ SKT-"),
             ("No Tech 16/24 BR+garbage", "32nds,DS++ JA-"),
             ("BXF-BR+ 1.2.3", "WA+ unknown B+X-F"),
+            ("BR+FS-XO+SKT-WA+BXF-", ""),
+            ("BR+ BR+garbage", "Hard"),
         ];
         for (credit, description) in cases {
             assert_eq!(
