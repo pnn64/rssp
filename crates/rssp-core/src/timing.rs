@@ -229,28 +229,30 @@ fn parse_segments_positive(s: &str) -> Vec<Segment> {
 }
 
 fn parse_speeds(s: &str) -> Vec<SpeedSegment> {
+    const ESTIMATED_COMPONENT_BYTES: usize = 11;
+
     if s.is_empty() {
         return Vec::new();
     }
-    s.split(',')
-        .filter_map(|chunk| {
-            let mut parts = chunk.split('=').map(str::trim);
-            let beat = parse_beat_or_row(parts.next()?)?;
-            let ratio = f64::from(parts.next()?.parse::<f64>().ok()? as f32);
-            let delay = f64::from(parts.next()?.parse::<f64>().ok()? as f32);
-            let unit = if parts.next() == Some("1") {
-                SpeedUnit::Seconds
-            } else {
-                SpeedUnit::Beats
-            };
-            Some(SpeedSegment {
-                beat,
-                ratio,
-                delay,
-                unit,
-            })
+    let mut speeds = Vec::with_capacity(s.len().div_ceil(ESTIMATED_COMPONENT_BYTES));
+    speeds.extend(s.split(',').filter_map(|chunk| {
+        let mut parts = chunk.split('=').map(str::trim);
+        let beat = parse_beat_or_row(parts.next()?)?;
+        let ratio = f64::from(parts.next()?.parse::<f64>().ok()? as f32);
+        let delay = f64::from(parts.next()?.parse::<f64>().ok()? as f32);
+        let unit = if parts.next() == Some("1") {
+            SpeedUnit::Seconds
+        } else {
+            SpeedUnit::Beats
+        };
+        Some(SpeedSegment {
+            beat,
+            ratio,
+            delay,
+            unit,
         })
-        .collect()
+    }));
+    speeds
 }
 
 // --- Row builders ---
@@ -2038,6 +2040,30 @@ pub fn get_speed_multiplier(t: &TimingData, beat: f64, time: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_speeds_preserves_sparse_entries_and_units() {
+        assert!(parse_speeds("").is_empty());
+
+        let speeds = parse_speeds(
+            " ,0=1=0=0,missing,4=2=0.5=1,=3=0=1,8=nope=1=1,12=3=0=1=ignored,96r=4=1=0",
+        );
+        assert_eq!(speeds.len(), 4);
+        assert_eq!(
+            (speeds[0].beat, speeds[0].ratio, speeds[0].delay),
+            (0.0, 1.0, 0.0)
+        );
+        assert_eq!(speeds[0].unit, SpeedUnit::Beats);
+        assert_eq!(
+            (speeds[1].beat, speeds[1].ratio, speeds[1].delay),
+            (4.0, 2.0, 0.5)
+        );
+        assert_eq!(speeds[1].unit, SpeedUnit::Seconds);
+        assert_eq!(speeds[2].beat, 12.0);
+        assert_eq!(speeds[2].unit, SpeedUnit::Seconds);
+        assert_eq!(speeds[3].beat, 2.0);
+        assert_eq!(speeds[3].unit, SpeedUnit::Beats);
+    }
 
     fn build_segment_rows_sorted(segments: &[Segment], require_positive: bool) -> Vec<i32> {
         let mut rows: Vec<_> = segments
