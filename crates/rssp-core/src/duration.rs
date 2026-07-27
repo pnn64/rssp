@@ -5,8 +5,8 @@ use crate::parse::{
     parse_version,
 };
 use crate::timing::{
-    TimingData, compute_timing_segments, get_time_for_beat_f32, steps_timing_allowed,
-    timing_data_from_segments, timing_format_from_ext,
+    TimingData, TimingFormat, TimingSegments, compute_timing_segments, get_time_for_beat_f32,
+    steps_timing_allowed, timing_data_from_segments, timing_format_from_ext,
 };
 
 #[derive(Debug, Clone)]
@@ -31,6 +31,38 @@ pub fn chart_duration_seconds(last_beat: f64, timing: &TimingData, offsets: Timi
         get_time_for_beat_f32(timing, last_beat)
             - offsets.global_offset_seconds
             - offsets.group_offset_seconds,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_duration_timing_segments(
+    chart_bpms: Option<&str>,
+    global_bpms: &str,
+    chart_stops: Option<&str>,
+    global_stops: &str,
+    chart_delays: Option<&str>,
+    global_delays: &str,
+    chart_warps: Option<&str>,
+    global_warps: &str,
+    format: TimingFormat,
+) -> TimingSegments {
+    compute_timing_segments(
+        chart_bpms,
+        global_bpms,
+        chart_stops,
+        global_stops,
+        chart_delays,
+        global_delays,
+        chart_warps,
+        global_warps,
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        format,
+        true,
     )
 }
 
@@ -63,21 +95,6 @@ pub fn compute_chart_durations(
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
     let cleaned_global_warps = clean_timing_map(global_warps_raw);
-    let global_speeds_raw = parsed_data
-        .speeds
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .unwrap_or("");
-    let cleaned_global_speeds = clean_timing_map(global_speeds_raw);
-    let global_scrolls_raw = parsed_data
-        .scrolls
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .unwrap_or("");
-    let cleaned_global_scrolls = clean_timing_map(global_scrolls_raw);
-    let global_fakes_raw = parsed_data
-        .fakes
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .unwrap_or("");
-    let cleaned_global_fakes = clean_timing_map(global_fakes_raw);
 
     let entries = parsed_data.notes_list;
     let mut results = Vec::with_capacity(entries.len());
@@ -127,9 +144,9 @@ pub fn compute_chart_durations(
             cleaned_global_stops.as_str(),
             cleaned_global_delays.as_str(),
             cleaned_global_warps.as_str(),
-            cleaned_global_speeds.as_str(),
-            cleaned_global_scrolls.as_str(),
-            cleaned_global_fakes.as_str(),
+            "",
+            "",
+            "",
         );
         let chart_offset = timing_src.chart_offset_seconds;
         let chart_bpms = if allow_steps_timing {
@@ -152,24 +169,9 @@ pub fn compute_chart_durations(
         } else {
             None
         };
-        let chart_speeds = if allow_steps_timing {
-            crate::chart_timing_tag_raw(entry.chart_speeds.as_deref())
-        } else {
-            None
-        };
-        let chart_scrolls = if allow_steps_timing {
-            crate::chart_timing_tag_raw(entry.chart_scrolls.as_deref())
-        } else {
-            None
-        };
-        let chart_fakes = if allow_steps_timing {
-            crate::chart_timing_tag_raw(entry.chart_fakes.as_deref())
-        } else {
-            None
-        };
         let chart_timing;
         let timing = if timing_src.chart_has_own_timing {
-            let timing_segments = compute_timing_segments(
+            let timing_segments = compute_duration_timing_segments(
                 chart_bpms.as_deref(),
                 timing_src.global_bpms,
                 chart_stops.as_deref(),
@@ -178,20 +180,13 @@ pub fn compute_chart_durations(
                 timing_src.global_delays,
                 chart_warps.as_deref(),
                 timing_src.global_warps,
-                chart_speeds.as_deref(),
-                timing_src.global_speeds,
-                chart_scrolls.as_deref(),
-                timing_src.global_scrolls,
-                chart_fakes.as_deref(),
-                timing_src.global_fakes,
                 timing_format,
-                true,
             );
             chart_timing = timing_data_from_segments(chart_offset, 0.0, &timing_segments);
             &chart_timing
         } else {
             global_timing.get_or_insert_with(|| {
-                let timing_segments = compute_timing_segments(
+                let timing_segments = compute_duration_timing_segments(
                     None,
                     &cleaned_global_bpms,
                     None,
@@ -200,14 +195,7 @@ pub fn compute_chart_durations(
                     &cleaned_global_delays,
                     None,
                     &cleaned_global_warps,
-                    None,
-                    &cleaned_global_speeds,
-                    None,
-                    &cleaned_global_scrolls,
-                    None,
-                    &cleaned_global_fakes,
                     timing_format,
-                    true,
                 );
                 timing_data_from_segments(song_offset, 0.0, &timing_segments)
             })
@@ -227,6 +215,10 @@ pub fn compute_chart_durations(
 #[cfg(test)]
 mod tests {
     use super::{TimingOffsets, compute_chart_durations};
+    use crate::timing::{
+        TimingFormat, compute_timing_segments, get_time_for_beat_f32, resolve_chart_timing,
+        timing_data_from_segments,
+    };
 
     const INHERITED_TIMING_FIXTURE: &[u8] =
         include_bytes!("../../rssp/benches/fixtures/camellia_mix.ssc");
@@ -251,5 +243,87 @@ mod tests {
                 .iter()
                 .all(|chart| chart.duration_seconds == 7_367.31)
         );
+    }
+
+    #[test]
+    fn visual_timing_maps_do_not_change_elapsed_time() {
+        for format in [TimingFormat::Ssc, TimingFormat::Sm] {
+            let full_segments = compute_timing_segments(
+                Some("0=120,8=180,20=90"),
+                "",
+                Some("4=0.5,18=0.25"),
+                "",
+                Some("12=0.125"),
+                "",
+                Some("24=4"),
+                "",
+                Some("0=1=0=0,4=2=1=1,8=0.5=0.25=0"),
+                "",
+                Some("0=1,2=0.5,6=-1"),
+                "",
+                Some("1=0.5,8=4,16=2"),
+                "",
+                format,
+                true,
+            );
+            let time_only_segments = compute_timing_segments(
+                Some("0=120,8=180,20=90"),
+                "",
+                Some("4=0.5,18=0.25"),
+                "",
+                Some("12=0.125"),
+                "",
+                Some("24=4"),
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                format,
+                true,
+            );
+            let full_timing = timing_data_from_segments(0.25, 0.0, &full_segments);
+            let time_only_timing = timing_data_from_segments(0.25, 0.0, &time_only_segments);
+
+            for beat in [0.0, 1.0, 4.0, 8.0, 12.0, 18.0, 24.0, 28.0, 32.0] {
+                assert_eq!(
+                    get_time_for_beat_f32(&full_timing, beat).to_bits(),
+                    get_time_for_beat_f32(&time_only_timing, beat).to_bits(),
+                    "elapsed time changed at beat {beat} for {format:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn visual_only_chart_timing_still_disables_global_timing() {
+        let timing = resolve_chart_timing(
+            true,
+            0.0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(b"0=2=0=0"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "0=120",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        );
+
+        assert!(timing.chart_has_own_timing);
+        assert_eq!(timing.global_bpms, "");
     }
 }
