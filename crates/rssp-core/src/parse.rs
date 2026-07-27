@@ -109,6 +109,16 @@ const CP1252_MAP: [u16; 32] = [
     0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0xFFFD, 0x017E, 0x0178,
 ];
 
+const CP1252_UTF8_EXTRA: [u8; 128] = {
+    let mut extra = [1u8; 128];
+    let mut idx = 0usize;
+    while idx < CP1252_MAP.len() {
+        extra[idx] = if CP1252_MAP[idx] <= 0x07ff { 1 } else { 2 };
+        idx += 1;
+    }
+    extra
+};
+
 const TAG_CH_BS: u8 = 1;
 const TAG_CH_SEMI: u8 = 1 << 1;
 const TAG_CH_COLON: u8 = 1 << 2;
@@ -124,17 +134,62 @@ const TAG_CHAR_CLASS: [u8; 256] = {
     t
 };
 
-fn decode_cp1252(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|&b| match b {
-            0x00..=0x7F => b as char,
-            0x80..=0x9F => {
-                char::from_u32(u32::from(CP1252_MAP[(b - 0x80) as usize])).unwrap_or('\u{FFFD}')
+#[inline(always)]
+fn cp1252_char(byte: u8) -> char {
+    match byte {
+        0x00..=0x7F => byte as char,
+        0x80..=0x9F => {
+            char::from_u32(u32::from(CP1252_MAP[(byte - 0x80) as usize])).unwrap_or('\u{FFFD}')
+        }
+        _ => char::from_u32(u32::from(byte)).unwrap_or('\u{FFFD}'),
+    }
+}
+
+#[inline]
+fn cp1252_utf8_len(bytes: &[u8]) -> usize {
+    const HIGH_BITS: u64 = 0x8080_8080_8080_8080;
+
+    let mut utf8_len = bytes.len();
+    let (chunks, remainder) = bytes.as_chunks::<8>();
+    for chunk in chunks {
+        if u64::from_ne_bytes(*chunk) & HIGH_BITS == 0 {
+            continue;
+        }
+        for &byte in chunk {
+            if byte >= 0x80 {
+                utf8_len += usize::from(CP1252_UTF8_EXTRA[(byte - 0x80) as usize]);
             }
-            _ => char::from_u32(u32::from(b)).unwrap_or('\u{FFFD}'),
-        })
-        .collect()
+        }
+    }
+    for &byte in remainder {
+        if byte >= 0x80 {
+            utf8_len += usize::from(CP1252_UTF8_EXTRA[(byte - 0x80) as usize]);
+        }
+    }
+    utf8_len
+}
+
+fn decode_cp1252(bytes: &[u8]) -> String {
+    let mut decoded = String::with_capacity(cp1252_utf8_len(bytes));
+    let mut ascii_start = 0usize;
+    for (idx, &byte) in bytes.iter().enumerate() {
+        if byte < 0x80 {
+            continue;
+        }
+        if ascii_start < idx {
+            // Every byte in this run was checked by the branch above.
+            let ascii = unsafe { std::str::from_utf8_unchecked(&bytes[ascii_start..idx]) };
+            decoded.push_str(ascii);
+        }
+        decoded.push(cp1252_char(byte));
+        ascii_start = idx + 1;
+    }
+    if ascii_start < bytes.len() {
+        // The loop found no high byte in the remaining run.
+        let ascii = unsafe { std::str::from_utf8_unchecked(&bytes[ascii_start..]) };
+        decoded.push_str(ascii);
+    }
+    decoded
 }
 
 pub fn decode_bytes(bytes: &[u8]) -> Cow<'_, str> {
@@ -880,7 +935,7 @@ fn split_notes6(block: &[u8]) -> (u8, [&[u8]; 5], &[u8]) {
 mod tests {
     use std::borrow::Cow;
 
-    use super::{decode_unescape_trim, unescape_trim_cow};
+    use super::{decode_cp1252, decode_unescape_trim, unescape_trim_cow};
 
     #[test]
     fn decoded_unescaped_trim_borrows_clean_utf8() {
@@ -898,6 +953,26 @@ mod tests {
         let cp1252 = decode_unescape_trim(&[b' ', 0x80, b' ']);
         assert!(matches!(cp1252, Cow::Owned(_)));
         assert_eq!(cp1252, "\u{20ac}");
+    }
+
+    #[test]
+    fn cp1252_decoding_preserves_byte_classes_with_exact_capacity() {
+        let decoded = decode_cp1252(&[0x00, 0x7f, 0x80, 0x81, 0x83, 0x93, 0x9f, 0xa0, 0xff]);
+
+        assert_eq!(
+            decoded,
+            "\0\u{7f}\u{20ac}\u{fffd}\u{0192}\u{201c}\u{0178}\u{00a0}\u{00ff}"
+        );
+        assert_eq!(decoded.capacity(), decoded.len());
+
+        let all_bytes: Vec<_> = (u8::MIN..=u8::MAX).collect();
+        let expected: String = all_bytes
+            .iter()
+            .map(|&byte| super::cp1252_char(byte))
+            .collect();
+        let decoded = decode_cp1252(&all_bytes);
+        assert_eq!(decoded, expected);
+        assert_eq!(decoded.capacity(), decoded.len());
     }
 
     #[test]

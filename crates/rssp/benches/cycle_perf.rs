@@ -175,6 +175,13 @@ fn large_stop_map(entries: usize) -> String {
 }
 
 #[cfg(windows)]
+fn cp1252_metadata(bytes: usize) -> Vec<u8> {
+    (0..bytes)
+        .map(|idx| if idx % 16 == 0 { 0x93 } else { b'a' })
+        .collect()
+}
+
+#[cfg(windows)]
 fn sorted_bpm_stats_reference(map: &[(f64, f64)]) -> (f64, f64) {
     let mut values: Vec<_> = map
         .iter()
@@ -199,6 +206,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let pair_map = large_pair_map(ENTRIES);
     let speed_map = large_speed_map(ENTRIES);
     let stop_map = large_stop_map(ENTRIES);
+    let legacy_metadata = cp1252_metadata(ENTRIES);
     let valid_tech = "BR+ FS- 24ths XO+ SKT- 32nds DS++ JA- WA+ BXF- ".repeat(64);
     let invalid_tech = "BR+garbage Hard unknown ".repeat(64);
     let row_segments = rssp::timing::TimingSegments {
@@ -260,6 +268,17 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     tech_notation.finish();
+
+    let mut decoding = c.benchmark_group("cycles/decoding");
+    decoding.sample_size(100);
+    decoding.measurement_time(Duration::from_secs(2));
+    decoding.throughput(Throughput::Bytes(legacy_metadata.len() as u64));
+    decoding.bench_function("cp1252_metadata", |b| {
+        b.iter(|| {
+            black_box(rssp::parse::decode_bytes(black_box(&legacy_metadata)));
+        });
+    });
+    decoding.finish();
 
     let mut normalization = c.benchmark_group("cycles/normalization");
     normalization.throughput(Throughput::Bytes(pair_map.len() as u64));
