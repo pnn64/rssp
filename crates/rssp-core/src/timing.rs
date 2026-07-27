@@ -196,12 +196,21 @@ fn parse_f64_fast(s: &str) -> Option<f64> {
 
 // --- Unified parsing ---
 fn parse_segments(s: &str) -> Vec<Segment> {
-    let component_count = if s.is_empty() {
-        0
+    const ESTIMATED_COMPONENT_BYTES: usize = 9;
+    const LARGE_MAP_BYTES: usize = 32 * 1_024;
+    const MAX_INITIAL_COMPONENTS: usize = 4_096;
+
+    if s.is_empty() {
+        return Vec::new();
+    }
+    let capacity = if s.len() >= LARGE_MAP_BYTES {
+        s.len()
+            .div_ceil(ESTIMATED_COMPONENT_BYTES)
+            .min(MAX_INITIAL_COMPONENTS)
     } else {
         s.bytes().filter(|&byte| byte == b',').count() + 1
     };
-    let mut segments = Vec::with_capacity(component_count);
+    let mut segments = Vec::with_capacity(capacity);
     for part in s.trim().split(',') {
         let Some((beat_str, val_str)) = part.trim().split_once('=') else {
             continue;
@@ -2040,6 +2049,45 @@ pub fn get_speed_multiplier(t: &TimingData, beat: f64, time: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_segments_preserves_sparse_entries_and_row_beats() {
+        assert!(parse_segments("").is_empty());
+
+        let segments = parse_segments(" ,0=1,missing,4=2,=3,8=nope,96r=-0.5,12=NaN,16=inf, ");
+        assert_eq!(segments.len(), 3);
+        assert_eq!((segments[0].beat, segments[0].value), (0.0, 1.0));
+        assert_eq!((segments[1].beat, segments[1].value), (4.0, 2.0));
+        assert_eq!((segments[2].beat, segments[2].value), (2.0, -0.5));
+
+        let positive =
+            parse_segments_positive(" ,0=1,missing,4=2,=3,8=nope,96r=-0.5,12=NaN,16=inf, ");
+        assert_eq!(positive.len(), 2);
+        assert_eq!((positive[0].beat, positive[0].value), (0.0, 1.0));
+        assert_eq!((positive[1].beat, positive[1].value), (4.0, 2.0));
+    }
+
+    #[test]
+    fn parse_segments_large_map_preserves_all_entries() {
+        use std::fmt::Write;
+
+        let mut map = String::with_capacity(4_096 * 12);
+        for idx in 0..4_096 {
+            if idx != 0 {
+                map.push(',');
+            }
+            write!(&mut map, "{}={}", idx * 4, 60 + idx % 300).unwrap();
+        }
+        assert!(map.len() >= 32 * 1_024);
+
+        let segments = parse_segments(&map);
+        assert_eq!(segments.len(), 4_096);
+        assert_eq!((segments[0].beat, segments[0].value), (0.0, 60.0));
+        assert_eq!(
+            (segments[4_095].beat, segments[4_095].value),
+            (16_380.0, 255.0)
+        );
+    }
 
     #[test]
     fn parse_speeds_preserves_sparse_entries_and_units() {
