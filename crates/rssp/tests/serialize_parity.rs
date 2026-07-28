@@ -364,7 +364,7 @@ fn compare_simfile_normalized_fields(
     }
 
     // Build error string
-    let mut error_details = String::new();
+    let mut error_details = String::from("Simfile normalized field mismatches:\n");
     for (field_name, expected, actual, cmp, _) in comparison_table {
         error_details += &format!(
             "  {}: baseline: {:?} -> reencoded: {:?} {}\n",
@@ -597,7 +597,7 @@ fn compare_chart_timing_fields(
                 }
 
                 // Build error string
-                let mut error_details = String::new();
+                let mut error_details = String::from("Chart timing field mismatches:\n");
                 for (field_name, expected, actual, cmp, _) in comparison_table {
                     error_details += &format!(
                         "  {}: baseline: {:?} -> reencoded: {:?} {}\n",
@@ -620,7 +620,7 @@ fn compare_chart_timing_fields(
         return Ok(());
     }
 
-    let mut error_details = String::from("Chart mismatches:\n");
+    let mut error_details = String::new();
     for line in errors {
         error_details.push_str(&line);
         error_details.push('\n');
@@ -675,7 +675,7 @@ fn compare_timing(
                 }
 
                 // Build error string
-                let mut error_details = String::new();
+                let mut error_details = String::from("Chart timing data mismatches:\n");
                 for (field_name, matches) in timing_comparison_table {
                     error_details += &format!(
                         "  {}: {}\n",
@@ -728,6 +728,7 @@ fn run_rssp_analyze(raw_bytes: &[u8], extension: &str) -> Result<SimfileSummary,
 }
 
 fn check_file(path: &Path, extension: &str) -> Result<(), String> {
+    let ssc = extension_is_ssc(extension).map_err(|e| e.to_string())?;
     let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {e}"))?;
 
     let raw_bytes = zstd::decode_all(&compressed_bytes[..])
