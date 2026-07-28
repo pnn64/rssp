@@ -749,6 +749,15 @@ fn check_file(path: &Path, extension: &str) -> Result<(), String> {
 
     compare_simfile_str_fields(path, extension, &base_summary, &reencoded_summary)?;
     compare_simfile_normalized_fields(path, &base_summary, &reencoded_summary)?;
+
+    // A few SSC files in the corpus are missing a #VERSION tag
+    // but have per-chart timing data, which is invalid.
+    // Don't bother validating these.
+    if ssc && !base_summary.ssc_version.is_finite() {
+        println!("SSC file is missing a version - skipping chart & timing tests");
+        return Ok(());
+    };
+
     compare_chart_timing_fields(path, &base_summary.charts, &reencoded_summary.charts)?;
     compare_chart_str_fields_and_hashes(path, &base_summary.charts, &reencoded_summary.charts)?;
     compare_timing(path, &base_summary, &reencoded_summary)?;
