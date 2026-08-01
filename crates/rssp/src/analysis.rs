@@ -1465,7 +1465,6 @@ mod tests {
         } else {
             description.clone()
         };
-        let chart_style = String::new();
 
         ChartMetadataStrings {
             step_type,
