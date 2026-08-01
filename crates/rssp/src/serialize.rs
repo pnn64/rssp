@@ -1,6 +1,6 @@
 use std::io;
 
-use rssp_core::parse::extension_is_ssc;
+use rssp_core::{parse::extension_is_ssc, timing::SpeedUnit};
 
 pub const DEFAULT_VERSION: &[u8] = b"0.83";
 pub const DEFAULT_TITLE: &[u8] = b"Untitled";
@@ -74,6 +74,8 @@ enum PropValue<'a> {
     Number(f64),
     NumberOpt(Option<f64>),
     Bool(bool),
+    TimingPairs(&'a [(f32, f32)]),
+    TimingSpeeds(&'a [(f32, f32, f32, SpeedUnit)]),
     RadarValues(Option<[f32; crate::stats::RADAR_CATEGORY_COUNT]>, bool),
 }
 
@@ -123,6 +125,48 @@ impl<'a> PropValue<'a> {
                 }
                 None => Ok(0),
             },
+            PropValue::TimingPairs(items) => {
+                let mut written_bytes = 0;
+                let mut first_item = true;
+
+                for (beat, value) in items.iter() {
+                    if !first_item {
+                        written_bytes += write_all!(out, b",\n")?;
+                    }
+                    written_bytes += write_all!(out, format_dot6_f32(*beat).as_bytes())?;
+                    written_bytes += write_all!(out, b"=")?;
+                    written_bytes += write_all!(out, format_dot6_f32(*value).as_bytes())?;
+                    first_item = false;
+                }
+
+                Ok(written_bytes)
+            }
+            PropValue::TimingSpeeds(items) => {
+                let mut written_bytes = 0;
+                let mut first_item = true;
+
+                for (beat, ratio, delay, unit) in items.iter() {
+                    if !first_item {
+                        written_bytes += write_all!(out, b",\n")?;
+                    }
+                    written_bytes += write_all!(out, format_dot6_f32(*beat).as_bytes())?;
+                    written_bytes += write_all!(out, b"=")?;
+                    written_bytes += write_all!(out, format_dot6_f32(*ratio).as_bytes())?;
+                    written_bytes += write_all!(out, b"=")?;
+                    written_bytes += write_all!(out, format_dot6_f32(*delay).as_bytes())?;
+                    written_bytes += write_all!(out, b"=")?;
+                    written_bytes += write_all!(
+                        out,
+                        match unit {
+                            SpeedUnit::Seconds => b"1",
+                            SpeedUnit::Beats => b"0",
+                        }
+                    )?;
+                    first_item = false;
+                }
+
+                Ok(written_bytes)
+            }
         }
     }
 
@@ -139,6 +183,8 @@ impl<'a> PropValue<'a> {
             PropValue::Number(_) => false,
             PropValue::NumberOpt(opt) => opt.is_none(),
             PropValue::Bool(_) => false,
+            PropValue::TimingPairs(items) => items.is_empty(),
+            PropValue::TimingSpeeds(items) => items.is_empty(),
             PropValue::RadarValues(rv, _) => rv.is_none(),
         }
     }
@@ -301,16 +347,16 @@ pub fn serialize_simfile(
         Prop::new(b"SAMPLELENGTH", PropValue::Number(summary.sample_length)),
         Prop::new(b"SELECTABLE", PropValue::Bool(summary.selectable)),
         Prop::nonempty_only(b"DISPLAYBPM", PropValue::StrNoEscape(&summary.display_bpm_str)),
-        Prop::new_with_default(b"BPMS", DEFAULT_BPMS, PropValue::StrNoEscape(&summary.normalized_bpms)),
-        Prop::new(b"STOPS", PropValue::StrNoEscape(&summary.normalized_stops)),
-        Prop::ssc_only(b"DELAYS", PropValue::StrNoEscape(&summary.normalized_delays)),
-        Prop::ssc_only(b"WARPS", PropValue::StrNoEscape(&summary.normalized_warps)),
+        Prop::new_with_default(b"BPMS", DEFAULT_BPMS, PropValue::TimingPairs(&summary.global_timing_segments.bpms)),
+        Prop::new(b"STOPS", PropValue::TimingPairs(&summary.global_timing_segments.stops)),
+        Prop::ssc_only(b"DELAYS", PropValue::TimingPairs(&summary.global_timing_segments.delays)),
+        Prop::ssc_only(b"WARPS", PropValue::TimingPairs(&summary.global_timing_segments.warps)),
         Prop::ssc_only_with_default(b"TIMESIGNATURES", DEFAULT_TIME_SIGNATURES, PropValue::StrNoEscape(&summary.normalized_time_signatures)),
         Prop::ssc_only_with_default(b"TICKCOUNTS", DEFAULT_TICKCOUNTS, PropValue::StrNoEscape(&summary.normalized_tickcounts)),
         Prop::ssc_only_with_default(b"COMBOS", DEFAULT_COMBOS, PropValue::StrNoEscape(&summary.normalized_combos)),
-        Prop::ssc_only_with_default(b"SPEEDS", DEFAULT_SPEEDS, PropValue::StrNoEscape(&summary.normalized_speeds)),
-        Prop::ssc_only_with_default(b"SCROLLS", DEFAULT_SCROLLS, PropValue::StrNoEscape(&summary.normalized_scrolls)),
-        Prop::ssc_only(b"FAKES", PropValue::StrNoEscape(&summary.normalized_fakes)),
+        Prop::ssc_only_with_default(b"SPEEDS", DEFAULT_SPEEDS, PropValue::TimingSpeeds(&summary.global_timing_segments.speeds)),
+        Prop::ssc_only_with_default(b"SCROLLS", DEFAULT_SCROLLS, PropValue::TimingPairs(&summary.global_timing_segments.scrolls)),
+        Prop::ssc_only(b"FAKES", PropValue::TimingPairs(&summary.global_timing_segments.fakes)),
         Prop::ssc_only_with_default(b"LABELS", DEFAULT_LABELS, PropValue::StrNoEscape(&summary.normalized_labels)),
         Prop::ssc_nonempty_only(b"LASTSECONDHINT", PropValue::NumberOpt(summary.last_second_hint)),
         Prop::new(b"BGCHANGES", PropValue::StrNoEscape(&summary.normalized_bgchanges)),
@@ -415,16 +461,16 @@ fn serialize_ssc_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> 
         Prop::new(b"RADARVALUES", PropValue::RadarValues(chart.cached_radar_values, true)),
         Prop::new(b"CREDIT", PropValue::Str(&chart.step_artist_str)),
         Prop::own_timing_only(b"OFFSET", PropValue::Number(chart.chart_offset_seconds)),
-        Prop::own_timing_only_with_default(b"BPMS", DEFAULT_BPMS, PropValue::StrNoEscapeOpt(chart.chart_bpms.as_deref())),
-        Prop::own_timing_only(b"STOPS", PropValue::StrNoEscapeOpt(chart.chart_stops.as_deref())),
-        Prop::own_timing_only(b"DELAYS", PropValue::StrNoEscapeOpt(chart.chart_delays.as_deref())),
-        Prop::own_timing_only(b"WARPS", PropValue::StrNoEscapeOpt(chart.chart_warps.as_deref())),
+        Prop::own_timing_only_with_default(b"BPMS", DEFAULT_BPMS, PropValue::TimingPairs(&chart.timing_segments.bpms)),
+        Prop::own_timing_only(b"STOPS", PropValue::TimingPairs(&chart.timing_segments.stops)),
+        Prop::own_timing_only(b"DELAYS", PropValue::TimingPairs(&chart.timing_segments.delays)),
+        Prop::own_timing_only(b"WARPS", PropValue::TimingPairs(&chart.timing_segments.warps)),
         Prop::own_timing_only_with_default(b"TIMESIGNATURES", DEFAULT_TIME_SIGNATURES, PropValue::StrNoEscapeOpt(chart.chart_time_signatures.as_deref())),
         Prop::own_timing_only_with_default(b"TICKCOUNTS", DEFAULT_TICKCOUNTS, PropValue::StrNoEscapeOpt(chart.chart_tickcounts.as_deref())),
         Prop::own_timing_only_with_default(b"COMBOS", DEFAULT_COMBOS, PropValue::StrNoEscapeOpt(chart.chart_combos.as_deref())),
-        Prop::own_timing_only_with_default(b"SPEEDS", DEFAULT_SPEEDS, PropValue::StrNoEscapeOpt(chart.chart_speeds.as_deref())),
-        Prop::own_timing_only_with_default(b"SCROLLS", DEFAULT_SCROLLS, PropValue::StrNoEscapeOpt(chart.chart_scrolls.as_deref())),
-        Prop::own_timing_only(b"FAKES", PropValue::StrNoEscapeOpt(chart.chart_fakes.as_deref())),
+        Prop::own_timing_only_with_default(b"SPEEDS", DEFAULT_SPEEDS, PropValue::TimingSpeeds(&chart.timing_segments.speeds)),
+        Prop::own_timing_only_with_default(b"SCROLLS", DEFAULT_SCROLLS, PropValue::TimingPairs(&chart.timing_segments.scrolls)),
+        Prop::own_timing_only(b"FAKES", PropValue::TimingPairs(&chart.timing_segments.fakes)),
         Prop::own_timing_only_with_default(b"LABELS", DEFAULT_LABELS, PropValue::StrNoEscapeOpt(chart.chart_labels.as_deref())),
         Prop::nonempty_only(b"ATTACKS", PropValue::StrNoEscapeOpt(chart.chart_has_own_attacks.then(|| chart.chart_attacks.as_deref()).flatten())),
         Prop::nonempty_only(b"DISPLAYBPM", PropValue::StrNoEscapeOpt(chart.chart_display_bpm.as_deref())),
@@ -442,6 +488,7 @@ fn serialize_ssc_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> 
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
+    use rssp_core::timing::TimingSegments;
     use std::io;
     use std::sync::Arc;
 
@@ -485,34 +532,34 @@ mod tests {
             #SAMPLESTART:10.000000;\n\
             #SAMPLELENGTH:16.000000;\n\
             #SELECTABLE:YES;\n\
-            #BPMS:0.000=120.000,\n\
-            16.000=240.000,\n\
-            48.000=120.000;\n\
-            #STOPS:1.000=1.250,\n\
-            1.500=1.750;\n\
-            #DELAYS:2.000=2.250,\n\
-            2.500=2.750;\n\
-            #WARPS:3.000=3.250,\n\
-            3.500=3.750;\n\
-            #TIMESIGNATURES:0.000=4=4,\n\
-            16.000=8=4,\n\
-            48.000=4=4;\n\
-            #TICKCOUNTS:0.000=4,\n\
-            16.000=2,\n\
-            48.000=4;\n\
-            #COMBOS:0.000=1,\n\
-            16.000=2,\n\
-            48.000=1;\n\
-            #SPEEDS:0.000=1.000=0.000=0,\n\
-            12.000=0.500=4.000=0,\n\
-            48.000=1.000=0.000=1;\n\
-            #SCROLLS:0.000=1.000,\n\
-            16.000=2.000,\n\
-            48.000=1.000;\n\
-            #FAKES:4.000=4.250,\n\
-            4.500=4.750;\n\
-            #LABELS:0.000=Song Start,\n\
-            16.000=Speedup;\n\
+            #BPMS:0.000000=120.000000,\n\
+            16.000000=240.000000,\n\
+            48.000000=120.000000;\n\
+            #STOPS:1.000000=1.250000,\n\
+            1.500000=1.750000;\n\
+            #DELAYS:2.000000=2.250000,\n\
+            2.500000=2.750000;\n\
+            #WARPS:3.000000=3.250000,\n\
+            3.500000=3.750000;\n\
+            #TIMESIGNATURES:0.000000=4=4,\n\
+            16.000000=8=4,\n\
+            48.000000=4=4;\n\
+            #TICKCOUNTS:0.000000=4,\n\
+            16.000000=2,\n\
+            48.000000=4;\n\
+            #COMBOS:0.000000=1,\n\
+            16.000000=2,\n\
+            48.000000=1;\n\
+            #SPEEDS:0.000000=1.000000=0.000000=0,\n\
+            12.000000=0.500000=4.000000=0,\n\
+            48.000000=1.000000=0.000000=1;\n\
+            #SCROLLS:0.000000=1.000000,\n\
+            16.000000=2.000000,\n\
+            48.000000=1.000000;\n\
+            #FAKES:4.000000=4.250000,\n\
+            4.500000=4.750000;\n\
+            #LABELS:0.000000=Song Start,\n\
+            16.000000=Speedup;\n\
             #BGCHANGES:BGChanges;\n\
             #KEYSOUNDS:;\n\
             #ATTACKS:;\n\
@@ -547,34 +594,34 @@ mod tests {
             0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000;\n\
             #CREDIT:Step artist;\n\
             #OFFSET:0.000000;\n\
-            #BPMS:0.000=120.000,\n\
-            16.000=240.000,\n\
-            48.000=120.000;\n\
-            #STOPS:1.000=1.250,\n\
-            1.500=1.750;\n\
-            #DELAYS:2.000=2.250,\n\
-            2.500=2.750;\n\
-            #WARPS:3.000=3.250,\n\
-            3.500=3.750;\n\
-            #TIMESIGNATURES:0.000=4=4,\n\
-            16.000=8=4,\n\
-            48.000=4=4;\n\
-            #TICKCOUNTS:0.000=4,\n\
-            16.000=2,\n\
-            48.000=4;\n\
-            #COMBOS:0.000=1,\n\
-            16.000=2,\n\
-            48.000=1;\n\
-            #SPEEDS:0.000=1.000=0.000=0,\n\
-            12.000=0.500=4.000=0,\n\
-            48.000=1.000=0.000=1;\n\
-            #SCROLLS:0.000=1.000,\n\
-            16.000=2.000,\n\
-            48.000=1.000;\n\
-            #FAKES:4.000=4.250,\n\
-            4.500=4.750;\n\
-            #LABELS:0.000=Song Start,\n\
-            16.000=Speedup;\n\
+            #BPMS:0.000000=120.000000,\n\
+            116.000000=240.000000,\n\
+            148.000000=120.000000;\n\
+            #STOPS:101.000000=1.250000,\n\
+            101.500000=1.750000;\n\
+            #DELAYS:102.000000=2.250000,\n\
+            102.500000=2.750000;\n\
+            #WARPS:103.000000=3.250000,\n\
+            103.500000=3.750000;\n\
+            #TIMESIGNATURES:0.000000=4=4,\n\
+            116.000000=8=4,\n\
+            148.000000=4=4;\n\
+            #TICKCOUNTS:0.000000=4,\n\
+            116.000000=2,\n\
+            148.000000=4;\n\
+            #COMBOS:0.000000=1,\n\
+            116.000000=2,\n\
+            148.000000=1;\n\
+            #SPEEDS:0.000000=1.000000=0.000000=0,\n\
+            112.000000=0.500000=4.000000=0,\n\
+            148.000000=1.000000=0.000000=1;\n\
+            #SCROLLS:0.000000=1.000000,\n\
+            116.000000=2.000000,\n\
+            148.000000=1.000000;\n\
+            #FAKES:104.000000=4.250000,\n\
+            104.500000=4.750000;\n\
+            #LABELS:0.000000=Song Start,\n\
+            116.000000=Speedup;\n\
             #NOTES:\n\
             0000\n\
             0000\n\
@@ -629,34 +676,34 @@ mod tests {
             #SAMPLELENGTH:16.000000;\n\
             #SELECTABLE:YES;\n\
             #DISPLAYBPM:150;\n\
-            #BPMS:0.000=120.000,\n\
-            16.000=240.000,\n\
-            48.000=120.000;\n\
-            #STOPS:1.000=1.250,\n\
-            1.500=1.750;\n\
-            #DELAYS:2.000=2.250,\n\
-            2.500=2.750;\n\
-            #WARPS:3.000=3.250,\n\
-            3.500=3.750;\n\
-            #TIMESIGNATURES:0.000=4=4,\n\
-            16.000=8=4,\n\
-            48.000=4=4;\n\
-            #TICKCOUNTS:0.000=4,\n\
-            16.000=2,\n\
-            48.000=4;\n\
-            #COMBOS:0.000=1,\n\
-            16.000=2,\n\
-            48.000=1;\n\
-            #SPEEDS:0.000=1.000=0.000=0,\n\
-            12.000=0.500=4.000=0,\n\
-            48.000=1.000=0.000=1;\n\
-            #SCROLLS:0.000=1.000,\n\
-            16.000=2.000,\n\
-            48.000=1.000;\n\
-            #FAKES:4.000=4.250,\n\
-            4.500=4.750;\n\
-            #LABELS:0.000=Song Start,\n\
-            16.000=Speedup;\n\
+            #BPMS:0.000000=120.000000,\n\
+            16.000000=240.000000,\n\
+            48.000000=120.000000;\n\
+            #STOPS:1.000000=1.250000,\n\
+            1.500000=1.750000;\n\
+            #DELAYS:2.000000=2.250000,\n\
+            2.500000=2.750000;\n\
+            #WARPS:3.000000=3.250000,\n\
+            3.500000=3.750000;\n\
+            #TIMESIGNATURES:0.000000=4=4,\n\
+            16.000000=8=4,\n\
+            48.000000=4=4;\n\
+            #TICKCOUNTS:0.000000=4,\n\
+            16.000000=2,\n\
+            48.000000=4;\n\
+            #COMBOS:0.000000=1,\n\
+            16.000000=2,\n\
+            48.000000=1;\n\
+            #SPEEDS:0.000000=1.000000=0.000000=0,\n\
+            12.000000=0.500000=4.000000=0,\n\
+            48.000000=1.000000=0.000000=1;\n\
+            #SCROLLS:0.000000=1.000000,\n\
+            16.000000=2.000000,\n\
+            48.000000=1.000000;\n\
+            #FAKES:4.000000=4.250000,\n\
+            4.500000=4.750000;\n\
+            #LABELS:0.000000=Song Start,\n\
+            16.000000=Speedup;\n\
             #LASTSECONDHINT:120.000000;\n\
             #BGCHANGES:BGChanges;\n\
             #FGCHANGES:FGChanges;\n\
@@ -697,34 +744,34 @@ mod tests {
             0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000;\n\
             #CREDIT:Step artist;\n\
             #OFFSET:0.000000;\n\
-            #BPMS:0.000=120.000,\n\
-            16.000=240.000,\n\
-            48.000=120.000;\n\
-            #STOPS:1.000=1.250,\n\
-            1.500=1.750;\n\
-            #DELAYS:2.000=2.250,\n\
-            2.500=2.750;\n\
-            #WARPS:3.000=3.250,\n\
-            3.500=3.750;\n\
-            #TIMESIGNATURES:0.000=4=4,\n\
-            16.000=8=4,\n\
-            48.000=4=4;\n\
-            #TICKCOUNTS:0.000=4,\n\
-            16.000=2,\n\
-            48.000=4;\n\
-            #COMBOS:0.000=1,\n\
-            16.000=2,\n\
-            48.000=1;\n\
-            #SPEEDS:0.000=1.000=0.000=0,\n\
-            12.000=0.500=4.000=0,\n\
-            48.000=1.000=0.000=1;\n\
-            #SCROLLS:0.000=1.000,\n\
-            16.000=2.000,\n\
-            48.000=1.000;\n\
-            #FAKES:4.000=4.250,\n\
-            4.500=4.750;\n\
-            #LABELS:0.000=Song Start,\n\
-            16.000=Speedup;\n\
+            #BPMS:0.000000=120.000000,\n\
+            116.000000=240.000000,\n\
+            148.000000=120.000000;\n\
+            #STOPS:101.000000=1.250000,\n\
+            101.500000=1.750000;\n\
+            #DELAYS:102.000000=2.250000,\n\
+            102.500000=2.750000;\n\
+            #WARPS:103.000000=3.250000,\n\
+            103.500000=3.750000;\n\
+            #TIMESIGNATURES:0.000000=4=4,\n\
+            116.000000=8=4,\n\
+            148.000000=4=4;\n\
+            #TICKCOUNTS:0.000000=4,\n\
+            116.000000=2,\n\
+            148.000000=4;\n\
+            #COMBOS:0.000000=1,\n\
+            116.000000=2,\n\
+            148.000000=1;\n\
+            #SPEEDS:0.000000=1.000000=0.000000=0,\n\
+            112.000000=0.500000=4.000000=0,\n\
+            148.000000=1.000000=0.000000=1;\n\
+            #SCROLLS:0.000000=1.000000,\n\
+            116.000000=2.000000,\n\
+            148.000000=1.000000;\n\
+            #FAKES:104.000000=4.250000,\n\
+            104.500000=4.750000;\n\
+            #LABELS:0.000000=Song Start,\n\
+            116.000000=Speedup;\n\
             #ATTACKS:Attacks;\n\
             #DISPLAYBPM:300;\n\
             #NOTES:\n\
@@ -781,19 +828,15 @@ mod tests {
             #SAMPLELENGTH:16.000000;\n\
             #SELECTABLE:YES;\n\
             #BPMS:0.000000=60.000000;\n\
-            #STOPS:1.000=1.250,\n\
-            1.500=1.750;\n\
-            #DELAYS:2.000=2.250,\n\
-            2.500=2.750;\n\
-            #WARPS:3.000=3.250,\n\
-            3.500=3.750;\n\
+            #STOPS:;\n\
+            #DELAYS:;\n\
+            #WARPS:;\n\
             #TIMESIGNATURES:0.000000=4=4;\n\
             #TICKCOUNTS:0.000000=4;\n\
             #COMBOS:0.000000=1;\n\
             #SPEEDS:0.000000=1.000000=0.000000=0;\n\
             #SCROLLS:0.000000=1.000000;\n\
-            #FAKES:4.000=4.250,\n\
-            4.500=4.750;\n\
+            #FAKES:;\n\
             #LABELS:0.000000=Song Start;\n\
             #BGCHANGES:BGChanges;\n\
             #KEYSOUNDS:;\n\
@@ -830,19 +873,15 @@ mod tests {
             #CREDIT:Step artist;\n\
             #OFFSET:0.000000;\n\
             #BPMS:0.000000=60.000000;\n\
-            #STOPS:1.000=1.250,\n\
-            1.500=1.750;\n\
-            #DELAYS:2.000=2.250,\n\
-            2.500=2.750;\n\
-            #WARPS:3.000=3.250,\n\
-            3.500=3.750;\n\
+            #STOPS:;\n\
+            #DELAYS:;\n\
+            #WARPS:;\n\
             #TIMESIGNATURES:0.000000=4=4;\n\
             #TICKCOUNTS:0.000000=4;\n\
             #COMBOS:0.000000=1;\n\
             #SPEEDS:0.000000=1.000000=0.000000=0;\n\
             #SCROLLS:0.000000=1.000000;\n\
-            #FAKES:4.000=4.250,\n\
-            4.500=4.750;\n\
+            #FAKES:;\n\
             #LABELS:0.000000=Song Start;\n\
             #NOTES:\n\
             0000\n\
@@ -889,11 +928,11 @@ mod tests {
         #SAMPLESTART:10.000000;\n\
         #SAMPLELENGTH:16.000000;\n\
         #SELECTABLE:YES;\n\
-        #BPMS:0.000=120.000,\n\
-        16.000=240.000,\n\
-        48.000=120.000;\n\
-        #STOPS:1.000=1.250,\n\
-        1.500=1.750;\n\
+        #BPMS:0.000000=120.000000,\n\
+        16.000000=240.000000,\n\
+        48.000000=120.000000;\n\
+        #STOPS:1.000000=1.250000,\n\
+        1.500000=1.750000;\n\
         #BGCHANGES:BGChanges;\n\
         #KEYSOUNDS:;\n\
         #ATTACKS:;\n\
@@ -945,11 +984,11 @@ mod tests {
         #SAMPLELENGTH:16.000000;\n\
         #SELECTABLE:YES;\n\
         #DISPLAYBPM:150;\n\
-        #BPMS:0.000=120.000,\n\
-        16.000=240.000,\n\
-        48.000=120.000;\n\
-        #STOPS:1.000=1.250,\n\
-        1.500=1.750;\n\
+        #BPMS:0.000000=120.000000,\n\
+        16.000000=240.000000,\n\
+        48.000000=120.000000;\n\
+        #STOPS:1.000000=1.250000,\n\
+        1.500000=1.750000;\n\
         #BGCHANGES:BGChanges;\n\
         #FGCHANGES:FGChanges;\n\
         #KEYSOUNDS:;\n\
@@ -1002,8 +1041,7 @@ mod tests {
         #SAMPLELENGTH:16.000000;\n\
         #SELECTABLE:YES;\n\
         #BPMS:0.000000=60.000000;\n\
-        #STOPS:1.000=1.250,\n\
-        1.500=1.750;\n\
+        #STOPS:;\n\
         #BGCHANGES:BGChanges;\n\
         #KEYSOUNDS:;\n\
         #ATTACKS:;\n\
@@ -1061,39 +1099,50 @@ mod tests {
             subtitletranslit_str: String::from("Subtitle translit"),
             artisttranslit_str: String::from("Artist translit"),
             offset: 0.123,
-            normalized_bpms: match trigger_defaults {
-                false => String::from("0.000=120.000,\n16.000=240.000,\n48.000=120.000"),
-                true => String::from(""),
+            normalized_bpms: Default::default(),
+            normalized_stops: Default::default(),
+            normalized_delays: Default::default(),
+            normalized_warps: Default::default(),
+            normalized_speeds: Default::default(),
+            normalized_scrolls: Default::default(),
+            normalized_fakes: Default::default(),
+            global_timing_segments: if trigger_defaults {
+                Arc::new(TimingSegments::default())
+            } else {
+                Arc::new(TimingSegments {
+                    beat0_offset_adjust: Default::default(),
+                    bpms: vec![(0.000, 120.000), (16.000, 240.000), (48.000, 120.000)],
+                    stops: vec![(1.000, 1.250), (1.500, 1.750)],
+                    delays: vec![(2.000, 2.250), (2.500, 2.750)],
+                    warps: vec![(3.000, 3.250), (3.500, 3.750)],
+                    speeds: vec![
+                        (0.000, 1.000, 0.000, rssp_core::timing::SpeedUnit::Beats),
+                        (12.000, 0.500, 4.000, rssp_core::timing::SpeedUnit::Beats),
+                        (48.000, 1.000, 0.000, rssp_core::timing::SpeedUnit::Seconds),
+                    ],
+                    scrolls: vec![(0.000, 1.000), (16.000, 2.000), (48.000, 1.000)],
+                    fakes: vec![(4.000, 4.250), (4.500, 4.750)],
+                })
             },
-            normalized_stops: String::from("1.000=1.250,\n1.500=1.750"),
-            normalized_delays: String::from("2.000=2.250,\n2.500=2.750"),
-            normalized_warps: String::from("3.000=3.250,\n3.500=3.750"),
-            normalized_speeds: match trigger_defaults {
-                false => String::from(
-                    "0.000=1.000=0.000=0,\n12.000=0.500=4.000=0,\n48.000=1.000=0.000=1",
-                ),
-                true => String::from(""),
+            normalized_time_signatures: if trigger_defaults {
+                String::from("")
+            } else {
+                String::from("0.000000=4=4,\n16.000000=8=4,\n48.000000=4=4")
             },
-            normalized_scrolls: match trigger_defaults {
-                false => String::from("0.000=1.000,\n16.000=2.000,\n48.000=1.000"),
-                true => String::from(""),
+            normalized_labels: if trigger_defaults {
+                String::from("")
+            } else {
+                String::from("0.000000=Song Start,\n16.000000=Speedup")
             },
-            normalized_fakes: String::from("4.000=4.250,\n4.500=4.750"),
-            normalized_time_signatures: match trigger_defaults {
-                false => String::from("0.000=4=4,\n16.000=8=4,\n48.000=4=4"),
-                true => String::from(""),
+            normalized_tickcounts: if trigger_defaults {
+                String::from("")
+            } else {
+                String::from("0.000000=4,\n16.000000=2,\n48.000000=4")
             },
-            normalized_labels: match trigger_defaults {
-                false => String::from("0.000=Song Start,\n16.000=Speedup"),
-                true => String::from(""),
-            },
-            normalized_tickcounts: match trigger_defaults {
-                false => String::from("0.000=4,\n16.000=2,\n48.000=4"),
-                true => String::from(""),
-            },
-            normalized_combos: match trigger_defaults {
-                false => String::from("0.000=1,\n16.000=2,\n48.000=1"),
-                true => String::from(""),
+            normalized_combos: if trigger_defaults {
+                String::from("")
+            } else {
+                String::from("0.000000=1,\n16.000000=2,\n48.000000=1")
             },
             ssc_version: 0.83,
             timing_format: rssp_core::timing::TimingFormat::Ssc,
@@ -1180,39 +1229,45 @@ mod tests {
 
             // Timing fields
             chart_has_own_timing: has_own_timing,
-            chart_bpms: (has_own_timing && !trigger_defaults)
-                .then(|| String::from("0.000=120.000,\n16.000=240.000,\n48.000=120.000")),
-            chart_stops: has_own_timing.then(|| String::from("1.000=1.250,\n1.500=1.750")),
-            chart_delays: has_own_timing.then(|| String::from("2.000=2.250,\n2.500=2.750")),
-            chart_warps: has_own_timing.then(|| String::from("3.000=3.250,\n3.500=3.750")),
-            chart_speeds: (has_own_timing && !trigger_defaults).then(|| {
-                String::from("0.000=1.000=0.000=0,\n12.000=0.500=4.000=0,\n48.000=1.000=0.000=1")
-            }),
-            chart_scrolls: (has_own_timing && !trigger_defaults)
-                .then(|| String::from("0.000=1.000,\n16.000=2.000,\n48.000=1.000")),
-            chart_fakes: has_own_timing.then(|| String::from("4.000=4.250,\n4.500=4.750")),
             chart_time_signatures: (has_own_timing && !trigger_defaults)
-                .then(|| String::from("0.000=4=4,\n16.000=8=4,\n48.000=4=4")),
+                .then(|| String::from("0.000000=4=4,\n116.000000=8=4,\n148.000000=4=4")),
             chart_labels: (has_own_timing && !trigger_defaults)
-                .then(|| String::from("0.000=Song Start,\n16.000=Speedup")),
+                .then(|| String::from("0.000000=Song Start,\n116.000000=Speedup")),
             chart_tickcounts: (has_own_timing && !trigger_defaults)
-                .then(|| String::from("0.000=4,\n16.000=2,\n48.000=4")),
+                .then(|| String::from("0.000000=4,\n116.000000=2,\n148.000000=4")),
             chart_combos: (has_own_timing && !trigger_defaults)
-                .then(|| String::from("0.000=1,\n16.000=2,\n48.000=1")),
+                .then(|| String::from("0.000000=1,\n116.000000=2,\n148.000000=1")),
             chart_attacks: include_nonempty.then(|| String::from("Attacks")), // TODO
+            chart_has_own_attacks: include_nonempty,
             chart_display_bpm: include_nonempty.then(|| String::from("300")),
 
-            // These are currently unused in favor of the `chart_*` fields above
-            timing_segments: Arc::new(crate::timing::TimingSegments {
-                beat0_offset_adjust: Default::default(),
-                bpms: Default::default(),
-                stops: Default::default(),
-                delays: Default::default(),
-                warps: Default::default(),
-                speeds: Default::default(),
-                scrolls: Default::default(),
-                fakes: Default::default(),
-            }),
+            timing_segments: if has_own_timing && !trigger_defaults {
+                Arc::new(TimingSegments {
+                    beat0_offset_adjust: Default::default(),
+                    bpms: vec![(0.000, 120.000), (116.000, 240.000), (148.000, 120.000)],
+                    stops: vec![(101.000, 1.250), (101.500, 1.750)],
+                    delays: vec![(102.000, 2.250), (102.500, 2.750)],
+                    warps: vec![(103.000, 3.250), (103.500, 3.750)],
+                    speeds: vec![
+                        (0.000, 1.000, 0.000, rssp_core::timing::SpeedUnit::Beats),
+                        (112.000, 0.500, 4.000, rssp_core::timing::SpeedUnit::Beats),
+                        (148.000, 1.000, 0.000, rssp_core::timing::SpeedUnit::Seconds),
+                    ],
+                    scrolls: vec![(0.000, 1.000), (116.000, 2.000), (148.000, 1.000)],
+                    fakes: vec![(104.000, 4.250), (104.500, 4.750)],
+                })
+            } else {
+                Arc::new(TimingSegments::default())
+            },
+
+            // Unused string timing fields (TimingSegments used instead)
+            chart_bpms: Default::default(),
+            chart_stops: Default::default(),
+            chart_delays: Default::default(),
+            chart_warps: Default::default(),
+            chart_speeds: Default::default(),
+            chart_scrolls: Default::default(),
+            chart_fakes: Default::default(),
 
             // The remaining fields are irrelevant to serialization
             matrix_rating: Default::default(),
