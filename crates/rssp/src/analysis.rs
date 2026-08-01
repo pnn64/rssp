@@ -1026,6 +1026,14 @@ pub fn analyze(
         .credit
         .map(decode_unescape_owned)
         .unwrap_or_default();
+    let origin_str = parsed_data
+        .origin
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .unwrap_or_default();
+    let credit_str = parsed_data
+        .credit
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .unwrap_or_default();
     let banner_path_str = parsed_data
         .banner
         .map(decode_unescape_owned)
