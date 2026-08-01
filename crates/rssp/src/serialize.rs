@@ -426,7 +426,7 @@ fn serialize_ssc_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> 
         Prop::own_timing_only_with_default(b"SCROLLS", DEFAULT_SCROLLS, PropValue::StrNoEscapeOpt(chart.chart_scrolls.as_deref())),
         Prop::own_timing_only(b"FAKES", PropValue::StrNoEscapeOpt(chart.chart_fakes.as_deref())),
         Prop::own_timing_only_with_default(b"LABELS", DEFAULT_LABELS, PropValue::StrNoEscapeOpt(chart.chart_labels.as_deref())),
-        Prop::nonempty_only(b"ATTACKS", PropValue::StrNoEscapeOpt(chart.chart_attacks.as_deref())),
+        Prop::nonempty_only(b"ATTACKS", PropValue::StrNoEscapeOpt(chart.chart_has_own_attacks.then(|| chart.chart_attacks.as_deref()).flatten())),
         Prop::nonempty_only(b"DISPLAYBPM", PropValue::StrNoEscapeOpt(chart.chart_display_bpm.as_deref())),
         Prop::nonempty_only(b"NOTES", PropValue::NoteData(&chart.minimized_note_data)),
         Prop::nonempty_only(b"NOTES2", PropValue::Empty), // TODO
