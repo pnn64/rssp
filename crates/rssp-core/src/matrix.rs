@@ -1009,23 +1009,75 @@ const fn density_from_code(code: u8) -> RunDensity {
     }
 }
 
-/// Finds the maximum difficulty rating from stream sections.
-pub fn compute_matrix_rating(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> f64 {
-    if measure_densities.is_empty() || bpm_map.is_empty() {
-        return 0.0;
-    }
-    if bpm_map.len() == 1 {
-        return compute_matrix_fixed_bpm(measure_densities, bpm_map[0].1);
-    }
-
-    compute_matrix_variable_bpm(measure_densities, bpm_map)
+/// Minimal input needed to reevaluate one Matrix rating candidate at another music rate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MatrixRatingInput {
+    pub effective_bpm: f64,
+    pub measures: usize,
 }
 
-fn compute_matrix_variable_bpm(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> f64 {
-    if bpm_map.len() < HASH_AGGREGATION_MIN_SEGMENTS {
-        return compute_matrix_variable_bpm_small(measure_densities, bpm_map);
-    }
+/// Finds the maximum difficulty rating from stream sections.
+pub fn compute_matrix_rating(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> f64 {
+    let mut best = 0.0f64;
+    for_each_matrix_input(measure_densities, bpm_map, |input| {
+        best = best.max(get_difficulty(input.effective_bpm, input.measures as f64));
+    });
+    best
+}
 
+/// Builds the compact inputs needed to reevaluate a chart's Matrix rating at any music rate.
+pub fn compute_matrix_profile(
+    measure_densities: &[usize],
+    bpm_map: &[(f64, f64)],
+) -> Vec<MatrixRatingInput> {
+    let mut profile = Vec::new();
+    for_each_matrix_input(measure_densities, bpm_map, |input| profile.push(input));
+    profile.sort_unstable_by(|left, right| {
+        left.effective_bpm
+            .total_cmp(&right.effective_bpm)
+            .then(left.measures.cmp(&right.measures))
+    });
+    profile.dedup();
+    profile
+}
+
+/// Reevaluates a compact Matrix profile after scaling its effective BPMs by `music_rate`.
+pub fn matrix_rating_at_rate(profile: &[MatrixRatingInput], music_rate: f64) -> f64 {
+    let rate = if music_rate.is_finite() && music_rate > 0.0 {
+        music_rate
+    } else {
+        1.0
+    };
+    profile.iter().fold(0.0f64, |best, input| {
+        best.max(get_difficulty(
+            input.effective_bpm * rate,
+            input.measures as f64,
+        ))
+    })
+}
+
+fn for_each_matrix_input(
+    measure_densities: &[usize],
+    bpm_map: &[(f64, f64)],
+    mut emit: impl FnMut(MatrixRatingInput),
+) {
+    if measure_densities.is_empty() || bpm_map.is_empty() {
+        return;
+    }
+    if bpm_map.len() == 1 {
+        fixed_matrix_inputs(measure_densities, bpm_map[0].1, &mut emit);
+    } else if bpm_map.len() < HASH_AGGREGATION_MIN_SEGMENTS {
+        small_matrix_inputs(measure_densities, bpm_map, &mut emit);
+    } else {
+        hashed_matrix_inputs(measure_densities, bpm_map, &mut emit);
+    }
+}
+
+fn hashed_matrix_inputs(
+    measure_densities: &[usize],
+    bpm_map: &[(f64, f64)],
+    emit: &mut impl FnMut(MatrixRatingInput),
+) {
     let mut bpm_counts =
         BpmCountsMap::with_capacity_and_hasher(bpm_map.len(), BuildHasherDefault::default());
 
@@ -1044,10 +1096,16 @@ fn compute_matrix_variable_bpm(measure_densities: &[usize], bpm_map: &[(f64, f64
         }
     }
 
-    matrix_best_from_counts(bpm_counts)
+    for (bpm_bits, counts) in bpm_counts {
+        emit_matrix_counts(bpm_bits, counts, emit);
+    }
 }
 
-fn compute_matrix_variable_bpm_small(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> f64 {
+fn small_matrix_inputs(
+    measure_densities: &[usize],
+    bpm_map: &[(f64, f64)],
+    emit: &mut impl FnMut(MatrixRatingInput),
+) {
     debug_assert!(bpm_map.len() < HASH_AGGREGATION_MIN_SEGMENTS);
     let mut bpm_bits = [0u64; HASH_AGGREGATION_MIN_SEGMENTS];
     let mut bpm_counts = [[0usize; 4]; HASH_AGGREGATION_MIN_SEGMENTS];
@@ -1072,7 +1130,7 @@ fn compute_matrix_variable_bpm_small(measure_densities: &[usize], bpm_map: &[(f6
     }
 
     if unique_bpms == 0 {
-        return 0.0;
+        return;
     }
 
     let (mut segment_idx, mut next_beat) = (0usize, bpm_map.get(1).map_or(f64::INFINITY, |m| m.0));
@@ -1090,36 +1148,18 @@ fn compute_matrix_variable_bpm_small(measure_densities: &[usize], bpm_map: &[(f6
         }
     }
 
-    matrix_best_from_counts(
-        bpm_bits[..unique_bpms]
-            .iter()
-            .copied()
-            .zip(bpm_counts[..unique_bpms].iter().copied()),
-    )
-}
-
-fn matrix_best_from_counts(bpm_counts: impl IntoIterator<Item = (u64, [usize; 4])>) -> f64 {
-    let mut best = 0.0f64;
-    for (bpm_bits, counts) in bpm_counts {
-        let bpm = f64::from_bits(bpm_bits);
-        for (code, count) in counts.into_iter().enumerate() {
-            if count == 0 {
-                continue;
-            }
-            let multiplier = get_density_multiplier(density_from_code(code as u8));
-            let effective_bpm = bpm * multiplier;
-            if effective_bpm > 0.0 {
-                best = best.max(get_difficulty(effective_bpm, count as f64));
-            }
-        }
+    for index in 0..unique_bpms {
+        emit_matrix_counts(bpm_bits[index], bpm_counts[index], emit);
     }
-
-    best
 }
 
-fn compute_matrix_fixed_bpm(measure_densities: &[usize], bpm: f64) -> f64 {
+fn fixed_matrix_inputs(
+    measure_densities: &[usize],
+    bpm: f64,
+    emit: &mut impl FnMut(MatrixRatingInput),
+) {
     if bpm <= 0.0 {
-        return 0.0;
+        return;
     }
 
     let mut counts = [0usize; 4];
@@ -1129,16 +1169,24 @@ fn compute_matrix_fixed_bpm(measure_densities: &[usize], bpm: f64) -> f64 {
             counts[code as usize] += 1;
         }
     }
+    emit_matrix_counts(bpm.to_bits(), counts, emit);
+}
 
-    let mut best = 0.0f64;
+fn emit_matrix_counts(bpm_bits: u64, counts: [usize; 4], emit: &mut impl FnMut(MatrixRatingInput)) {
+    let bpm = f64::from_bits(bpm_bits);
     for (code, count) in counts.into_iter().enumerate() {
         if count == 0 {
             continue;
         }
         let multiplier = get_density_multiplier(density_from_code(code as u8));
-        best = best.max(get_difficulty(bpm * multiplier, count as f64));
+        let effective_bpm = bpm * multiplier;
+        if effective_bpm > 0.0 {
+            emit(MatrixRatingInput {
+                effective_bpm,
+                measures: count,
+            });
+        }
     }
-    best
 }
 
 #[cfg(test)]
@@ -1247,5 +1295,43 @@ mod tests {
             compute_matrix_rating(&densities, &bpm_map),
             matrix_rating_generic(&densities, &bpm_map)
         );
+    }
+
+    #[test]
+    fn matrix_profile_matches_direct_rating_at_multiple_rates() {
+        let densities = [0, 16, 20, 24, 32, 16, 20, 24, 32, 16, 0, 20, 24, 32, 48, 16];
+        let bpm_map = [
+            (0.0, 180.0),
+            (8.0, 220.0),
+            (16.0, 180.0),
+            (32.0, -10.0),
+            (48.0, 240.0),
+        ];
+        let profile = compute_matrix_profile(&densities, &bpm_map);
+
+        assert_eq!(
+            matrix_rating_at_rate(&profile, 1.0),
+            compute_matrix_rating(&densities, &bpm_map)
+        );
+        for rate in [0.8, 1.25, 1.5] {
+            let scaled_bpms: Vec<_> = bpm_map
+                .iter()
+                .map(|&(beat, bpm)| (beat, bpm * rate))
+                .collect();
+            assert_eq!(
+                matrix_rating_at_rate(&profile, rate),
+                compute_matrix_rating(&densities, &scaled_bpms),
+                "profile result changed at {rate:.2}x"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_matrix_profile_rate_falls_back_to_one() {
+        let profile = compute_matrix_profile(&[16, 16, 16, 16], &[(0.0, 180.0)]);
+        let base = matrix_rating_at_rate(&profile, 1.0);
+
+        assert_eq!(matrix_rating_at_rate(&profile, 0.0), base);
+        assert_eq!(matrix_rating_at_rate(&profile, f64::NAN), base);
     }
 }

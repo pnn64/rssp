@@ -14,7 +14,7 @@ use crate::bpm::{
 };
 use crate::hash::compute_chart_hash_pair;
 use crate::math::{round_dp, round_sig_figs_6};
-use crate::matrix::compute_matrix_rating;
+use crate::matrix::{MatrixRatingInput, compute_matrix_profile, matrix_rating_at_rate};
 use crate::parse::{
     ParsedChartEntry, SSC_VERSION_CHART_NAME_TAG, clean_tag, decode_bytes, decode_unescape_trim,
     extract_sections, normalize_chart_desc_ref, parse_offset_seconds, parse_version,
@@ -252,6 +252,7 @@ struct DerivedChartMetrics {
     bpm_neutral_hash: String,
     tier_bpm: f64,
     matrix_rating: f64,
+    matrix_profile: Vec<MatrixRatingInput>,
 }
 
 fn parity_scratch<const LANES: usize>(
@@ -348,6 +349,7 @@ fn compute_derived_chart_metrics(
             bpm_neutral_hash,
             tier_bpm,
             matrix_rating: 0.0,
+            matrix_profile: Vec::new(),
         };
     }
 
@@ -355,7 +357,8 @@ fn compute_derived_chart_metrics(
     let (sn_detailed_breakdown, sn_partial_breakdown, sn_simple_breakdown) = sn_breakdowns;
     let (detailed_breakdown, partial_breakdown, simple_breakdown) = standard_breakdowns;
 
-    let matrix_rating = round_dp(compute_matrix_rating(measure_densities, bpm_map), 2);
+    let matrix_profile = compute_matrix_profile(measure_densities, bpm_map);
+    let matrix_rating = round_dp(matrix_rating_at_rate(&matrix_profile, 1.0), 2);
 
     DerivedChartMetrics {
         stream_counts,
@@ -370,6 +373,7 @@ fn compute_derived_chart_metrics(
         bpm_neutral_hash,
         tier_bpm,
         matrix_rating,
+        matrix_profile,
     }
 }
 
@@ -856,6 +860,7 @@ fn build_chart_summary(
             tech_notation_str: metadata.tech_notation,
             tier_bpm: metrics.tier_bpm,
             matrix_rating: metrics.matrix_rating,
+            matrix_profile: metrics.matrix_profile,
             stats,
             stream_counts: metrics.stream_counts,
             total_streams: metrics.total_streams,
