@@ -529,7 +529,7 @@ fn empty_course_chart(step_type: &str, course_difficulty: Difficulty, meter: i32
         difficulty_str: difficulty_label(course_difficulty).to_string(),
         rating_str: meter.to_string(),
         matrix_rating: 0.0,
-        matrix_profile: Vec::new(),
+        matrix_profile: crate::matrix::MatrixProfile::default(),
         tech_notation_str: String::new(),
         tier_bpm: 0.0,
         stats: crate::stats::ArrowStats::default(),

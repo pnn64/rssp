@@ -563,9 +563,25 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     optimizations.throughput(Throughput::Elements(matrix_densities.len() as u64));
-    optimizations.bench_function("matrix_many_bpms", |b| {
+    optimizations.bench_function("matrix_profile_build_legacy", |b| {
         b.iter(|| {
-            black_box(rssp::matrix::compute_matrix_rating(
+            black_box(rssp::matrix::compute_matrix_profile_legacy_for_bench(
+                black_box(&matrix_densities),
+                black_box(&matrix_bpms),
+            ));
+        });
+    });
+    optimizations.bench_function("matrix_profile_build_reserved", |b| {
+        b.iter(|| {
+            black_box(rssp::matrix::compute_matrix_profile_reserved_for_bench(
+                black_box(&matrix_densities),
+                black_box(&matrix_bpms),
+            ));
+        });
+    });
+    optimizations.bench_function("matrix_profile_build_optimized", |b| {
+        b.iter(|| {
+            black_box(rssp::matrix::compute_matrix_profile(
                 black_box(&matrix_densities),
                 black_box(&matrix_bpms),
             ));

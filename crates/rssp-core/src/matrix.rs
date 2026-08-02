@@ -1,6 +1,7 @@
 use crate::stats::{RunDensity, categorize_measure_density};
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
+use std::ops::Deref;
 
 #[derive(Default)]
 struct U64MixHasher(u64);
@@ -45,6 +46,8 @@ const MIN_BPM_KEY: i32 = 80;
 const MAX_BPM_KEY: i32 = 500;
 const BPM_KEY_STEP: i32 = 10;
 const HASH_AGGREGATION_MIN_SEGMENTS: usize = 32;
+// Caps speculative profile reservation at one 4 KiB page of 16-byte inputs.
+const MAX_PROFILE_RESERVE: usize = 256;
 
 /// Static difficulty table for matrix rating interpolation.
 const DIFFICULTY_TABLE: DifficultyTable = [
@@ -824,37 +827,6 @@ const DIFFICULTY_TABLE: DifficultyTable = [
     ),
 ];
 
-/// Finds the lower bound measure and its difficulty.
-#[inline(always)]
-fn find_lower_bound(measures: f64, bpm_data: &[(i32, i32)]) -> (f64, f64) {
-    for &(m, d) in bpm_data.iter().rev() {
-        if f64::from(m) <= measures {
-            return (f64::from(m), f64::from(d));
-        }
-    }
-    (0.0, 0.0)
-}
-
-/// Finds the start of a difficulty range.
-#[inline(always)]
-fn find_range_start(base_difficulty: f64, bpm_data: &[(i32, i32)]) -> f64 {
-    bpm_data
-        .iter()
-        .find_map(|&(m, d)| (f64::from(d) == base_difficulty).then_some(f64::from(m)))
-        .unwrap_or(0.0)
-}
-
-/// Finds the start of the next difficulty range.
-#[inline(always)]
-fn find_range_end(range_start_m: f64, base_difficulty: f64, bpm_data: &[(i32, i32)]) -> f64 {
-    bpm_data
-        .iter()
-        .find_map(|&(m, d)| {
-            (f64::from(m) > range_start_m && f64::from(d) > base_difficulty).then_some(f64::from(m))
-        })
-        .unwrap_or(f64::INFINITY)
-}
-
 /// Computes downward extrapolation for low measures.
 #[inline(always)]
 fn extrapolate_downward(measures: f64, min_measure_key: f64, min_difficulty: f64) -> f64 {
@@ -895,23 +867,42 @@ fn calculate_difficulty_for_bpm(measures: f64, bpm_data: &[(i32, i32)]) -> f64 {
     }
 
     let min_measure_key = f64::from(bpm_data[0].0);
-
     if measures < min_measure_key {
-        let min_difficulty = f64::from(bpm_data[0].1);
-        return extrapolate_downward(measures, min_measure_key, min_difficulty);
+        return extrapolate_downward(measures, min_measure_key, f64::from(bpm_data[0].1));
     }
 
-    let (_, base_difficulty) = find_lower_bound(measures, bpm_data);
+    let base_difficulty = bpm_data
+        .iter()
+        .rev()
+        .find_map(|&(measure, difficulty)| {
+            (f64::from(measure) <= measures).then_some(f64::from(difficulty))
+        })
+        .unwrap_or(0.0);
+    let max_difficulty = f64::from(
+        bpm_data
+            .iter()
+            .map(|&(_, difficulty)| difficulty)
+            .max()
+            .unwrap_or(0),
+    );
+    let range_start = bpm_data
+        .iter()
+        .find_map(|&(measure, difficulty)| {
+            (f64::from(difficulty) == base_difficulty).then_some(f64::from(measure))
+        })
+        .unwrap_or(0.0);
 
-    let max_diff_in_row = f64::from(bpm_data.iter().map(|&(_, d)| d).max().unwrap_or(0));
-
-    if (base_difficulty - max_diff_in_row).abs() < f64::EPSILON {
-        let plateau_start_m = find_range_start(max_diff_in_row, bpm_data);
-        scale_plateau(measures, plateau_start_m, base_difficulty)
+    if (base_difficulty - max_difficulty).abs() < f64::EPSILON {
+        scale_plateau(measures, range_start, base_difficulty)
     } else {
-        let range_start_m = find_range_start(base_difficulty, bpm_data);
-        let range_end_m = find_range_end(range_start_m, base_difficulty, bpm_data);
-        interpolate_log(measures, range_start_m, range_end_m, base_difficulty)
+        let range_end = bpm_data
+            .iter()
+            .find_map(|&(measure, difficulty)| {
+                (f64::from(measure) > range_start && f64::from(difficulty) > base_difficulty)
+                    .then_some(f64::from(measure))
+            })
+            .unwrap_or(f64::INFINITY);
+        interpolate_log(measures, range_start, range_end, base_difficulty)
     }
 }
 
@@ -1016,6 +1007,51 @@ pub struct MatrixRatingInput {
     pub measures: usize,
 }
 
+const EMPTY_MATRIX_INPUT: MatrixRatingInput = MatrixRatingInput {
+    effective_bpm: 0.0,
+    measures: 0,
+};
+
+/// Immutable inputs needed to reevaluate a chart's Matrix rating.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MatrixProfile(Box<[MatrixRatingInput]>);
+
+impl MatrixProfile {
+    /// Returns the rating inputs as a contiguous slice.
+    #[must_use]
+    pub fn as_slice(&self) -> &[MatrixRatingInput] {
+        &self.0
+    }
+
+    /// Reevaluates this profile after scaling its effective BPMs by `music_rate`.
+    #[must_use]
+    pub fn rating_at_rate(&self, music_rate: f64) -> f64 {
+        matrix_rating_at_valid_rate(&self.0, valid_music_rate(music_rate))
+    }
+}
+
+impl AsRef<[MatrixRatingInput]> for MatrixProfile {
+    fn as_ref(&self) -> &[MatrixRatingInput] {
+        self.as_slice()
+    }
+}
+
+impl Deref for MatrixProfile {
+    type Target = [MatrixRatingInput];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+fn sort_matrix_inputs(inputs: &mut [MatrixRatingInput]) {
+    inputs.sort_unstable_by(|left, right| {
+        left.effective_bpm
+            .total_cmp(&right.effective_bpm)
+            .then(left.measures.cmp(&right.measures))
+    });
+}
+
 /// Finds the maximum difficulty rating from stream sections.
 pub fn compute_matrix_rating(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> f64 {
     let mut best = 0.0f64;
@@ -1029,25 +1065,122 @@ pub fn compute_matrix_rating(measure_densities: &[usize], bpm_map: &[(f64, f64)]
 pub fn compute_matrix_profile(
     measure_densities: &[usize],
     bpm_map: &[(f64, f64)],
+) -> MatrixProfile {
+    if measure_densities.is_empty() || bpm_map.is_empty() {
+        return MatrixProfile::default();
+    }
+    if bpm_map.len() == 1 {
+        let mut inputs = [EMPTY_MATRIX_INPUT; 4];
+        let mut len = 0usize;
+        fixed_matrix_inputs(measure_densities, bpm_map[0].1, &mut |input| {
+            inputs[len] = input;
+            len += 1;
+        });
+        return box_bounded_profile(inputs, len);
+    }
+    if bpm_map.len() < HASH_AGGREGATION_MIN_SEGMENTS {
+        let mut inputs = [EMPTY_MATRIX_INPUT; 4 * (HASH_AGGREGATION_MIN_SEGMENTS - 1)];
+        let mut len = 0usize;
+        small_matrix_inputs(measure_densities, bpm_map, &mut |input| {
+            inputs[len] = input;
+            len += 1;
+        });
+        return box_bounded_profile(inputs, len);
+    }
+
+    let mut profile = Vec::with_capacity(matrix_profile_capacity(measure_densities, bpm_map));
+    hashed_matrix_inputs(measure_densities, bpm_map, &mut |input| profile.push(input));
+    box_matrix_profile(profile)
+}
+
+/// Legacy growable profile retained only for comparative benchmarks.
+#[cfg(any(test, feature = "bench-support"))]
+#[doc(hidden)]
+pub fn compute_matrix_profile_legacy_for_bench(
+    measure_densities: &[usize],
+    bpm_map: &[(f64, f64)],
 ) -> Vec<MatrixRatingInput> {
     let mut profile = Vec::new();
-    for_each_matrix_input(measure_densities, bpm_map, |input| profile.push(input));
-    profile.sort_unstable_by(|left, right| {
-        left.effective_bpm
-            .total_cmp(&right.effective_bpm)
-            .then(left.measures.cmp(&right.measures))
-    });
-    profile.dedup();
+    fill_matrix_profile(&mut profile, measure_densities, bpm_map);
     profile
+}
+
+/// Reserved growable profile retained only to isolate reservation benchmarks.
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn compute_matrix_profile_reserved_for_bench(
+    measure_densities: &[usize],
+    bpm_map: &[(f64, f64)],
+) -> Vec<MatrixRatingInput> {
+    let mut profile = Vec::with_capacity(matrix_profile_capacity(measure_densities, bpm_map));
+    fill_matrix_profile(&mut profile, measure_densities, bpm_map);
+    profile
+}
+
+fn matrix_profile_capacity(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> usize {
+    measure_densities
+        .len()
+        .min(bpm_map.len().saturating_mul(4))
+        .min(MAX_PROFILE_RESERVE)
+}
+
+#[cfg(any(test, feature = "bench-support"))]
+fn fill_matrix_profile(
+    profile: &mut Vec<MatrixRatingInput>,
+    measure_densities: &[usize],
+    bpm_map: &[(f64, f64)],
+) {
+    for_each_matrix_input(measure_densities, bpm_map, |input| profile.push(input));
+    sort_matrix_inputs(profile);
+    profile.dedup();
+}
+
+fn box_bounded_profile<const N: usize>(
+    mut inputs: [MatrixRatingInput; N],
+    len: usize,
+) -> MatrixProfile {
+    let inputs = &mut inputs[..len];
+    sort_matrix_inputs(inputs);
+    let len = dedup_matrix_inputs(inputs);
+    MatrixProfile(Box::from(&inputs[..len]))
+}
+
+fn box_matrix_profile(mut inputs: Vec<MatrixRatingInput>) -> MatrixProfile {
+    sort_matrix_inputs(&mut inputs);
+    inputs.dedup();
+    MatrixProfile(inputs.into_boxed_slice())
+}
+
+fn dedup_matrix_inputs(inputs: &mut [MatrixRatingInput]) -> usize {
+    if inputs.is_empty() {
+        return 0;
+    }
+    let mut unique = 1usize;
+    for index in 1..inputs.len() {
+        if inputs[index] != inputs[unique - 1] {
+            inputs[unique] = inputs[index];
+            unique += 1;
+        }
+    }
+    unique
 }
 
 /// Reevaluates a compact Matrix profile after scaling its effective BPMs by `music_rate`.
 pub fn matrix_rating_at_rate(profile: &[MatrixRatingInput], music_rate: f64) -> f64 {
-    let rate = if music_rate.is_finite() && music_rate > 0.0 {
+    matrix_rating_at_valid_rate(profile, valid_music_rate(music_rate))
+}
+
+#[inline(always)]
+fn valid_music_rate(music_rate: f64) -> f64 {
+    if music_rate.is_finite() && music_rate > 0.0 {
         music_rate
     } else {
         1.0
-    };
+    }
+}
+
+#[inline(always)]
+fn matrix_rating_at_valid_rate(profile: &[MatrixRatingInput], rate: f64) -> f64 {
     profile.iter().fold(0.0f64, |best, input| {
         best.max(get_difficulty(
             input.effective_bpm * rate,
@@ -1226,6 +1359,22 @@ mod tests {
     }
 
     #[test]
+    fn profile_uses_exact_size_boxed_storage() {
+        assert!(MatrixProfile::default().is_empty());
+        let profile = compute_matrix_profile(&[16, 16, 16, 16], &[(0.0, 180.0)]);
+        assert_eq!(profile.len(), 1);
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(
+            std::mem::size_of::<MatrixProfile>(),
+            std::mem::size_of::<Box<[MatrixRatingInput]>>()
+        );
+        #[cfg(target_pointer_width = "64")]
+        assert!(
+            std::mem::size_of::<MatrixProfile>() < std::mem::size_of::<Vec<MatrixRatingInput>>()
+        );
+    }
+
+    #[test]
     fn fixed_bpm_matrix_matches_generic_path() {
         let densities = [0, 16, 17, 20, 23, 24, 31, 32, 48, 0, 12, 16];
         let bpm_map = [(0.0, 180.0)];
@@ -1313,6 +1462,10 @@ mod tests {
             matrix_rating_at_rate(&profile, 1.0),
             compute_matrix_rating(&densities, &bpm_map)
         );
+        assert_eq!(
+            profile.rating_at_rate(1.0),
+            compute_matrix_rating(&densities, &bpm_map)
+        );
         for rate in [0.8, 1.25, 1.5] {
             let scaled_bpms: Vec<_> = bpm_map
                 .iter()
@@ -1323,6 +1476,47 @@ mod tests {
                 compute_matrix_rating(&densities, &scaled_bpms),
                 "profile result changed at {rate:.2}x"
             );
+            assert_eq!(
+                profile.rating_at_rate(rate),
+                compute_matrix_rating(&densities, &scaled_bpms),
+                "profile method result changed at {rate:.2}x"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_profiles_match_fixed_small_and_hashed_rating_paths() {
+        let densities: Vec<_> = (0..512)
+            .map(|index| [0, 16, 20, 24, 32, 48][index % 6])
+            .collect();
+        for segment_count in [1usize, 2, 31, 32, 96] {
+            let segment_beats = densities.len() as f64 * 4.0 / segment_count as f64;
+            let bpm_map: Vec<_> = (0..segment_count)
+                .map(|index| {
+                    (
+                        index as f64 * segment_beats,
+                        80.0 + (index % 17) as f64 * 10.0,
+                    )
+                })
+                .collect();
+            let profile = compute_matrix_profile(&densities, &bpm_map);
+            assert_eq!(
+                profile.as_slice(),
+                compute_matrix_profile_legacy_for_bench(&densities, &bpm_map),
+                "profile inputs changed for {segment_count} segments"
+            );
+
+            for rate in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0] {
+                let scaled_bpms: Vec<_> = bpm_map
+                    .iter()
+                    .map(|&(beat, bpm)| (beat, bpm * rate))
+                    .collect();
+                assert_eq!(
+                    matrix_rating_at_rate(&profile, rate).to_bits(),
+                    compute_matrix_rating(&densities, &scaled_bpms).to_bits(),
+                    "profile result changed for {segment_count} segments at {rate:.2}x"
+                );
+            }
         }
     }
 
@@ -1333,5 +1527,7 @@ mod tests {
 
         assert_eq!(matrix_rating_at_rate(&profile, 0.0), base);
         assert_eq!(matrix_rating_at_rate(&profile, f64::NAN), base);
+        assert_eq!(profile.rating_at_rate(0.0), base);
+        assert_eq!(profile.rating_at_rate(f64::NAN), base);
     }
 }

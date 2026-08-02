@@ -14,7 +14,7 @@ rssp-core = { workspace = true }
 serde_json = { version = "1.0.145", features = ["preserve_order"] }
 
 [features]
-profile = []
+profile = ["rssp-core/bench-support"]
 
 [dev-dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
@@ -134,6 +134,7 @@ harness = false
 [[bench]]
 name = "matrix_perf"
 harness = false
+required-features = ["profile"]
 
 [[bench]]
 name = "allocation_perf"
@@ -143,6 +144,7 @@ required-features = ["profile"]
 [[bench]]
 name = "cycle_perf"
 harness = false
+required-features = ["profile"]
 
 [[bench]]
 name = "report_perf"

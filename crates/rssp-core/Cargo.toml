@@ -8,6 +8,9 @@ repository = "https://github.com/pnn64/rssp"
 license = "MIT"
 keywords = ["stepmania", "simfile", "parser", "rust", "rssp"]
 
+[features]
+bench-support = []
+
 [dependencies]
 
 [lints.clippy]

@@ -85,6 +85,7 @@ enum Mode {
     Parse,
     Fast,
     Full,
+    Matrix,
     Annotations,
     Hashes,
     Durations,
@@ -162,6 +163,7 @@ fn parse_args() -> (Mode, usize) {
                 mode = match args[i + 1].as_str() {
                     "parse" => Mode::Parse,
                     "fast" => Mode::Fast,
+                    "matrix" => Mode::Matrix,
                     "annotations" => Mode::Annotations,
                     "hashes" => Mode::Hashes,
                     "durations" => Mode::Durations,
@@ -214,6 +216,7 @@ fn load_corpus() -> Vec<SimInput> {
 fn options_for(mode: Mode) -> rssp::AnalysisOptions {
     match mode {
         Mode::Fast
+        | Mode::Matrix
         | Mode::Parse
         | Mode::Hashes
         | Mode::Durations
@@ -319,6 +322,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
                     checksum = checksum.wrapping_add(notation.len());
                     black_box(notation);
                 }
+            }
+            Mode::Matrix => {
+                unreachable!("matrix mode uses its dedicated allocation runner")
             }
             Mode::Snapshot => {
                 unreachable!("report modes use their dedicated allocation runner")
@@ -524,6 +530,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Parse => "parse",
         Mode::Fast => "fast",
         Mode::Full => "full",
+        Mode::Matrix => "matrix",
         Mode::Annotations => "annotations",
         Mode::Hashes => "hashes",
         Mode::Durations => "durations",
@@ -1076,11 +1083,140 @@ fn run_translate_markers_alloc(iterations: usize) {
     );
 }
 
+struct MatrixAllocInput {
+    densities: Vec<usize>,
+    bpm_map: Vec<(f64, f64)>,
+}
+
+fn matrix_alloc_inputs() -> Vec<MatrixAllocInput> {
+    vec![
+        MatrixAllocInput {
+            densities: vec![16; 4_096],
+            bpm_map: vec![(0.0, 180.0)],
+        },
+        MatrixAllocInput {
+            densities: (0..4_096).map(|index| [16, 20][index & 1]).collect(),
+            bpm_map: vec![(0.0, 180.0)],
+        },
+        MatrixAllocInput {
+            densities: (0..4_096)
+                .map(|index| [16, 20, 24, 32][index & 3])
+                .collect(),
+            bpm_map: (0..16)
+                .map(|index| (index as f64 * 1_024.0, 120.0 + (index % 7) as f64 * 15.0))
+                .collect(),
+        },
+        MatrixAllocInput {
+            densities: (0..4_096)
+                .map(|index| [16, 20, 24, 32][index & 3])
+                .collect(),
+            bpm_map: (0..64)
+                .map(|index| (index as f64 * 256.0, 80.0 + index as f64 * 2.5))
+                .collect(),
+        },
+    ]
+}
+
+fn run_matrix_alloc_phase<T>(
+    phase: &str,
+    iterations: usize,
+    inputs: &[MatrixAllocInput],
+    mut compute: impl FnMut(&[usize], &[(f64, f64)]) -> T,
+) where
+    T: AsRef<[rssp::matrix::MatrixRatingInput]>,
+{
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        for input in inputs {
+            let profile = compute(black_box(&input.densities), black_box(&input.bpm_map));
+            checksum = checksum.wrapping_add(profile.as_ref().len());
+            black_box(profile);
+        }
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    let measures = inputs
+        .iter()
+        .map(|input| input.densities.len())
+        .sum::<usize>() as f64
+        * divisor;
+    println!(
+        concat!(
+            "mode=matrix phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_measures_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        measures / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_matrix_alloc(iterations: usize) {
+    let inputs = matrix_alloc_inputs();
+    let legacy_profiles: Vec<_> = inputs
+        .iter()
+        .map(|input| {
+            rssp::matrix::compute_matrix_profile_legacy_for_bench(&input.densities, &input.bpm_map)
+        })
+        .collect();
+    let profiles: Vec<_> = inputs
+        .iter()
+        .map(|input| rssp::matrix::compute_matrix_profile(&input.densities, &input.bpm_map))
+        .collect();
+    let legacy_entries = legacy_profiles.iter().map(Vec::len).sum::<usize>();
+    let entries = profiles
+        .iter()
+        .map(|profile| profile.as_ref().len())
+        .sum::<usize>();
+    assert_eq!(legacy_entries, entries);
+    let input_bytes = std::mem::size_of::<rssp::matrix::MatrixRatingInput>();
+    let legacy_storage = legacy_profiles
+        .iter()
+        .map(|profile| std::mem::size_of_val(profile) + profile.capacity() * input_bytes)
+        .sum::<usize>();
+    let storage = profiles
+        .iter()
+        .map(|profile| std::mem::size_of_val(profile) + profile.len() * input_bytes)
+        .sum::<usize>();
+    println!(
+        "mode=matrix storage legacy_bytes={legacy_storage} optimized_bytes={storage} entries={entries}"
+    );
+    run_matrix_alloc_phase("legacy", iterations, &inputs, |densities, bpm_map| {
+        rssp::matrix::compute_matrix_profile_legacy_for_bench(densities, bpm_map)
+    });
+    run_matrix_alloc_phase("reserved", iterations, &inputs, |densities, bpm_map| {
+        rssp::matrix::compute_matrix_profile_reserved_for_bench(densities, bpm_map)
+    });
+    run_matrix_alloc_phase("optimized", iterations, &inputs, |densities, bpm_map| {
+        rssp::matrix::compute_matrix_profile(densities, bpm_map)
+    });
+}
+
 fn main() {
     let (mode, iterations) = parse_args();
     match mode {
         Mode::CustomCompile => {
             run_custom_pattern_alloc(iterations);
+            return;
+        }
+        Mode::Matrix => {
+            run_matrix_alloc(iterations);
             return;
         }
         Mode::CourseAnalyze => {

@@ -197,7 +197,7 @@ pub struct ChartSummary {
     pub difficulty_str: String,
     pub rating_str: String,
     pub matrix_rating: f64,
-    pub matrix_profile: Vec<crate::matrix::MatrixRatingInput>,
+    pub matrix_profile: crate::matrix::MatrixProfile,
     pub tech_notation_str: String,
     pub tier_bpm: f64,
     pub stats: ArrowStats,
