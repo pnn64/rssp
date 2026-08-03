@@ -1,6 +1,9 @@
-use std::io;
+use std::{borrow::Cow, io};
 
-use rssp_core::{parse::extension_is_ssc, timing::SpeedUnit};
+use rssp_core::{
+    parse::extension_is_ssc,
+    timing::{SpeedUnit, convert_warps_and_delays_to_sm_stops},
+};
 
 pub const DEFAULT_VERSION: &[u8] = b"0.83";
 pub const DEFAULT_TITLE: &[u8] = b"Untitled";
@@ -319,6 +322,17 @@ pub fn serialize_simfile(
         }
     }
 
+    let stops = if ssc {
+        Cow::Borrowed(summary.global_timing_segments.stops.as_slice())
+    } else {
+        convert_warps_and_delays_to_sm_stops(
+            &summary.global_timing_segments.bpms,
+            &summary.global_timing_segments.stops,
+            &summary.global_timing_segments.delays,
+            &summary.global_timing_segments.warps,
+        )
+    };
+
     let mut written_bytes = 0;
 
     #[rustfmt::skip]
@@ -348,7 +362,7 @@ pub fn serialize_simfile(
         Prop::new(b"SELECTABLE", PropValue::Bool(summary.selectable)),
         Prop::nonempty_only(b"DISPLAYBPM", PropValue::StrNoEscape(&summary.display_bpm_str)),
         Prop::new_with_default(b"BPMS", DEFAULT_BPMS, PropValue::TimingPairs(&summary.global_timing_segments.bpms)),
-        Prop::new(b"STOPS", PropValue::TimingPairs(&summary.global_timing_segments.stops)),
+        Prop::new(b"STOPS", PropValue::TimingPairs(&stops)),
         Prop::ssc_only(b"DELAYS", PropValue::TimingPairs(&summary.global_timing_segments.delays)),
         Prop::ssc_only(b"WARPS", PropValue::TimingPairs(&summary.global_timing_segments.warps)),
         Prop::ssc_only_with_default(b"TIMESIGNATURES", DEFAULT_TIME_SIGNATURES, PropValue::StrNoEscape(&summary.normalized_time_signatures)),
@@ -362,7 +376,7 @@ pub fn serialize_simfile(
         Prop::new(b"BGCHANGES", PropValue::StrNoEscape(&summary.normalized_bgchanges)),
         Prop::nonempty_only(b"FGCHANGES", PropValue::StrNoEscape(&summary.normalized_fgchanges)),
         Prop::new(b"KEYSOUNDS", PropValue::StrNoEscape(&summary.normalized_keysounds)),
-        Prop::new(b"ATTACKS", PropValue::StrNoEscape(&summary.normalized_attacks)), // Commas aren't always row separators
+        Prop::new(b"ATTACKS", PropValue::StrNoEscape(&summary.normalized_attacks)),
     ];
 
     for prop in props {
@@ -932,7 +946,11 @@ mod tests {
         16.000000=240.000000,\n\
         48.000000=120.000000;\n\
         #STOPS:1.000000=1.250000,\n\
-        1.500000=1.750000;\n\
+        1.500000=1.750000,\n\
+        2.000000=2.250000,\n\
+        2.500000=2.750000,\n\
+        3.000000=-1.625000,\n\
+        3.500000=-1.875000;\n\
         #BGCHANGES:BGChanges;\n\
         #KEYSOUNDS:;\n\
         #ATTACKS:;\n\
@@ -988,7 +1006,11 @@ mod tests {
         16.000000=240.000000,\n\
         48.000000=120.000000;\n\
         #STOPS:1.000000=1.250000,\n\
-        1.500000=1.750000;\n\
+        1.500000=1.750000,\n\
+        2.000000=2.250000,\n\
+        2.500000=2.750000,\n\
+        3.000000=-1.625000,\n\
+        3.500000=-1.875000;\n\
         #BGCHANGES:BGChanges;\n\
         #FGCHANGES:FGChanges;\n\
         #KEYSOUNDS:;\n\
