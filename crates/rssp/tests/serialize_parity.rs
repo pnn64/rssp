@@ -5,19 +5,21 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use libtest_mimic::Arguments;
-use rssp::parse::extension_is_ssc;
 use walkdir::WalkDir;
 
-use rssp::report::{TimingSnapshot, build_timing_snapshot};
+use rssp::parse::extension_is_ssc;
 use rssp::serialize::*;
 use rssp::stats::RADAR_CATEGORY_COUNT;
+use rssp::timing::{SpeedUnit, TimingSegments};
 use rssp::{AnalysisOptions, ChartSummary, SimfileSummary, analyze};
-
-static EMPTY: String = String::new();
 
 pub const NORM_DEFAULT_BPMS: &[u8] = b"0.000=60.000";
 pub const NORM_DEFAULT_SPEEDS: &[u8] = b"0.000=1.000=0.000=0";
 pub const NORM_DEFAULT_SCROLLS: &[u8] = b"0.000=1.000";
+pub const TIMING_DEFAULT_BPMS: &[(f32, f32)] = &[(0.0f32, 60.0f32)];
+pub const TIMING_DEFAULT_SPEEDS: &[(f32, f32, f32, SpeedUnit)] =
+    &[(0.0f32, 1.0f32, 0.0f32, SpeedUnit::Beats)];
+pub const TIMING_DEFAULT_SCROLLS: &[(f32, f32)] = &[(0.0f32, 1.0f32)];
 
 #[derive(Debug, Clone)]
 struct TestCase {
@@ -32,94 +34,15 @@ struct Failure {
     message: String,
 }
 
-const TIMING_EPS: f64 = 1e-3;
+const TIMING_EPS: f32 = 1e-3;
 
-fn timing_approx_eq(a: &f64, b: &f64) -> bool {
+fn timing_approx_eq(a: &f32, b: &f32) -> bool {
     (a - b).abs() <= TIMING_EPS
 }
 
-macro_rules! timing_matches_entry {
-    ($field: ident, $comparator: expr, $expected: expr, $actual: expr) => {
-        (
-            String::from(stringify!($field)),
-            $comparator(&$expected.$field, &$actual.$field),
-        )
-    };
-}
-
-fn build_timing_comparison_table(
-    expected: &TimingSnapshot,
-    actual: &TimingSnapshot,
-) -> Vec<(String, bool)> {
-    vec![
-        timing_matches_entry!(beat0_offset_seconds, timing_approx_eq, expected, actual),
-        timing_matches_entry!(bpms, compare_pairs, expected, actual),
-        timing_matches_entry!(stops, compare_pairs, expected, actual),
-        timing_matches_entry!(delays, compare_pairs, expected, actual),
-        timing_matches_entry!(warps, compare_pairs, expected, actual),
-        timing_matches_entry!(scrolls, compare_pairs, expected, actual),
-        timing_matches_entry!(fakes, compare_pairs, expected, actual),
-        timing_matches_entry!(time_signatures, compare_time_signatures, expected, actual),
-        timing_matches_entry!(labels, compare_labels, expected, actual),
-        timing_matches_entry!(tickcounts, compare_tickcounts, expected, actual),
-        timing_matches_entry!(combos, compare_combos, expected, actual),
-        timing_matches_entry!(speeds, compare_speeds, expected, actual),
-    ]
-}
-
-fn compare_pairs(expected: &[(f64, f64)], actual: &[(f64, f64)]) -> bool {
-    expected.len() == actual.len()
-        && expected
-            .iter()
-            .zip(actual)
-            .all(|(e, a)| timing_approx_eq(&e.0, &a.0) && timing_approx_eq(&e.1, &a.1))
-}
-
-fn compare_time_signatures(expected: &[(f64, i32, i32)], actual: &[(f64, i32, i32)]) -> bool {
-    expected.len() == actual.len()
-        && expected
-            .iter()
-            .zip(actual)
-            .all(|(e, a)| timing_approx_eq(&e.0, &a.0) && e.1 == a.1 && e.2 == a.2)
-}
-
-fn compare_labels(expected: &[(f64, String)], actual: &[(f64, String)]) -> bool {
-    expected.len() == actual.len()
-        && expected
-            .iter()
-            .zip(actual)
-            .all(|(e, a)| timing_approx_eq(&e.0, &a.0) && e.1 == a.1)
-}
-
-fn compare_tickcounts(expected: &[(f64, i32)], actual: &[(f64, i32)]) -> bool {
-    expected.len() == actual.len()
-        && expected
-            .iter()
-            .zip(actual)
-            .all(|(e, a)| timing_approx_eq(&e.0, &a.0) && e.1 == a.1)
-}
-
-fn compare_combos(expected: &[(f64, i32, i32)], actual: &[(f64, i32, i32)]) -> bool {
-    expected.len() == actual.len()
-        && expected
-            .iter()
-            .zip(actual)
-            .all(|(e, a)| timing_approx_eq(&e.0, &a.0) && e.1 == a.1 && e.2 == a.2)
-}
-
-fn compare_speeds(expected: &[(f64, f64, f64, i32)], actual: &[(f64, f64, f64, i32)]) -> bool {
-    expected.len() == actual.len()
-        && expected.iter().zip(actual).all(|(e, a)| {
-            timing_approx_eq(&e.0, &a.0)
-                && timing_approx_eq(&e.1, &a.1)
-                && timing_approx_eq(&e.2, &a.2)
-                && e.3 == a.3
-        })
-}
-
-fn compare_radar_values(
-    expected_opt: Option<&[f32; RADAR_CATEGORY_COUNT]>,
-    actual_opt: Option<&[f32; RADAR_CATEGORY_COUNT]>,
+fn radar_values_eq(
+    expected_opt: &Option<[f32; RADAR_CATEGORY_COUNT]>,
+    actual_opt: &Option<[f32; RADAR_CATEGORY_COUNT]>,
 ) -> bool {
     match (expected_opt, actual_opt) {
         (None, None) => true,
@@ -135,81 +58,64 @@ fn compare_radar_values(
     }
 }
 
-fn format_radar_values(radar_values: Option<[f32; RADAR_CATEGORY_COUNT]>) -> String {
-    match radar_values {
-        Some(radar_values) => radar_values
-            .iter()
-            .map(|&f| rssp_core::math::fmt_dec6_itg(f as f64))
-            .collect::<Vec<String>>()
-            .join(","),
-        None => String::from(""),
-    }
-}
-
-macro_rules! build_comparison_entry {
-    ($field: ident, $expected: expr, $actual: expr) => {
-        (
-            stringify!($field),
-            &$expected.$field,
-            &$actual.$field,
-            $expected.$field == $actual.$field,
-            None,
-        )
+macro_rules! compare_fields {
+    ($errors: expr, $expected: expr, $actual: expr, $eq_fn: ident, $field: ident) => {
+        compare_fields!($errors, $expected, $actual, $eq_fn, $field, (|_, _| false))
     };
-    ($field: ident, $expected: expr, $actual: expr, $default: expr) => {
-        (
-            stringify!($field),
-            &$expected.$field,
-            &$actual.$field,
-            $expected.$field == $actual.$field
-                || ($expected.$field.is_empty() && $actual.$field.as_bytes() == $default),
-            Some($default),
-        )
+    ($errors: expr, $expected: expr, $actual: expr, $eq_fn: ident, $field: ident, $is_default_fn: expr) => {
+        (if !$eq_fn(&$expected.$field, &$actual.$field)
+            && !$is_default_fn(&$expected.$field, &$actual.$field)
+        {
+            $errors += &format!(
+                "{}: baseline: {:?} -> reencoded: {:?} ....MISMATCH\n",
+                stringify!($field),
+                $expected.$field,
+                $actual.$field,
+            );
+        })
     };
 }
 
-macro_rules! build_comparison_entry_opt {
-    ($field: ident, $expected: expr, $actual: expr) => {
-        (
-            stringify!($field),
-            &$expected.$field.as_ref().unwrap_or_else(|| &EMPTY),
-            &$actual.$field.as_ref().unwrap_or_else(|| &EMPTY),
-            $expected.$field == $actual.$field,
-            None,
-        )
-    };
-    ($field: ident, $expected: expr, $actual: expr, $default: expr) => {
-        (
-            stringify!($field),
-            &$expected.$field.as_ref().unwrap_or_else(|| &EMPTY),
-            &$actual.$field.as_ref().unwrap_or_else(|| &EMPTY),
-            $expected.$field == $actual.$field
-                || ($expected.$field.as_ref().is_none_or(|f| f.is_empty())
-                    && $actual
-                        .$field
-                        .as_ref()
-                        .is_some_and(|f| f.as_bytes() == $default)),
-            Some($default),
-        )
-    };
+fn eq<T: Eq>(expected: &T, actual: &T) -> bool {
+    expected == actual
 }
 
-macro_rules! version_comparison_entry {
-    ($expected_version_str: expr, $actual_version_str: expr, $default: expr) => {
-        (
-            "VERSION",
-            $expected_version_str,
-            $actual_version_str,
-            $expected_version_str == $actual_version_str
-                || ($expected_version_str.is_empty() && $actual_version_str.as_bytes() == $default),
-            Some($default),
-        )
-    };
+fn timing_pairs_eq(expected: &Vec<(f32, f32)>, actual: &Vec<(f32, f32)>) -> bool {
+    expected
+        .iter()
+        .zip(actual.iter())
+        .all(|(a, b)| timing_approx_eq(&a.0, &b.0) && timing_approx_eq(&a.1, &b.1))
 }
 
-fn normalized_eq(a: &str, b: &str) -> bool {
-    let mut a_lines = a.lines();
-    let mut b_lines = b.lines();
+fn timing_speeds_eq(
+    expected: &Vec<(f32, f32, f32, SpeedUnit)>,
+    actual: &Vec<(f32, f32, f32, SpeedUnit)>,
+) -> bool {
+    expected.iter().zip(actual.iter()).all(|(a, b)| {
+        timing_approx_eq(&a.0, &b.0)
+            && timing_approx_eq(&a.1, &b.1)
+            && timing_approx_eq(&a.2, &b.2)
+            && a.3 == b.3
+    })
+}
+
+fn version_eq(expected: &f32, actual: &f32) -> bool {
+    let expected_str = if expected.is_finite() {
+        format!("{:.2}", expected)
+    } else {
+        String::new()
+    };
+    let actual_str = if actual.is_finite() {
+        format!("{:.2}", actual)
+    } else {
+        String::new()
+    };
+    expected_str == actual_str
+}
+
+fn normalized_eq(expected: &str, actual: &str) -> bool {
+    let mut a_lines = expected.lines();
+    let mut b_lines = actual.lines();
     for (line_a, line_b) in a_lines.by_ref().zip(b_lines.by_ref()) {
         if line_a != line_b {
             return false;
@@ -221,424 +127,249 @@ fn normalized_eq(a: &str, b: &str) -> bool {
     true
 }
 
-macro_rules! build_normalized_comparison_entry {
-    ($field: ident, $expected: expr, $actual: expr) => {
-        (
-            stringify!($field),
-            &$expected.$field,
-            &$actual.$field,
-            normalized_eq(&$expected.$field, &$actual.$field),
-            None,
-        )
-    };
-    ($field: ident, $expected: expr, $actual: expr, $default: expr) => {
-        (
-            stringify!($field),
-            &$expected.$field,
-            &$actual.$field,
-            normalized_eq(&$expected.$field, &$actual.$field)
-                || ($expected.$field.is_empty() && $actual.$field.as_bytes() == $default),
-            Some($default),
-        )
-    };
+fn normalized_opt_eq(expected: &Option<String>, actual: &Option<String>) -> bool {
+    match (expected, actual) {
+        (Some(a), Some(b)) => normalized_eq(a, b),
+        (None, None) => true,
+        _ => false,
+    }
 }
 
+fn is_default_str(default: &[u8]) -> impl Fn(&str, &str) -> bool {
+    move |a, b| a.is_empty() && b.as_bytes() == default
+}
+
+fn is_default_version(default: f32) -> impl Fn(&f32, &f32) -> bool {
+    move |a, b| !a.is_finite() && *b == default
+}
+
+fn is_default_bytes_opt(default: &[u8]) -> impl Fn(&Option<String>, &Option<String>) -> bool {
+    move |e, a| {
+        e.as_ref().is_none_or(|e| e.is_empty())
+            && a.as_ref().is_some_and(|a| a.as_bytes() == default)
+    }
+}
+
+fn is_default_pairs(default: &[(f32, f32)]) -> impl Fn(&Vec<(f32, f32)>, &Vec<(f32, f32)>) -> bool {
+    move |e, a| e.is_empty() && a == &default
+}
+
+fn is_default_speeds(
+    default: &[(f32, f32, f32, SpeedUnit)],
+) -> impl Fn(&Vec<(f32, f32, f32, SpeedUnit)>, &Vec<(f32, f32, f32, SpeedUnit)>) -> bool {
+    move |e, a| e.is_empty() && a == &default
+}
+
+// StepMania and DeadSync both strip certain BPMs during parsing,
+// which will inevitably change the normalized BPMs and chart hashes after serializing.
+// Use this function to determine when to ignore changes to those fields.
+fn has_hash_breaking_bpms(normalized_bpms: &str) -> bool {
+    let mut previous_beat: &str = "";
+    let mut previous_value: &str = "";
+    for pair in normalized_bpms.split(",") {
+        if let Some((beat, value)) = pair.split_once('=') {
+            if value == "0.000" {
+                return true;
+            } else if beat == previous_beat || value == previous_value {
+                return true;
+            }
+            previous_beat = beat;
+            previous_value = value;
+        }
+    }
+    false
+}
+
+#[inline(always)]
+fn has_warp_hacks(is_ssc: bool, timing_segments: &TimingSegments) -> bool {
+    !is_ssc && !timing_segments.warps.is_empty()
+}
+
+struct Exemptions {
+    is_ssc: bool,
+    has_hash_breaking_bpms: bool,
+    has_warp_hacks: bool,
+}
+
+impl Exemptions {
+    fn for_simfile(expected: &SimfileSummary, is_ssc: bool) -> Exemptions {
+        Exemptions {
+            is_ssc,
+            has_hash_breaking_bpms: has_hash_breaking_bpms(&expected.normalized_bpms),
+            has_warp_hacks: has_warp_hacks(is_ssc, &expected.global_timing_segments),
+        }
+    }
+}
+
+#[rustfmt::skip]
 fn compare_simfile_str_fields(
-    path: &Path,
-    extension: &str,
     expected: &SimfileSummary,
     actual: &SimfileSummary,
+    exemptions: &Exemptions,
 ) -> Result<(), String> {
-    let is_ssc = extension_is_ssc(extension).map_err(|e| e.to_string())?;
-    let expected_ssc_version = if expected.ssc_version.is_finite() {
-        format!("{:.2}", expected.ssc_version)
+
+    let mut errors = String::new();
+
+    compare_fields!(errors, expected, actual, eq, title_str, is_default_str(DEFAULT_TITLE));
+    compare_fields!(errors, expected, actual, eq, subtitle_str);
+    compare_fields!(errors, expected, actual, eq, artist_str, is_default_str(DEFAULT_ARTIST));
+    compare_fields!(errors, expected, actual, eq, titletranslit_str);
+    compare_fields!(errors, expected, actual, eq, subtitletranslit_str);
+    compare_fields!(errors, expected, actual, eq, artisttranslit_str);
+    compare_fields!(errors, expected, actual, eq, display_bpm_str);
+    compare_fields!(errors, expected, actual, eq, credit_str);
+    compare_fields!(errors, expected, actual, eq, genre_str);
+    compare_fields!(errors, expected, actual, eq, lyrics_path);
+    compare_fields!(errors, expected, actual, eq, music_path);
+    compare_fields!(errors, expected, actual, eq, cdtitle_path);
+    compare_fields!(errors, expected, actual, eq, background_path);
+    compare_fields!(errors, expected, actual, eq, banner_path);
+
+    if exemptions.is_ssc {
+        compare_fields!(errors, expected, actual, version_eq, ssc_version, is_default_version(0.83));
+        compare_fields!(errors, expected, actual, eq, origin_str);
+        compare_fields!(errors, expected, actual, eq, discimage_path);
+        compare_fields!(errors, expected, actual, eq, cdimage_path);
+        compare_fields!(errors, expected, actual, eq, previewvid_path);
+        compare_fields!(errors, expected, actual, eq, jacket_path);
+    }
+
+    if errors.is_empty() {
+        Ok(())
     } else {
-        String::new()
-    };
-    let actual_ssc_version = if actual.ssc_version.is_finite() {
-        format!("{:.2}", actual.ssc_version)
-    } else {
-        String::new()
-    };
-
-    let mut comparison_table: Vec<(&str, &str, &str, bool, Option<&[u8]>)> = vec![
-        build_comparison_entry!(title_str, expected, actual, DEFAULT_TITLE),
-        build_comparison_entry!(subtitle_str, expected, actual),
-        build_comparison_entry!(artist_str, expected, actual, DEFAULT_ARTIST),
-        build_comparison_entry!(titletranslit_str, expected, actual),
-        build_comparison_entry!(subtitletranslit_str, expected, actual),
-        build_comparison_entry!(artisttranslit_str, expected, actual),
-        build_comparison_entry!(display_bpm_str, expected, actual),
-        build_comparison_entry!(credit_str, expected, actual),
-        build_comparison_entry!(genre_str, expected, actual),
-        build_comparison_entry!(lyrics_path, expected, actual),
-        build_comparison_entry!(music_path, expected, actual),
-        build_comparison_entry!(cdtitle_path, expected, actual),
-        build_comparison_entry!(background_path, expected, actual),
-        build_comparison_entry!(banner_path, expected, actual),
-    ];
-    if is_ssc {
-        comparison_table.extend_from_slice(&[
-            version_comparison_entry!(&expected_ssc_version, &actual_ssc_version, DEFAULT_VERSION),
-            build_comparison_entry!(origin_str, expected, actual),
-            build_comparison_entry!(discimage_path, expected, actual),
-            build_comparison_entry!(cdimage_path, expected, actual),
-            build_comparison_entry!(previewvid_path, expected, actual),
-            build_comparison_entry!(jacket_path, expected, actual),
-        ]);
+        Err(String::from("Simfile string field mismatches:\n") + &errors)
     }
-
-    let all_ok = comparison_table.iter().all(|entry| entry.3);
-
-    if all_ok {
-        return Ok(());
-    }
-
-    let mut error_details = String::new();
-    for (field_name, expected, actual, cmp, _) in comparison_table {
-        error_details += &format!(
-            "  {}: baseline: {:?} -> reencoded: {:?} {}\n",
-            field_name,
-            expected,
-            actual,
-            match cmp {
-                true => "....ok",
-                false => "....MISMATCH",
-            }
-        );
-    }
-
-    Err(format!(
-        "\n\nMISMATCH DETECTED\nFile: {}\n{}",
-        path.display(),
-        error_details,
-    ))
 }
 
+#[rustfmt::skip]
 fn compare_simfile_normalized_fields(
-    path: &Path,
     expected: &SimfileSummary,
     actual: &SimfileSummary,
+    exemptions: &Exemptions,
 ) -> Result<(), String> {
-    let comparison_table: Vec<(&str, &str, &str, bool, Option<&[u8]>)> = vec![
-        build_normalized_comparison_entry!(normalized_bpms, expected, actual, NORM_DEFAULT_BPMS),
-        build_normalized_comparison_entry!(normalized_stops, expected, actual),
-        build_normalized_comparison_entry!(normalized_delays, expected, actual),
-        build_normalized_comparison_entry!(
-            normalized_speeds,
-            expected,
-            actual,
-            NORM_DEFAULT_SPEEDS
-        ),
-        build_normalized_comparison_entry!(
-            normalized_scrolls,
-            expected,
-            actual,
-            NORM_DEFAULT_SCROLLS
-        ),
-        build_normalized_comparison_entry!(normalized_fakes, expected, actual),
-        build_normalized_comparison_entry!(
-            normalized_time_signatures,
-            expected,
-            actual,
-            DEFAULT_TIME_SIGNATURES
-        ),
-        build_normalized_comparison_entry!(normalized_labels, expected, actual, DEFAULT_LABELS),
-        build_normalized_comparison_entry!(
-            normalized_tickcounts,
-            expected,
-            actual,
-            DEFAULT_TICKCOUNTS
-        ),
-        build_normalized_comparison_entry!(normalized_combos, expected, actual, DEFAULT_COMBOS),
-        build_normalized_comparison_entry!(normalized_bgchanges, expected, actual),
-        build_normalized_comparison_entry!(normalized_fgchanges, expected, actual),
-        build_normalized_comparison_entry!(normalized_keysounds, expected, actual),
-        build_normalized_comparison_entry!(normalized_attacks, expected, actual),
-    ];
+    let mut errors = String::new();
 
-    let all_ok = comparison_table.iter().all(|entry| entry.3);
-
-    if all_ok {
-        return Ok(());
+    if !exemptions.has_hash_breaking_bpms && !exemptions.has_warp_hacks {
+        compare_fields!(errors, expected, actual, normalized_eq, normalized_bpms, is_default_str(NORM_DEFAULT_BPMS));
     }
-
-    // Build error string
-    let mut error_details = String::from("Simfile normalized field mismatches:\n");
-    for (field_name, expected, actual, cmp, _) in comparison_table {
-        error_details += &format!(
-            "  {}: baseline: {:?} -> reencoded: {:?} {}\n",
-            field_name,
-            expected,
-            actual,
-            match cmp {
-                true => "....ok",
-                false => "....MISMATCH",
-            }
-        );
+    if !exemptions.has_warp_hacks {
+        compare_fields!(errors, expected, actual, normalized_eq, normalized_stops);
+        compare_fields!(errors, expected, actual, normalized_eq, normalized_delays);
+        compare_fields!(errors, expected, actual, normalized_eq, normalized_warps);
     }
-
-    Err(format!(
-        "\n\nMISMATCH DETECTED\nFile: {}\n{}",
-        path.display(),
-        error_details,
-    ))
-}
-
-fn compare_chart_str_fields_and_hashes(
-    path: &Path,
-    expected_charts: &[ChartSummary],
-    actual_charts: &[ChartSummary],
-) -> Result<(), String> {
-    let mut errors: Vec<String> = Vec::new();
-
-    let count = expected_charts.len().max(actual_charts.len());
-    for idx in 0..count {
-        let expected_chart_opt = expected_charts.get(idx);
-        let actual_chart_opt = actual_charts.get(idx);
-
-        match (expected_chart_opt, actual_chart_opt) {
-            (None, None) => panic!(), // Unreachable
-            (None, Some(actual_chart)) => {
-                errors.push(format!(
-                    "Unexpected {} {} chart at index {}",
-                    actual_chart.step_type_str, actual_chart.difficulty_str, idx
-                ));
-            }
-            (Some(expected_chart), None) => {
-                errors.push(format!(
-                    "Expected {} {} chart at index {}",
-                    expected_chart.step_type_str, expected_chart.difficulty_str, idx
-                ));
-            }
-            (Some(expected_chart), Some(actual_chart)) => {
-                let expected_radar_values = format_radar_values(expected_chart.cached_radar_values);
-                let actual_radar_values = format_radar_values(actual_chart.cached_radar_values);
-                let comparison_table: Vec<(&str, &str, &str, bool, Option<&[u8]>)> = vec![
-                    build_comparison_entry!(
-                        step_type_str,
-                        expected_chart,
-                        actual_chart,
-                        DEFAULT_STEPSTYPE
-                    ),
-                    build_comparison_entry!(step_artist_str, expected_chart, actual_chart),
-                    build_comparison_entry!(description_str, expected_chart, actual_chart),
-                    build_comparison_entry!(chart_name_str, expected_chart, actual_chart),
-                    build_comparison_entry!(chart_style_str, expected_chart, actual_chart),
-                    build_comparison_entry!(
-                        difficulty_str,
-                        expected_chart,
-                        actual_chart,
-                        DEFAULT_DIFFICULTY
-                    ),
-                    build_comparison_entry!(
-                        rating_str,
-                        expected_chart,
-                        actual_chart,
-                        DEFAULT_METER
-                    ),
-                    build_comparison_entry!(short_hash, expected_chart, actual_chart),
-                    build_comparison_entry!(bpm_neutral_hash, expected_chart, actual_chart),
-                    (
-                        "cached_radar_values",
-                        &expected_radar_values,
-                        &actual_radar_values,
-                        compare_radar_values(
-                            expected_chart.cached_radar_values.as_ref(),
-                            actual_chart.cached_radar_values.as_ref(),
-                        ),
-                        None,
-                    ),
-                ];
-
-                let all_ok = comparison_table.iter().all(|entry| entry.3);
-
-                if all_ok {
-                    continue;
-                }
-
-                // Build error string
-                let mut error_details = String::new();
-                for (field_name, expected, actual, cmp, _) in comparison_table {
-                    error_details += &format!(
-                        "  {}: baseline: {:?} -> reencoded: {:?} {}\n",
-                        field_name,
-                        expected,
-                        actual,
-                        match cmp {
-                            true => "....ok",
-                            false => "....MISMATCH",
-                        }
-                    );
-                }
-
-                errors.push(error_details);
-            }
-        }
-    }
+    compare_fields!(errors, expected, actual, normalized_eq, normalized_speeds, is_default_str(NORM_DEFAULT_SPEEDS));
+    compare_fields!(errors, expected, actual, normalized_eq, normalized_scrolls, is_default_str(NORM_DEFAULT_SCROLLS));
+    compare_fields!(errors, expected, actual, normalized_eq, normalized_fakes);
+    compare_fields!(errors, expected, actual, normalized_eq, normalized_time_signatures, is_default_str(DEFAULT_TIME_SIGNATURES));
+    compare_fields!(errors, expected, actual, normalized_eq, normalized_labels, is_default_str(DEFAULT_LABELS));
+    compare_fields!(errors, expected, actual, normalized_eq, normalized_tickcounts, is_default_str(DEFAULT_TICKCOUNTS));
+    compare_fields!(errors, expected, actual, normalized_eq, normalized_combos, is_default_str(DEFAULT_COMBOS));
+    compare_fields!(errors, expected, actual, normalized_eq, normalized_bgchanges);
+    compare_fields!(errors, expected, actual, normalized_eq, normalized_fgchanges);
+    compare_fields!(errors, expected, actual, normalized_eq, normalized_keysounds);
+    compare_fields!(errors, expected, actual, normalized_eq, normalized_attacks);
 
     if errors.is_empty() {
-        return Ok(());
+        Ok(())
+    } else {
+        Err(String::from("Simfile normalized field mismatches:\n") + &errors)
     }
-
-    let mut error_details = String::from("Chart timing field mismatches:\n");
-    for line in errors {
-        error_details.push_str(&line);
-        error_details.push('\n');
-    }
-
-    Err(format!(
-        "\n\nMISMATCH DETECTED\nFile: {}\n{}\n",
-        path.display(),
-        error_details
-    ))
 }
 
-fn compare_chart_timing_fields(
-    path: &Path,
-    expected_charts: &[ChartSummary],
-    actual_charts: &[ChartSummary],
+#[rustfmt::skip]
+fn compare_simfile_timing_fields(
+    expected: &SimfileSummary,
+    actual: &SimfileSummary,
+    exemptions: &Exemptions,
 ) -> Result<(), String> {
-    let mut errors: Vec<String> = Vec::new();
+    let mut errors = String::new();
+    let expected_timing = &expected.global_timing_segments;
+    let actual_timing = &actual.global_timing_segments;
 
-    let count = expected_charts.len().max(actual_charts.len());
-    for idx in 0..count {
-        let expected_chart_opt = expected_charts.get(idx);
-        let actual_chart_opt = actual_charts.get(idx);
-
-        match (expected_chart_opt, actual_chart_opt) {
-            (None, None) => panic!(), // Unreachable
-            (None, Some(actual_chart)) => {
-                errors.push(format!(
-                    "Unexpected {} {} chart at index {}",
-                    actual_chart.step_type_str, actual_chart.difficulty_str, idx
-                ));
-            }
-            (Some(expected_chart), None) => {
-                errors.push(format!(
-                    "Expected {} {} chart at index {}",
-                    expected_chart.step_type_str, expected_chart.difficulty_str, idx
-                ));
-            }
-            (Some(expected_chart), Some(actual_chart)) => {
-                // Massage this boolean into a string to keep the comparison table simple
-                let expected_chart_has_own_timing = expected_chart.chart_has_own_timing.to_string();
-                let actual_chart_has_own_timing = actual_chart.chart_has_own_timing.to_string();
-
-                let comparison_table: Vec<(&str, &String, &String, bool, Option<&[u8]>)> = vec![
-                    // Compare these again here for important debugging context
-                    build_comparison_entry!(step_type_str, expected_chart, actual_chart),
-                    build_comparison_entry!(difficulty_str, expected_chart, actual_chart),
-                    build_comparison_entry!(rating_str, expected_chart, actual_chart),
-                    // Compare these again here to log timing data when hash breaks
-                    build_comparison_entry!(short_hash, expected_chart, actual_chart),
-                    build_comparison_entry!(bpm_neutral_hash, expected_chart, actual_chart),
-                    (
-                        "chart_has_own_timing",
-                        &expected_chart_has_own_timing,
-                        &actual_chart_has_own_timing,
-                        expected_chart.chart_has_own_timing == actual_chart.chart_has_own_timing,
-                        None,
-                    ),
-                    build_comparison_entry_opt!(chart_attacks, expected_chart, actual_chart),
-                    build_comparison_entry_opt!(chart_stops, expected_chart, actual_chart),
-                    build_comparison_entry_opt!(
-                        chart_speeds,
-                        expected_chart,
-                        actual_chart,
-                        DEFAULT_SPEEDS
-                    ),
-                    build_comparison_entry_opt!(
-                        chart_scrolls,
-                        expected_chart,
-                        actual_chart,
-                        DEFAULT_SCROLLS
-                    ),
-                    build_comparison_entry_opt!(
-                        chart_bpms,
-                        expected_chart,
-                        actual_chart,
-                        DEFAULT_BPMS
-                    ),
-                    build_comparison_entry_opt!(chart_delays, expected_chart, actual_chart),
-                    build_comparison_entry_opt!(chart_warps, expected_chart, actual_chart),
-                    build_comparison_entry_opt!(chart_fakes, expected_chart, actual_chart),
-                    build_comparison_entry_opt!(chart_display_bpm, expected_chart, actual_chart),
-                    build_comparison_entry_opt!(
-                        chart_time_signatures,
-                        expected_chart,
-                        actual_chart,
-                        DEFAULT_TIME_SIGNATURES
-                    ),
-                    build_comparison_entry_opt!(
-                        chart_labels,
-                        expected_chart,
-                        actual_chart,
-                        DEFAULT_LABELS
-                    ),
-                    build_comparison_entry_opt!(
-                        chart_tickcounts,
-                        expected_chart,
-                        actual_chart,
-                        DEFAULT_TICKCOUNTS
-                    ),
-                    build_comparison_entry_opt!(
-                        chart_combos,
-                        expected_chart,
-                        actual_chart,
-                        DEFAULT_COMBOS
-                    ),
-                ];
-
-                let all_ok = comparison_table.iter().all(|entry| entry.3);
-
-                if all_ok {
-                    continue;
-                }
-
-                // Build error string
-                let mut error_details = String::from("Chart timing field mismatches:\n");
-                for (field_name, expected, actual, cmp, _) in comparison_table {
-                    error_details += &format!(
-                        "  {}: baseline: {:?} -> reencoded: {:?} {}\n",
-                        field_name,
-                        expected,
-                        actual,
-                        match cmp {
-                            true => "....ok",
-                            false => "....MISMATCH",
-                        }
-                    );
-                }
-
-                errors.push(error_details);
-            }
-        }
+    if !exemptions.has_warp_hacks {
+        compare_fields!(errors, expected_timing, actual_timing, timing_pairs_eq, bpms, is_default_pairs(TIMING_DEFAULT_BPMS));
+        compare_fields!(errors, expected_timing, actual_timing, timing_pairs_eq, stops);
+        compare_fields!(errors, expected_timing, actual_timing, timing_pairs_eq, delays);
+        compare_fields!(errors, expected_timing, actual_timing, timing_pairs_eq, warps);
     }
+    compare_fields!(errors, expected_timing, actual_timing, timing_pairs_eq, scrolls, is_default_pairs(TIMING_DEFAULT_SCROLLS));
+    compare_fields!(errors, expected_timing, actual_timing, timing_speeds_eq, speeds, is_default_speeds(TIMING_DEFAULT_SPEEDS));
+    compare_fields!(errors, expected_timing, actual_timing, timing_pairs_eq, fakes);
 
     if errors.is_empty() {
-        return Ok(());
+        Ok(())
+    } else {
+        Err(String::from("Simfile timing mismatches:\n") + &errors)
     }
-
-    let mut error_details = String::new();
-    for line in errors {
-        error_details.push_str(&line);
-        error_details.push('\n');
-    }
-
-    Err(format!(
-        "\n\nMISMATCH DETECTED\nFile: {}\n{}\n",
-        path.display(),
-        error_details
-    ))
 }
 
-fn compare_timing(
-    path: &Path,
+#[rustfmt::skip]
+fn compare_chart_str_fields(
+    expected: &ChartSummary,
+    actual: &ChartSummary,
+    _exemptions: &Exemptions,
+) -> Result<(), String> {
+    let mut errors = String::new();
+
+    compare_fields!(errors, expected, actual, eq, step_type_str, is_default_str(DEFAULT_STEPSTYPE));
+    compare_fields!(errors, expected, actual, eq, step_artist_str);
+    compare_fields!(errors, expected, actual, eq, description_str);
+    compare_fields!(errors, expected, actual, eq, chart_name_str);
+    compare_fields!(errors, expected, actual, eq, chart_style_str);
+    compare_fields!(errors, expected, actual, eq, difficulty_str, is_default_str(DEFAULT_DIFFICULTY));
+    compare_fields!(errors, expected, actual, eq, rating_str, is_default_str(DEFAULT_METER));
+    compare_fields!(errors, expected, actual, radar_values_eq, cached_radar_values);
+    compare_fields!(errors, expected, actual, eq, chart_display_bpm);
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(String::from("Chart string field mismatches:\n") + &errors)
+    }
+}
+
+#[rustfmt::skip]
+fn compare_chart_hashes_and_timing(
+    expected: &ChartSummary,
+    actual: &ChartSummary,
+    exemptions: &Exemptions,
+) -> Result<(), String> {
+    let mut errors = String::new();
+    let expected_timing = &expected.timing_segments;
+    let actual_timing = &actual.timing_segments;
+
+    if !exemptions.has_hash_breaking_bpms && !exemptions.has_warp_hacks {
+        compare_fields!(errors, expected, actual, eq, short_hash);
+    }
+    compare_fields!(errors, expected, actual, eq, bpm_neutral_hash);
+    compare_fields!(errors, expected, actual, eq, chart_has_own_timing);
+    compare_fields!(errors, expected, actual, normalized_opt_eq, chart_time_signatures, is_default_bytes_opt(DEFAULT_TIME_SIGNATURES));
+    compare_fields!(errors, expected, actual, normalized_opt_eq, chart_labels, is_default_bytes_opt(DEFAULT_LABELS));
+    compare_fields!(errors, expected, actual, normalized_opt_eq, chart_tickcounts, is_default_bytes_opt(DEFAULT_TICKCOUNTS));
+    compare_fields!(errors, expected, actual, normalized_opt_eq, chart_combos, is_default_bytes_opt(DEFAULT_COMBOS));
+    if !exemptions.has_warp_hacks {
+        compare_fields!(errors, expected_timing, actual_timing, timing_pairs_eq, bpms, is_default_pairs(&[(0.0f32, 60.0f32)]));
+        compare_fields!(errors, expected_timing, actual_timing, timing_pairs_eq, stops);
+        compare_fields!(errors, expected_timing, actual_timing, timing_pairs_eq, delays);
+        compare_fields!(errors, expected_timing, actual_timing, timing_pairs_eq, warps);
+    }
+    compare_fields!(errors, expected_timing, actual_timing, timing_pairs_eq, scrolls, is_default_pairs(&[(0.0f32, 1.0f32)]));
+    compare_fields!(errors, expected_timing, actual_timing, timing_speeds_eq, speeds, is_default_speeds(&[(0.0f32, 1.0f32, 0.0f32, SpeedUnit::Beats)]));
+    compare_fields!(errors, expected_timing, actual_timing, timing_pairs_eq, fakes);
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(String::from("Chart hash / timing mismatches:\n") + &errors)
+    }
+}
+
+fn compare_charts(
     expected_simfile: &SimfileSummary,
     actual_simfile: &SimfileSummary,
+    exemptions: &Exemptions,
 ) -> Result<(), String> {
-    let mut errors: Vec<String> = Vec::new();
+    let mut errors = String::new();
 
     let count = expected_simfile
         .charts
@@ -651,67 +382,35 @@ fn compare_timing(
         match (expected_chart_opt, actual_chart_opt) {
             (None, None) => panic!(), // Unreachable
             (None, Some(actual_chart)) => {
-                errors.push(format!(
-                    "Unexpected {} {} chart at index {}",
+                errors += &format!(
+                    "Unexpected {} {} chart at index {}\n",
                     actual_chart.step_type_str, actual_chart.difficulty_str, idx
-                ));
+                );
             }
             (Some(expected_chart), None) => {
-                errors.push(format!(
-                    "Expected {} {} chart at index {}",
+                errors += &format!(
+                    "Expected {} {} chart at index {}\n",
                     expected_chart.step_type_str, expected_chart.difficulty_str, idx
-                ));
+                );
             }
             (Some(expected_chart), Some(actual_chart)) => {
-                let expected_timing = build_timing_snapshot(expected_chart, expected_simfile);
-                let actual_timing = build_timing_snapshot(actual_chart, actual_simfile);
-                let timing_comparison_table =
-                    build_timing_comparison_table(&expected_timing, &actual_timing);
-
-                let all_ok = timing_comparison_table.iter().all(|entry| entry.1);
-
-                if all_ok {
-                    continue;
+                match compare_chart_str_fields(expected_chart, actual_chart, exemptions) {
+                    Err(errs) => errors += &errs,
+                    _ => {}
                 }
-
-                // Build error string
-                let mut error_details = String::from("Chart timing data mismatches:\n");
-                for (field_name, matches) in timing_comparison_table {
-                    error_details += &format!(
-                        "  {}: {}\n",
-                        field_name,
-                        match matches {
-                            true => "....ok",
-                            false => "....MISMATCH",
-                        }
-                    );
+                match compare_chart_hashes_and_timing(expected_chart, actual_chart, exemptions) {
+                    Err(errs) => errors += &errs,
+                    _ => {}
                 }
-
-                error_details += &format!(
-                    "\nExpected: {:?}\nActual: {:?}\n",
-                    expected_timing, actual_timing
-                );
-
-                errors.push(error_details);
             }
         }
     }
 
     if errors.is_empty() {
-        return Ok(());
+        Ok(())
+    } else {
+        Err(errors)
     }
-
-    let mut error_details = String::from("Timing mismatches:\n");
-    for line in errors {
-        error_details.push_str(&line);
-        error_details.push('\n');
-    }
-
-    Err(format!(
-        "\n\nMISMATCH DETECTED\nFile: {}\n{}\n",
-        path.display(),
-        error_details
-    ))
 }
 
 fn run_rssp_analyze(raw_bytes: &[u8], extension: &str) -> Result<SimfileSummary, String> {
@@ -728,13 +427,14 @@ fn run_rssp_analyze(raw_bytes: &[u8], extension: &str) -> Result<SimfileSummary,
 }
 
 fn check_file(path: &Path, extension: &str) -> Result<(), String> {
-    let ssc = extension_is_ssc(extension).map_err(|e| e.to_string())?;
+    let is_ssc = extension_is_ssc(extension).map_err(|e| e.to_string())?;
     let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {e}"))?;
 
     let raw_bytes = zstd::decode_all(&compressed_bytes[..])
         .map_err(|e| format!("Failed to decompress simfile: {e}"))?;
 
     let base_summary = run_rssp_analyze(&raw_bytes, extension)?;
+    let exemptions = Exemptions::for_simfile(&base_summary, is_ssc);
 
     // Serialize to simfile bytes in memory
     let mut buffer = vec![];
@@ -748,22 +448,50 @@ fn check_file(path: &Path, extension: &str) -> Result<(), String> {
 
     println!("File: {}", path.display());
 
-    compare_simfile_str_fields(path, extension, &base_summary, &reencoded_summary)?;
-    compare_simfile_normalized_fields(path, &base_summary, &reencoded_summary)?;
+    let mut comparison_results = Vec::with_capacity(6); // should match # of tests below
+
+    comparison_results.push(compare_simfile_str_fields(
+        &base_summary,
+        &reencoded_summary,
+        &exemptions,
+    ));
+    comparison_results.push(compare_simfile_normalized_fields(
+        &base_summary,
+        &reencoded_summary,
+        &exemptions,
+    ));
+    comparison_results.push(compare_simfile_timing_fields(
+        &base_summary,
+        &reencoded_summary,
+        &exemptions,
+    ));
 
     // A few SSC files in the corpus are missing a #VERSION tag
     // but have per-chart timing data, which is invalid.
     // Don't bother validating these.
-    if ssc && !base_summary.ssc_version.is_finite() {
-        println!("SSC file is missing a version - skipping chart & timing tests");
-        return Ok(());
-    };
+    if is_ssc && !base_summary.ssc_version.is_finite() {
+        println!("SSC file is missing a version - skipping chart tests");
+    } else {
+        comparison_results.push(compare_charts(
+            &base_summary,
+            &reencoded_summary,
+            &exemptions,
+        ));
+    }
 
-    compare_chart_timing_fields(path, &base_summary.charts, &reencoded_summary.charts)?;
-    compare_chart_str_fields_and_hashes(path, &base_summary.charts, &reencoded_summary.charts)?;
-    compare_timing(path, &base_summary, &reencoded_summary)?;
-
-    Ok(())
+    let all_ok = comparison_results.iter().all(|r| r.is_ok());
+    if all_ok {
+        Ok(())
+    } else {
+        let mut err = "\n\nMISMATCH DETECTED\n".to_string();
+        for result in comparison_results {
+            match result {
+                Err(e) => err.push_str(&e),
+                Ok(_) => {}
+            }
+        }
+        Err(err)
+    }
 }
 
 fn main() {
@@ -879,7 +607,7 @@ fn main() {
             Err(msg) => {
                 println!("test {name} ... FAILED");
                 failures.push(Failure {
-                    name,
+                    name: path.to_string_lossy().to_string(),
                     message: msg.trim().to_string(),
                 });
                 num_failed += 1;
