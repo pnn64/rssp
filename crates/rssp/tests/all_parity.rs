@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use libtest_mimic::Arguments;
 use serde::Deserialize;
@@ -42,6 +44,12 @@ struct TestCase {
 struct Failure {
     name: String,
     message: String,
+}
+
+#[derive(Debug, Clone)]
+enum ParityBackend {
+    Rssp,
+    Assp { exe: PathBuf },
 }
 
 #[derive(Debug, Deserialize)]
@@ -2361,12 +2369,74 @@ fn run_rssp_json(raw_bytes: &[u8], extension: &str) -> Result<RsspJsonFile, Stri
     serde_json::from_slice(&stdout).map_err(|e| format!("Failed to parse rssp JSON: {e}"))
 }
 
+fn run_assp_json(
+    raw_bytes: &[u8],
+    extension: &str,
+    file_hash: &str,
+    exe: &Path,
+) -> Result<RsspJsonFile, String> {
+    if !exe.exists() {
+        return Err(format!(
+            "ASSP executable was not found at {}. Build it with `..\\..\\..\\assp\\build.ps1` or set ASSP_EXE.",
+            exe.display()
+        ));
+    }
+
+    let temp_path = env::temp_dir().join(format!(
+        "rssp-all-parity-assp-{}-{file_hash}.{extension}",
+        std::process::id()
+    ));
+    fs::write(&temp_path, raw_bytes)
+        .map_err(|e| format!("Failed to write temporary simfile for ASSP: {e}"))?;
+
+    let output = Command::new(exe)
+        .arg(&temp_path)
+        .arg("--json")
+        .output()
+        .map_err(|e| format!("Failed to run ASSP: {e}"))?;
+
+    let _ = fs::remove_file(&temp_path);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!(
+            "ASSP exited with status {}\nstdout:\n{}\nstderr:\n{}",
+            output.status, stdout, stderr
+        ));
+    }
+
+    serde_json::from_slice(&output.stdout).map_err(|e| {
+        format!(
+            "Failed to parse ASSP JSON: {e}\nstdout prefix:\n{}",
+            String::from_utf8_lossy(&output.stdout[..output.stdout.len().min(4096)])
+        )
+    })
+}
+
+fn run_actual_json(
+    raw_bytes: &[u8],
+    extension: &str,
+    file_hash: &str,
+    backend: &ParityBackend,
+) -> Result<RsspJsonFile, String> {
+    match backend {
+        ParityBackend::Rssp => run_rssp_json(raw_bytes, extension),
+        ParityBackend::Assp { exe } => run_assp_json(raw_bytes, extension, file_hash, exe),
+    }
+}
+
 fn read_zst(path: &Path) -> Result<Vec<u8>, String> {
     let compressed = fs::read(path).map_err(|e| format!("Failed to read file: {e}"))?;
     zstd::decode_all(&compressed[..]).map_err(|e| format!("Failed to decompress file: {e}"))
 }
 
-fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), String> {
+fn check_file(
+    path: &Path,
+    extension: &str,
+    baseline_dir: &Path,
+    backend: &ParityBackend,
+) -> Result<(), String> {
     let compressed_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {e}"))?;
 
     let raw_bytes = zstd::decode_all(&compressed_bytes[..])
@@ -2407,7 +2477,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     let rssp_file: RsspBaselineFile = serde_json::from_slice(&rssp_json)
         .map_err(|e| format!("Failed to parse baseline JSON: {e}"))?;
 
-    let actual = run_rssp_json(&raw_bytes, extension)?;
+    let actual = run_actual_json(&raw_bytes, extension, &file_hash, backend)?;
 
     let harness_map = build_index(&harness_charts, |c| &c.step_type, |c| &c.difficulty);
     let actual_map = build_index(
@@ -2510,12 +2580,33 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
     Ok(())
 }
 
+fn default_assp_exe(manifest_dir: &Path) -> PathBuf {
+    manifest_dir
+        .join("../../..")
+        .join("assp")
+        .join("target")
+        .join("assp.exe")
+}
+
+fn parity_backend(manifest_dir: &Path) -> ParityBackend {
+    match env::var("RSSP_ALL_PARITY_BACKEND") {
+        Ok(value) if value.eq_ignore_ascii_case("assp") => {
+            let exe = env::var_os("ASSP_EXE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| default_assp_exe(manifest_dir));
+            ParityBackend::Assp { exe }
+        }
+        _ => ParityBackend::Rssp,
+    }
+}
+
 fn main() {
     let args = Arguments::from_args();
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let packs_dir = manifest_dir.join("tests/data/packs");
     let baseline_dir = manifest_dir.join("tests/data/baseline");
+    let backend = parity_backend(&manifest_dir);
 
     if !packs_dir.exists() {
         println!("No tests/packs directory found.");
@@ -2591,7 +2682,7 @@ fn main() {
         return;
     }
 
-    println!("running {} tests", tests.len());
+    println!("running {} tests with {:?}", tests.len(), backend);
 
     let mut num_passed = 0u64;
     let mut num_failed = 0u64;
@@ -2604,7 +2695,7 @@ fn main() {
             extension,
         } = test;
 
-        let res = check_file(&path, &extension, &baseline_dir);
+        let res = check_file(&path, &extension, &baseline_dir, &backend);
         match res {
             Ok(()) => {
                 println!("test {name} ... ok");

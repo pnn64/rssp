@@ -49,7 +49,9 @@ struct RowCount {
 macro_rules! dispatch_lanes {
     ($lanes:expr, $func:ident($($arg:expr),*)) => {
         match $lanes {
+            5 => $func::<5>($($arg),*),
             8 => $func::<8>($($arg),*),
+            10 => $func::<10>($($arg),*),
             _ => $func::<4>($($arg),*),
         }
     };
@@ -689,12 +691,23 @@ pub fn minimize_chart_and_count_with_lanes(
     data: &[u8],
     lanes: usize,
 ) -> (Vec<u8>, ArrowStats, Vec<usize>) {
-    if lanes == 8 {
-        let (mut nr, mut nl) = (|_, _| {}, |_: &[u8; 8], _, _, _, _| {});
-        process_chart::<8, _, _>(data, &mut nr, &mut nl)
-    } else {
-        let (mut nr, mut nl) = (|_, _| {}, |_: &[u8; 4], _, _, _, _| {});
-        process_chart::<4, _, _>(data, &mut nr, &mut nl)
+    match lanes {
+        5 => {
+            let (mut nr, mut nl) = (|_, _| {}, |_: &[u8; 5], _, _, _, _| {});
+            process_chart::<5, _, _>(data, &mut nr, &mut nl)
+        }
+        8 => {
+            let (mut nr, mut nl) = (|_, _| {}, |_: &[u8; 8], _, _, _, _| {});
+            process_chart::<8, _, _>(data, &mut nr, &mut nl)
+        }
+        10 => {
+            let (mut nr, mut nl) = (|_, _| {}, |_: &[u8; 10], _, _, _, _| {});
+            process_chart::<10, _, _>(data, &mut nr, &mut nl)
+        }
+        _ => {
+            let (mut nr, mut nl) = (|_, _| {}, |_: &[u8; 4], _, _, _, _| {});
+            process_chart::<4, _, _>(data, &mut nr, &mut nl)
+        }
     }
 }
 
@@ -1016,18 +1029,20 @@ pub(crate) fn for_each_minimized_row(
     lanes: usize,
     mut on_row: impl FnMut(usize, usize, usize, &[u8]),
 ) {
-    if lanes == 8 {
-        for_each_minimized_measure::<8, _>(data, |measure_idx, rows, _| {
-            for (row_idx, row) in rows.iter().enumerate() {
-                on_row(measure_idx, row_idx, rows.len(), row);
-            }
-        });
-    } else {
-        for_each_minimized_measure::<4, _>(data, |measure_idx, rows, _| {
-            for (row_idx, row) in rows.iter().enumerate() {
-                on_row(measure_idx, row_idx, rows.len(), row);
-            }
-        });
+    macro_rules! visit_rows {
+        ($lanes:literal) => {
+            for_each_minimized_measure::<$lanes, _>(data, |measure_idx, rows, _| {
+                for (row_idx, row) in rows.iter().enumerate() {
+                    on_row(measure_idx, row_idx, rows.len(), row);
+                }
+            })
+        };
+    }
+    match lanes {
+        5 => visit_rows!(5),
+        8 => visit_rows!(8),
+        10 => visit_rows!(10),
+        _ => visit_rows!(4),
     }
 }
 
@@ -1055,12 +1070,17 @@ pub fn compute_timing_aware_stats_with_row_to_beat(
     timing: &TimingData,
     beats: &[f32],
 ) -> ArrowStats {
-    if lanes == 8 {
-        let rows = parse_minimized_rows::<8>(data);
-        compute_timing_aware_stats_from_rows_with_row_to_beat::<8>(&rows, timing, beats)
-    } else {
-        let rows = parse_minimized_rows::<4>(data);
-        compute_timing_aware_stats_from_rows_with_row_to_beat::<4>(&rows, timing, beats)
+    macro_rules! compute {
+        ($lanes:literal) => {{
+            let rows = parse_minimized_rows::<$lanes>(data);
+            compute_timing_aware_stats_from_rows_with_row_to_beat::<$lanes>(&rows, timing, beats)
+        }};
+    }
+    match lanes {
+        5 => compute!(5),
+        8 => compute!(8),
+        10 => compute!(10),
+        _ => compute!(4),
     }
 }
 

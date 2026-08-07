@@ -110,8 +110,12 @@ pub fn resolve_difficulty_label(
 #[must_use]
 pub fn step_type_lanes(step_type: &str) -> usize {
     let s = step_type.trim().as_bytes();
-    if s.eq_ignore_ascii_case(b"dance-double") || s.eq_ignore_ascii_case(b"dance_double") {
+    if s.eq_ignore_ascii_case(b"pump-double") || s.eq_ignore_ascii_case(b"pump_double") {
+        10
+    } else if s.eq_ignore_ascii_case(b"dance-double") || s.eq_ignore_ascii_case(b"dance_double") {
         8
+    } else if s.eq_ignore_ascii_case(b"pump-single") || s.eq_ignore_ascii_case(b"pump_single") {
+        5
     } else {
         4
     }
@@ -141,8 +145,12 @@ pub const fn supported_stepstype_lanes_bytes(raw: &[u8]) -> Option<usize> {
     let s = trim_ascii_ws(raw);
     if s.eq_ignore_ascii_case(b"dance-single") || s.eq_ignore_ascii_case(b"dance_single") {
         Some(4)
+    } else if s.eq_ignore_ascii_case(b"pump-single") || s.eq_ignore_ascii_case(b"pump_single") {
+        Some(5)
     } else if s.eq_ignore_ascii_case(b"dance-double") || s.eq_ignore_ascii_case(b"dance_double") {
         Some(8)
+    } else if s.eq_ignore_ascii_case(b"pump-double") || s.eq_ignore_ascii_case(b"pump_double") {
+        Some(10)
     } else {
         None
     }
@@ -150,7 +158,27 @@ pub const fn supported_stepstype_lanes_bytes(raw: &[u8]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_difficulty_label, resolve_difficulty_label};
+    use super::{
+        normalize_difficulty_label, resolve_difficulty_label, step_type_lanes,
+        supported_stepstype_lanes_bytes,
+    };
+
+    #[test]
+    fn dance_and_pump_lane_counts() {
+        for (step_type, lanes) in [
+            ("dance-single", 4),
+            ("pump-single", 5),
+            ("dance-double", 8),
+            ("pump-double", 10),
+        ] {
+            assert_eq!(step_type_lanes(step_type), lanes);
+            assert_eq!(
+                supported_stepstype_lanes_bytes(step_type.as_bytes()),
+                Some(lanes)
+            );
+        }
+        assert_eq!(supported_stepstype_lanes_bytes(b"pump-halfdouble"), None);
+    }
 
     #[test]
     fn difficulty_labels_keep_aliases() {

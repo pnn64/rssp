@@ -840,7 +840,6 @@ pub fn compute_mines_nonfake(
     warps: &[(f64, f64)],
     fakes: &[(f64, f64)],
 ) -> u32 {
-    let lanes = if lanes == 8 { 8 } else { 4 };
     let (mut count, mut warp_idx, mut fake_idx) = (0u32, 0usize, 0usize);
     let segments_are_sorted = |segments: &[(f64, f64)]| {
         segments.iter().all(|(start, _)| !start.is_nan())

@@ -497,10 +497,11 @@ pub fn compute_note_data_hash(note_data: &[u8], lanes: usize, normalized_bpms: &
         short_hex(&stream.finish(normalized_bpms.as_bytes()))
     }
 
-    if lanes == 8 {
-        hash_lanes::<8>(note_data, normalized_bpms)
-    } else {
-        hash_lanes::<4>(note_data, normalized_bpms)
+    match lanes {
+        5 => hash_lanes::<5>(note_data, normalized_bpms),
+        8 => hash_lanes::<8>(note_data, normalized_bpms),
+        10 => hash_lanes::<10>(note_data, normalized_bpms),
+        _ => hash_lanes::<4>(note_data, normalized_bpms),
     }
 }
 

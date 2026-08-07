@@ -398,11 +398,11 @@ pub fn get_nps_stats_with_scratch(nps: &[f64], scratch: &mut Vec<f64>) -> (f64, 
 
 #[must_use]
 pub fn measure_equally_spaced(data: &[u8], lanes: usize) -> Vec<bool> {
-    let lanes = if lanes == 8 { 8 } else { 4 };
-    if lanes == 8 {
-        equally_spaced_impl::<8>(data)
-    } else {
-        equally_spaced_impl::<4>(data)
+    match lanes {
+        5 => equally_spaced_impl::<5>(data),
+        8 => equally_spaced_impl::<8>(data),
+        10 => equally_spaced_impl::<10>(data),
+        _ => equally_spaced_impl::<4>(data),
     }
 }
 

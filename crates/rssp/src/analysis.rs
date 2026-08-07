@@ -527,7 +527,8 @@ fn build_chart_summary(
     );
 
     let compute_patterns = lanes == 4 && options.compute_pattern_counts;
-    let want_parity_rows = options.compute_tech_counts || options.compute_note_annotations;
+    let want_parity_rows =
+        matches!(lanes, 4 | 8) && (options.compute_tech_counts || options.compute_note_annotations);
     let rows_collected = compute_patterns || want_parity_rows;
     let (mut rows4, mut rows8) = (Vec::new(), Vec::new());
     let (mut minimized_chart, mut stats, measure_densities, row_to_beat, last_beat) =
@@ -824,11 +825,7 @@ fn build_chart_summary(
             (tech_counts, timing_stats, note_annotations)
         }
         _ => {
-            let tech_counts = if options.compute_tech_counts {
-                step_parity::analyze_timing_lanes(&minimized_chart, timing, lanes)
-            } else {
-                step_parity::TechCounts::default()
-            };
+            let tech_counts = step_parity::TechCounts::default();
             let timing_stats = if reuse_base_stats {
                 std::mem::take(&mut stats)
             } else {
