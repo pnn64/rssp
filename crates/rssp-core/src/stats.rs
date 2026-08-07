@@ -415,21 +415,24 @@ fn recalc_without_phantoms<const L: usize>(
 ) -> ArrowStats {
     let mut stats = ArrowStats::default();
     for (i, line) in rows.iter().enumerate() {
-        let phantom_mask = ends[i]
-            .iter()
-            .enumerate()
-            .fold(0u8, |m, (c, e)| if e.is_none() { m | (1 << c) } else { m });
+        let phantom_mask =
+            ends[i].iter().enumerate().fold(
+                0u16,
+                |m, (c, e)| {
+                    if e.is_none() { m | (1u16 << c) } else { m }
+                },
+            );
         count_line_masked(line, &mut stats, phantom_mask);
     }
     stats
 }
 
 #[inline(always)]
-fn count_line_masked<const L: usize>(line: &[u8; L], stats: &mut ArrowStats, phantom_mask: u8) {
-    let (mut note_mask, mut hold_mask, mut end_mask) = (0u8, 0u8, 0u8);
+fn count_line_masked<const L: usize>(line: &[u8; L], stats: &mut ArrowStats, phantom_mask: u16) {
+    let (mut note_mask, mut hold_mask, mut end_mask) = (0u16, 0u16, 0u16);
 
     for (i, &ch) in line.iter().enumerate() {
-        let bit = 1u8 << i;
+        let bit = 1u16 << i;
         let is_phantom = (phantom_mask & bit) != 0;
         match ch {
             b'1' => {
@@ -448,7 +451,7 @@ fn count_line_masked<const L: usize>(line: &[u8; L], stats: &mut ArrowStats, pha
                     stats.rolls += 1;
                 }
             }
-            b'3' => end_mask |= 1 << i,
+            b'3' => end_mask |= bit,
             b'M' | b'm' => stats.mines += 1,
             b'L' | b'l' => stats.lifts += 1,
             b'F' | b'f' => stats.fakes += 1,
@@ -1666,6 +1669,16 @@ mod tests {
             let (_, _, expected) = minimize_chart_and_count_with_lanes(data, lanes);
             assert_eq!(measure_densities(data, lanes), expected);
         }
+    }
+
+    #[test]
+    fn phantom_recalc_supports_pump_double_lanes() {
+        let mut row = [b'0'; 10];
+        row[9] = b'1';
+        let stats = recalc_without_phantoms(&[row], &[[None; 10]]);
+
+        assert_eq!(stats.total_arrows, 1);
+        assert_eq!(stats.total_steps, 1);
     }
 
     #[test]
