@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use crate::math::{fmt_dec3_half_up, push_dec3_half_up, round_sig_figs_itg, roundtrip_bpm_itg};
 use crate::parse::{
     ParsedChartEntry, ParsedSimfileData, decode_bytes, decode_unescape_trim, extract_sections,
-    parse_version,
+    parse_float_prefix, parse_version,
 };
 use crate::timing::{
     ROWS_PER_BEAT, TimingFormat, compute_timing_segments, format_bpm_segments_f32_like_itg,
@@ -281,44 +281,6 @@ fn split_display_bpm_params(tag: &str) -> (&str, Option<&str>) {
         }
     }
     (tag.trim(), None)
-}
-
-fn parse_float_prefix(s: &str) -> Option<f64> {
-    let b = s.trim_start().as_bytes();
-    let mut i = usize::from(b.first().is_some_and(|&c| c == b'+' || c == b'-'));
-
-    let start = i;
-    while i < b.len() && b[i].is_ascii_digit() {
-        i += 1;
-    }
-    if i < b.len() && b[i] == b'.' {
-        i += 1;
-        while i < b.len() && b[i].is_ascii_digit() {
-            i += 1;
-        }
-    }
-    if i == start || (i == start + 1 && !b[start].is_ascii_digit()) {
-        return None;
-    }
-    if i < b.len() && matches!(b[i], b'e' | b'E') {
-        let e = i;
-        i += 1;
-        if i < b.len() && matches!(b[i], b'+' | b'-') {
-            i += 1;
-        }
-        let ed = i;
-        while i < b.len() && b[i].is_ascii_digit() {
-            i += 1;
-        }
-        if ed == i {
-            i = e;
-        }
-    }
-    std::str::from_utf8(&b[..i])
-        .ok()?
-        .parse()
-        .ok()
-        .map(|v: f64| if v.is_finite() { v } else { 0.0 })
 }
 
 fn parse_display_bpm(tag: &str) -> Option<(f64, f64)> {

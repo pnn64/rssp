@@ -204,11 +204,50 @@ pub fn parse_offset_seconds(offset: Option<&[u8]>) -> f64 {
         .map_or(0.0, |f| f64::from(f as f32))
 }
 
+pub(crate) fn parse_float_prefix(s: &str) -> Option<f64> {
+    let b = s.trim_start().as_bytes();
+    let mut i = usize::from(b.first().is_some_and(|&c| c == b'+' || c == b'-'));
+
+    let start = i;
+    while i < b.len() && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i < b.len() && b[i] == b'.' {
+        i += 1;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+    }
+    if i == start || (i == start + 1 && !b[start].is_ascii_digit()) {
+        return None;
+    }
+    if i < b.len() && matches!(b[i], b'e' | b'E') {
+        let e = i;
+        i += 1;
+        if i < b.len() && matches!(b[i], b'+' | b'-') {
+            i += 1;
+        }
+        let exponent = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        if exponent == i {
+            i = e;
+        }
+    }
+    std::str::from_utf8(&b[..i])
+        .ok()?
+        .parse()
+        .ok()
+        .map(|value: f64| if value.is_finite() { value } else { 0.0 })
+}
+
 #[must_use]
 pub fn parse_version(version: Option<&[u8]>, fmt: TimingFormat) -> f32 {
     version
         .and_then(|b| std::str::from_utf8(b).ok())
-        .and_then(|s| s.parse().ok())
+        .and_then(parse_float_prefix)
+        .map(|version| version as f32)
         .unwrap_or(if fmt == TimingFormat::Ssc {
             f32::NAN
         } else {
@@ -935,7 +974,25 @@ fn split_notes6(block: &[u8]) -> (u8, [&[u8]; 5], &[u8]) {
 mod tests {
     use std::borrow::Cow;
 
-    use super::{decode_cp1252, decode_unescape_trim, unescape_trim_cow};
+    use super::{decode_cp1252, decode_unescape_trim, parse_version, unescape_trim_cow};
+    use crate::timing::{STEPFILE_VERSION_NUMBER, TimingFormat};
+
+    #[test]
+    fn version_parses_itg_numeric_prefix() {
+        assert_eq!(
+            parse_version(Some(b"0.83 StepPrime"), TimingFormat::Ssc),
+            0.83
+        );
+        assert_eq!(
+            parse_version(Some(b"  +.74custom"), TimingFormat::Ssc),
+            0.74
+        );
+        assert!(parse_version(Some(b"StepPrime"), TimingFormat::Ssc).is_nan());
+        assert_eq!(
+            parse_version(Some(b"StepPrime"), TimingFormat::Sm),
+            STEPFILE_VERSION_NUMBER
+        );
+    }
 
     #[test]
     fn decoded_unescaped_trim_borrows_clean_utf8() {
