@@ -687,16 +687,7 @@ fn finalize_notedata_entry(f: NotedataFields<'_>) -> Option<ParsedChartEntry<'_>
 }
 
 pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfileData<'a>> {
-    let ssc = if ext.eq_ignore_ascii_case("ssc") {
-        true
-    } else if ext.eq_ignore_ascii_case("sm") {
-        false
-    } else {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Unsupported file extension (must be .sm or .ssc)",
-        ));
-    };
+    let ssc = extension_is_ssc(ext)?;
 
     let mut r = ParsedSimfileData::default();
     let mut i = 0;
@@ -783,6 +774,20 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
         i += 1;
     }
     Ok(r)
+}
+
+pub fn extension_is_ssc(ext: &str) -> io::Result<bool> {
+    let ssc = if ext.eq_ignore_ascii_case("ssc") {
+        true
+    } else if ext.eq_ignore_ascii_case("sm") {
+        false
+    } else {
+        return io::Result::Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Unsupported file extension (must be .sm or .ssc)",
+        ));
+    };
+    io::Result::Ok(ssc)
 }
 
 #[inline(always)]
