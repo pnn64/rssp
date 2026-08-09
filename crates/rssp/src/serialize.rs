@@ -1329,6 +1329,7 @@ mod tests {
             measure_nps_vec: Default::default(),
             row_to_beat: Default::default(),
             chart_offset_seconds: Default::default(),
+            matrix_profile: Default::default(),
         }
     }
 }
