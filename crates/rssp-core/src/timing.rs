@@ -579,7 +579,7 @@ where
 }
 
 // --- TimingSegments output ---
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TimingSegments {
     pub beat0_offset_adjust: f32,
     pub bpms: Vec<(f32, f32)>,
