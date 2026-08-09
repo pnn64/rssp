@@ -498,7 +498,7 @@ fn build_chart_summary(
     let lanes = supported_stepstype_lanes_bytes(fields[0])?;
 
     let chart_bpms_opt = entry.chart_bpms.as_deref();
-    let chart_attacks_opt = entry.chart_attacks.as_deref().or(global_attacks_opt);
+    let chart_attacks_opt = entry.chart_attacks.as_deref();
     let chart_delays_opt = entry.chart_delays.as_deref();
     let chart_warps_opt = entry.chart_warps.as_deref();
     let chart_stops_opt = entry.chart_stops.as_deref();
@@ -635,13 +635,24 @@ fn build_chart_summary(
             .filter(|s| !s.is_empty())
             .map(str::to_string)
     });
-    let chart_attacks = chart_attacks_opt.and_then(|bytes| {
-        std::str::from_utf8(bytes)
-            .ok()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-    });
+    let chart_attacks = chart_attacks_opt
+        .and_then(|bytes| {
+            std::str::from_utf8(bytes)
+                .ok()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            // Chart attacks was blank (after trimming) or absent - try again with global attacks
+            global_attacks_opt.and_then(|bytes| {
+                std::str::from_utf8(bytes)
+                    .ok()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            })
+        });
     let chart_display_bpm = chart_display_bpm_tag(chart_display_bpm_opt);
     let timing_src = crate::timing::resolve_chart_timing(
         allow_steps_timing,
@@ -1129,15 +1140,6 @@ pub fn analyze(
         compute_bpm_range_and_stats(&global_bpm_map);
     let median_bpm = round_dp(median_bpm_raw, 2);
     let average_bpm = round_dp(average_bpm_raw, 2);
-
-    let cleaned_global_bpms_str = cleaned_global_bpms.as_str();
-    let cleaned_global_stops_str = cleaned_global_stops.as_str();
-    let cleaned_global_delays_str = cleaned_global_delays.as_str();
-    let cleaned_global_warps_str = cleaned_global_warps.as_str();
-    let cleaned_global_speeds_str = cleaned_global_speeds.as_str();
-    let cleaned_global_scrolls_str = cleaned_global_scrolls.as_str();
-    let cleaned_global_fakes_str = cleaned_global_fakes.as_str();
-    let normalized_global_bpms_str = normalized_global_bpms.as_str();
     let global_attacks_opt = parsed_data.attacks;
 
     let entries = parsed_data.notes_list;
@@ -1154,14 +1156,14 @@ pub fn analyze(
         if let Some((summary, chart_length)) = build_chart_summary(
             &entry,
             global_attacks_opt,
-            cleaned_global_bpms_str,
-            cleaned_global_stops_str,
-            cleaned_global_delays_str,
-            cleaned_global_warps_str,
-            cleaned_global_speeds_str,
-            cleaned_global_scrolls_str,
-            cleaned_global_fakes_str,
-            normalized_global_bpms_str,
+            &cleaned_global_bpms,
+            &cleaned_global_stops,
+            &cleaned_global_delays,
+            &cleaned_global_warps,
+            &cleaned_global_speeds,
+            &cleaned_global_scrolls,
+            &cleaned_global_fakes,
+            &normalized_global_bpms,
             &global_timing_segments,
             &mut global_timing,
             &global_bpm_map,
