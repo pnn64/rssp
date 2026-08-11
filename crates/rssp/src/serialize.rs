@@ -489,7 +489,7 @@ fn serialize_ssc_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> 
         Prop::nonempty_only(b"ATTACKS", PropValue::StrNoEscapeOpt(chart.chart_has_own_attacks.then(|| chart.chart_attacks.as_deref()).flatten())),
         Prop::nonempty_only(b"DISPLAYBPM", PropValue::StrNoEscapeOpt(chart.chart_display_bpm.as_deref())),
         Prop::nonempty_only(b"NOTES", PropValue::NoteData(&chart.minimized_note_data)),
-        Prop::nonempty_only(b"NOTES2", PropValue::Empty), // TODO
+        Prop::nonempty_only(b"NOTES2", PropValue::Empty), // TODO: write NOTES2 instead of NOTES as needed
     ];
 
     for prop in props {
@@ -574,8 +574,9 @@ mod tests {
             4.500000=4.750000;\n\
             #LABELS:0.000000=Song Start,\n\
             16.000000=Speedup;\n\
-            #BGCHANGES:BGChanges;\n\
-            #KEYSOUNDS:;\n\
+            #BGCHANGES:99999=-nosongbg-=1.000=0=0=0 // don't automatically add -songbackground-\n\
+            ;\n\
+            #KEYSOUNDS:a.ogg,b.ogg.c.ogg;\n\
             #ATTACKS:;\n\
             \n\
             //---------------dance-single - Description----------------\n\
@@ -590,9 +591,13 @@ mod tests {
             0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000;\n\
             #CREDIT:Step artist;\n\
             #NOTES:\n\
+            1000\n\
             0000\n\
+            0100\n\
+            00M0\n\
+            0100\n\
             0000\n\
-            0000\n\
+            0001\n\
             0000\n\
             ;\n\
             \n\
@@ -637,9 +642,13 @@ mod tests {
             #LABELS:0.000000=Song Start,\n\
             116.000000=Speedup;\n\
             #NOTES:\n\
+            1000\n\
             0000\n\
+            0100\n\
+            00M0\n\
+            0100\n\
             0000\n\
-            0000\n\
+            0001\n\
             0000\n\
             ;\n\
             \n";
@@ -719,10 +728,11 @@ mod tests {
             #LABELS:0.000000=Song Start,\n\
             16.000000=Speedup;\n\
             #LASTSECONDHINT:120.000000;\n\
-            #BGCHANGES:BGChanges;\n\
-            #FGCHANGES:FGChanges;\n\
-            #KEYSOUNDS:;\n\
-            #ATTACKS:Attacks;\n\
+            #BGCHANGES:99999=-nosongbg-=1.000=0=0=0 // don't automatically add -songbackground-\n\
+            ;\n\
+            #FGCHANGES:0.000000=lua=1.000000=0=0=1;\n\
+            #KEYSOUNDS:a.ogg,b.ogg.c.ogg;\n\
+            #ATTACKS:TIME=64.000000:LEN=2.000000:MODS=*0.5 stealth;\n\
             \n\
             //---------------dance-single - Description----------------\n\
             #NOTEDATA:;\n\
@@ -736,12 +746,16 @@ mod tests {
             #RADARVALUES:0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000,\
             0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000;\n\
             #CREDIT:Step artist;\n\
-            #ATTACKS:Attacks;\n\
+            #ATTACKS:TIME=164.000000:LEN=2.000000:MODS=*0.5 stealth;\n\
             #DISPLAYBPM:300;\n\
             #NOTES:\n\
+            1000\n\
             0000\n\
+            0100\n\
+            00M0\n\
+            0100\n\
             0000\n\
-            0000\n\
+            0001\n\
             0000\n\
             ;\n\
             \n\
@@ -786,12 +800,16 @@ mod tests {
             104.500000=4.750000;\n\
             #LABELS:0.000000=Song Start,\n\
             116.000000=Speedup;\n\
-            #ATTACKS:Attacks;\n\
+            #ATTACKS:TIME=164.000000:LEN=2.000000:MODS=*0.5 stealth;\n\
             #DISPLAYBPM:300;\n\
             #NOTES:\n\
+            1000\n\
             0000\n\
+            0100\n\
+            00M0\n\
+            0100\n\
             0000\n\
-            0000\n\
+            0001\n\
             0000\n\
             ;\n\
             \n";
@@ -852,8 +870,9 @@ mod tests {
             #SCROLLS:0.000000=1.000000;\n\
             #FAKES:;\n\
             #LABELS:0.000000=Song Start;\n\
-            #BGCHANGES:BGChanges;\n\
-            #KEYSOUNDS:;\n\
+            #BGCHANGES:99999=-nosongbg-=1.000=0=0=0 // don't automatically add -songbackground-\n\
+            ;\n\
+            #KEYSOUNDS:a.ogg,b.ogg.c.ogg;\n\
             #ATTACKS:;\n\
             \n\
             //---------------dance-single - Description----------------\n\
@@ -868,9 +887,13 @@ mod tests {
             0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000;\n\
             #CREDIT:Step artist;\n\
             #NOTES:\n\
+            1000\n\
             0000\n\
+            0100\n\
+            00M0\n\
+            0100\n\
             0000\n\
-            0000\n\
+            0001\n\
             0000\n\
             ;\n\
             \n\
@@ -898,9 +921,13 @@ mod tests {
             #FAKES:;\n\
             #LABELS:0.000000=Song Start;\n\
             #NOTES:\n\
+            1000\n\
             0000\n\
+            0100\n\
+            00M0\n\
+            0100\n\
             0000\n\
-            0000\n\
+            0001\n\
             0000\n\
             ;\n\
             \n";
@@ -951,15 +978,20 @@ mod tests {
         2.500000=2.750000,\n\
         3.000000=-1.625000,\n\
         3.500000=-1.875000;\n\
-        #BGCHANGES:BGChanges;\n\
-        #KEYSOUNDS:;\n\
+        #BGCHANGES:99999=-nosongbg-=1.000=0=0=0 // don't automatically add -songbackground-\n\
+        ;\n\
+        #KEYSOUNDS:a.ogg,b.ogg.c.ogg;\n\
         #ATTACKS:;\n\
         \n\
         //---------------dance-single - Description----------------\n\
         #NOTES:\n     dance-single:\n     Description:\n     Challenge:\n     17:\n     0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000:\n\
+        1000\n\
         0000\n\
+        0100\n\
+        00M0\n\
+        0100\n\
         0000\n\
-        0000\n\
+        0001\n\
         0000\n\
         ;\n\
         \n";
@@ -1011,16 +1043,21 @@ mod tests {
         2.500000=2.750000,\n\
         3.000000=-1.625000,\n\
         3.500000=-1.875000;\n\
-        #BGCHANGES:BGChanges;\n\
-        #FGCHANGES:FGChanges;\n\
-        #KEYSOUNDS:;\n\
-        #ATTACKS:Attacks;\n\
+        #BGCHANGES:99999=-nosongbg-=1.000=0=0=0 // don't automatically add -songbackground-\n\
+        ;\n\
+        #FGCHANGES:0.000000=lua=1.000000=0=0=1;\n\
+        #KEYSOUNDS:a.ogg,b.ogg.c.ogg;\n\
+        #ATTACKS:TIME=64.000000:LEN=2.000000:MODS=*0.5 stealth;\n\
         \n\
         //---------------dance-single - Description----------------\n\
         #NOTES:\n     dance-single:\n     Description:\n     Challenge:\n     17:\n     0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000:\n\
+        1000\n\
         0000\n\
+        0100\n\
+        00M0\n\
+        0100\n\
         0000\n\
-        0000\n\
+        0001\n\
         0000\n\
         ;\n\
         \n";
@@ -1064,15 +1101,20 @@ mod tests {
         #SELECTABLE:YES;\n\
         #BPMS:0.000000=60.000000;\n\
         #STOPS:;\n\
-        #BGCHANGES:BGChanges;\n\
-        #KEYSOUNDS:;\n\
+        #BGCHANGES:99999=-nosongbg-=1.000=0=0=0 // don't automatically add -songbackground-\n\
+        ;\n\
+        #KEYSOUNDS:a.ogg,b.ogg.c.ogg;\n\
         #ATTACKS:;\n\
         \n\
         //---------------dance-single - Description----------------\n\
         #NOTES:\n     dance-single:\n     Description:\n     Beginner:\n     1:\n     0.010000,0.020000,0.030000,0.040000,0.050000,0.060000,0.070000,0.080000,0.090000,0.100000,0.110000,0.120000,0.130000,0.140000:\n\
+        1000\n\
         0000\n\
+        0100\n\
+        00M0\n\
+        0100\n\
         0000\n\
-        0000\n\
+        0001\n\
         0000\n\
         ;\n\
         \n";
@@ -1182,15 +1224,17 @@ mod tests {
             sample_length: 16.0,
             origin_str: String::from("Origin"),
             credit_str: String::from("Credit"),
-            normalized_bgchanges: String::from("BGChanges"), // TODO: replace with valid string
+            normalized_bgchanges: String::from(
+                "99999=-nosongbg-=1.000=0=0=0 // don't automatically add -songbackground-\n",
+            ),
             normalized_fgchanges: if include_nonempty {
-                String::from("FGChanges") // TODO: replace with valid string
+                String::from("0.000000=lua=1.000000=0=0=1")
             } else {
                 Default::default()
             },
-            normalized_keysounds: Default::default(), // TODO
+            normalized_keysounds: String::from("a.ogg,b.ogg.c.ogg"),
             normalized_attacks: if include_nonempty {
-                String::from("Attacks") // TODO: replace with valid string
+                String::from("TIME=64.000000:LEN=2.000000:MODS=*0.5 stealth")
             } else {
                 Default::default()
             },
@@ -1243,7 +1287,7 @@ mod tests {
                 0.130, 0.140,
             ]),
             tech_notation_str: String::from("BR FS XO"),
-            minimized_note_data: b"0000\n0000\n0000\n0000\n".to_vec(), // TODO
+            minimized_note_data: b"1000\n0000\n0100\n00M0\n0100\n0000\n0001\n0000\n".to_vec(),
             music_path: match include_nonempty {
                 true => String::from("chart_music.ogg"),
                 false => String::from(""),
@@ -1259,7 +1303,8 @@ mod tests {
                 .then(|| String::from("0.000000=4,\n116.000000=2,\n148.000000=4")),
             chart_combos: (has_own_timing && !trigger_defaults)
                 .then(|| String::from("0.000000=1,\n116.000000=2,\n148.000000=1")),
-            chart_attacks: include_nonempty.then(|| String::from("Attacks")), // TODO
+            chart_attacks: include_nonempty
+                .then(|| String::from("TIME=164.000000:LEN=2.000000:MODS=*0.5 stealth")),
             chart_has_own_attacks: include_nonempty,
             chart_display_bpm: include_nonempty.then(|| String::from("300")),
 
