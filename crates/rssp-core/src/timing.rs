@@ -1,6 +1,7 @@
 use crate::bpm::{clean_timing_map_cow, parse_beat_or_row, parse_bpm_map};
 use crate::math::{lrint_f32, lrint_f64, push_dec6_itg, roundtrip_bpm_itg};
 use crate::parse::parse_offset_seconds;
+use std::borrow::Cow;
 use std::cmp::Ordering;
 
 // --- Constants ---
@@ -1049,6 +1050,81 @@ fn process_bpms_and_stops_sm(
     sort_segments_by_beat(&mut out_warps);
 
     (out_bpms, out_stops, out_warps, f64::from(beat0_offset))
+}
+
+pub fn convert_warps_and_delays_to_sm_stops<'a>(
+    bpms: &[(f32, f32)],
+    stops: &'a [(f32, f32)],
+    delays: &[(f32, f32)],
+    warps: &[(f32, f32)],
+) -> Cow<'a, [(f32, f32)]> {
+    if delays.is_empty() && warps.is_empty() {
+        return Cow::Borrowed(stops);
+    }
+
+    let mut warp_stops = Vec::new();
+    let mut bpm_index = 0;
+    for (warp_beat, warp_value) in warps {
+        // Find the current BPM
+        while bpm_index + 1 < bpms.len() && bpms[bpm_index + 1].0 <= *warp_beat {
+            bpm_index += 1;
+        }
+        let bps = 60.0 / bpms[bpm_index].1;
+        let skip = bps * warp_value;
+        warp_stops.push((*warp_beat, -skip));
+    }
+
+    // Perform a 3-way merge on the SM stop sources.
+    // If two sources apply the same beat, sum up their values into a single pair.
+    let mut sm_stops = Vec::with_capacity(stops.len() + delays.len() + warp_stops.len());
+    let mut stops_index = 0;
+    let mut delays_index = 0;
+    let mut warp_stops_index = 0;
+
+    while stops_index < stops.len()
+        || delays_index < delays.len()
+        || warp_stops_index < warp_stops.len()
+    {
+        // Find the smallest remaining key.
+        let mut key = None;
+
+        if stops_index < stops.len() {
+            key = Some(stops[stops_index].0);
+        }
+        if delays_index < delays.len() && key.is_none_or(|k| delays[delays_index].0 < k) {
+            key = Some(delays[delays_index].0);
+        }
+        if warp_stops_index < warp_stops.len()
+            && key.is_none_or(|k| warp_stops[warp_stops_index].0 < k)
+        {
+            key = Some(warp_stops[warp_stops_index].0);
+        }
+
+        let key = match key {
+            Some(k) => k,
+            None => break, // Should be unreachable, but just in case
+        };
+        let mut value = 0.0;
+
+        if stops_index < stops.len() && stops[stops_index].0 == key {
+            value += stops[stops_index].1;
+            stops_index += 1;
+        }
+        if delays_index < delays.len() && delays[delays_index].0 == key {
+            value += delays[delays_index].1;
+            delays_index += 1;
+        }
+        if warp_stops_index < warp_stops.len() && warp_stops[warp_stops_index].0 == key {
+            value += warp_stops[warp_stops_index].1;
+            warp_stops_index += 1;
+        }
+
+        if value != 0.0 {
+            sm_stops.push((key, value));
+        }
+    }
+
+    Cow::Owned(sm_stops)
 }
 
 // --- TimingData ---
