@@ -360,7 +360,6 @@ fn has_misrounded_bpm_beats(normalized_bpms: &str) -> bool {
                     let tick = (decimal * 48.0 / 1000.0).round();
                     let normalized_decimal = (tick * 1000.0 / 48.0).round();
                     if normalized_decimal != decimal {
-                        print!("{:?} != {:?}", normalized_decimal, decimal);
                         return true;
                     }
                 }
