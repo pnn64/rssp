@@ -702,14 +702,12 @@ fn check_file(path: &Path, extension: &str) -> Result<(), String> {
         serialize_simfile(&base_summary, extension, &mut cursor).map_err(|e| e.to_string())?;
     };
 
-    //print!("{}", String::from_utf8(buffer.clone()).unwrap());
-
     // Re-run rssp analyze on the serialized simfile
     let reencoded_summary = run_rssp_analyze(&buffer, extension)?;
 
     println!("File: {}", path.display());
 
-    let mut comparison_results = Vec::with_capacity(6); // should match # of tests below
+    let mut comparison_results = Vec::with_capacity(4); // should match # of tests below
 
     comparison_results.push(compare_simfile_str_fields(
         &base_summary,
