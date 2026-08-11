@@ -298,6 +298,9 @@ fn ac_search_array(text: &[u8], dfa: &AcDfa<PatternVariant>) -> PatternCounts {
 #[inline]
 fn ac_search_vec(text: &[u8], dfa: &AcDfa<usize>, count: usize) -> Vec<u32> {
     let mut counts = vec![0u32; count];
+    if count == 0 {
+        return counts;
+    }
     let mut state = 0u32;
 
     for &b in text {
@@ -313,9 +316,9 @@ fn ac_search_vec(text: &[u8], dfa: &AcDfa<usize>, count: usize) -> Vec<u32> {
 
 fn ac_empty<T>() -> AcDfa<T> {
     AcDfa {
-        goto: vec![0; AC_ALPHA],
-        output_starts: vec![0],
-        output_lens: vec![0],
+        goto: Vec::new(),
+        output_starts: Vec::new(),
+        output_lens: Vec::new(),
         flat_outputs: Vec::new(),
     }
 }
@@ -1045,6 +1048,20 @@ mod tests {
         assert_eq!(
             combined.custom_patterns,
             detect_custom_patterns_compiled(&bitmasks, &custom)
+        );
+    }
+
+    #[test]
+    fn empty_custom_patterns_skip_the_automaton() {
+        let bitmasks = [0b0001, 0b0010, 0b0100, 0b1000];
+        let rows: Vec<_> = bitmasks.iter().copied().map(row_from_mask).collect();
+        let empty = super::compiled_custom_empty();
+
+        assert!(detect_custom_patterns_compiled(&bitmasks, &empty).is_empty());
+        assert!(
+            analyze_patterns_from_rows(&rows, 2, &empty)
+                .custom_patterns
+                .is_empty()
         );
     }
 

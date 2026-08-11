@@ -1562,6 +1562,10 @@ fn parity_perms_for_row(g: &mut StepParityGenerator, row_idx: usize) -> &'static
 }
 
 fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usize> {
+    // Sample enough layers for mixed row types, then size the arena once from
+    // the file's observed state density instead of repeatedly doubling it.
+    const RESERVE_SAMPLE_ROWS: usize = 64;
+
     debug_assert_eq!(g.column_count, COLS);
     let start_id = parity_add_node(g, 0);
     g.nodes[start_id].cost = 0.0;
@@ -1644,6 +1648,12 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
         }
 
         std::mem::swap(&mut g.prev_ids, &mut g.next_ids);
+
+        if i + 1 == RESERVE_SAMPLE_ROWS && g.rows.len() > RESERVE_SAMPLE_ROWS {
+            let states_per_row = g.nodes.len().div_ceil(RESERVE_SAMPLE_ROWS);
+            let expected = states_per_row.saturating_mul(g.rows.len());
+            g.nodes.reserve(expected.saturating_sub(g.nodes.len()));
+        }
     }
 
     g.prev_ids
@@ -3117,6 +3127,49 @@ mod tests {
 
         assert_eq!(combined.0, separate_counts);
         assert_eq!(combined.1, separate_annotations);
+    }
+
+    #[test]
+    fn long_solve_keeps_row_annotations_aligned() {
+        const ROWS: usize = 128;
+        const MASKS: [u8; 8] = [
+            0b0001, 0b0100, 0b1000, 0b0010, 0b0011, 0b1100, 0b0101, 0b1010,
+        ];
+        let rows: Vec<[u8; 4]> = (0..ROWS)
+            .map(|idx| {
+                let mask = MASKS[idx % MASKS.len()];
+                std::array::from_fn(|column| {
+                    if mask & (1 << column) == 0 {
+                        b'0'
+                    } else {
+                        b'1'
+                    }
+                })
+            })
+            .collect();
+        let beats: Vec<_> = (0..u16::try_from(ROWS).expect("test row count fits u16"))
+            .map(|idx| f32::from(idx) * 0.25)
+            .collect();
+        let mut scratch = timing_rows_scratch::<4>().expect("dance-single layout");
+
+        let (counts, annotations) = analyze_and_annotate_timing_rows_known_holds(
+            &rows,
+            &beats,
+            &basic_timing(),
+            false,
+            &mut scratch,
+        );
+
+        assert_eq!(annotations.len(), ROWS);
+        let mut summed = TechCounts::default();
+        for (idx, annotation) in annotations.iter().enumerate() {
+            let mask = MASKS[idx % MASKS.len()];
+            assert_eq!(annotation.beat.to_bits(), beats[idx].to_bits());
+            assert_eq!(annotation.column_mask, mask);
+            assert_eq!(annotation.foot_count(), mask.count_ones());
+            summed += annotation.row_tech;
+        }
+        assert_eq!(summed, counts);
     }
 
     #[test]

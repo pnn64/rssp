@@ -6,7 +6,16 @@ pub fn fixture(version: &str) -> String {
     let mut out = String::with_capacity(160 + CHART_COUNT * 180);
     writeln!(
         &mut out,
-        "#VERSION:{version};\n#TITLE:Metadata Performance;\n#ARTIST:RSSP;\n#OFFSET:0;\n#BPMS:0=120;"
+        concat!(
+            "#VERSION:{};\n",
+            "#TITLE:  Metadata Performance  ;\n",
+            "#SUBTITLE:  Allocation fixture  ;\n",
+            "#ARTIST:  RSSP  ;\n",
+            "#GENRE:  Benchmark  ;\n",
+            "#OFFSET:0;\n",
+            "#BPMS:0=120;"
+        ),
+        version
     )
     .expect("writing to a String should succeed");
 

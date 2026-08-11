@@ -649,6 +649,19 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             ));
         });
     });
+    parity.bench_function("dense_single_cold", |b| {
+        b.iter(|| {
+            let mut scratch =
+                rssp::step_parity::timing_rows_scratch::<4>().expect("dance-single parity layout");
+            black_box(rssp::step_parity::analyze_timing_rows_known_holds(
+                black_box(&single_rows),
+                black_box(&single_beats),
+                black_box(&parity_timing),
+                false,
+                black_box(&mut scratch),
+            ));
+        });
+    });
     parity.bench_function("dense_single_holds", |b| {
         b.iter(|| {
             black_box(rssp::step_parity::analyze_timing_rows_known_holds(

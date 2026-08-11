@@ -16,7 +16,7 @@ use crate::hash::compute_chart_hash_pair;
 use crate::math::{round_dp, round_sig_figs_6};
 use crate::matrix::{MatrixProfile, compute_matrix_profile};
 use crate::parse::{
-    ParsedChartEntry, SSC_VERSION_CHART_NAME_TAG, clean_tag, decode_bytes, decode_unescape_trim,
+    ParsedChartEntry, SSC_VERSION_CHART_NAME_TAG, decode_bytes, decode_unescape_trim,
     extract_sections, normalize_chart_desc_ref, parse_offset_seconds, parse_version,
     strip_title_tags, unescape_tag,
 };
@@ -120,13 +120,8 @@ fn chart_timing_tag_pair(tag: Option<&[u8]>) -> (Option<String>, Option<String>)
 
 fn chart_display_bpm_tag(tag: Option<&[u8]>) -> Option<String> {
     let bytes = tag?;
-    let text = decode_bytes(bytes);
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
+    let value = decode_trim_owned(bytes);
+    if value.is_empty() { None } else { Some(value) }
 }
 
 fn msd_first_param_bytes(bytes: &[u8]) -> &[u8] {
@@ -142,6 +137,55 @@ fn msd_first_param_bytes(bytes: &[u8]) -> &[u8] {
         }
     }
     bytes
+}
+
+fn unescape_owned(mut value: String) -> String {
+    if !value.as_bytes().contains(&b'\\') {
+        return value;
+    }
+    let mut escaped = false;
+    value.retain(|ch| {
+        if escaped {
+            escaped = false;
+            true
+        } else if ch == '\\' {
+            escaped = true;
+            false
+        } else {
+            true
+        }
+    });
+    if escaped {
+        value.push('\\');
+    }
+    value
+}
+
+fn decode_unescape_owned(bytes: &[u8]) -> String {
+    match decode_bytes(bytes) {
+        Cow::Borrowed(value) => unescape_tag(value).into_owned(),
+        Cow::Owned(value) => unescape_owned(value),
+    }
+}
+
+fn trim_owned(value: &mut String) {
+    let trimmed = value.trim();
+    let start = trimmed.as_ptr() as usize - value.as_ptr() as usize;
+    let end = start + trimmed.len();
+    value.truncate(end);
+    if start != 0 {
+        value.drain(..start);
+    }
+}
+
+fn decode_trim_owned(bytes: &[u8]) -> String {
+    match decode_bytes(bytes) {
+        Cow::Borrowed(value) => value.trim().to_owned(),
+        Cow::Owned(mut value) => {
+            trim_owned(&mut value);
+            value
+        }
+    }
 }
 
 const RADAR_CATEGORY_NOTES: usize = 5;
@@ -515,7 +559,7 @@ fn build_chart_summary(
     let chart_music_path = entry
         .chart_music
         .as_deref()
-        .map(|bytes| unescape_tag(decode_bytes(bytes).as_ref()).into_owned())
+        .map(decode_unescape_owned)
         .unwrap_or_default();
 
     let metadata = chart_metadata_strings(
@@ -528,7 +572,7 @@ fn build_chart_summary(
     let chart_style = entry
         .chart_style
         .as_ref()
-        .map(|bytes| unescape_tag(decode_bytes(bytes).as_ref()).into_owned())
+        .map(|bytes| decode_unescape_owned(bytes))
         .unwrap_or_default();
 
     let compute_patterns = lanes == 4 && options.compute_pattern_counts;
@@ -606,25 +650,15 @@ fn build_chart_summary(
         None
     };
     let chart_time_signatures = chart_time_signatures_opt.and_then(|bytes| {
-        let decoded = decode_bytes(bytes);
-        let trimmed = decoded.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
+        let value = decode_trim_owned(bytes);
+        if value.is_empty() { None } else { Some(value) }
     });
     let chart_labels = chart_labels_opt.and_then(|bytes| {
         let first_param = msd_first_param_bytes(bytes);
-        let decoded = decode_bytes(first_param);
-        let unescaped = unescape_tag(decoded.as_ref());
-        let cleaned = clean_tag(unescaped.as_ref());
-        let trimmed = cleaned.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
+        let mut value = decode_unescape_owned(first_param);
+        value.retain(|ch| !ch.is_control());
+        trim_owned(&mut value);
+        if value.is_empty() { None } else { Some(value) }
     });
     let chart_tickcounts = chart_tickcounts_opt.and_then(|bytes| {
         std::str::from_utf8(bytes)
@@ -947,9 +981,9 @@ pub fn analyze(
     let mut title_str = parsed_data.title.map_or_else(
         || "<invalid-title>".to_string(),
         |b| {
-            let decoded = decode_bytes(b);
-            let unescaped = unescape_tag(decoded.as_ref());
-            clean_tag(unescaped.as_ref()).into_owned()
+            let mut value = decode_unescape_owned(b);
+            value.retain(|ch| !ch.is_control());
+            value
         },
     );
     if options.strip_tags {
@@ -958,100 +992,85 @@ pub fn analyze(
             title_str = stripped.into_owned();
         }
     }
-    let trimmed_title = title_str.trim();
-    if trimmed_title.len() != title_str.len() {
-        title_str = trimmed_title.to_string();
-    }
+    trim_owned(&mut title_str);
 
     let mut subtitle_str = parsed_data
         .subtitle
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .map(|b| decode_unescape_trim(b).into_owned())
         .unwrap_or_default();
-    let trimmed_subtitle = subtitle_str.trim();
-    if trimmed_subtitle.len() != subtitle_str.len() {
-        subtitle_str = trimmed_subtitle.to_string();
-    }
     let mut artist_str = parsed_data
         .artist
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .map(|b| decode_unescape_trim(b).into_owned())
         .unwrap_or_default();
-    let trimmed_artist = artist_str.trim();
-    if trimmed_artist.len() != artist_str.len() {
-        artist_str = trimmed_artist.to_string();
-    }
-    let mut genre_str = parsed_data
+    let genre_str = parsed_data
         .genre
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .map(|b| decode_unescape_trim(b).into_owned())
         .unwrap_or_default();
-    let trimmed_genre = genre_str.trim();
-    if trimmed_genre.len() != genre_str.len() {
-        genre_str = trimmed_genre.to_string();
-    }
     let mut titletranslit_str = parsed_data
         .title_translit
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .map(decode_unescape_owned)
         .unwrap_or_default();
     let mut subtitletranslit_str = parsed_data
         .subtitle_translit
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .map(decode_unescape_owned)
         .unwrap_or_default();
     let mut artisttranslit_str = parsed_data
         .artist_translit
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .map(decode_unescape_owned)
         .unwrap_or_default();
     let origin_str = parsed_data
         .origin
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .map(decode_unescape_owned)
         .unwrap_or_default();
     let credit_str = parsed_data
         .credit
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .map(decode_unescape_owned)
         .unwrap_or_default();
     let banner_path_str = parsed_data
         .banner
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .map(decode_unescape_owned)
         .unwrap_or_default();
     let background_path_str = parsed_data
         .background
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .map(decode_unescape_owned)
         .unwrap_or_default();
     let cdtitle_path_str = parsed_data
         .cdtitle
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .map(decode_unescape_owned)
         .unwrap_or_default();
     let jacket_path_str = parsed_data
         .jacket
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .map(decode_unescape_owned)
         .unwrap_or_default();
     let music_path_str = parsed_data
         .music
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .map(decode_unescape_owned)
         .unwrap_or_default();
     let previewvid_str = parsed_data
         .previewvid
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .map(decode_unescape_owned)
         .unwrap_or_default();
     let cdimage_str = parsed_data
         .cdimage
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .map(decode_unescape_owned)
         .unwrap_or_default();
     let discimage_str = parsed_data
         .discimage
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .map(decode_unescape_owned)
         .unwrap_or_default();
     let lyricspath_str = parsed_data
         .lyricspath
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .map(decode_unescape_owned)
         .unwrap_or_default();
     let selectable_bool = parsed_data
         .selectable
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .map(decode_unescape_owned)
         .unwrap_or_default()
         != "NO";
     let timing_format = timing_format_from_ext(extension);
     let display_bpm_str = parsed_data
         .display_bpm
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .map(decode_unescape_owned)
         .unwrap_or_default();
 
     if options.translate_markers {
@@ -1127,9 +1146,9 @@ pub fn analyze(
         .labels
         .map(|b| {
             let first_param = msd_first_param_bytes(b);
-            let decoded = decode_bytes(first_param);
-            let unescaped = unescape_tag(decoded.as_ref());
-            clean_tag(unescaped.as_ref()).into_owned()
+            let mut value = decode_unescape_owned(first_param);
+            value.retain(|ch| !ch.is_control());
+            value
         })
         .unwrap_or_default();
     let normalized_global_tickcounts = parsed_data
@@ -1375,6 +1394,7 @@ pub fn compute_all_hashes(
 mod tests {
     use super::{
         AnalysisOptions, ChartMetadataStrings, analyze, chart_metadata_strings, compute_all_hashes,
+        decode_trim_owned, decode_unescape_owned,
     };
     use crate::parse::{
         decode_bytes, normalize_chart_desc, normalize_chart_name, unescape_tag, unescape_trim,
@@ -1384,6 +1404,26 @@ mod tests {
     use std::borrow::Cow;
 
     const FIXTURE: &[u8] = include_bytes!("../benches/fixtures/hash_fixture.ssc");
+
+    #[test]
+    fn owned_metadata_decoding_matches_existing_semantics() {
+        let cases: [&[u8]; 5] = [
+            b"plain metadata",
+            b"escaped\\: metadata",
+            b"trailing slash\\",
+            b"double\\\\slash",
+            &[b' ', 0x93, b'T', b'i', b't', b'l', b'e', 0x94, b' '],
+        ];
+
+        for bytes in cases {
+            let decoded = decode_bytes(bytes);
+            assert_eq!(
+                decode_unescape_owned(bytes),
+                unescape_tag(decoded.as_ref()).as_ref()
+            );
+            assert_eq!(decode_trim_owned(bytes), decoded.trim());
+        }
+    }
 
     fn materialized_chart_metadata(
         fields: [&[u8]; 5],
