@@ -525,6 +525,11 @@ fn build_chart_summary(
         ssc_version,
         extension,
     );
+    let chart_style = entry
+        .chart_style
+        .as_ref()
+        .map(|bytes| unescape_tag(decode_bytes(bytes).as_ref()).into_owned())
+        .unwrap_or_default();
 
     let compute_patterns = lanes == 4 && options.compute_pattern_counts;
     let want_parity_rows =
@@ -653,6 +658,7 @@ fn build_chart_summary(
                     .map(str::to_string)
             })
         });
+    let chart_has_own_attacks = chart_attacks.is_some() && entry.chart_attacks.is_some();
     let chart_display_bpm = chart_display_bpm_tag(chart_display_bpm_opt);
     let timing_src = crate::timing::resolve_chart_timing(
         allow_steps_timing,
@@ -863,6 +869,7 @@ fn build_chart_summary(
             step_artist_str: metadata.step_artist,
             description_str: metadata.description,
             chart_name_str: metadata.chart_name,
+            chart_style_str: chart_style,
             difficulty_str: metadata.difficulty,
             rating_str: metadata.rating,
             tech_notation_str: metadata.tech_notation,
@@ -909,6 +916,7 @@ fn build_chart_summary(
             minimized_note_data: minimized_chart,
             music_path: chart_music_path,
             chart_attacks,
+            chart_has_own_attacks,
             chart_stops,
             chart_speeds,
             chart_scrolls,
@@ -991,6 +999,14 @@ pub fn analyze(
         .artist_translit
         .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
         .unwrap_or_default();
+    let origin_str = parsed_data
+        .origin
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .unwrap_or_default();
+    let credit_str = parsed_data
+        .credit
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .unwrap_or_default();
     let banner_path_str = parsed_data
         .banner
         .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
@@ -1011,6 +1027,27 @@ pub fn analyze(
         .music
         .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
         .unwrap_or_default();
+    let previewvid_str = parsed_data
+        .previewvid
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .unwrap_or_default();
+    let cdimage_str = parsed_data
+        .cdimage
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .unwrap_or_default();
+    let discimage_str = parsed_data
+        .discimage
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .unwrap_or_default();
+    let lyricspath_str = parsed_data
+        .lyricspath
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .unwrap_or_default();
+    let selectable_bool = parsed_data
+        .selectable
+        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
+        .unwrap_or_default()
+        != "NO";
     let timing_format = timing_format_from_ext(extension);
     let display_bpm_str = parsed_data
         .display_bpm
@@ -1105,6 +1142,30 @@ pub fn analyze(
         .and_then(|b| std::str::from_utf8(b).ok())
         .map_or("", str::trim)
         .to_string();
+    let normalized_global_bgchanges = parsed_data
+        .bgchanges
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .map_or("", str::trim)
+        .to_string();
+    let normalized_global_fgchanges = parsed_data
+        .fgchanges
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .map_or("", str::trim)
+        .to_string();
+    let normalized_global_keysounds = parsed_data
+        .keysounds
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .map_or("", str::trim)
+        .to_string();
+    let normalized_global_attacks = parsed_data
+        .attacks
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .map_or("", str::trim)
+        .to_string();
+    let last_second_hint = parsed_data
+        .last_second_hint
+        .map(|b| parse_offset_seconds(Some(b)))
+        .and_then(|n| if n <= 0.0 { None } else { Some(n) });
 
     let allow_steps_timing = steps_timing_allowed(ssc_version, timing_format);
     let compiled_custom_patterns =
@@ -1200,6 +1261,8 @@ pub fn analyze(
         titletranslit_str,
         subtitletranslit_str,
         artisttranslit_str,
+        origin_str,
+        credit_str,
         offset: offset_rounded,
         normalized_bpms: normalized_global_bpms,
         normalized_stops: normalized_global_stops,
@@ -1212,6 +1275,10 @@ pub fn analyze(
         normalized_labels: normalized_global_labels,
         normalized_tickcounts: normalized_global_tickcounts,
         normalized_combos: normalized_global_combos,
+        normalized_bgchanges: normalized_global_bgchanges,
+        normalized_fgchanges: normalized_global_fgchanges,
+        normalized_keysounds: normalized_global_keysounds,
+        normalized_attacks: normalized_global_attacks,
         ssc_version,
         timing_format,
         banner_path: banner_path_str,
@@ -1231,6 +1298,13 @@ pub fn analyze(
         tech_counts_enabled: options.compute_tech_counts,
         charts: chart_summaries,
         total_elapsed,
+        global_timing_segments,
+        previewvid_path: previewvid_str,
+        cdimage_path: cdimage_str,
+        discimage_path: discimage_str,
+        lyrics_path: lyricspath_str,
+        selectable: selectable_bool,
+        last_second_hint,
     })
 }
 
