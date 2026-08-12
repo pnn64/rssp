@@ -191,7 +191,7 @@ const fn compute_simple_quad_parts(
 }
 
 // Make the struct and its fields public
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ChartSummary {
     pub step_type_str: String,
     pub step_artist_str: String,
@@ -264,7 +264,7 @@ pub struct ChartSummary {
 }
 
 // Make the struct and its fields public
-#[derive(Debug)] // Add Debug for easier use in the engine
+#[derive(Debug, Clone)] // Add Debug for easier use in the engine
 pub struct SimfileSummary {
     pub title_str: String,
     pub subtitle_str: String,
