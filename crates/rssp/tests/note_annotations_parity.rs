@@ -365,7 +365,10 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         });
 
         if matched {
-            println!("  {step_type} {difficulty} [{meter_label}]: {} rows ....ok", expected.len());
+            println!(
+                "  {step_type} {difficulty} [{meter_label}]: {} rows ....ok",
+                expected.len()
+            );
         } else {
             println!("  {step_type} {difficulty} [{meter_label}] ....MISMATCH");
             return Err(format!(
@@ -387,7 +390,10 @@ fn main() {
     let args = Arguments::from_args();
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let packs_dir = resolve_dir("RSSP_PARITY_PACKS_DIR", manifest_dir.join("tests/data/packs"));
+    let packs_dir = resolve_dir(
+        "RSSP_PARITY_PACKS_DIR",
+        manifest_dir.join("tests/data/packs"),
+    );
     let baseline_dir = resolve_dir(
         "RSSP_PARITY_BASELINE_DIR",
         manifest_dir.join("tests/data/baseline"),

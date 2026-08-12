@@ -31,23 +31,56 @@ pub struct CourseFile {
 
 const COURSE_BANNER_EXTS: [&str; 5] = ["png", "jpg", "jpeg", "bmp", "gif"];
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CourseEntry {
     pub song: CourseSong,
     pub steps: StepsSpec,
     pub modifiers: String,
     pub secret: bool,
     pub no_difficult: bool,
+    pub gain_seconds: f32,
     pub gain_lives: i32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CourseSong {
     Fixed { group: Option<String>, song: String },
     RandomAny,
     RandomWithinGroup { group: String },
     SortPick { sort: SongSort, index: i32 },
+    Select(SongSelect),
     Unknown { raw: String },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SongSelect {
+    pub titles: Vec<String>,
+    pub groups: Vec<String>,
+    pub artists: Vec<String>,
+    pub genres: Vec<String>,
+    pub difficulties: Vec<Difficulty>,
+    pub meter_range: Option<(i32, i32)>,
+    pub bpm_range: Option<(f64, f64)>,
+    pub duration_range: Option<(f32, f32)>,
+    pub sort: Option<SongSort>,
+    pub index: i32,
+}
+
+impl Default for SongSelect {
+    fn default() -> Self {
+        Self {
+            titles: Vec::new(),
+            groups: Vec::new(),
+            artists: Vec::new(),
+            genres: Vec::new(),
+            difficulties: Vec::new(),
+            meter_range: None,
+            bpm_range: None,
+            duration_range: None,
+            sort: None,
+            index: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,7 +118,7 @@ const fn course_meter(meters: &[Option<i32>; 6], difficulty: Difficulty) -> Opti
     meters[difficulty as usize]
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum StepsSpec {
     Difficulty(Difficulty),
     MeterRange { low: i32, high: i32 },
@@ -179,6 +212,11 @@ const fn trim_ascii(mut s: &[u8]) -> &[u8] {
 
 fn decode_trim(bytes: &[u8]) -> String {
     decode_bytes(trim_ascii(bytes)).trim().to_string()
+}
+
+fn decode_unescape_trim(bytes: &[u8]) -> String {
+    let decoded = decode_bytes(trim_ascii(bytes));
+    unescape_tag(decoded.as_ref()).trim().to_string()
 }
 
 fn parse_repeat(s: &str) -> bool {
@@ -328,8 +366,133 @@ fn parse_song_entry(params: &[&[u8]]) -> CourseEntry {
         modifiers,
         secret,
         no_difficult,
+        gain_seconds: 0.0,
         gain_lives,
     }
+}
+
+fn parse_select_list(raw: &[u8], out: &mut Vec<String>) -> bool {
+    let items = split_unescaped(raw, b',');
+    if items.is_empty() {
+        return false;
+    }
+    out.extend(items.into_iter().map(decode_unescape_trim));
+    true
+}
+
+fn parse_select_range(raw: &[u8]) -> Option<(f64, f64)> {
+    let raw = decode_trim(raw);
+    let mut values = raw.split('-');
+    let first = values.next()?.trim().parse::<f64>().ok()?;
+    let last = values
+        .next()
+        .map(str::trim)
+        .map_or(Ok(first), str::parse)
+        .ok()?;
+    if values.next().is_some() || first > last {
+        return None;
+    }
+    Some((first, last))
+}
+
+fn parse_select_sort(raw: &[u8]) -> Option<(Option<SongSort>, i32)> {
+    let parts = split_unescaped(raw, b',');
+    if parts.len() != 2 {
+        return None;
+    }
+    let sort = match decode_trim(parts[0]).to_ascii_lowercase().as_str() {
+        "randomize" => None,
+        "mostplays" | "best" => Some(SongSort::MostPlays),
+        "fewestplays" | "worst" => Some(SongSort::FewestPlays),
+        "topgrades" | "gradebest" => Some(SongSort::TopGrades),
+        "lowestgrades" | "gradeworst" => Some(SongSort::LowestGrades),
+        _ => return None,
+    };
+    let index = (decode_trim(parts[1]).parse::<i32>().unwrap_or(0) - 1).clamp(0, 500);
+    Some((sort, index))
+}
+
+fn apply_select_mods(entry: &mut CourseEntry, raw: &[u8]) {
+    let mut modifiers = Vec::new();
+    for item in split_unescaped(raw, b',') {
+        let value = decode_unescape_trim(item);
+        if value.eq_ignore_ascii_case("showcourse") {
+            entry.secret = false;
+        } else if value.eq_ignore_ascii_case("noshowcourse") {
+            entry.secret = true;
+        } else if value.eq_ignore_ascii_case("nodifficult") {
+            entry.no_difficult = true;
+        } else if !value.is_empty() {
+            modifiers.push(value);
+        }
+    }
+    entry.modifiers = modifiers.join(",");
+}
+
+fn parse_song_select(params: &[&[u8]]) -> Option<CourseEntry> {
+    let mut entry = CourseEntry {
+        song: CourseSong::Select(SongSelect::default()),
+        steps: StepsSpec::Unknown { raw: String::new() },
+        modifiers: String::new(),
+        secret: false,
+        no_difficult: false,
+        gain_seconds: 0.0,
+        gain_lives: -1,
+    };
+
+    for param in params {
+        let parts = split_unescaped(param, b'=');
+        if parts.len() != 2 {
+            return None;
+        }
+        let name = decode_trim(parts[0]);
+        let value = parts[1];
+        let CourseSong::Select(select) = &mut entry.song else {
+            unreachable!("SONGSELECT parser always constructs selection criteria");
+        };
+        if name.eq_ignore_ascii_case("TITLE") {
+            if !parse_select_list(value, &mut select.titles) {
+                return None;
+            }
+        } else if name.eq_ignore_ascii_case("GROUP") {
+            if !parse_select_list(value, &mut select.groups) {
+                return None;
+            }
+        } else if name.eq_ignore_ascii_case("ARTIST") {
+            if !parse_select_list(value, &mut select.artists) {
+                return None;
+            }
+        } else if name.eq_ignore_ascii_case("GENRE") {
+            if !parse_select_list(value, &mut select.genres) {
+                return None;
+            }
+        } else if name.eq_ignore_ascii_case("DIFFICULTY") {
+            for raw in split_unescaped(value, b',') {
+                if let Some(diff) = parse_course_difficulty(&decode_trim(raw)) {
+                    select.difficulties.push(diff);
+                }
+            }
+        } else if name.eq_ignore_ascii_case("METER") {
+            let (low, high) = parse_select_range(value)?;
+            select.meter_range = Some((low as i32, high as i32));
+        } else if name.eq_ignore_ascii_case("BPMRANGE") {
+            select.bpm_range = Some(parse_select_range(value)?);
+        } else if name.eq_ignore_ascii_case("DURATION") {
+            let (low, high) = parse_select_range(value)?;
+            select.duration_range = Some((low as f32, high as f32));
+        } else if name.eq_ignore_ascii_case("SORT") {
+            let (sort, index) = parse_select_sort(value)?;
+            select.sort = sort;
+            select.index = index;
+        } else if name.eq_ignore_ascii_case("GAINLIVES") {
+            entry.gain_lives = decode_trim(value).parse().unwrap_or(0);
+        } else if name.eq_ignore_ascii_case("GAINSECONDS") {
+            entry.gain_seconds = decode_trim(value).parse::<i32>().unwrap_or(0) as f32;
+        } else if name.eq_ignore_ascii_case("MODS") {
+            apply_select_mods(&mut entry, value);
+        }
+    }
+    Some(entry)
 }
 
 fn parse_course_meter_tag(value: &[u8], meters: &mut [Option<i32>; 6]) {
@@ -486,6 +649,13 @@ pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
         if name_bytes.eq_ignore_ascii_case(b"SONG") {
             let params = split_unescaped(value, b':');
             entries.push(parse_song_entry(&params));
+            continue;
+        }
+        if name_bytes.eq_ignore_ascii_case(b"SONGSELECT") {
+            let params = split_unescaped(value, b':');
+            if let Some(entry) = parse_song_select(&params) {
+                entries.push(entry);
+            }
         }
     }
 
@@ -982,7 +1152,9 @@ pub fn analyze_crs_path(
 
 #[cfg(test)]
 mod tests {
-    use super::{CourseHashKey, analyze_crs_path, dedup_push};
+    use super::{
+        CourseHashKey, CourseSong, Difficulty, SongSort, analyze_crs_path, dedup_push, parse_crs,
+    };
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1040,6 +1212,57 @@ mod tests {
         }
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn songselect_parses_itgmania_criteria() {
+        let course = parse_crs(
+            br#"
+#COURSE:[Per-Song MMod Scale] ITL Random 8s;
+#METER:Hard:8;
+#SONGSELECT:GROUP=ITL Online 2022,ITL Online 2023:METER=8-8;
+#SONGSELECT:TITLE=thank u\, next:ARTIST=Artist\=Name:GENRE=J-Pop,Black Metal:DIFFICULTY=Medium,Hard:BPMRANGE=120-160:DURATION=90-125:SORT=FewestPlays,4:GAINSECONDS=5:GAINLIVES=2:MODS=2x,noshowcourse,nodifficult;
+"#,
+        )
+        .expect("ITGmania SONGSELECT course should parse");
+
+        assert_eq!(course.entries.len(), 2);
+        let CourseSong::Select(first) = &course.entries[0].song else {
+            panic!("first entry should preserve SONGSELECT criteria");
+        };
+        assert_eq!(first.groups, ["ITL Online 2022", "ITL Online 2023"]);
+        assert_eq!(first.meter_range, Some((8, 8)));
+
+        let second_entry = &course.entries[1];
+        let CourseSong::Select(second) = &second_entry.song else {
+            panic!("second entry should preserve SONGSELECT criteria");
+        };
+        assert_eq!(second.titles, ["thank u, next"]);
+        assert_eq!(second.artists, ["Artist=Name"]);
+        assert_eq!(second.genres, ["J-Pop", "Black Metal"]);
+        assert_eq!(second.difficulties, [Difficulty::Medium, Difficulty::Hard]);
+        assert_eq!(second.bpm_range, Some((120.0, 160.0)));
+        assert_eq!(second.duration_range, Some((90.0, 125.0)));
+        assert_eq!(second.sort, Some(SongSort::FewestPlays));
+        assert_eq!(second.index, 3);
+        assert_eq!(second_entry.gain_seconds, 5.0);
+        assert_eq!(second_entry.gain_lives, 2);
+        assert_eq!(second_entry.modifiers, "2x");
+        assert!(second_entry.secret);
+        assert!(second_entry.no_difficult);
+    }
+
+    #[test]
+    fn songselect_skips_invalid_entry_like_itgmania() {
+        let course =
+            parse_crs(b"#COURSE:Skip Invalid;\n#SONGSELECT:METER=12-8;\n#SONGSELECT:METER=8-8;")
+                .expect("course should remain valid when one SONGSELECT is invalid");
+
+        assert_eq!(course.entries.len(), 1);
+        let CourseSong::Select(select) = &course.entries[0].song else {
+            panic!("valid SONGSELECT should remain");
+        };
+        assert_eq!(select.meter_range, Some((8, 8)));
     }
 
     #[test]
