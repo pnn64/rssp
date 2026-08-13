@@ -729,6 +729,7 @@ fn run_stream_outputs_alloc_phase(
     phase: &str,
     iterations: usize,
     measures: &[usize],
+    base_live_bytes: usize,
     mut compute: impl FnMut(
         &[usize],
     ) -> (
@@ -756,7 +757,7 @@ fn run_stream_outputs_alloc_phase(
             "throughput_measures_s={:.3} alloc_calls_per_iter={:.1} ",
             "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
             "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
-            "live_growth_bytes={} peak_live_growth_bytes={}"
+            "live_growth_bytes={} retained_bytes={} peak_working_bytes={}"
         ),
         phase,
         iterations,
@@ -769,7 +770,8 @@ fn run_stream_outputs_alloc_phase(
         (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
         (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
         after.live_bytes as isize - before.live_bytes as isize,
-        after.peak_live_bytes.saturating_sub(before.live_bytes),
+        before.live_bytes.saturating_sub(base_live_bytes),
+        after.peak_live_bytes.saturating_sub(base_live_bytes),
     );
 }
 
@@ -783,13 +785,22 @@ fn run_stream_outputs_alloc(iterations: usize) {
             _ => 0,
         })
         .collect();
-    run_stream_outputs_alloc_phase("allocating", iterations, &measures, |measures| {
-        rssp::stats::compute_stream_outputs(measures)
-    });
+    let base_live_bytes = LIVE_BYTES.load(Ordering::Relaxed);
+    run_stream_outputs_alloc_phase(
+        "allocating",
+        iterations,
+        &measures,
+        base_live_bytes,
+        |measures| rssp::stats::compute_stream_outputs(measures),
+    );
     let mut tokens = Vec::new();
-    run_stream_outputs_alloc_phase("reused", iterations, &measures, |measures| {
-        rssp::stats::compute_stream_outputs_with_scratch(measures, &mut tokens)
-    });
+    run_stream_outputs_alloc_phase(
+        "reused",
+        iterations,
+        &measures,
+        base_live_bytes,
+        |measures| rssp::stats::compute_stream_outputs_with_scratch(measures, &mut tokens),
+    );
 }
 
 fn run_analysis_alloc_phase(
@@ -797,6 +808,7 @@ fn run_analysis_alloc_phase(
     iterations: usize,
     corpus: &[SimInput],
     options: &rssp::AnalysisOptions,
+    base_live_bytes: usize,
     mut analyze: impl FnMut(&SimInput) -> rssp::report::SimfileSummary,
 ) {
     for sim in corpus {
@@ -823,7 +835,7 @@ fn run_analysis_alloc_phase(
             "throughput_mib_s={:.3} alloc_calls_per_iter={:.1} ",
             "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
             "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
-            "live_growth_bytes={} peak_live_growth_bytes={}"
+            "live_growth_bytes={} retained_bytes={} peak_working_bytes={}"
         ),
         phase,
         iterations,
@@ -836,7 +848,8 @@ fn run_analysis_alloc_phase(
         (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
         (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
         after.live_bytes as isize - before.live_bytes as isize,
-        after.peak_live_bytes.saturating_sub(before.live_bytes),
+        before.live_bytes.saturating_sub(base_live_bytes),
+        after.peak_live_bytes.saturating_sub(base_live_bytes),
     );
     black_box(options);
 }
@@ -846,14 +859,36 @@ fn run_analysis_reuse_alloc(
     corpus: &[SimInput],
     options: &rssp::AnalysisOptions,
 ) {
-    run_analysis_alloc_phase("fresh", iterations, corpus, options, |sim| {
-        rssp::analyze(sim.raw.as_slice(), sim.extension, options).expect("fixture should analyze")
-    });
+    for sim in corpus {
+        black_box(
+            rssp::analyze(sim.raw.as_slice(), sim.extension, options)
+                .expect("fixture should analyze"),
+        );
+    }
+    let base_live_bytes = LIVE_BYTES.load(Ordering::Relaxed);
+    run_analysis_alloc_phase(
+        "fresh",
+        iterations,
+        corpus,
+        options,
+        base_live_bytes,
+        |sim| {
+            rssp::analyze(sim.raw.as_slice(), sim.extension, options)
+                .expect("fixture should analyze")
+        },
+    );
     let mut scratch = rssp::AnalysisScratch::default();
-    run_analysis_alloc_phase("reused", iterations, corpus, options, |sim| {
-        rssp::analyze_with_scratch(sim.raw.as_slice(), sim.extension, options, &mut scratch)
-            .expect("fixture should analyze")
-    });
+    run_analysis_alloc_phase(
+        "reused",
+        iterations,
+        corpus,
+        options,
+        base_live_bytes,
+        |sim| {
+            rssp::analyze_with_scratch(sim.raw.as_slice(), sim.extension, options, &mut scratch)
+                .expect("fixture should analyze")
+        },
+    );
 }
 
 fn run_course_analyze_alloc(iterations: usize) {
