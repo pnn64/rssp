@@ -200,9 +200,10 @@ fn compute_stream_counts_and_range(measures: &[usize]) -> (StreamCounts, Option<
     clippy::cast_possible_truncation,
     reason = "stream counters are intentionally u32 for output compatibility"
 )]
-fn compute_stream_counts_and_tokens(measures: &[usize]) -> (StreamCounts, Vec<Token>) {
+fn compute_stream_counts_and_tokens(measures: &[usize], tokens: &mut Vec<Token>) -> StreamCounts {
     let mut counts = StreamCounts::default();
-    let mut tokens = Vec::with_capacity(scratch_cap(measures.len()));
+    tokens.clear();
+    tokens.reserve(scratch_cap(measures.len()));
     let (mut seen_stream, mut leading_breaks, mut pending_breaks) = (false, 0usize, 0usize);
     let (mut token_category, mut token_len) = (RunDensity::Break, 0usize);
 
@@ -262,7 +263,7 @@ fn compute_stream_counts_and_tokens(measures: &[usize]) -> (StreamCounts, Vec<To
     }
 
     if !seen_stream {
-        return (StreamCounts::default(), tokens);
+        return StreamCounts::default();
     }
     if pending_breaks >= 2 {
         counts.total_breaks += pending_breaks as u32;
@@ -270,7 +271,7 @@ fn compute_stream_counts_and_tokens(measures: &[usize]) -> (StreamCounts, Vec<To
     if token_category != RunDensity::Break {
         tokens.push(Token::Run(token_category, token_len));
     }
-    (counts, tokens)
+    counts
 }
 
 #[must_use]
@@ -281,7 +282,24 @@ pub fn compute_stream_outputs(
     (String, String, String),
     (String, String, String),
 ) {
-    let (counts, tokens) = compute_stream_counts_and_tokens(measures);
+    compute_stream_outputs_with_scratch(measures, &mut Vec::new())
+}
+
+/// Computes stream counts and breakdowns using caller-owned token storage.
+///
+/// Clear-and-reuse this buffer when processing multiple charts to avoid one
+/// temporary allocation per chart. Its retained capacity is bounded by the
+/// largest chart passed by the caller.
+#[must_use]
+pub fn compute_stream_outputs_with_scratch(
+    measures: &[usize],
+    tokens: &mut Vec<Token>,
+) -> (
+    StreamCounts,
+    (String, String, String),
+    (String, String, String),
+) {
+    let counts = compute_stream_counts_and_tokens(measures, tokens);
     if tokens.is_empty() {
         return (
             counts,
@@ -291,11 +309,11 @@ pub fn compute_stream_outputs(
     }
 
     let sn = (
-        format_breakdown_tokens(&tokens, BreakdownMode::Detailed),
-        format_breakdown_tokens(&tokens, BreakdownMode::Partial),
-        format_breakdown_tokens(&tokens, BreakdownMode::Simplified),
+        format_breakdown_tokens(tokens, BreakdownMode::Detailed),
+        format_breakdown_tokens(tokens, BreakdownMode::Partial),
+        format_breakdown_tokens(tokens, BreakdownMode::Simplified),
     );
-    let standard = format_stream_tokens3(&tokens);
+    let standard = format_stream_tokens3(tokens);
     (counts, sn, standard)
 }
 
@@ -893,6 +911,24 @@ mod tests {
                 "{measures:?}"
             );
             assert_eq!(standard, stream_breakdowns(&measures), "{measures:?}");
+        }
+    }
+
+    #[test]
+    fn reused_token_scratch_preserves_outputs() {
+        let cases: [&[usize]; 4] = [
+            &[16, 0, 16, 0, 0, 24],
+            &[],
+            &[0, 0, 32, 32, 0, 20, 0, 0],
+            &[12, 15, 0],
+        ];
+        let mut scratch = Vec::new();
+
+        for measures in cases {
+            assert_eq!(
+                compute_stream_outputs_with_scratch(measures, &mut scratch),
+                compute_stream_outputs(measures)
+            );
         }
     }
 

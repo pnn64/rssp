@@ -85,6 +85,8 @@ enum Mode {
     Parse,
     Fast,
     Full,
+    AnalysisReuse,
+    StreamOutputs,
     Matrix,
     Annotations,
     Hashes,
@@ -163,6 +165,8 @@ fn parse_args() -> (Mode, usize) {
                 mode = match args[i + 1].as_str() {
                     "parse" => Mode::Parse,
                     "fast" => Mode::Fast,
+                    "analysis-reuse" => Mode::AnalysisReuse,
+                    "stream-outputs" => Mode::StreamOutputs,
                     "matrix" => Mode::Matrix,
                     "annotations" => Mode::Annotations,
                     "hashes" => Mode::Hashes,
@@ -231,10 +235,11 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             compute_pattern_counts: false,
             ..rssp::AnalysisOptions::default()
         },
-        Mode::Full => rssp::AnalysisOptions {
+        Mode::Full | Mode::AnalysisReuse => rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
         },
+        Mode::StreamOutputs => rssp::AnalysisOptions::default(),
         Mode::CourseJson | Mode::CourseCsv => rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
@@ -323,7 +328,7 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
                     black_box(notation);
                 }
             }
-            Mode::Matrix => {
+            Mode::Matrix | Mode::AnalysisReuse | Mode::StreamOutputs => {
                 unreachable!("matrix mode uses its dedicated allocation runner")
             }
             Mode::Snapshot => {
@@ -530,6 +535,8 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Parse => "parse",
         Mode::Fast => "fast",
         Mode::Full => "full",
+        Mode::AnalysisReuse => "analysis-reuse",
+        Mode::StreamOutputs => "stream-outputs",
         Mode::Matrix => "matrix",
         Mode::Annotations => "annotations",
         Mode::Hashes => "hashes",
@@ -663,16 +670,19 @@ fn custom_pattern_input(unique_count: usize) -> Vec<String> {
     patterns
 }
 
-fn run_custom_pattern_alloc(iterations: usize) {
-    const UNIQUE_PATTERNS: usize = 256;
-    let patterns = custom_pattern_input(UNIQUE_PATTERNS);
-    black_box(rssp::patterns::compile_custom_patterns(&patterns));
+fn run_custom_pattern_alloc_phase(
+    phase: &str,
+    iterations: usize,
+    patterns: &[String],
+    compile: impl Fn(&[String]) -> rssp::patterns::CompiledCustomPatterns,
+) {
+    black_box(compile(patterns));
     reset_counters();
     let before = Counters::read();
     let start = Instant::now();
     let mut checksum = 0usize;
     for _ in 0..iterations {
-        let compiled = rssp::patterns::compile_custom_patterns(black_box(&patterns));
+        let compiled = compile(black_box(patterns));
         checksum = checksum.wrapping_add(usize::from(!rssp::patterns::compiled_custom_is_empty(
             &compiled,
         )));
@@ -683,12 +693,13 @@ fn run_custom_pattern_alloc(iterations: usize) {
     let divisor = iterations as f64;
     println!(
         concat!(
-            "mode=custom-compile iters={} checksum={} elapsed_s={:.6} ",
+            "mode=custom-compile phase={} iters={} checksum={} elapsed_s={:.6} ",
             "throughput_patterns_s={:.3} alloc_calls_per_iter={:.1} ",
             "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
             "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
             "live_growth_bytes={} peak_live_growth_bytes={}"
         ),
+        phase,
         iterations,
         black_box(checksum),
         elapsed.as_secs_f64(),
@@ -701,6 +712,148 @@ fn run_custom_pattern_alloc(iterations: usize) {
         after.live_bytes as isize - before.live_bytes as isize,
         after.peak_live_bytes.saturating_sub(before.live_bytes),
     );
+}
+
+fn run_custom_pattern_alloc(iterations: usize) {
+    const UNIQUE_PATTERNS: usize = 256;
+    let patterns = custom_pattern_input(UNIQUE_PATTERNS);
+    run_custom_pattern_alloc_phase("legacy", iterations, &patterns, |patterns| {
+        rssp::patterns::compile_custom_patterns_legacy_for_bench(patterns)
+    });
+    run_custom_pattern_alloc_phase("open-addressed", iterations, &patterns, |patterns| {
+        rssp::patterns::compile_custom_patterns(patterns)
+    });
+}
+
+fn run_stream_outputs_alloc_phase(
+    phase: &str,
+    iterations: usize,
+    measures: &[usize],
+    mut compute: impl FnMut(
+        &[usize],
+    ) -> (
+        rssp::stats::StreamCounts,
+        (String, String, String),
+        (String, String, String),
+    ),
+) {
+    black_box(compute(measures));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let output = compute(black_box(measures));
+        checksum = checksum.wrapping_add(output.0.run16_streams as usize);
+        black_box(output);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=stream-outputs phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_measures_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        measures.len() as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_stream_outputs_alloc(iterations: usize) {
+    let measures: Vec<_> = (0..16_384)
+        .map(|index| match index % 23 {
+            0..=7 => 16,
+            8..=11 => 20,
+            12..=14 => 24,
+            15..=16 => 32,
+            _ => 0,
+        })
+        .collect();
+    run_stream_outputs_alloc_phase("allocating", iterations, &measures, |measures| {
+        rssp::stats::compute_stream_outputs(measures)
+    });
+    let mut tokens = Vec::new();
+    run_stream_outputs_alloc_phase("reused", iterations, &measures, |measures| {
+        rssp::stats::compute_stream_outputs_with_scratch(measures, &mut tokens)
+    });
+}
+
+fn run_analysis_alloc_phase(
+    phase: &str,
+    iterations: usize,
+    corpus: &[SimInput],
+    options: &rssp::AnalysisOptions,
+    mut analyze: impl FnMut(&SimInput) -> rssp::report::SimfileSummary,
+) {
+    for sim in corpus {
+        black_box(analyze(sim));
+    }
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        for sim in corpus {
+            let summary = analyze(black_box(sim));
+            checksum = checksum.wrapping_add(summary.charts.len());
+            black_box(summary);
+        }
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    let bytes = corpus.iter().map(|sim| sim.raw.len()).sum::<usize>() as f64 * divisor;
+    println!(
+        concat!(
+            "mode=analysis-reuse phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_mib_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        bytes / elapsed.as_secs_f64() / (1024.0 * 1024.0),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+    black_box(options);
+}
+
+fn run_analysis_reuse_alloc(
+    iterations: usize,
+    corpus: &[SimInput],
+    options: &rssp::AnalysisOptions,
+) {
+    run_analysis_alloc_phase("fresh", iterations, corpus, options, |sim| {
+        rssp::analyze(sim.raw.as_slice(), sim.extension, options).expect("fixture should analyze")
+    });
+    let mut scratch = rssp::AnalysisScratch::default();
+    run_analysis_alloc_phase("reused", iterations, corpus, options, |sim| {
+        rssp::analyze_with_scratch(sim.raw.as_slice(), sim.extension, options, &mut scratch)
+            .expect("fixture should analyze")
+    });
 }
 
 fn run_course_analyze_alloc(iterations: usize) {
@@ -1215,6 +1368,10 @@ fn main() {
             run_custom_pattern_alloc(iterations);
             return;
         }
+        Mode::StreamOutputs => {
+            run_stream_outputs_alloc(iterations);
+            return;
+        }
         Mode::Matrix => {
             run_matrix_alloc(iterations);
             return;
@@ -1296,6 +1453,10 @@ fn main() {
 
     let corpus = load_corpus();
     let options = options_for(mode);
+    if matches!(mode, Mode::AnalysisReuse) {
+        run_analysis_reuse_alloc(iterations, &corpus, &options);
+        return;
+    }
     let bytes: usize = corpus.iter().map(|sim| sim.raw.len()).sum();
     let report_summaries = if matches!(
         mode,

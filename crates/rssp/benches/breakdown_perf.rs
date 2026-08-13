@@ -171,9 +171,18 @@ fn bench_combined_stream_outputs(c: &mut Criterion) {
     let mut group = c.benchmark_group("combined_stream_outputs");
     group.sample_size(100);
     group.measurement_time(Duration::from_secs(2));
-    group.bench_function("counts_and_six_breakdowns", |b| {
+    group.bench_function("allocating_tokens", |b| {
         b.iter(|| {
             black_box(rssp::stats::compute_stream_outputs(black_box(&densities)));
+        });
+    });
+    let mut tokens = Vec::new();
+    group.bench_function("reused_tokens", |b| {
+        b.iter(|| {
+            black_box(rssp::stats::compute_stream_outputs_with_scratch(
+                black_box(&densities),
+                black_box(&mut tokens),
+            ));
         });
     });
     group.finish();

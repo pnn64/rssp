@@ -70,7 +70,10 @@ pub mod rounding {
 
 pub const RSSP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub use analysis::{AnalysisOptions, ChartHashInfo, analyze, compute_all_hashes, display_metadata};
+pub use analysis::{
+    AnalysisOptions, AnalysisScratch, ChartHashInfo, analyze, analyze_with_scratch,
+    compute_all_hashes, display_metadata,
+};
 pub(crate) use rssp_core::chart_timing_tag_raw;
 
 pub use report::{ChartSummary, SimfileSummary};

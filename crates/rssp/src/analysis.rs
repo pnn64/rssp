@@ -28,7 +28,7 @@ use crate::patterns::{
     analyze_patterns_from_rows, compile_custom_patterns, compiled_custom_empty,
 };
 use crate::stats::{
-    RADAR_CATEGORY_COUNT, StreamCounts, compute_stream_outputs,
+    RADAR_CATEGORY_COUNT, StreamCounts, compute_stream_outputs_with_scratch,
     compute_timing_aware_stats_from_rows_with_row_to_beat,
     compute_timing_aware_stats_no_holds_from_rows, compute_timing_aware_stats_with_row_to_beat,
     minimize_chart_count_rows, minimize_rows_typed,
@@ -63,6 +63,30 @@ impl Default for AnalysisOptions {
             compute_pattern_counts: true,
             translate_markers: false,
         }
+    }
+}
+
+/// Reusable temporary storage for repeated simfile analysis.
+///
+/// One workspace is single-thread-only and may be reused sequentially across
+/// any mix of 4-lane and 8-lane simfiles. It retains the largest parity, NPS,
+/// and stream-token buffers it has needed; drop it to release that memory.
+#[derive(Default)]
+pub struct AnalysisScratch {
+    parity4: Option<step_parity::TimingRowsScratch<4>>,
+    parity8: Option<step_parity::TimingRowsScratch<8>>,
+    nps: Vec<f64>,
+    stream_tokens: Vec<stats::Token>,
+}
+
+impl std::fmt::Debug for AnalysisScratch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AnalysisScratch")
+            .field("has_parity4", &self.parity4.is_some())
+            .field("has_parity8", &self.parity8.is_some())
+            .field("nps_capacity", &self.nps.capacity())
+            .field("stream_capacity", &self.stream_tokens.capacity())
+            .finish()
     }
 }
 
@@ -371,9 +395,10 @@ fn compute_derived_chart_metrics(
     bpm_map: &[(f64, f64)],
     minimized_chart: &[u8],
     bpms_to_use: &str,
+    stream_tokens: &mut Vec<stats::Token>,
 ) -> DerivedChartMetrics {
     let (stream_counts, sn_breakdowns, standard_breakdowns) =
-        compute_stream_outputs(measure_densities);
+        compute_stream_outputs_with_scratch(measure_densities, stream_tokens);
     let total_streams = stream_counts.run16_streams
         + stream_counts.run20_streams
         + stream_counts.run24_streams
@@ -533,6 +558,7 @@ fn build_chart_summary(
     parity_scratch4: &mut Option<step_parity::TimingRowsScratch<4>>,
     parity_scratch8: &mut Option<step_parity::TimingRowsScratch<8>>,
     nps_scratch: &mut Vec<f64>,
+    stream_tokens: &mut Vec<stats::Token>,
     options: &AnalysisOptions,
 ) -> Option<(ChartSummary, i32)> {
     let chart_start_time = Instant::now();
@@ -765,6 +791,7 @@ fn build_chart_summary(
         bpm_map.as_ref(),
         &minimized_chart,
         bpms_to_use.as_ref(),
+        stream_tokens,
     );
 
     let pattern_analysis = compute_patterns.then(|| {
@@ -972,10 +999,34 @@ fn build_chart_summary(
     ))
 }
 
+/// # Errors
+///
+/// Returns an error when the extension is unsupported, parsing fails, or no
+/// supported chart is present.
 pub fn analyze(
     simfile_data: &[u8],
     extension: &str,
     options: &AnalysisOptions,
+) -> Result<SimfileSummary, String> {
+    let mut scratch = AnalysisScratch::default();
+    analyze_with_scratch(simfile_data, extension, options, &mut scratch)
+}
+
+/// Analyzes a simfile while reusing caller-owned temporary storage.
+///
+/// This produces the same owned summary as [`analyze`]. Reusing one workspace
+/// across a batch avoids rebuilding large parity arenas and median/token
+/// buffers for every file.
+///
+/// # Errors
+///
+/// Returns an error when the extension is unsupported, parsing fails, or no
+/// supported chart is present.
+pub fn analyze_with_scratch(
+    simfile_data: &[u8],
+    extension: &str,
+    options: &AnalysisOptions,
+    scratch: &mut AnalysisScratch,
 ) -> Result<SimfileSummary, String> {
     let total_start_time = Instant::now();
 
@@ -1231,9 +1282,6 @@ pub fn analyze(
     let mut chart_summaries = Vec::with_capacity(entry_count);
     let mut total_length = 0i32;
     let mut global_timing = None;
-    let mut parity_scratch4 = None;
-    let mut parity_scratch8 = None;
-    let mut nps_scratch = Vec::new();
     let options_ref = &options;
     let compiled_custom_patterns_ref = &compiled_custom_patterns;
     for entry in entries {
@@ -1257,9 +1305,10 @@ pub fn analyze(
             ssc_version,
             allow_steps_timing,
             compiled_custom_patterns_ref,
-            &mut parity_scratch4,
-            &mut parity_scratch8,
-            &mut nps_scratch,
+            &mut scratch.parity4,
+            &mut scratch.parity8,
+            &mut scratch.nps,
+            &mut scratch.stream_tokens,
             options_ref,
         ) {
             if chart_length > total_length {
@@ -1397,8 +1446,8 @@ pub fn compute_all_hashes(
 #[cfg(test)]
 mod tests {
     use super::{
-        AnalysisOptions, ChartMetadataStrings, analyze, chart_metadata_strings, compute_all_hashes,
-        decode_trim_owned, decode_unescape_owned,
+        AnalysisOptions, AnalysisScratch, ChartMetadataStrings, analyze, analyze_with_scratch,
+        chart_metadata_strings, compute_all_hashes, decode_trim_owned, decode_unescape_owned,
     };
     use crate::parse::{
         decode_bytes, normalize_chart_desc, normalize_chart_name, unescape_tag, unescape_trim,
@@ -1408,6 +1457,31 @@ mod tests {
     use std::borrow::Cow;
 
     const FIXTURE: &[u8] = include_bytes!("../benches/fixtures/hash_fixture.ssc");
+
+    fn json(summary: &crate::SimfileSummary) -> Vec<u8> {
+        let mut out = Vec::new();
+        crate::report::write_reports(summary, crate::report::OutputMode::JSON, &mut out)
+            .expect("summary should serialize");
+        out
+    }
+
+    #[test]
+    fn reused_analysis_scratch_preserves_output() {
+        let options = AnalysisOptions {
+            compute_note_annotations: true,
+            ..AnalysisOptions::default()
+        };
+        let expected = analyze(FIXTURE, "ssc", &options).expect("analysis should succeed");
+        let mut scratch = AnalysisScratch::default();
+
+        let first = analyze_with_scratch(FIXTURE, "ssc", &options, &mut scratch)
+            .expect("first reused analysis should succeed");
+        let second = analyze_with_scratch(FIXTURE, "ssc", &options, &mut scratch)
+            .expect("second reused analysis should succeed");
+
+        assert_eq!(json(&first), json(&expected));
+        assert_eq!(json(&second), json(&expected));
+    }
 
     #[test]
     fn owned_metadata_decoding_matches_existing_semantics() {

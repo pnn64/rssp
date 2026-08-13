@@ -156,7 +156,14 @@ fn bench_custom_patterns(c: &mut Criterion) {
     compile_group.sample_size(100);
     compile_group.measurement_time(Duration::from_secs(2));
     compile_group.throughput(Throughput::Elements(patterns.len() as u64));
-    compile_group.bench_function("compile_256_unique_with_duplicates", |b| {
+    compile_group.bench_function("legacy_hashmap", |b| {
+        b.iter(|| {
+            black_box(rssp::patterns::compile_custom_patterns_legacy_for_bench(
+                black_box(&patterns),
+            ));
+        });
+    });
+    compile_group.bench_function("open_addressed", |b| {
         b.iter(|| {
             black_box(rssp::patterns::compile_custom_patterns(black_box(
                 &patterns,

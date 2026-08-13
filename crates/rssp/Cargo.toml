@@ -116,6 +116,7 @@ required-features = ["profile"]
 [[bench]]
 name = "mono_perf"
 harness = false
+required-features = ["profile"]
 
 [[bench]]
 name = "bpm_perf"

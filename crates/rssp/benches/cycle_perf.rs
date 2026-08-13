@@ -182,6 +182,24 @@ fn cp1252_metadata(bytes: usize) -> Vec<u8> {
 }
 
 #[cfg(windows)]
+fn custom_pattern_input(unique_count: usize) -> Vec<String> {
+    const DIRECTIONS: [u8; 4] = *b"LDUR";
+    let mut patterns = Vec::with_capacity(unique_count * 3);
+    for mut value in 0..unique_count {
+        let mut bytes = [b'L'; 8];
+        for byte in &mut bytes {
+            *byte = DIRECTIONS[value & 3];
+            value >>= 2;
+        }
+        let pattern = String::from_utf8(bytes.to_vec()).expect("directions are valid UTF-8");
+        patterns.push(pattern.clone());
+        patterns.push(pattern.to_ascii_lowercase());
+        patterns.push(pattern);
+    }
+    patterns
+}
+
+#[cfg(windows)]
 fn sorted_bpm_stats_reference(map: &[(f64, f64)]) -> (f64, f64) {
     let mut values: Vec<_> = map
         .iter()
@@ -550,6 +568,11 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         .map(|idx| ((idx * 37) % 257) as f64 / 7.0)
         .collect();
     let mut nps_scratch = Vec::new();
+    let custom_patterns = custom_pattern_input(256);
+    let analysis_fixture = include_bytes!("fixtures/camellia_mix.ssc");
+    let analysis_options = rssp::AnalysisOptions::default();
+    let mut analysis_scratch = rssp::AnalysisScratch::default();
+    let mut stream_tokens = Vec::new();
 
     let mut optimizations = c.benchmark_group("cycles/optimizations");
     optimizations.sample_size(100);
@@ -560,6 +583,14 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             black_box(rssp::stats::compute_stream_outputs(black_box(
                 &stream_densities,
             )));
+        });
+    });
+    optimizations.bench_function("stream_outputs_reused", |b| {
+        b.iter(|| {
+            black_box(rssp::stats::compute_stream_outputs_with_scratch(
+                black_box(&stream_densities),
+                black_box(&mut stream_tokens),
+            ));
         });
     });
     optimizations.throughput(Throughput::Elements(matrix_densities.len() as u64));
@@ -606,7 +637,53 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             }
         });
     });
+    optimizations.throughput(Throughput::Elements(custom_patterns.len() as u64));
+    optimizations.bench_function("custom_patterns_legacy", |b| {
+        b.iter(|| {
+            black_box(rssp::patterns::compile_custom_patterns_legacy_for_bench(
+                black_box(&custom_patterns),
+            ));
+        });
+    });
+    optimizations.bench_function("custom_patterns_open_addressed", |b| {
+        b.iter(|| {
+            black_box(rssp::patterns::compile_custom_patterns(black_box(
+                &custom_patterns,
+            )));
+        });
+    });
     optimizations.finish();
+
+    let mut analysis = c.benchmark_group("cycles/analysis_scratch");
+    analysis.sample_size(10);
+    analysis.measurement_time(Duration::from_secs(3));
+    analysis.throughput(Throughput::Bytes(analysis_fixture.len() as u64));
+    analysis.bench_function("fresh", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::analyze(
+                    black_box(analysis_fixture),
+                    black_box("ssc"),
+                    black_box(&analysis_options),
+                )
+                .expect("fixture should analyze"),
+            );
+        });
+    });
+    analysis.bench_function("reused", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::analyze_with_scratch(
+                    black_box(analysis_fixture),
+                    black_box("ssc"),
+                    black_box(&analysis_options),
+                    black_box(&mut analysis_scratch),
+                )
+                .expect("fixture should analyze"),
+            );
+        });
+    });
+    analysis.finish();
 
     let parity_timing = step_parity_bench::timing();
     let single_rows = step_parity_bench::rows::<4>(

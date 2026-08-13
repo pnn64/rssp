@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-use std::collections::HashMap;
 use std::sync::LazyLock;
 
 // ============================================================================
@@ -262,9 +260,10 @@ where
         goto[state] = row;
     }
 
-    debug_assert!(goto
-        .iter()
-        .all(|row| row.iter().all(|&child| child != u32::MAX)));
+    debug_assert!(
+        goto.iter()
+            .all(|row| row.iter().all(|&child| child != u32::MAX))
+    );
 
     let flat_goto = goto.into_flattened();
 
@@ -510,14 +509,80 @@ pub const fn compiled_custom_is_empty(compiled: &CompiledCustomPatterns) -> bool
     compiled.patterns.is_empty()
 }
 
-pub fn compile_custom_patterns(patterns: &[String]) -> CompiledCustomPatterns {
-    let mut pattern_indexes = HashMap::with_capacity(patterns.len());
+#[inline(always)]
+fn pattern_hash_ci(pattern: &str) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in pattern.bytes() {
+        hash ^= u64::from(byte.to_ascii_uppercase());
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash ^ (hash >> 32)
+}
 
-    for pattern_str in patterns {
-        let upper = if pattern_str.bytes().any(|byte| byte.is_ascii_lowercase()) {
-            Cow::Owned(pattern_str.to_ascii_uppercase())
+pub fn compile_custom_patterns(patterns: &[String]) -> CompiledCustomPatterns {
+    if patterns.is_empty() {
+        return compiled_custom_empty();
+    }
+
+    let table_len = patterns
+        .len()
+        .saturating_add(patterns.len() / 3)
+        .max(2)
+        .next_power_of_two();
+    let mut slots = vec![u32::MAX; table_len];
+    let mut compiled = Vec::with_capacity(patterns.len().min(256));
+    let mask = u64::try_from(table_len - 1).expect("table mask fits u64");
+
+    for pattern in patterns {
+        let mut slot = usize::try_from(pattern_hash_ci(pattern) & mask)
+            .expect("masked pattern hash fits usize");
+        loop {
+            let index = slots[slot];
+            if index == u32::MAX {
+                slots[slot] = u32::try_from(compiled.len())
+                    .expect("custom pattern count cannot exceed u32 storage");
+                compiled.push(CompiledPattern {
+                    pattern: pattern.to_ascii_uppercase(),
+                });
+                break;
+            }
+            if compiled[index as usize]
+                .pattern
+                .eq_ignore_ascii_case(pattern)
+            {
+                break;
+            }
+            slot = (slot + 1) & (table_len - 1);
+        }
+    }
+    compiled.shrink_to_fit();
+
+    let dfa = ac_build(
+        compiled
+            .iter()
+            .enumerate()
+            .map(|(index, pattern)| (index, pattern.pattern.as_bytes())),
+        pattern_bit,
+    );
+
+    CompiledCustomPatterns {
+        dfa,
+        patterns: compiled,
+    }
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn compile_custom_patterns_legacy_for_bench(patterns: &[String]) -> CompiledCustomPatterns {
+    use std::borrow::Cow;
+    use std::collections::HashMap;
+
+    let mut pattern_indexes = HashMap::with_capacity(patterns.len());
+    for pattern in patterns {
+        let upper = if pattern.bytes().any(|byte| byte.is_ascii_lowercase()) {
+            Cow::Owned(pattern.to_ascii_uppercase())
         } else {
-            Cow::Borrowed(pattern_str.as_str())
+            Cow::Borrowed(pattern.as_str())
         };
         if pattern_indexes.contains_key(upper.as_ref()) {
             continue;
@@ -534,7 +599,6 @@ pub fn compile_custom_patterns(patterns: &[String]) -> CompiledCustomPatterns {
     for (pattern, index) in pattern_indexes {
         compiled[index].pattern = pattern;
     }
-
     let dfa = ac_build(
         compiled
             .iter()
@@ -542,10 +606,9 @@ pub fn compile_custom_patterns(patterns: &[String]) -> CompiledCustomPatterns {
             .map(|(index, pattern)| (index, pattern.pattern.as_bytes())),
         pattern_bit,
     );
-
     CompiledCustomPatterns {
-        dfa,
         patterns: compiled,
+        dfa,
     }
 }
 
@@ -939,10 +1002,10 @@ pub const fn compute_box_counts(counts: &PatternCounts) -> BoxCounts {
 #[cfg(test)]
 mod tests {
     use super::{
-        ac_build, ac_output_slice, ac_search_vec, analyze_patterns_from_rows,
-        compile_custom_patterns, count_anchors, count_facing_steps,
-        detect_custom_patterns_compiled, detect_default_patterns, pattern_bit,
-        CompiledCustomPatterns, CompiledPattern, CustomPatternSummary, AC_ALPHA,
+        AC_ALPHA, CompiledCustomPatterns, CompiledPattern, CustomPatternSummary, ac_build,
+        ac_output_slice, ac_search_vec, analyze_patterns_from_rows, compile_custom_patterns,
+        count_anchors, count_facing_steps, detect_custom_patterns_compiled,
+        detect_default_patterns, pattern_bit,
     };
     use std::collections::HashSet;
 

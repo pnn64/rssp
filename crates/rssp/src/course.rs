@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 #[cfg(target_arch = "wasm32")]
 use web_time::{Duration, Instant};
 
-use crate::analysis::AnalysisOptions;
+use crate::analysis::{AnalysisOptions, AnalysisScratch};
 use crate::assets;
 use crate::math::{round_dp, round_sig_figs_6};
 use crate::normalize_difficulty_label;
@@ -1040,6 +1040,7 @@ pub fn analyze_crs_path(
 
     let mut meters = Vec::with_capacity(entry_count);
     let mut measure_nps_all = Vec::new();
+    let mut analysis_scratch = AnalysisScratch::default();
 
     let mut total = empty_course_chart(&step_type, course_diff, 0);
 
@@ -1067,7 +1068,12 @@ pub fn analyze_crs_path(
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
                 let opened = simfile::open(entry.key()).map_err(|e| e.to_string())?;
-                let summary = crate::analysis::analyze(&opened.data, opened.extension, &options)?;
+                let summary = crate::analysis::analyze_with_scratch(
+                    &opened.data,
+                    opened.extension,
+                    &options,
+                    &mut analysis_scratch,
+                )?;
                 entry.insert(summary)
             }
         };

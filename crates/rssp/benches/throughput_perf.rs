@@ -189,6 +189,31 @@ fn analyze_full_loop(
     total_steps
 }
 
+fn analyze_full_loop_reused(
+    corpus: &[SimInput],
+    indexes: &[usize],
+    options: &rssp::AnalysisOptions,
+    scratch: &mut rssp::AnalysisScratch,
+) -> usize {
+    let mut total_steps = 0usize;
+    for &idx in indexes {
+        let sim = &corpus[idx];
+        let summary = rssp::analyze_with_scratch(
+            black_box(sim.raw.as_slice()),
+            black_box(sim.extension),
+            black_box(options),
+            black_box(scratch),
+        )
+        .expect("benchmark corpus should analyze");
+        total_steps += summary
+            .charts
+            .iter()
+            .map(|chart| chart.stats.total_steps as usize)
+            .sum::<usize>();
+    }
+    total_steps
+}
+
 fn parse_only_loop(corpus: &[SimInput]) -> usize {
     let mut chart_count = 0usize;
     for sim in corpus {
@@ -236,6 +261,18 @@ fn bench_throughput(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(analyze_bytes));
     group.bench_function("analyze_full", |b| {
         b.iter(|| black_box(analyze_full_loop(&corpus, &analyze_indexes, &full_options)));
+    });
+
+    let mut full_scratch = rssp::AnalysisScratch::default();
+    group.bench_function("analyze_full_reused", |b| {
+        b.iter(|| {
+            black_box(analyze_full_loop_reused(
+                &corpus,
+                &analyze_indexes,
+                &full_options,
+                &mut full_scratch,
+            ))
+        });
     });
 
     group.throughput(Throughput::Bytes(analyze_bytes));
