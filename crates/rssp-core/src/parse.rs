@@ -324,7 +324,7 @@ pub struct ParsedSimfileData<'a> {
     pub offset: Option<&'a [u8]>,
     pub origin: Option<&'a [u8]>,
     pub credit: Option<&'a [u8]>,
-    pub attacks: Option<&'a [u8]>,
+    pub attacks: Option<TagBytes<'a>>,
     pub bpms: Option<&'a [u8]>,
     pub stops: Option<&'a [u8]>,
     pub delays: Option<&'a [u8]>,
@@ -368,7 +368,7 @@ struct NotedataFields<'a> {
     notes: Option<&'a [u8]>,
     notes2: Option<&'a [u8]>,
     chart_music: Option<&'a [u8]>,
-    chart_attacks: Option<&'a [u8]>,
+    chart_attacks: Option<TagBytes<'a>>,
     chart_bpms: Option<&'a [u8]>,
     chart_stops: Option<&'a [u8]>,
     chart_freezes: Option<&'a [u8]>,
@@ -590,6 +590,30 @@ fn try_tag_adv<'a>(s: &'a [u8], tag: &[u8], nl: bool, out: &mut Option<&'a [u8]>
     Some(adv)
 }
 
+#[inline]
+fn try_tag_append<'a>(
+    s: &'a [u8],
+    tag: &[u8],
+    nl: bool,
+    out: &mut Option<TagBytes<'a>>,
+) -> Option<usize> {
+    if !starts_with_ci(s, tag) {
+        return None;
+    }
+    let (value, adv) = parse_tag_val(s, tag.len(), nl)?;
+    *out = Some(match out.take() {
+        None => Cow::Borrowed(value),
+        Some(previous) => {
+            let mut joined = previous.into_owned();
+            joined.reserve(1 + value.len());
+            joined.push(b':');
+            joined.extend_from_slice(value);
+            Cow::Owned(joined)
+        }
+    });
+    Some(adv)
+}
+
 macro_rules! try_tags {
     ($s:expr, $i:expr, $o:expr, [ $( ($tag:expr, $field:ident, $nl:expr) ),* $(,)? ]) => {
         $( if let Some(a) = try_tag_adv($s, $tag, $nl, &mut $o.$field) { $i += a; continue; } )*
@@ -625,6 +649,11 @@ fn parse_notedata_entry(data: &[u8], start: usize) -> (Option<ParsedChartEntry<'
             continue;
         }
 
+        if let Some(adv) = try_tag_append(s, b"#ATTACKS:", true, &mut out.chart_attacks) {
+            i += adv;
+            continue;
+        }
+
         try_tags!(
             s,
             i,
@@ -640,7 +669,6 @@ fn parse_notedata_entry(data: &[u8], start: usize) -> (Option<ParsedChartEntry<'
                 (b"#NOTES:", notes, true),
                 (b"#NOTES2:", notes2, true),
                 (b"#MUSIC:", chart_music, true),
-                (b"#ATTACKS:", chart_attacks, true),
                 (b"#BPMS:", chart_bpms, true),
                 (b"#STOPS:", chart_stops, true),
                 (b"#FREEZES:", chart_freezes, true),
@@ -678,7 +706,7 @@ fn build_chart_entry(f: NotedataFields<'_>) -> ParsedChartEntry<'_> {
         chart_style: f.chart_style,
         note_data: f.notes.or(f.notes2).unwrap_or_default(),
         chart_music: f.chart_music.map(Cow::Borrowed),
-        chart_attacks: f.chart_attacks.map(Cow::Borrowed),
+        chart_attacks: f.chart_attacks,
         chart_bpms: f.chart_bpms.map(Cow::Borrowed),
         chart_stops: f.chart_stops.or(f.chart_freezes).map(Cow::Borrowed),
         chart_delays: f.chart_delays.map(Cow::Borrowed),
@@ -749,6 +777,11 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
             }
         }
 
+        if let Some(adv) = try_tag_append(s, b"#ATTACKS:", true, &mut r.attacks) {
+            i += adv;
+            continue;
+        }
+
         try_header_tags!(
             s,
             i,
@@ -763,7 +796,6 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
                 (b"#ARTISTTRANSLIT:", artist_translit, true),
                 (b"#VERSION:", version, true),
                 (b"#OFFSET:", offset, true),
-                (b"#ATTACKS:", attacks, true),
                 (b"#BPMS:", bpms, true),
                 (b"#STOPS:", stops, true),
                 (b"#FREEZES:", stops, true),
@@ -784,7 +816,6 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
                 (b"#BGCHANGES:", bgchanges, true),
                 (b"#FGCHANGES:", fgchanges, true),
                 (b"#KEYSOUNDS:", keysounds, true),
-                (b"#ATTACKS:", attacks, true),
                 (b"#ORIGIN:", origin, ssc),
                 (b"#PREVIEWVID:", previewvid, ssc),
                 (b"#CDIMAGE:", cdimage, ssc),
@@ -1006,7 +1037,9 @@ fn split_notes6(block: &[u8]) -> (u8, [&[u8]; 5], &[u8]) {
 mod tests {
     use std::borrow::Cow;
 
-    use super::{decode_cp1252, decode_unescape_trim, parse_version, unescape_trim_cow};
+    use super::{
+        decode_cp1252, decode_unescape_trim, extract_sections, parse_version, unescape_trim_cow,
+    };
     use crate::timing::{STEPFILE_VERSION_NUMBER, TimingFormat};
 
     #[test]
@@ -1068,5 +1101,48 @@ mod tests {
     fn unescaped_trim_cow_preserves_unicode_trim_behavior() {
         assert_eq!(unescape_trim_cow("\u{2003}Title\u{2003}"), "Title");
         assert_eq!(unescape_trim_cow(r" A\ B "), "A B");
+    }
+
+    #[test]
+    fn repeated_song_attacks_append_in_file_order() {
+        let parsed = extract_sections(
+            b"#ATTACKS:TIME=0:END=9999:MODS=overhead;\n\
+              #ATTACKS:TIME=0.241:END=0.438:MODS=*1.875 15% invert;\n\
+              #ATTACKS:TIME=0.338:END=0.515:MODS=*1.946 no invert;",
+            "sm",
+        )
+        .expect("SM extraction should succeed");
+        let attacks = parsed.attacks.expect("attacks should be present");
+
+        assert!(matches!(attacks, Cow::Owned(_)));
+        assert_eq!(
+            attacks.as_ref(),
+            b"TIME=0:END=9999:MODS=overhead:\
+              TIME=0.241:END=0.438:MODS=*1.875 15% invert:\
+              TIME=0.338:END=0.515:MODS=*1.946 no invert"
+        );
+    }
+
+    #[test]
+    fn repeated_step_attacks_append_in_file_order() {
+        let parsed = extract_sections(
+            b"#VERSION:0.83;\n\
+              #NOTEDATA:;\n\
+              #STEPSTYPE:dance-single;\n\
+              #ATTACKS:TIME=1:LEN=2:MODS=mirror;\n\
+              #ATTACKS:TIME=4:LEN=1:MODS=invert;\n\
+              #NOTES:\n0000\n;",
+            "ssc",
+        )
+        .expect("SSC extraction should succeed");
+        let attacks = parsed.notes_list[0]
+            .chart_attacks
+            .as_deref()
+            .expect("step attacks should be present");
+
+        assert_eq!(
+            attacks,
+            b"TIME=1:LEN=2:MODS=mirror:TIME=4:LEN=1:MODS=invert"
+        );
     }
 }

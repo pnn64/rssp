@@ -1181,6 +1181,7 @@ pub fn analyze(
         .to_string();
     let normalized_global_attacks = parsed_data
         .attacks
+        .as_deref()
         .and_then(|b| std::str::from_utf8(b).ok())
         .map_or("", str::trim)
         .to_string();
@@ -1223,7 +1224,7 @@ pub fn analyze(
         compute_bpm_range_and_stats(&global_bpm_map);
     let median_bpm = round_dp(median_bpm_raw, 2);
     let average_bpm = round_dp(average_bpm_raw, 2);
-    let global_attacks_opt = parsed_data.attacks;
+    let global_attacks_opt = parsed_data.attacks.as_deref();
 
     let entries = parsed_data.notes_list;
     let entry_count = entries.len();
@@ -1589,5 +1590,36 @@ mod tests {
             assert_eq!(hash.difficulty, chart.difficulty_str);
             assert_eq!(hash.hash, chart.short_hash);
         }
+    }
+
+    #[test]
+    fn repeated_sm_attacks_reach_every_chart() {
+        let simfile = b"#TITLE:Repeated Attacks;\n\
+            #MUSIC:test.ogg;\n\
+            #OFFSET:0;\n\
+            #BPMS:0=120;\n\
+            #ATTACKS:TIME=0:END=9999:MODS=overhead;\n\
+            #ATTACKS:TIME=0.241:END=0.438:MODS=*1.875 15% invert;\n\
+            #ATTACKS:TIME=0.338:END=0.515:MODS=*1.946 no invert;\n\
+            #NOTES:\n\
+                dance-single:\n\
+                :\n\
+                Easy:\n\
+                1:\n\
+                0,0,0,0,0:\n\
+            0000\n\
+            1000\n\
+            0000\n\
+            0000\n\
+            ;";
+        let summary = analyze(simfile, "sm", &AnalysisOptions::default())
+            .expect("SM analysis should succeed");
+        let expected = "TIME=0:END=9999:MODS=overhead:\
+            TIME=0.241:END=0.438:MODS=*1.875 15% invert:\
+            TIME=0.338:END=0.515:MODS=*1.946 no invert";
+
+        assert_eq!(summary.normalized_attacks, expected);
+        assert_eq!(summary.charts.len(), 1);
+        assert_eq!(summary.charts[0].chart_attacks.as_deref(), Some(expected));
     }
 }
