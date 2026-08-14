@@ -273,6 +273,7 @@ fn first_two_sound_files(song_dir: &Path) -> (Option<PathBuf>, Option<PathBuf>) 
     (first, second)
 }
 
+#[cfg(any(test, feature = "profile"))]
 #[inline(always)]
 fn only_movie_file(song_dir: &Path) -> Option<PathBuf> {
     let Ok(entries) = fs::read_dir(song_dir) else {
@@ -553,10 +554,15 @@ fn bg_file_bucket(file: &str) -> usize {
         .map_or(0, |byte| byte.to_ascii_lowercase() as usize)
 }
 
-fn list_song_dir_rel_files(song_dir: &Path) -> BgFileCatalog {
+fn list_song_dir_rel_files<const TRACK_MOVIE: bool>(
+    song_dir: &Path,
+) -> (BgFileCatalog, Option<PathBuf>) {
     let mut dirs = vec![song_dir.to_path_buf()];
     let mut files = Vec::new();
+    let mut only_movie = None;
+    let mut movies_ambiguous = false;
     while let Some(dir) = dirs.pop() {
+        let is_root = dir == song_dir;
         let Ok(entries) = fs::read_dir(&dir) else {
             continue;
         };
@@ -570,9 +576,23 @@ fn list_song_dir_rel_files(song_dir: &Path) -> BgFileCatalog {
                 continue;
             };
             files.push(to_slash(&rel.to_string_lossy()));
+            if TRACK_MOVIE
+                && is_root
+                && !movies_ambiguous
+                && !is_mac_resource_fork(&path)
+                && is_movie_ext(&path)
+                && path.is_file()
+            {
+                if only_movie.is_some() {
+                    only_movie = None;
+                    movies_ambiguous = true;
+                } else {
+                    only_movie = Some(path);
+                }
+            }
         }
     }
-    BgFileCatalog::from_files(files)
+    (BgFileCatalog::from_files(files), only_movie)
 }
 
 fn strip_newlines(s: &str) -> Cow<'_, str> {
@@ -774,12 +794,12 @@ fn upsert_bgchange(
     }
 }
 
-#[must_use]
-pub fn resolve_background_changes_like_itg(
+fn resolve_bgchanges_with(
     song_dir: &Path,
     simfile_data: &[u8],
+    files: &BgFileCatalog,
+    fallback_movie: impl FnOnce() -> Option<PathBuf>,
 ) -> Vec<ResolvedBackgroundChange> {
-    let files = list_song_dir_rel_files(song_dir);
     let mut resolution_status = BgResolutionStatus::new(files.files.len());
     let mut out: Vec<ResolvedBackgroundChange> = Vec::new();
     let mut saw_no_song_bg = false;
@@ -787,13 +807,13 @@ pub fn resolve_background_changes_like_itg(
     for raw in extract_bgchanges_values(simfile_data) {
         let decoded = decode_bytes(raw);
         let text = unescape_tag(decoded.as_ref());
-        for_each_bgchange_pair(text.as_ref(), &files, |start_beat, target, file_index| {
+        for_each_bgchange_pair(text.as_ref(), files, |start_beat, target, file_index| {
             let Some(change) = parse_bgchange_pair(
                 song_dir,
                 start_beat,
                 target,
                 file_index,
-                &files,
+                files,
                 &mut resolution_status,
             ) else {
                 return;
@@ -829,7 +849,7 @@ pub fn resolve_background_changes_like_itg(
     let has_any_file = out
         .iter()
         .any(|change| matches!(change.target, BackgroundChangeTarget::File(_)));
-    if !has_explicit_movie && let Some(movie) = only_movie_file(song_dir) {
+    if !has_explicit_movie && let Some(movie) = fallback_movie() {
         if saw_no_song_bg {
             if let Some(ix) = beat_zero_still_ix {
                 out[ix].target = BackgroundChangeTarget::File(movie);
@@ -850,6 +870,29 @@ pub fn resolve_background_changes_like_itg(
     out
 }
 
+#[must_use]
+pub fn resolve_background_changes_like_itg(
+    song_dir: &Path,
+    simfile_data: &[u8],
+) -> Vec<ResolvedBackgroundChange> {
+    let (files, movie) = list_song_dir_rel_files::<true>(song_dir);
+    resolve_bgchanges_with(song_dir, simfile_data, &files, || movie)
+}
+
+#[cfg(any(test, feature = "profile"))]
+fn resolve_bgchanges_legacy(song_dir: &Path, simfile_data: &[u8]) -> Vec<ResolvedBackgroundChange> {
+    let (files, _) = list_song_dir_rel_files::<false>(song_dir);
+    resolve_bgchanges_with(song_dir, simfile_data, &files, || only_movie_file(song_dir))
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_bgchanges_legacy(
+    song_dir: &Path,
+    simfile_data: &[u8],
+) -> Vec<ResolvedBackgroundChange> {
+    resolve_bgchanges_legacy(song_dir, simfile_data)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -857,8 +900,8 @@ mod tests {
     use super::{
         BackgroundChangeTarget, BgFileCatalog, BgResolutionStatus, ResolvedBackgroundChange,
         cmp_name_ci, for_each_bgchange_pair, is_dir_ci, is_file_ci, lc_name, list_image_candidates,
-        match_bg_file, resolve_background_changes_like_itg, resolve_music_path_like_itg,
-        resolve_song_assets, strip_newlines, upsert_bgchange,
+        match_bg_file, resolve_background_changes_like_itg, resolve_bgchanges_legacy,
+        resolve_music_path_like_itg, resolve_song_assets, strip_newlines, upsert_bgchange,
     };
 
     struct TempDir(PathBuf);
@@ -1211,18 +1254,40 @@ mod tests {
         let temp = TempDir::new();
         let movie = temp.0.join("Movie.MP4");
         std::fs::write(&movie, []).expect("asset test movie should be writable");
+        std::fs::write(temp.0.join("._Ignored.mkv"), [])
+            .expect("resource fork movie should be writable");
+        std::fs::write(temp.0.join("Visuals").join("Nested.avi"), [])
+            .expect("nested movie should be writable");
 
+        let expected = vec![ResolvedBackgroundChange {
+            start_beat: 0.0,
+            target: BackgroundChangeTarget::File(movie),
+        }];
+        for simfile in [b"".as_slice(), b"#BGCHANGES:0=-nosongbg-;".as_slice()] {
+            assert_eq!(
+                resolve_background_changes_like_itg(&temp.0, simfile),
+                expected
+            );
+            assert_eq!(resolve_bgchanges_legacy(&temp.0, simfile), expected);
+        }
+
+        let still = temp.0.join("still.png");
+        std::fs::write(&still, []).expect("still image should be writable");
+        let simfile = b"#BGCHANGES:0=still.png;";
+        let expected = vec![ResolvedBackgroundChange {
+            start_beat: 0.0,
+            target: BackgroundChangeTarget::File(still),
+        }];
         assert_eq!(
-            resolve_background_changes_like_itg(&temp.0, b""),
-            vec![ResolvedBackgroundChange {
-                start_beat: 0.0,
-                target: BackgroundChangeTarget::File(movie),
-            }]
+            resolve_background_changes_like_itg(&temp.0, simfile),
+            expected
         );
+        assert_eq!(resolve_bgchanges_legacy(&temp.0, simfile), expected);
 
         std::fs::write(temp.0.join("Second.mkv"), [])
             .expect("second asset test movie should be writable");
         assert!(resolve_background_changes_like_itg(&temp.0, b"").is_empty());
+        assert!(resolve_bgchanges_legacy(&temp.0, b"").is_empty());
     }
 
     fn png_header(width: u32, height: u32) -> [u8; 24] {

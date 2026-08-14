@@ -1399,22 +1399,27 @@ fn run_timing_json_alloc(iterations: usize) {
     );
 }
 
-fn run_background_changes_alloc(iterations: usize) {
-    let fixture = assets_bench::AssetFixture::new();
-    black_box(rssp::assets::resolve_background_changes_like_itg(
-        fixture.song_dir(),
-        fixture.simfile(),
-    ));
+fn run_bgchanges_phase(
+    phase: &str,
+    iterations: usize,
+    fixture: &assets_bench::AssetFixture,
+    legacy: bool,
+) {
+    let resolve = || {
+        if legacy {
+            rssp::profile::background_changes_legacy(fixture.song_dir(), fixture.simfile())
+        } else {
+            rssp::assets::resolve_background_changes_like_itg(fixture.song_dir(), fixture.simfile())
+        }
+    };
+    black_box(resolve());
 
     reset_counters();
     let before = Counters::read();
     let start = Instant::now();
     let mut checksum = 0usize;
     for _ in 0..iterations {
-        let changes = rssp::assets::resolve_background_changes_like_itg(
-            black_box(fixture.song_dir()),
-            black_box(fixture.simfile()),
-        );
+        let changes = resolve();
         checksum = checksum.wrapping_add(changes.len());
         black_box(changes);
     }
@@ -1423,12 +1428,13 @@ fn run_background_changes_alloc(iterations: usize) {
     let divisor = iterations as f64;
     println!(
         concat!(
-            "mode=background-changes iters={} checksum={} elapsed_s={:.6} ",
+            "mode=background-changes phase={} iters={} checksum={} elapsed_s={:.6} ",
             "throughput_changes_s={:.3} alloc_calls_per_iter={:.1} ",
             "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
             "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
             "live_growth_bytes={} peak_live_growth_bytes={}"
         ),
+        phase,
         iterations,
         black_box(checksum),
         elapsed.as_secs_f64(),
@@ -1441,6 +1447,12 @@ fn run_background_changes_alloc(iterations: usize) {
         after.live_bytes as isize - before.live_bytes as isize,
         after.peak_live_bytes.saturating_sub(before.live_bytes),
     );
+}
+
+fn run_background_changes_alloc(iterations: usize) {
+    let fixture = assets_bench::AssetFixture::with_movies(1);
+    run_bgchanges_phase("root-rescan", iterations, &fixture, true);
+    run_bgchanges_phase("catalog-movie", iterations, &fixture, false);
 }
 
 fn run_asset_fallbacks_alloc(iterations: usize) {

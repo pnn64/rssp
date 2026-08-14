@@ -18,6 +18,10 @@ pub struct AssetFixture {
 
 impl AssetFixture {
     pub fn new() -> Self {
+        Self::with_movies(MOVIE_COUNT)
+    }
+
+    pub fn with_movies(movie_count: usize) -> Self {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should follow the Unix epoch")
@@ -44,7 +48,7 @@ impl AssetFixture {
             std::fs::write(root.join(format!("Track-{index:03}.ogg")), [])
                 .expect("benchmark sound should be writable");
         }
-        for index in 0..MOVIE_COUNT {
+        for index in 0..movie_count {
             std::fs::write(root.join(format!("Movie-{index:03}.mp4")), [])
                 .expect("benchmark movie should be writable");
         }

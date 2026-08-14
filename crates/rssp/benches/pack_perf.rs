@@ -68,13 +68,21 @@ fn bench_pack_root(c: &mut Criterion) {
 }
 
 fn bench_background_changes(c: &mut Criterion) {
-    let fixture = assets_bench::AssetFixture::new();
+    let fixture = assets_bench::AssetFixture::with_movies(1);
 
     let mut group = c.benchmark_group("background_changes");
     group.sample_size(30);
     group.measurement_time(Duration::from_secs(3));
     group.throughput(Throughput::Elements(assets_bench::CHANGE_COUNT as u64));
-    group.bench_function("resolve_256_changes", |b| {
+    group.bench_function("root_rescan", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::background_changes_legacy(
+                black_box(fixture.song_dir()),
+                black_box(fixture.simfile()),
+            ))
+        });
+    });
+    group.bench_function("catalog_movie", |b| {
         b.iter(|| {
             black_box(rssp::assets::resolve_background_changes_like_itg(
                 black_box(fixture.song_dir()),

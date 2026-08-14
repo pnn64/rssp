@@ -9,6 +9,10 @@ use std::time::Duration;
 
 #[cfg(windows)]
 #[allow(dead_code)]
+#[path = "support/assets.rs"]
+mod assets_bench;
+#[cfg(windows)]
+#[allow(dead_code)]
 #[path = "support/course.rs"]
 mod course_bench;
 #[cfg(windows)]
@@ -597,6 +601,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let course_fixture = course_bench::CourseFixture::new();
     let course_options = course_bench::fast_options();
     let pack_fixture = pack_bench::PackFixture::new();
+    let asset_fixture = assets_bench::AssetFixture::with_movies(1);
 
     let mut optimizations = c.benchmark_group("cycles/optimizations");
     optimizations.sample_size(100);
@@ -823,6 +828,28 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     pack.finish();
+
+    let mut background = c.benchmark_group("cycles/background_changes");
+    background.sample_size(20);
+    background.measurement_time(Duration::from_secs(3));
+    background.throughput(Throughput::Elements(assets_bench::CHANGE_COUNT as u64));
+    background.bench_function("root_rescan", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::background_changes_legacy(
+                black_box(asset_fixture.song_dir()),
+                black_box(asset_fixture.simfile()),
+            ))
+        });
+    });
+    background.bench_function("catalog_movie", |b| {
+        b.iter(|| {
+            black_box(rssp::assets::resolve_background_changes_like_itg(
+                black_box(asset_fixture.song_dir()),
+                black_box(asset_fixture.simfile()),
+            ))
+        });
+    });
+    background.finish();
 
     let mut analysis = c.benchmark_group("cycles/analysis_scratch");
     analysis.sample_size(10);

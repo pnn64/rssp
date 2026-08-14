@@ -75,6 +75,14 @@ pub mod profile {
     ) -> Result<PackRootResult, ScanError> {
         crate::pack::profile_pack_root(dir, opt, banner, background, true)
     }
+
+    #[must_use]
+    pub fn background_changes_legacy(
+        song_dir: &Path,
+        simfile_data: &[u8],
+    ) -> Vec<crate::assets::ResolvedBackgroundChange> {
+        crate::assets::profile_bgchanges_legacy(song_dir, simfile_data)
+    }
 }
 
 pub use rssp_core::{
