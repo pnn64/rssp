@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 
 pub const SEGMENT_COUNT: usize = 512;
 
-pub fn fixture() -> String {
+fn build_fixture(chart_bpms: bool) -> String {
     fn push_pairs(out: &mut String, count: usize, mut value: impl FnMut(usize) -> f64) {
         for index in 0..count {
             if index != 0 {
@@ -64,12 +64,24 @@ pub fn fixture() -> String {
         "#DESCRIPTION:report benchmark;\n",
         "#DIFFICULTY:Challenge;\n",
         "#METER:10;\n",
-        "#CREDIT:;\n",
-        "#NOTES:\n",
-        "1000\n0100\n0010\n0001\n",
-        ";\n"
+        "#CREDIT:;\n"
     ));
+    if chart_bpms {
+        fixture.push_str("#BPMS:");
+        push_pairs(&mut fixture, SEGMENT_COUNT, |index| {
+            90.0 + (index % 211) as f64
+        });
+    }
+    fixture.push_str(concat!("#NOTES:\n", "1000\n0100\n0010\n0001\n", ";\n"));
     fixture
+}
+
+pub fn fixture() -> String {
+    build_fixture(false)
+}
+
+pub fn chart_bpm_fixture() -> String {
+    build_fixture(true)
 }
 
 pub fn options() -> rssp::AnalysisOptions {

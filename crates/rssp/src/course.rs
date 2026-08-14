@@ -783,6 +783,7 @@ fn empty_course_chart(step_type: &str, course_difficulty: Difficulty, meter: i32
         chart_speeds: None,
         chart_scrolls: None,
         chart_bpms: None,
+        chart_bpms_norm: None,
         chart_delays: None,
         chart_warps: None,
         chart_fakes: None,

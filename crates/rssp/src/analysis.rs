@@ -635,7 +635,7 @@ fn build_chart_summary(
     }
 
     let (chart_bpms, chart_bpms_norm) = chart_timing_tag_pair(chart_bpms_opt);
-    let bpms_to_use = chart_bpms_norm.map_or(Cow::Borrowed(global_bpms_norm), Cow::Owned);
+    let bpms_to_use = chart_bpms_norm.as_deref().unwrap_or(global_bpms_norm);
     let chart_stops = chart_timing_tag_raw(chart_stops_opt);
     let chart_speeds = chart_timing_tag_raw(chart_speeds_opt);
     let chart_delays = chart_timing_tag_raw(chart_delays_opt);
@@ -790,7 +790,7 @@ fn build_chart_summary(
         &measure_densities,
         bpm_map.as_ref(),
         &minimized_chart,
-        bpms_to_use.as_ref(),
+        bpms_to_use,
         stream_tokens,
     );
 
@@ -985,6 +985,7 @@ fn build_chart_summary(
             chart_speeds,
             chart_scrolls,
             chart_bpms,
+            chart_bpms_norm,
             chart_delays,
             chart_warps,
             chart_fakes,
@@ -1481,6 +1482,32 @@ mod tests {
 
         assert_eq!(json(&first), json(&expected));
         assert_eq!(json(&second), json(&expected));
+    }
+
+    #[test]
+    fn cached_chart_bpms_preserve_report_output() {
+        const CHART: &[u8] = concat!(
+            "#VERSION:0.83;\n#BPMS:0=60;\n",
+            "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n",
+            "#DESCRIPTION:cached BPMs;\n#DIFFICULTY:Challenge;\n#METER:10;\n#CREDIT:;\n",
+            "#BPMS: 0 = 120, bad, 4.0004 = 150.9995;\n",
+            "#NOTES:\n1000\n0100\n0010\n0001\n;\n"
+        )
+        .as_bytes();
+        let summary = analyze(CHART, "ssc", &AnalysisOptions::default())
+            .expect("chart BPM fixture should analyze");
+        assert_eq!(
+            summary.charts[0].chart_bpms_norm.as_deref(),
+            Some("0.000=120.000,4.000=151.000")
+        );
+
+        let mut legacy = summary.clone();
+        legacy
+            .charts
+            .first_mut()
+            .expect("chart BPM fixture should contain a chart")
+            .chart_bpms_norm = None;
+        assert_eq!(json(&summary), json(&legacy));
     }
 
     #[test]

@@ -103,6 +103,7 @@ enum Mode {
     Json,
     JsonBpmText,
     JsonFull,
+    JsonHashBpms,
     JsonNps,
     JsonStreams,
     JsonTiming,
@@ -194,6 +195,7 @@ fn parse_args() -> (Mode, usize) {
                     "json" => Mode::Json,
                     "json-bpm-text" => Mode::JsonBpmText,
                     "json-full" => Mode::JsonFull,
+                    "json-hash-bpms" => Mode::JsonHashBpms,
                     "json-nps" => Mode::JsonNps,
                     "json-streams" => Mode::JsonStreams,
                     "json-timing" => Mode::JsonTiming,
@@ -279,9 +281,11 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
         },
-        Mode::JsonBpmText | Mode::JsonNps | Mode::JsonStreams | Mode::JsonTiming => {
-            rssp::AnalysisOptions::default()
-        }
+        Mode::JsonBpmText
+        | Mode::JsonHashBpms
+        | Mode::JsonNps
+        | Mode::JsonStreams
+        | Mode::JsonTiming => rssp::AnalysisOptions::default(),
         Mode::Annotations => rssp::AnalysisOptions {
             mono_threshold: 6,
             compute_note_annotations: true,
@@ -379,6 +383,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::JsonBpmText => {
                 unreachable!("BPM text JSON mode uses its dedicated allocation runner")
+            }
+            Mode::JsonHashBpms => {
+                unreachable!("hash BPM JSON mode uses its dedicated allocation runner")
             }
             Mode::JsonStreams => {
                 unreachable!("stream JSON mode uses its dedicated allocation runner")
@@ -593,6 +600,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Json => "json",
         Mode::JsonBpmText => "json-bpm-text",
         Mode::JsonFull => "json-full",
+        Mode::JsonHashBpms => "json-hash-bpms",
         Mode::JsonNps => "json-nps",
         Mode::JsonStreams => "json-streams",
         Mode::JsonTiming => "json-timing",
@@ -1470,6 +1478,38 @@ fn run_bpm_text_json_alloc(iterations: usize) {
     );
 }
 
+fn run_hash_bpms_json_alloc(iterations: usize) {
+    let fixture = report_timing_bench::chart_bpm_fixture();
+    let summary = rssp::analyze(fixture.as_bytes(), "ssc", &report_timing_bench::options())
+        .expect("hash BPM JSON benchmark should analyze");
+    let mut legacy = summary.clone();
+    legacy
+        .charts
+        .first_mut()
+        .expect("hash BPM fixture should contain a chart")
+        .chart_bpms_norm = None;
+    run_json_report_phase(
+        "json-hash-bpms",
+        "renormalized",
+        report_timing_bench::SEGMENT_COUNT,
+        iterations,
+        &legacy,
+        |summary, output| {
+            rssp::report::write_reports(summary, rssp::report::OutputMode::JSON, output)
+        },
+    );
+    run_json_report_phase(
+        "json-hash-bpms",
+        "precomputed",
+        report_timing_bench::SEGMENT_COUNT,
+        iterations,
+        &summary,
+        |summary, output| {
+            rssp::report::write_reports(summary, rssp::report::OutputMode::JSON, output)
+        },
+    );
+}
+
 fn run_nps_json_alloc(iterations: usize) {
     let fixture = report_nps_bench::fixture();
     let summary = rssp::analyze(&fixture, "ssc", &report_nps_bench::options())
@@ -1898,6 +1938,10 @@ fn main() {
         }
         Mode::JsonBpmText => {
             run_bpm_text_json_alloc(iterations);
+            return;
+        }
+        Mode::JsonHashBpms => {
+            run_hash_bpms_json_alloc(iterations);
             return;
         }
         Mode::JsonStreams => {

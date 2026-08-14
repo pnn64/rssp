@@ -218,6 +218,90 @@ fn bench_timing_json(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_hash_bpms_json(c: &mut Criterion) {
+    let fixture = report_timing_bench::chart_bpm_fixture();
+    let summary = rssp::analyze(fixture.as_bytes(), "ssc", &report_timing_bench::options())
+        .expect("hash BPM fixture should analyze");
+    let mut legacy = summary.clone();
+    legacy
+        .charts
+        .first_mut()
+        .expect("hash BPM fixture should contain a chart")
+        .chart_bpms_norm = None;
+    let chart = summary
+        .charts
+        .first()
+        .expect("hash BPM fixture should contain a chart");
+    let legacy_chart = legacy
+        .charts
+        .first()
+        .expect("hash BPM fixture should contain a legacy chart");
+
+    let mut group = c.benchmark_group("report_json_hash_bpms");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(
+        report_timing_bench::SEGMENT_COUNT as u64,
+    ));
+    group.bench_function("renormalized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_timing(
+                black_box(&mut output),
+                black_box(legacy_chart),
+                black_box(&legacy),
+            )
+            .expect("renormalized hash BPM JSON should write");
+            black_box(output);
+        });
+    });
+    group.bench_function("precomputed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_timing(
+                black_box(&mut output),
+                black_box(chart),
+                black_box(&summary),
+            )
+            .expect("precomputed hash BPM JSON should write");
+            black_box(output);
+        });
+    });
+    group.finish();
+
+    let mut group = c.benchmark_group("report_json_hash_bpms_full");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(
+        report_timing_bench::SEGMENT_COUNT as u64,
+    ));
+    group.bench_function("renormalized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::report::write_reports(
+                black_box(&legacy),
+                rssp::report::OutputMode::JSON,
+                black_box(&mut output),
+            )
+            .expect("renormalized hash BPM report should write");
+            black_box(output);
+        });
+    });
+    group.bench_function("precomputed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::report::write_reports(
+                black_box(&summary),
+                rssp::report::OutputMode::JSON,
+                black_box(&mut output),
+            )
+            .expect("precomputed hash BPM report should write");
+            black_box(output);
+        });
+    });
+    group.finish();
+}
+
 fn bench_nps_json(c: &mut Criterion) {
     let fixture = report_nps_bench::fixture();
     let summary = rssp::analyze(&fixture, "ssc", &report_nps_bench::options())
@@ -446,6 +530,7 @@ criterion_group!(
     benches,
     bench_timing_snapshot,
     bench_timing_json,
+    bench_hash_bpms_json,
     bench_nps_json,
     bench_stream_json,
     bench_csv,

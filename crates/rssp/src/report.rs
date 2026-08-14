@@ -255,6 +255,7 @@ pub struct ChartSummary {
     pub chart_speeds: Option<String>,
     pub chart_scrolls: Option<String>,
     pub chart_bpms: Option<String>,
+    pub chart_bpms_norm: Option<String>,
     pub chart_delays: Option<String>,
     pub chart_warps: Option<String>,
     pub chart_fakes: Option<String>,
@@ -3868,13 +3869,17 @@ fn write_json_timing_with<W: Write, const MATERIALIZE: bool, const MATERIALIZE_B
         resolve_display_bpm(display_tag, bpm_min_raw, bpm_max_raw, 1.0);
     let display_bpm_min = round_sig_figs_6(round_sig_figs_itg(display_bpm_min_raw));
     let display_bpm_max = round_sig_figs_6(round_sig_figs_itg(display_bpm_max_raw));
-    let hash_bpms_owned = chart
-        .chart_bpms
+    let hash_bpms_cached = chart
+        .chart_bpms_norm
         .as_deref()
-        .map(normalize_float_digits)
         .filter(|value| !value.is_empty());
-    let hash_bpms = hash_bpms_owned
-        .as_deref()
+    let hash_bpms_owned = hash_bpms_cached
+        .is_none()
+        .then(|| chart.chart_bpms.as_deref().map(normalize_float_digits))
+        .flatten()
+        .filter(|value| !value.is_empty());
+    let hash_bpms = hash_bpms_cached
+        .or(hash_bpms_owned.as_deref())
         .unwrap_or(&simfile.normalized_bpms);
 
     let mut object = JsonObjectWriter::new(writer, indent)?;

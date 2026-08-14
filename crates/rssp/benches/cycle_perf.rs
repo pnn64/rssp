@@ -623,6 +623,27 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         .charts
         .first()
         .expect("timing JSON cycle fixture should contain a chart");
+    let hash_bpms_fixture = report_timing_bench::chart_bpm_fixture();
+    let hash_bpms_summary = rssp::analyze(
+        hash_bpms_fixture.as_bytes(),
+        "ssc",
+        &report_timing_bench::options(),
+    )
+    .expect("hash BPM JSON cycle fixture should analyze");
+    let mut legacy_hash_bpms = hash_bpms_summary.clone();
+    legacy_hash_bpms
+        .charts
+        .first_mut()
+        .expect("hash BPM cycle fixture should contain a chart")
+        .chart_bpms_norm = None;
+    let hash_bpms_chart = hash_bpms_summary
+        .charts
+        .first()
+        .expect("hash BPM cycle fixture should contain a chart");
+    let legacy_hash_bpms_chart = legacy_hash_bpms
+        .charts
+        .first()
+        .expect("hash BPM cycle fixture should contain a legacy chart");
     let nps_report_fixture = report_nps_bench::fixture();
     let nps_report_summary =
         rssp::analyze(&nps_report_fixture, "ssc", &report_nps_bench::options())
@@ -999,6 +1020,70 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     bpm_text_full.finish();
+
+    let mut hash_bpms = c.benchmark_group("cycles/report_json_hash_bpms");
+    hash_bpms.sample_size(20);
+    hash_bpms.measurement_time(Duration::from_secs(3));
+    hash_bpms.throughput(Throughput::Elements(
+        report_timing_bench::SEGMENT_COUNT as u64,
+    ));
+    hash_bpms.bench_function("renormalized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_timing(
+                black_box(&mut output),
+                black_box(legacy_hash_bpms_chart),
+                black_box(&legacy_hash_bpms),
+            )
+            .expect("renormalized hash BPM JSON should write");
+            black_box(output)
+        });
+    });
+    hash_bpms.bench_function("precomputed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_timing(
+                black_box(&mut output),
+                black_box(hash_bpms_chart),
+                black_box(&hash_bpms_summary),
+            )
+            .expect("precomputed hash BPM JSON should write");
+            black_box(output)
+        });
+    });
+    hash_bpms.finish();
+
+    let mut hash_bpms_full = c.benchmark_group("cycles/report_json_hash_bpms_full");
+    hash_bpms_full.sample_size(20);
+    hash_bpms_full.measurement_time(Duration::from_secs(3));
+    hash_bpms_full.throughput(Throughput::Elements(
+        report_timing_bench::SEGMENT_COUNT as u64,
+    ));
+    hash_bpms_full.bench_function("renormalized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::report::write_reports(
+                black_box(&legacy_hash_bpms),
+                rssp::report::OutputMode::JSON,
+                black_box(&mut output),
+            )
+            .expect("renormalized hash BPM report should write");
+            black_box(output)
+        });
+    });
+    hash_bpms_full.bench_function("precomputed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::report::write_reports(
+                black_box(&hash_bpms_summary),
+                rssp::report::OutputMode::JSON,
+                black_box(&mut output),
+            )
+            .expect("precomputed hash BPM report should write");
+            black_box(output)
+        });
+    });
+    hash_bpms_full.finish();
 
     let mut timing_arrays = c.benchmark_group("cycles/report_json_timing_arrays");
     timing_arrays.sample_size(20);

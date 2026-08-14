@@ -1329,6 +1329,7 @@ mod tests {
 
             // Unused string timing fields (TimingSegments used instead)
             chart_bpms: Default::default(),
+            chart_bpms_norm: Default::default(),
             chart_stops: Default::default(),
             chart_delays: Default::default(),
             chart_warps: Default::default(),
