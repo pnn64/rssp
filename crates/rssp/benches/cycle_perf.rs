@@ -571,6 +571,19 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let custom_patterns = custom_pattern_input(256);
     let analysis_fixture = include_bytes!("fixtures/camellia_mix.ssc");
     let nps_fixture = include_bytes!("fixtures/watch_yo_step.ssc");
+    let minimize_parsed = rssp::parse::extract_sections(nps_fixture, "ssc")
+        .expect("minimizer cycle fixture should parse");
+    let minimize_chart = minimize_parsed
+        .notes_list
+        .iter()
+        .filter_map(|entry| {
+            Some((
+                entry.note_data,
+                rssp::supported_stepstype_lanes_bytes(entry.fields[0])?,
+            ))
+        })
+        .max_by_key(|(data, _)| data.len())
+        .expect("minimizer cycle fixture should contain a supported chart");
     let analysis_options = rssp::AnalysisOptions::default();
     let mut analysis_scratch = rssp::AnalysisScratch::default();
     let mut stream_tokens = Vec::new();
@@ -671,6 +684,30 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
                 rssp::compute_chart_peak_nps(black_box(nps_fixture), black_box("ssc"))
                     .expect("fixture should analyze"),
             );
+        });
+    });
+    const MINIMIZE_BATCH: usize = 128;
+    optimizations.throughput(Throughput::Bytes(
+        (minimize_chart.0.len() * MINIMIZE_BATCH) as u64,
+    ));
+    optimizations.bench_function("minimize_materialized", |b| {
+        b.iter(|| {
+            for _ in 0..MINIMIZE_BATCH {
+                black_box(rssp::stats::minimize_chart_count_rows_legacy_for_bench(
+                    black_box(minimize_chart.0),
+                    black_box(minimize_chart.1),
+                ));
+            }
+        });
+    });
+    optimizations.bench_function("minimize_output_backed", |b| {
+        b.iter(|| {
+            for _ in 0..MINIMIZE_BATCH {
+                black_box(rssp::stats::minimize_chart_count_rows(
+                    black_box(minimize_chart.0),
+                    black_box(minimize_chart.1),
+                ));
+            }
         });
     });
     optimizations.finish();

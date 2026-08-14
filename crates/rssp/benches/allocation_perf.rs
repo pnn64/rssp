@@ -92,6 +92,7 @@ enum Mode {
     Hashes,
     Durations,
     Nps,
+    Minimize,
     Bpms,
     Tech,
     Snapshot,
@@ -117,6 +118,11 @@ enum Mode {
 
 struct SimInput {
     extension: &'static str,
+    raw: Vec<u8>,
+}
+
+struct MinimizeInput {
+    lanes: usize,
     raw: Vec<u8>,
 }
 
@@ -172,6 +178,7 @@ fn parse_args() -> (Mode, usize) {
                     "hashes" => Mode::Hashes,
                     "durations" => Mode::Durations,
                     "nps" => Mode::Nps,
+                    "minimize" => Mode::Minimize,
                     "bpms" => Mode::Bpms,
                     "tech" => Mode::Tech,
                     "snapshot" => Mode::Snapshot,
@@ -225,6 +232,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         | Mode::Hashes
         | Mode::Durations
         | Mode::Nps
+        | Mode::Minimize
         | Mode::Bpms
         | Mode::Tech
         | Mode::Snapshot
@@ -330,6 +338,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::Matrix | Mode::AnalysisReuse | Mode::StreamOutputs => {
                 unreachable!("matrix mode uses its dedicated allocation runner")
+            }
+            Mode::Minimize => {
+                unreachable!("minimize mode uses its paired allocation runner")
             }
             Mode::Snapshot => {
                 unreachable!("report modes use their dedicated allocation runner")
@@ -542,6 +553,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Hashes => "hashes",
         Mode::Durations => "durations",
         Mode::Nps => "nps",
+        Mode::Minimize => "minimize",
         Mode::Bpms => "bpms",
         Mode::Tech => "tech",
         Mode::Snapshot => "snapshot",
@@ -945,6 +957,87 @@ fn run_nps_alloc(iterations: usize, corpus: &[SimInput]) {
     });
     run_nps_alloc_phase("reused", iterations, corpus, |sim| {
         rssp::compute_chart_peak_nps(&sim.raw, sim.extension).expect("fixture NPS should compute")
+    });
+}
+
+fn minimize_inputs(corpus: &[SimInput]) -> Vec<MinimizeInput> {
+    let mut inputs = Vec::new();
+    for sim in corpus {
+        let parsed = rssp::parse::extract_sections(&sim.raw, sim.extension)
+            .expect("fixture should parse into chart inputs");
+        inputs.extend(parsed.notes_list.into_iter().filter_map(|entry| {
+            Some(MinimizeInput {
+                lanes: rssp::supported_stepstype_lanes_bytes(entry.fields[0])?,
+                raw: entry.note_data.to_vec(),
+            })
+        }));
+    }
+    inputs
+}
+
+fn run_minimize_phase(
+    phase: &str,
+    iterations: usize,
+    inputs: &[MinimizeInput],
+    mut compute: impl FnMut(
+        &[u8],
+        usize,
+    ) -> (Vec<u8>, rssp::stats::ArrowStats, Vec<usize>, Vec<f32>, f64),
+) {
+    for input in inputs {
+        black_box(compute(&input.raw, input.lanes));
+    }
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        for input in inputs {
+            let (chart, stats, densities, beats, last) =
+                compute(black_box(&input.raw), black_box(input.lanes));
+            checksum = checksum
+                .wrapping_add(chart.len())
+                .wrapping_add(stats.total_arrows as usize)
+                .wrapping_add(densities.len())
+                .wrapping_add(beats.len())
+                .wrapping_add(last.to_bits() as usize);
+            black_box((chart, stats, densities, beats, last));
+        }
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    let bytes = inputs.iter().map(|input| input.raw.len()).sum::<usize>() as f64 * divisor;
+    println!(
+        concat!(
+            "mode=minimize phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_mib_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        bytes / elapsed.as_secs_f64() / (1024.0 * 1024.0),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_minimize_alloc(iterations: usize, corpus: &[SimInput]) {
+    let inputs = minimize_inputs(corpus);
+    run_minimize_phase("materialized", iterations, &inputs, |data, lanes| {
+        rssp::stats::minimize_chart_count_rows_legacy_for_bench(data, lanes)
+    });
+    run_minimize_phase("output_backed", iterations, &inputs, |data, lanes| {
+        rssp::stats::minimize_chart_count_rows(data, lanes)
     });
 }
 
@@ -1546,6 +1639,10 @@ fn main() {
     let corpus = load_corpus();
     if matches!(mode, Mode::Nps) {
         run_nps_alloc(iterations, &corpus);
+        return;
+    }
+    if matches!(mode, Mode::Minimize) {
+        run_minimize_alloc(iterations, &corpus);
         return;
     }
     let options = options_for(mode);

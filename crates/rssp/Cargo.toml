@@ -125,6 +125,7 @@ harness = false
 [[bench]]
 name = "step_counts_perf"
 harness = false
+required-features = ["profile"]
 
 [[bench]]
 name = "tech_counts_perf"

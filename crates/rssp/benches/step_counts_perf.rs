@@ -1,4 +1,4 @@
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -242,6 +242,39 @@ fn bench_step_counts_inner(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_minimize_rows(c: &mut Criterion) {
+    let (charts, _) = build_count_inputs();
+    let bytes = charts
+        .iter()
+        .map(|chart| chart.chart_data.len())
+        .sum::<usize>();
+    let mut group = c.benchmark_group("minimize_count_rows");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(2));
+    group.throughput(Throughput::Bytes(bytes as u64));
+    group.bench_function("materialized_measure", |b| {
+        b.iter(|| {
+            for chart in &charts {
+                black_box(rssp::stats::minimize_chart_count_rows_legacy_for_bench(
+                    black_box(&chart.chart_data),
+                    black_box(chart.lanes),
+                ));
+            }
+        });
+    });
+    group.bench_function("output_backed_measure", |b| {
+        b.iter(|| {
+            for chart in &charts {
+                black_box(rssp::stats::minimize_chart_count_rows(
+                    black_box(&chart.chart_data),
+                    black_box(chart.lanes),
+                ));
+            }
+        });
+    });
+    group.finish();
+}
+
 fn bench_judgability_scan(c: &mut Criterion) {
     let (charts, globals) = build_count_inputs();
     let chart = charts
@@ -292,6 +325,7 @@ criterion_group!(
     benches,
     bench_step_counts_pipeline,
     bench_step_counts_inner,
+    bench_minimize_rows,
     bench_judgability_scan
 );
 criterion_main!(benches);

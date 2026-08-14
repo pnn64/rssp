@@ -695,24 +695,13 @@ pub fn minimize_chart_and_count_with_lanes(
     data: &[u8],
     lanes: usize,
 ) -> (Vec<u8>, ArrowStats, Vec<usize>) {
-    match lanes {
-        5 => {
-            let (mut nr, mut nl) = (|_, _| {}, |_: &[u8; 5], _, _, _, _| {});
-            process_chart::<5, _, _>(data, &mut nr, &mut nl)
-        }
-        8 => {
-            let (mut nr, mut nl) = (|_, _| {}, |_: &[u8; 8], _, _, _, _| {});
-            process_chart::<8, _, _>(data, &mut nr, &mut nl)
-        }
-        10 => {
-            let (mut nr, mut nl) = (|_, _| {}, |_: &[u8; 10], _, _, _, _| {});
-            process_chart::<10, _, _>(data, &mut nr, &mut nl)
-        }
-        _ => {
-            let (mut nr, mut nl) = (|_, _| {}, |_: &[u8; 4], _, _, _, _| {});
-            process_chart::<4, _, _>(data, &mut nr, &mut nl)
-        }
-    }
+    let (chart, stats, densities, _, _) = match lanes {
+        5 => minimize_rows_direct::<5, false>(data),
+        8 => minimize_rows_direct::<8, false>(data),
+        10 => minimize_rows_direct::<10, false>(data),
+        _ => minimize_rows_direct::<4, false>(data),
+    };
+    (chart, stats, densities)
 }
 
 #[must_use]
@@ -720,31 +709,180 @@ pub fn minimize_chart_count_rows(
     data: &[u8],
     lanes: usize,
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
-    dispatch_lanes!(lanes, minimize_rows_plain(data))
+    match lanes {
+        5 => minimize_rows_direct::<5, true>(data),
+        8 => minimize_rows_direct::<8, true>(data),
+        10 => minimize_rows_direct::<10, true>(data),
+        _ => minimize_rows_direct::<4, true>(data),
+    }
 }
 
-fn minimize_rows_plain<const L: usize>(
+fn reduce_output_measure<const L: usize>(output: &mut Vec<u8>, start: usize, rows: usize) -> usize {
+    let stride = L + 1;
+    let mut shift = 0usize;
+    let mut step = 2usize;
+    for _ in 0..rows.trailing_zeros() {
+        let mut row = step / 2;
+        while row < rows {
+            let offset = start + row * stride;
+            if output[offset..offset + L] != [b'0'; L] {
+                return compact_output_rows::<L>(output, start, rows, shift);
+            }
+            row += step;
+        }
+        shift += 1;
+        step <<= 1;
+    }
+    compact_output_rows::<L>(output, start, rows, shift)
+}
+
+fn compact_output_rows<const L: usize>(
+    output: &mut Vec<u8>,
+    start: usize,
+    rows: usize,
+    shift: usize,
+) -> usize {
+    if shift == 0 {
+        return rows;
+    }
+    let stride = L + 1;
+    let step = 1usize << shift;
+    let len = rows >> shift;
+    for row in 1..len {
+        let src = start + row * step * stride;
+        let dst = start + row * stride;
+        output.copy_within(src..src + stride, dst);
+    }
+    output.truncate(start + len * stride);
+    len
+}
+
+// Parser state machine: rows are written directly into their retained output
+// buffer, then compacted in place when each measure ends.
+fn minimize_rows_direct<const L: usize, const BEATS: bool>(
     data: &[u8],
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
-    minimize_rows_basic::<L>(data)
+    let mut output = Vec::with_capacity(data.len());
+    let mut densities = Vec::with_capacity(data.len() / ((L + 1) * 4) + 1);
+    let mut beats = if BEATS {
+        Vec::with_capacity(data.len() / (L + 1))
+    } else {
+        Vec::new()
+    };
+    let mut stats = ArrowStats::default();
+    let (mut holds, mut ends) = (0u32, 0u32);
+    let mut phantom_depths = [0u32; L];
+    let mut object_depths = [0u32; L];
+    let mut has_phantom = false;
+    let (mut last_m, mut last_r, mut last_rows) = (None, 0, 0);
+    let (mut midx, mut measure_rows, mut done) = (0usize, 0usize, false);
+    let mut measure_start = 0usize;
+
+    {
+        let mut finish_measure =
+            |output: &mut Vec<u8>, measure_start: usize, rows: usize, measure: usize| {
+                if rows == 0 {
+                    densities.push(0);
+                    return;
+                }
+                let rows = reduce_output_measure::<L>(output, measure_start, rows);
+                if BEATS {
+                    append_row_beats(&mut beats, measure, rows);
+                }
+                let mut density = 0usize;
+                for row in 0..rows {
+                    let offset = measure_start + row * (L + 1);
+                    // The parser appends exactly L note bytes followed by one newline.
+                    let line: &[u8; L] = output[offset..offset + L]
+                        .try_into()
+                        .expect("minimized row width should match its lane count");
+                    let count = count_line(
+                        line,
+                        &mut stats,
+                        &mut holds,
+                        &mut ends,
+                        &mut phantom_depths,
+                        &mut has_phantom,
+                        &mut object_depths,
+                    );
+                    density += usize::from(count.density);
+                    if count.object {
+                        (last_m, last_r, last_rows) = (Some(measure), row, rows);
+                    }
+                }
+                densities.push(density);
+            };
+
+        let mut line_off = 0usize;
+        while let Some(raw) = next_line(data, &mut line_off) {
+            let line = skip_ws(raw);
+            if line.is_empty() || line[0] == b'/' {
+                continue;
+            }
+            match line[0] {
+                b',' => {
+                    finish_measure(&mut output, measure_start, measure_rows, midx);
+                    output.extend_from_slice(b",\n");
+                    midx += 1;
+                    measure_rows = 0;
+                    measure_start = output.len();
+                }
+                b';' => {
+                    finish_measure(&mut output, measure_start, measure_rows, midx);
+                    done = true;
+                    break;
+                }
+                _ if line.len() >= L => {
+                    output.extend_from_slice(&line[..L]);
+                    output.push(b'\n');
+                    measure_rows += 1;
+                }
+                _ => {}
+            }
+        }
+        if !done {
+            finish_measure(&mut output, measure_start, measure_rows, midx);
+        }
+    }
+
+    has_phantom |= phantom_depths.iter().any(|&depth| depth != 0);
+    if holds > 0 && (holds != ends || has_phantom) {
+        let rows = parse_minimized_rows::<L>(&output);
+        let hold_ends = match_hold_ends(&rows);
+        let step_count = stats.total_steps;
+        stats = recalc_without_phantoms(&rows, &hold_ends);
+        stats.total_steps = step_count;
+    }
+
+    let last = calc_last_beat(last_m, last_r, last_rows);
+    (output, stats, densities, beats, last)
 }
 
-fn minimize_rows_basic<const L: usize>(
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn minimize_chart_count_rows_legacy_for_bench(
+    data: &[u8],
+    lanes: usize,
+) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
+    dispatch_lanes!(lanes, minimize_rows_materialized(data))
+}
+
+#[cfg(feature = "bench-support")]
+fn minimize_rows_materialized<const L: usize>(
     data: &[u8],
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
     let mut beats = Vec::with_capacity(data.len() / (L + 1));
     let (mut last_m, mut last_r, mut last_rows) = (None, 0, 0);
-
-    let mut on_rows = |m, r| append_row_beats(&mut beats, m, r);
-    let mut on_line = |_: &[u8; L], m, r, row_count, has_object| {
+    let mut on_rows = |measure, rows| append_row_beats(&mut beats, measure, rows);
+    let mut on_line = |_: &[u8; L], measure, row, rows, has_object| {
         if has_object {
-            (last_m, last_r, last_rows) = (Some(m), r, row_count);
+            (last_m, last_r, last_rows) = (Some(measure), row, rows);
         }
     };
-
-    let (out, stats, dens) = process_chart::<L, _, _>(data, &mut on_rows, &mut on_line);
+    let (output, stats, densities) = process_chart::<L, _, _>(data, &mut on_rows, &mut on_line);
     let last = calc_last_beat(last_m, last_r, last_rows);
-    (out, stats, dens, beats, last)
+    (output, stats, densities, beats, last)
 }
 
 #[must_use]
@@ -1609,6 +1747,59 @@ mod tests {
     fn stats_from_typed(data: &[u8], timing: &TimingData) -> ArrowStats {
         let (_, _, _, rows, beats, _) = minimize_rows_typed::<4>(data);
         compute_timing_aware_stats_from_rows_with_row_to_beat::<4>(&rows, timing, &beats)
+    }
+
+    fn generated_chart<const L: usize>() -> Vec<u8> {
+        let mut data = Vec::new();
+        for measure in 0..48 {
+            let rows = [4, 6, 8, 12, 16][measure % 5];
+            for row in 0..rows {
+                let mut line = [b'0'; L];
+                if row % 4 == 0 {
+                    line[(measure + row) % L] = b'1';
+                }
+                if measure % 11 == 0 && row == 1 {
+                    line[(measure + 1) % L] = b'2';
+                }
+                if measure % 13 == 0 && row + 2 == rows {
+                    line[(measure + 1) % L] = b'3';
+                }
+                if measure % 7 == 0 && row == 2 {
+                    line[(measure + 2) % L] = b'M';
+                }
+                data.extend_from_slice(&line);
+                data.push(b'\n');
+            }
+            data.extend_from_slice(if measure + 1 == 48 { b";\n" } else { b",\n" });
+        }
+        data
+    }
+
+    fn assert_direct_matches_typed<const L: usize>(data: &[u8]) {
+        let (expected_chart, expected_stats, expected_densities, _, expected_beats, expected_last) =
+            minimize_rows_typed::<L>(data);
+        let (chart, stats, densities, beats, last) = minimize_chart_count_rows(data, L);
+        assert_eq!(chart, expected_chart);
+        assert_eq!(stats, expected_stats);
+        assert_eq!(densities, expected_densities);
+        assert_eq!(beats, expected_beats);
+        assert_eq!(last, expected_last);
+
+        let count_only = minimize_chart_and_count_with_lanes(data, L);
+        assert_eq!(
+            count_only,
+            (expected_chart, expected_stats, expected_densities)
+        );
+    }
+
+    #[test]
+    fn output_backed_minimize_matches_typed_pipeline() {
+        assert_direct_matches_typed::<4>(&generated_chart::<4>());
+        assert_direct_matches_typed::<5>(&generated_chart::<5>());
+        assert_direct_matches_typed::<8>(&generated_chart::<8>());
+        assert_direct_matches_typed::<10>(&generated_chart::<10>());
+        assert_direct_matches_typed::<4>(b"\n,\n;\n");
+        assert_direct_matches_typed::<4>(b" // comment\n 1000 trailing\n0000\r\n");
     }
 
     #[test]
