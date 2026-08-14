@@ -3,6 +3,8 @@ use criterion::measurement::{Measurement, ValueFormatter};
 #[cfg(windows)]
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 #[cfg(windows)]
+use std::fmt::Write as _;
+#[cfg(windows)]
 use std::hint::black_box;
 #[cfg(windows)]
 use std::time::Duration;
@@ -907,6 +909,96 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     delimiter.finish();
+
+    let native_bpms = &report_chart.timing_segments.bpms;
+    let mut bpm_format = c.benchmark_group("cycles/native_bpm_format");
+    bpm_format.sample_size(20);
+    bpm_format.measurement_time(Duration::from_secs(3));
+    bpm_format.throughput(Throughput::Elements(native_bpms.len() as u64));
+    bpm_format.bench_function("materialized", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::format_bpm_segments_f32_like_itg(black_box(
+                native_bpms,
+            )))
+        });
+    });
+    bpm_format.bench_function("streamed", |b| {
+        let mut output = String::with_capacity(native_bpms.len() * 24);
+        b.iter(|| {
+            output.clear();
+            write!(
+                &mut output,
+                "{}",
+                rssp::timing::native_bpms_display(black_box(native_bpms))
+            )
+            .expect("BPM display should write to String");
+            black_box(output.len())
+        });
+    });
+    bpm_format.finish();
+
+    let mut bpm_text = c.benchmark_group("cycles/report_json_bpm_text");
+    bpm_text.sample_size(20);
+    bpm_text.measurement_time(Duration::from_secs(3));
+    bpm_text.throughput(Throughput::Elements(
+        report_timing_bench::SEGMENT_COUNT as u64,
+    ));
+    bpm_text.bench_function("materialized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_bpm_text_materialized(
+                black_box(&mut output),
+                black_box(report_chart),
+                black_box(&report_summary),
+            )
+            .expect("materialized BPM text JSON should write");
+            black_box(output)
+        });
+    });
+    bpm_text.bench_function("streamed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_bpm_text(
+                black_box(&mut output),
+                black_box(report_chart),
+                black_box(&report_summary),
+            )
+            .expect("streamed BPM text JSON should write");
+            black_box(output)
+        });
+    });
+    bpm_text.finish();
+
+    let mut bpm_text_full = c.benchmark_group("cycles/report_json_bpm_text_full");
+    bpm_text_full.sample_size(20);
+    bpm_text_full.measurement_time(Duration::from_secs(3));
+    bpm_text_full.throughput(Throughput::Elements(
+        report_timing_bench::SEGMENT_COUNT as u64,
+    ));
+    bpm_text_full.bench_function("materialized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_bpm_text_report_materialized(
+                black_box(&report_summary),
+                black_box(&mut output),
+            )
+            .expect("materialized BPM text JSON report should write");
+            black_box(output)
+        });
+    });
+    bpm_text_full.bench_function("streamed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::report::write_reports(
+                black_box(&report_summary),
+                rssp::report::OutputMode::JSON,
+                black_box(&mut output),
+            )
+            .expect("streamed BPM text JSON report should write");
+            black_box(output)
+        });
+    });
+    bpm_text_full.finish();
 
     let mut timing_arrays = c.benchmark_group("cycles/report_json_timing_arrays");
     timing_arrays.sample_size(20);

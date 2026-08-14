@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
@@ -17,7 +18,8 @@ use crate::stats::{
 use crate::step_parity::{RowAnnotation, TechCounts};
 use crate::timing::{
     SpeedUnit, TimingFormat, TimingSegments, beat_to_note_row, format_bpm_segments_f32_like_itg,
-    normalize_scrolls_like_itg, normalize_speeds_like_itg, note_row_to_beat, steps_timing_allowed,
+    native_bpms_display, normalize_scrolls_like_itg, normalize_speeds_like_itg, note_row_to_beat,
+    steps_timing_allowed,
 };
 
 #[inline(always)]
@@ -1210,7 +1212,7 @@ mod tests {
         push_duration, push_num, push_str, steps_timing_allowed, timing_fixed_6, write_csv_course,
         write_csv_course_materialized, write_json_all, write_json_all_materialized,
         write_json_all_with, write_json_course, write_json_course_materialized,
-        write_json_stream_sequences,
+        write_json_native_bpms, write_json_stream_sequences,
     };
 
     fn timing_fixed_6_materialized(value: f64) -> f64 {
@@ -1259,6 +1261,21 @@ mod tests {
                 assert_eq!(actual.to_bits(), expected.to_bits(), "value={value:?}");
             }
         }
+    }
+
+    #[test]
+    fn streamed_bpm_text_preserves_stack_overflow_output() {
+        let bpms: Vec<_> = (0..1_024)
+            .map(|index| (index as f32 * 4.0, 90.0 + (index % 211) as f32))
+            .collect();
+        let formatted = crate::timing::format_bpm_segments_f32_like_itg(&bpms);
+        assert!(formatted.len() > 16_384);
+
+        let mut actual = Vec::new();
+        write_json_native_bpms(&mut actual, &bpms).expect("BPM text should stream");
+        assert_eq!(actual.first(), Some(&b'"'));
+        assert_eq!(actual.last(), Some(&b'"'));
+        assert_eq!(&actual[1..actual.len() - 1], formatted.as_bytes());
     }
 
     #[test]
@@ -1463,7 +1480,7 @@ mod tests {
 
             assert_eq!(actual, expected);
             let mut prior = Vec::new();
-            write_json_all_with::<_, true, false, false>(&summary, &mut prior)
+            write_json_all_with::<_, true, false, false, false>(&summary, &mut prior)
                 .expect("materialized timing arrays should write");
             assert_eq!(actual, prior);
             serde_json::from_slice::<serde_json::Value>(&actual)
@@ -3113,6 +3130,48 @@ fn write_json_string<W: Write>(writer: &mut W, s: &str) -> io::Result<()> {
     writer.write_all(b"\"")
 }
 
+struct StackText<const N: usize> {
+    bytes: [u8; N],
+    len: usize,
+}
+
+impl<const N: usize> StackText<N> {
+    const fn new() -> Self {
+        Self {
+            bytes: [0; N],
+            len: 0,
+        }
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..self.len]
+    }
+}
+
+impl<const N: usize> std::fmt::Write for StackText<N> {
+    fn write_str(&mut self, value: &str) -> std::fmt::Result {
+        if value.len() > N - self.len {
+            return Err(std::fmt::Error);
+        }
+        let end = self.len + value.len();
+        self.bytes[self.len..end].copy_from_slice(value.as_bytes());
+        self.len = end;
+        Ok(())
+    }
+}
+
+fn write_json_native_bpms<W: Write>(writer: &mut W, bpms: &[(f32, f32)]) -> io::Result<()> {
+    let mut buffer = StackText::<16_384>::new();
+    if write!(&mut buffer, "{}", native_bpms_display(bpms)).is_err() {
+        writer.write_all(b"\"")?;
+        write!(writer, "{}", native_bpms_display(bpms))?;
+        return writer.write_all(b"\"");
+    }
+    writer.write_all(b"\"")?;
+    writer.write_all(buffer.as_bytes())?;
+    writer.write_all(b"\"")
+}
+
 fn write_json_number_for_key<W: Write>(
     writer: &mut W,
     key: Option<&str>,
@@ -3765,7 +3824,7 @@ fn write_json_native_scrolls<W: Write>(
     writer.write_all(b"]")
 }
 
-fn write_json_timing_with<W: Write, const MATERIALIZE: bool>(
+fn write_json_timing_with<W: Write, const MATERIALIZE: bool, const MATERIALIZE_BPM_TEXT: bool>(
     writer: &mut W,
     chart: &ChartSummary,
     simfile: &SimfileSummary,
@@ -3775,7 +3834,8 @@ fn write_json_timing_with<W: Write, const MATERIALIZE: bool>(
     let beat0_offset_seconds =
         timing_fixed_6(chart.chart_offset_seconds + f64::from(timing.beat0_offset_adjust));
     let beat0_group_offset_seconds = 0.0;
-    let bpms_formatted = format_bpm_segments_f32_like_itg(&timing.bpms);
+    let bpms_formatted =
+        MATERIALIZE_BPM_TEXT.then(|| format_bpm_segments_f32_like_itg(&timing.bpms));
     let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw_f32(&timing.bpms);
     let materialized = MATERIALIZE.then(|| build_normalized_timing_tables(chart, simfile));
     let text = (!MATERIALIZE).then(|| build_timing_text_tables(chart, simfile));
@@ -3821,7 +3881,13 @@ fn write_json_timing_with<W: Write, const MATERIALIZE: bool>(
     object.field_f64("beat0_offset_seconds", beat0_offset_seconds)?;
     object.field_f64("beat0_group_offset_seconds", beat0_group_offset_seconds)?;
     object.field_string("hash_bpms", hash_bpms)?;
-    object.field_string("bpms_formatted", &bpms_formatted)?;
+    if let Some(bpms_formatted) = &bpms_formatted {
+        object.field_string("bpms_formatted", bpms_formatted)?;
+    } else {
+        object.field_with("bpms_formatted", |writer, _| {
+            write_json_native_bpms(writer, &timing.bpms)
+        })?;
+    }
     object.field_f64("bpm_min", bpm_min)?;
     object.field_f64("bpm_max", bpm_max)?;
     object.field_string("display_bpm", &display_bpm)?;
@@ -4306,6 +4372,7 @@ fn write_json_chart_with<
     const MATERIALIZE_TIMING: bool,
     const MATERIALIZE_NPS: bool,
     const MATERIALIZE_STREAMS: bool,
+    const MATERIALIZE_BPM_TEXT: bool,
 >(
     writer: &mut W,
     chart: &ChartSummary,
@@ -4323,7 +4390,9 @@ fn write_json_chart_with<
         write_json_gimmicks(writer, chart, simfile, indent)
     })?;
     object.field_with("timing", |writer, indent| {
-        write_json_timing_with::<W, MATERIALIZE_TIMING>(writer, chart, simfile, indent)
+        write_json_timing_with::<W, MATERIALIZE_TIMING, MATERIALIZE_BPM_TEXT>(
+            writer, chart, simfile, indent,
+        )
     })?;
     object.field_with("stream_info", |writer, indent| {
         write_json_stream_info_with::<W, MATERIALIZE_STREAMS>(writer, chart, indent)
@@ -4359,7 +4428,7 @@ fn write_json_chart<W: Write>(
     simfile: &SimfileSummary,
     indent: usize,
 ) -> io::Result<()> {
-    write_json_chart_with::<W, false, false, false>(writer, chart, simfile, indent)
+    write_json_chart_with::<W, false, false, false, false>(writer, chart, simfile, indent)
 }
 
 #[cfg(test)]
@@ -4454,6 +4523,7 @@ fn write_json_all_with<
     const MATERIALIZE_TIMING: bool,
     const MATERIALIZE_NPS: bool,
     const MATERIALIZE_STREAMS: bool,
+    const MATERIALIZE_BPM_TEXT: bool,
 >(
     simfile: &SimfileSummary,
     writer: &mut W,
@@ -4492,12 +4562,8 @@ fn write_json_all_with<
                     MATERIALIZE_TIMING,
                     MATERIALIZE_NPS,
                     MATERIALIZE_STREAMS,
-                >(
-                    writer,
-                    &simfile.charts[idx],
-                    simfile,
-                    item_indent,
-                )
+                    MATERIALIZE_BPM_TEXT,
+                >(writer, &simfile.charts[idx], simfile, item_indent)
             },
         )
     })?;
@@ -4506,7 +4572,7 @@ fn write_json_all_with<
 }
 
 pub fn write_json_all<W: Write>(simfile: &SimfileSummary, writer: &mut W) -> io::Result<()> {
-    write_json_all_with::<W, false, false, false>(simfile, writer)
+    write_json_all_with::<W, false, false, false, false>(simfile, writer)
 }
 
 #[cfg(feature = "profile")]
@@ -4514,7 +4580,7 @@ pub(crate) fn profile_write_json_materialized<W: Write>(
     simfile: &SimfileSummary,
     writer: &mut W,
 ) -> io::Result<()> {
-    write_json_all_with::<W, true, false, false>(simfile, writer)
+    write_json_all_with::<W, true, false, false, false>(simfile, writer)
 }
 
 #[cfg(feature = "profile")]
@@ -4522,7 +4588,7 @@ pub(crate) fn profile_write_json_nps_materialized<W: Write>(
     simfile: &SimfileSummary,
     writer: &mut W,
 ) -> io::Result<()> {
-    write_json_all_with::<W, false, true, false>(simfile, writer)
+    write_json_all_with::<W, false, true, false, false>(simfile, writer)
 }
 
 #[cfg(feature = "profile")]
@@ -4530,7 +4596,15 @@ pub(crate) fn profile_write_json_streams_materialized<W: Write>(
     simfile: &SimfileSummary,
     writer: &mut W,
 ) -> io::Result<()> {
-    write_json_all_with::<W, false, false, true>(simfile, writer)
+    write_json_all_with::<W, false, false, true, false>(simfile, writer)
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_write_json_bpm_text_materialized<W: Write>(
+    simfile: &SimfileSummary,
+    writer: &mut W,
+) -> io::Result<()> {
+    write_json_all_with::<W, false, false, false, true>(simfile, writer)
 }
 
 #[cfg(feature = "profile")]
@@ -4539,7 +4613,16 @@ pub(crate) fn profile_write_json_timing<W: Write, const MATERIALIZE: bool>(
     chart: &ChartSummary,
     simfile: &SimfileSummary,
 ) -> io::Result<()> {
-    write_json_timing_with::<W, MATERIALIZE>(writer, chart, simfile, 0)
+    write_json_timing_with::<W, MATERIALIZE, false>(writer, chart, simfile, 0)
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_write_json_bpm_text<W: Write, const MATERIALIZE: bool>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    simfile: &SimfileSummary,
+) -> io::Result<()> {
+    write_json_timing_with::<W, false, MATERIALIZE>(writer, chart, simfile, 0)
 }
 
 #[cfg(feature = "profile")]

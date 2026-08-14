@@ -3,6 +3,7 @@ use crate::math::{lrint_f32, lrint_f64, push_dec6_itg, roundtrip_bpm_itg};
 use crate::parse::parse_offset_seconds;
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::fmt;
 
 // --- Constants ---
 pub const STEPFILE_VERSION_NUMBER: f32 = 0.83;
@@ -729,6 +730,31 @@ pub fn format_bpm_segments_f32_like_itg(bpms: &[(f32, f32)]) -> String {
             .map(|&(beat, bpm)| (f64::from(beat), f64::from(bpm))),
         bpms.len(),
     )
+}
+
+/// Returns an allocation-free formatter for native BPM segments.
+#[must_use]
+pub fn native_bpms_display(bpms: &[(f32, f32)]) -> impl fmt::Display + '_ {
+    struct DisplayBpms<'a>(&'a [(f32, f32)]);
+
+    impl fmt::Display for DisplayBpms<'_> {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            for (index, &(beat, bpm)) in self.0.iter().enumerate() {
+                if index != 0 {
+                    formatter.write_str(",")?;
+                }
+                let beat = note_row_to_beat_f32(beat_to_note_row_f32(beat));
+                write!(
+                    formatter,
+                    "{beat:.6}={:.6}",
+                    roundtrip_bpm_itg(f64::from(bpm)) as f32
+                )?;
+            }
+            Ok(())
+        }
+    }
+
+    DisplayBpms(bpms)
 }
 
 fn format_bpm_segments_iter(
@@ -2125,6 +2151,15 @@ pub fn get_speed_multiplier(t: &TimingData, beat: f64, time: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_bpm_display_matches_itg_text() {
+        assert_eq!(native_bpms_display(&[]).to_string(), "");
+        assert_eq!(
+            native_bpms_display(&[(0.0, 120.0), (4.0, 180.0)]).to_string(),
+            "0.000000=120.000000,4.000000=180.000000"
+        );
+    }
 
     #[test]
     fn parse_segments_preserves_sparse_entries_and_row_beats() {

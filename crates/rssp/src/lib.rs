@@ -127,6 +127,29 @@ pub mod profile {
         crate::report::profile_write_json_timing::<W, true>(writer, chart, simfile)
     }
 
+    pub fn write_json_bpm_text_report_materialized<W: std::io::Write>(
+        simfile: &crate::report::SimfileSummary,
+        writer: &mut W,
+    ) -> std::io::Result<()> {
+        crate::report::profile_write_json_bpm_text_materialized(simfile, writer)
+    }
+
+    pub fn write_json_bpm_text<W: std::io::Write>(
+        writer: &mut W,
+        chart: &crate::report::ChartSummary,
+        simfile: &crate::report::SimfileSummary,
+    ) -> std::io::Result<()> {
+        crate::report::profile_write_json_bpm_text::<W, false>(writer, chart, simfile)
+    }
+
+    pub fn write_json_bpm_text_materialized<W: std::io::Write>(
+        writer: &mut W,
+        chart: &crate::report::ChartSummary,
+        simfile: &crate::report::SimfileSummary,
+    ) -> std::io::Result<()> {
+        crate::report::profile_write_json_bpm_text::<W, true>(writer, chart, simfile)
+    }
+
     pub fn write_json_nps_report_materialized<W: std::io::Write>(
         simfile: &crate::report::SimfileSummary,
         writer: &mut W,

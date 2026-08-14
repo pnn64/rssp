@@ -101,6 +101,7 @@ enum Mode {
     Snapshot,
     Csv,
     Json,
+    JsonBpmText,
     JsonFull,
     JsonNps,
     JsonStreams,
@@ -191,6 +192,7 @@ fn parse_args() -> (Mode, usize) {
                     "snapshot" => Mode::Snapshot,
                     "csv" => Mode::Csv,
                     "json" => Mode::Json,
+                    "json-bpm-text" => Mode::JsonBpmText,
                     "json-full" => Mode::JsonFull,
                     "json-nps" => Mode::JsonNps,
                     "json-streams" => Mode::JsonStreams,
@@ -277,7 +279,9 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
         },
-        Mode::JsonNps | Mode::JsonStreams | Mode::JsonTiming => rssp::AnalysisOptions::default(),
+        Mode::JsonBpmText | Mode::JsonNps | Mode::JsonStreams | Mode::JsonTiming => {
+            rssp::AnalysisOptions::default()
+        }
         Mode::Annotations => rssp::AnalysisOptions {
             mono_threshold: 6,
             compute_note_annotations: true,
@@ -372,6 +376,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::JsonNps => {
                 unreachable!("NPS JSON mode uses its dedicated allocation runner")
+            }
+            Mode::JsonBpmText => {
+                unreachable!("BPM text JSON mode uses its dedicated allocation runner")
             }
             Mode::JsonStreams => {
                 unreachable!("stream JSON mode uses its dedicated allocation runner")
@@ -584,6 +591,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Snapshot => "snapshot",
         Mode::Csv => "csv",
         Mode::Json => "json",
+        Mode::JsonBpmText => "json-bpm-text",
         Mode::JsonFull => "json-full",
         Mode::JsonNps => "json-nps",
         Mode::JsonStreams => "json-streams",
@@ -1438,6 +1446,30 @@ fn run_timing_json_alloc(iterations: usize) {
     );
 }
 
+fn run_bpm_text_json_alloc(iterations: usize) {
+    let fixture = report_timing_bench::fixture();
+    let summary = rssp::analyze(fixture.as_bytes(), "ssc", &report_timing_bench::options())
+        .expect("BPM text JSON benchmark should analyze");
+    run_json_report_phase(
+        "json-bpm-text",
+        "materialized",
+        report_timing_bench::SEGMENT_COUNT,
+        iterations,
+        &summary,
+        rssp::profile::write_json_bpm_text_report_materialized,
+    );
+    run_json_report_phase(
+        "json-bpm-text",
+        "streamed",
+        report_timing_bench::SEGMENT_COUNT,
+        iterations,
+        &summary,
+        |summary, output| {
+            rssp::report::write_reports(summary, rssp::report::OutputMode::JSON, output)
+        },
+    );
+}
+
 fn run_nps_json_alloc(iterations: usize) {
     let fixture = report_nps_bench::fixture();
     let summary = rssp::analyze(&fixture, "ssc", &report_nps_bench::options())
@@ -1862,6 +1894,10 @@ fn main() {
         }
         Mode::JsonNps => {
             run_nps_json_alloc(iterations);
+            return;
+        }
+        Mode::JsonBpmText => {
+            run_bpm_text_json_alloc(iterations);
             return;
         }
         Mode::JsonStreams => {

@@ -1,4 +1,5 @@
 use criterion::{Criterion, criterion_group, criterion_main};
+use std::fmt::Write as _;
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -276,6 +277,35 @@ fn bench_bpm_format(c: &mut Criterion) {
     group.bench_function("format_segments", |b| {
         b.iter(|| {
             black_box(rssp::timing::format_bpm_segments_like_itg(black_box(&bpms)));
+        });
+    });
+    group.finish();
+
+    let native_bpms: Vec<_> = bpms
+        .iter()
+        .map(|&(beat, bpm)| (beat as f32, bpm as f32))
+        .collect();
+    let mut group = c.benchmark_group("native_bpm_format");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("materialized", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::format_bpm_segments_f32_like_itg(black_box(
+                &native_bpms,
+            )));
+        });
+    });
+    group.bench_function("streamed", |b| {
+        let mut output = String::with_capacity(native_bpms.len() * 24);
+        b.iter(|| {
+            output.clear();
+            write!(
+                &mut output,
+                "{}",
+                rssp::timing::native_bpms_display(black_box(&native_bpms))
+            )
+            .expect("BPM display should write to String");
+            black_box(output.len());
         });
     });
     group.finish();

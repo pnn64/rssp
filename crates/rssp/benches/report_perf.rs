@@ -94,6 +94,69 @@ fn bench_timing_json(c: &mut Criterion) {
         .first()
         .expect("fixture should contain a chart");
 
+    let mut group = c.benchmark_group("report_json_bpm_text");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(
+        report_timing_bench::SEGMENT_COUNT as u64,
+    ));
+    group.bench_function("materialized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_bpm_text_materialized(
+                black_box(&mut output),
+                black_box(chart),
+                black_box(&summary),
+            )
+            .expect("materialized BPM text JSON should write");
+            black_box(output);
+        });
+    });
+    group.bench_function("streamed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_bpm_text(
+                black_box(&mut output),
+                black_box(chart),
+                black_box(&summary),
+            )
+            .expect("streamed BPM text JSON should write");
+            black_box(output);
+        });
+    });
+    group.finish();
+
+    let mut group = c.benchmark_group("report_json_bpm_text_full");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(
+        report_timing_bench::SEGMENT_COUNT as u64,
+    ));
+    group.bench_function("materialized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_bpm_text_report_materialized(
+                black_box(&summary),
+                black_box(&mut output),
+            )
+            .expect("materialized BPM text JSON report should write");
+            black_box(output);
+        });
+    });
+    group.bench_function("streamed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::report::write_reports(
+                black_box(&summary),
+                rssp::report::OutputMode::JSON,
+                black_box(&mut output),
+            )
+            .expect("streamed BPM text JSON report should write");
+            black_box(output);
+        });
+    });
+    group.finish();
+
     let mut group = c.benchmark_group("report_json_timing_arrays");
     group.sample_size(100);
     group.measurement_time(Duration::from_secs(3));
