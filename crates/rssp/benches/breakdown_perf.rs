@@ -1,4 +1,4 @@
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -188,11 +188,39 @@ fn bench_combined_stream_outputs(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_stream_sequences(c: &mut Criterion) {
+    let densities: Vec<_> = (0..16_384)
+        .map(|index| if index % 8 < 3 { 16 } else { 0 })
+        .collect();
+    let mut group = c.benchmark_group("stream_sequences");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(2));
+    group.throughput(Throughput::Elements(densities.len() as u64));
+    group.bench_function("materialized", |b| {
+        b.iter(|| {
+            black_box(rssp::stats::stream_sequences(black_box(&densities)));
+        });
+    });
+    group.bench_function("visitor", |b| {
+        b.iter(|| {
+            let mut checksum = 0usize;
+            rssp::stats::visit_stream_sequences(black_box(&densities), |segment| {
+                checksum = checksum.wrapping_add(segment.start + segment.end);
+                Ok::<(), std::convert::Infallible>(())
+            })
+            .expect("infallible stream visitor should succeed");
+            black_box(checksum);
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_breakdown_pipeline,
     bench_breakdown_inner,
     bench_breakdown_counts,
-    bench_combined_stream_outputs
+    bench_combined_stream_outputs,
+    bench_stream_sequences
 );
 criterion_main!(benches);

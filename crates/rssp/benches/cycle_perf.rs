@@ -1025,6 +1025,60 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     });
     nps_report.finish();
 
+    let mut stream_sequences = c.benchmark_group("cycles/report_json_stream_sequences");
+    stream_sequences.sample_size(20);
+    stream_sequences.measurement_time(Duration::from_secs(3));
+    stream_sequences.throughput(Throughput::Elements(report_nps_bench::MEASURE_COUNT as u64));
+    stream_sequences.bench_function("materialized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_streams_materialized(
+                black_box(&mut output),
+                black_box(nps_report_chart),
+            )
+            .expect("materialized stream JSON should write");
+            black_box(output)
+        });
+    });
+    stream_sequences.bench_function("streamed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_streams(black_box(&mut output), black_box(nps_report_chart))
+                .expect("streamed stream JSON should write");
+            black_box(output)
+        });
+    });
+    stream_sequences.finish();
+
+    let mut stream_report = c.benchmark_group("cycles/report_json_streams");
+    stream_report.sample_size(20);
+    stream_report.measurement_time(Duration::from_secs(3));
+    stream_report.throughput(Throughput::Elements(report_nps_bench::MEASURE_COUNT as u64));
+    stream_report.bench_function("materialized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_streams_report_materialized(
+                black_box(&nps_report_summary),
+                black_box(&mut output),
+            )
+            .expect("materialized stream JSON report should write");
+            black_box(output)
+        });
+    });
+    stream_report.bench_function("streamed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::report::write_reports(
+                black_box(&nps_report_summary),
+                rssp::report::OutputMode::JSON,
+                black_box(&mut output),
+            )
+            .expect("streamed stream JSON report should write");
+            black_box(output)
+        });
+    });
+    stream_report.finish();
+
     let mut analysis = c.benchmark_group("cycles/analysis_scratch");
     analysis.sample_size(10);
     analysis.measurement_time(Duration::from_secs(3));

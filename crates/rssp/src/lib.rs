@@ -147,6 +147,27 @@ pub mod profile {
     ) -> std::io::Result<()> {
         crate::report::profile_write_json_nps::<W, true>(writer, chart)
     }
+
+    pub fn write_json_streams_report_materialized<W: std::io::Write>(
+        simfile: &crate::report::SimfileSummary,
+        writer: &mut W,
+    ) -> std::io::Result<()> {
+        crate::report::profile_write_json_streams_materialized(simfile, writer)
+    }
+
+    pub fn write_json_streams<W: std::io::Write>(
+        writer: &mut W,
+        chart: &crate::report::ChartSummary,
+    ) -> std::io::Result<()> {
+        crate::report::profile_write_json_streams::<W, false>(writer, chart)
+    }
+
+    pub fn write_json_streams_materialized<W: std::io::Write>(
+        writer: &mut W,
+        chart: &crate::report::ChartSummary,
+    ) -> std::io::Result<()> {
+        crate::report::profile_write_json_streams::<W, true>(writer, chart)
+    }
 }
 
 pub use rssp_core::{

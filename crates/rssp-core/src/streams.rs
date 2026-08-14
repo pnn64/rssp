@@ -79,6 +79,23 @@ const fn is_stream_measure(d: usize) -> bool {
 #[must_use]
 pub fn stream_sequences(measures: &[usize]) -> Vec<StreamSegment> {
     let mut segs = Vec::with_capacity(scratch_cap(measures.len() / 2 + 1));
+    visit_stream_sequences(measures, |segment| {
+        segs.push(segment);
+        Ok::<(), std::convert::Infallible>(())
+    })
+    .expect("infallible segment collector should succeed");
+    segs
+}
+
+/// Visits stream and break segments without materializing a segment vector.
+///
+/// # Errors
+///
+/// Returns the first error produced by `visit`.
+pub fn visit_stream_sequences<E>(
+    measures: &[usize],
+    mut visit: impl FnMut(StreamSegment) -> Result<(), E>,
+) -> Result<(), E> {
     let mut i = 0usize;
     let mut prev_stream_end = None;
 
@@ -98,28 +115,28 @@ pub fn stream_sequences(measures: &[usize]) -> Vec<StreamSegment> {
             Some(prev_end) => {
                 let gap = start - prev_end;
                 if gap >= 2 {
-                    segs.push(StreamSegment {
+                    visit(StreamSegment {
                         start: prev_end,
                         end: start,
                         is_break: true,
-                    });
+                    })?;
                 }
             }
             None if start >= 2 => {
-                segs.push(StreamSegment {
+                visit(StreamSegment {
                     start: 0,
                     end: start,
                     is_break: true,
-                });
+                })?;
             }
             _ => {}
         }
 
-        segs.push(StreamSegment {
+        visit(StreamSegment {
             start,
             end,
             is_break: false,
-        });
+        })?;
         prev_stream_end = Some(end);
         i += 1;
     }
@@ -127,15 +144,15 @@ pub fn stream_sequences(measures: &[usize]) -> Vec<StreamSegment> {
     if let Some(last_end) = prev_stream_end {
         let tail = measures.len() - last_end;
         if tail >= 2 {
-            segs.push(StreamSegment {
+            visit(StreamSegment {
                 start: last_end,
                 end: measures.len(),
                 is_break: true,
-            });
+            })?;
         }
     }
 
-    segs
+    Ok(())
 }
 
 #[must_use]
@@ -819,6 +836,40 @@ mod tests {
         assert_eq!(format_run_symbol(RunDensity::Run20, 12, true), "~12~*");
         assert_eq!(format_run_symbol(RunDensity::Run24, 12, false), "\\12\\");
         assert_eq!(format_run_symbol(RunDensity::Run32, 12, false), "=12=");
+    }
+
+    #[test]
+    fn stream_sequence_visitor_preserves_segment_boundaries() {
+        let measures = [16, 0, 0, 20, 0, 0];
+        let expected = [
+            StreamSegment {
+                start: 0,
+                end: 1,
+                is_break: false,
+            },
+            StreamSegment {
+                start: 1,
+                end: 3,
+                is_break: true,
+            },
+            StreamSegment {
+                start: 3,
+                end: 4,
+                is_break: false,
+            },
+            StreamSegment {
+                start: 4,
+                end: 6,
+                is_break: true,
+            },
+        ];
+        let mut actual = Vec::new();
+        visit_stream_sequences(&measures, |segment| {
+            actual.push(segment);
+            Ok::<(), std::convert::Infallible>(())
+        })
+        .expect("infallible segment visitor should succeed");
+        assert_eq!(actual, expected);
     }
 
     #[test]

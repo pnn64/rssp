@@ -9,6 +9,7 @@ pub use crate::streams::{
     categorize_measure_density, compute_stream_counts, compute_stream_outputs,
     compute_stream_outputs_with_scratch, format_run_symbol, generate_breakdown,
     generate_breakdowns, stream_breakdown, stream_breakdowns, stream_sequences,
+    visit_stream_sequences,
 };
 
 // ============================================================================

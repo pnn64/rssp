@@ -216,6 +216,70 @@ fn bench_nps_json(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_stream_json(c: &mut Criterion) {
+    let fixture = report_nps_bench::fixture();
+    let summary = rssp::analyze(&fixture, "ssc", &report_nps_bench::options())
+        .expect("stream JSON fixture should analyze");
+    let chart = summary
+        .charts
+        .first()
+        .expect("stream JSON fixture should contain a chart");
+
+    let mut group = c.benchmark_group("report_json_stream_sequences");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(report_nps_bench::MEASURE_COUNT as u64));
+    group.bench_function("materialized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_streams_materialized(
+                black_box(&mut output),
+                black_box(chart),
+            )
+            .expect("materialized stream JSON should write");
+            black_box(output);
+        });
+    });
+    group.bench_function("streamed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_streams(black_box(&mut output), black_box(chart))
+                .expect("streamed stream JSON should write");
+            black_box(output);
+        });
+    });
+    group.finish();
+
+    let mut group = c.benchmark_group("report_json_streams");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(report_nps_bench::MEASURE_COUNT as u64));
+    group.bench_function("materialized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_streams_report_materialized(
+                black_box(&summary),
+                black_box(&mut output),
+            )
+            .expect("materialized stream JSON report should write");
+            black_box(output);
+        });
+    });
+    group.bench_function("streamed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::report::write_reports(
+                black_box(&summary),
+                rssp::report::OutputMode::JSON,
+                black_box(&mut output),
+            )
+            .expect("streamed stream JSON report should write");
+            black_box(output);
+        });
+    });
+    group.finish();
+}
+
 fn bench_csv(c: &mut Criterion) {
     let summary =
         rssp::analyze(FIXTURE.as_bytes(), "ssc", &fast_options()).expect("fixture should analyze");
@@ -320,6 +384,7 @@ criterion_group!(
     bench_timing_snapshot,
     bench_timing_json,
     bench_nps_json,
+    bench_stream_json,
     bench_csv,
     bench_json,
     bench_course_json

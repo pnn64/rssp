@@ -12,7 +12,7 @@ use crate::math::{round_dp, round_sig_figs_6, round_sig_figs_itg, roundtrip_bpm_
 use crate::patterns::{CustomPatternSummary, PatternCounts, PatternVariant};
 use crate::stats::{
     ArrowStats, RADAR_CATEGORY_COUNT, StreamCounts, measure_equally_spaced, stream_sequences,
-    visit_measure_spacing,
+    visit_measure_spacing, visit_stream_sequences,
 };
 use crate::step_parity::{RowAnnotation, TechCounts};
 use crate::timing::{
@@ -1463,7 +1463,7 @@ mod tests {
 
             assert_eq!(actual, expected);
             let mut prior = Vec::new();
-            write_json_all_with::<_, true, false>(&summary, &mut prior)
+            write_json_all_with::<_, true, false, false>(&summary, &mut prior)
                 .expect("materialized timing arrays should write");
             assert_eq!(actual, prior);
             serde_json::from_slice::<serde_json::Value>(&actual)
@@ -3455,30 +3455,67 @@ fn write_json_stream_segment<W: Write>(
     object.finish()
 }
 
+fn write_json_stream_sequences_with<W: Write, const MATERIALIZE: bool>(
+    writer: &mut W,
+    measures: &[usize],
+    indent: usize,
+) -> io::Result<()> {
+    if MATERIALIZE {
+        let segments = stream_sequences(measures);
+        return write_json_multiline_array(
+            writer,
+            segments.len(),
+            indent,
+            |writer, index, item_indent| {
+                let segment = segments[index];
+                write_json_stream_segment(
+                    writer,
+                    item_indent,
+                    segment.start,
+                    segment.end,
+                    segment.is_break,
+                )
+            },
+        );
+    }
+
+    writer.write_all(b"[")?;
+    let item_indent = indent + 2;
+    let mut first = true;
+    visit_stream_sequences(measures, |segment| {
+        if first {
+            writer.write_all(b"\n")?;
+            first = false;
+        } else {
+            writer.write_all(b",\n")?;
+        }
+        write_indent(writer, item_indent)?;
+        write_json_stream_segment(
+            writer,
+            item_indent,
+            segment.start,
+            segment.end,
+            segment.is_break,
+        )
+    })?;
+    if first {
+        return writer.write_all(b"]");
+    }
+    writer.write_all(b"\n")?;
+    write_indent(writer, indent)?;
+    writer.write_all(b"]")
+}
+
+#[cfg(test)]
 fn write_json_stream_sequences<W: Write>(
     writer: &mut W,
     measures: &[usize],
     indent: usize,
 ) -> io::Result<()> {
-    let segments = stream_sequences(measures);
-    write_json_multiline_array(
-        writer,
-        segments.len(),
-        indent,
-        |writer, index, item_indent| {
-            let segment = segments[index];
-            write_json_stream_segment(
-                writer,
-                item_indent,
-                segment.start,
-                segment.end,
-                segment.is_break,
-            )
-        },
-    )
+    write_json_stream_sequences_with::<W, false>(writer, measures, indent)
 }
 
-fn write_json_stream_info<W: Write>(
+fn write_json_stream_info_with<W: Write, const MATERIALIZE: bool>(
     writer: &mut W,
     chart: &ChartSummary,
     indent: usize,
@@ -3500,7 +3537,7 @@ fn write_json_stream_info<W: Write>(
     object.field_f64("adj_stream_percent", adj_stream_percent)?;
     object.field_f64("break_percent", break_percent)?;
     object.field_with("stream_sequences", |writer, indent| {
-        write_json_stream_sequences(writer, &chart.measure_densities, indent)
+        write_json_stream_sequences_with::<W, MATERIALIZE>(writer, &chart.measure_densities, indent)
     })?;
     object.finish()
 }
@@ -4264,7 +4301,12 @@ fn write_json_pattern_counts<W: Write>(
     object.finish()
 }
 
-fn write_json_chart_with<W: Write, const MATERIALIZE_TIMING: bool, const MATERIALIZE_NPS: bool>(
+fn write_json_chart_with<
+    W: Write,
+    const MATERIALIZE_TIMING: bool,
+    const MATERIALIZE_NPS: bool,
+    const MATERIALIZE_STREAMS: bool,
+>(
     writer: &mut W,
     chart: &ChartSummary,
     simfile: &SimfileSummary,
@@ -4284,7 +4326,7 @@ fn write_json_chart_with<W: Write, const MATERIALIZE_TIMING: bool, const MATERIA
         write_json_timing_with::<W, MATERIALIZE_TIMING>(writer, chart, simfile, indent)
     })?;
     object.field_with("stream_info", |writer, indent| {
-        write_json_stream_info(writer, chart, indent)
+        write_json_stream_info_with::<W, MATERIALIZE_STREAMS>(writer, chart, indent)
     })?;
     object.field_with("nps", |writer, indent| {
         write_json_nps_with::<W, MATERIALIZE_NPS>(writer, chart, indent)
@@ -4317,7 +4359,7 @@ fn write_json_chart<W: Write>(
     simfile: &SimfileSummary,
     indent: usize,
 ) -> io::Result<()> {
-    write_json_chart_with::<W, false, false>(writer, chart, simfile, indent)
+    write_json_chart_with::<W, false, false, false>(writer, chart, simfile, indent)
 }
 
 #[cfg(test)]
@@ -4407,7 +4449,12 @@ fn write_json_all_materialized<W: Write>(
     writeln!(writer)
 }
 
-fn write_json_all_with<W: Write, const MATERIALIZE_TIMING: bool, const MATERIALIZE_NPS: bool>(
+fn write_json_all_with<
+    W: Write,
+    const MATERIALIZE_TIMING: bool,
+    const MATERIALIZE_NPS: bool,
+    const MATERIALIZE_STREAMS: bool,
+>(
     simfile: &SimfileSummary,
     writer: &mut W,
 ) -> io::Result<()> {
@@ -4440,7 +4487,12 @@ fn write_json_all_with<W: Write, const MATERIALIZE_TIMING: bool, const MATERIALI
             simfile.charts.len(),
             indent,
             |writer, idx, item_indent| {
-                write_json_chart_with::<W, MATERIALIZE_TIMING, MATERIALIZE_NPS>(
+                write_json_chart_with::<
+                    W,
+                    MATERIALIZE_TIMING,
+                    MATERIALIZE_NPS,
+                    MATERIALIZE_STREAMS,
+                >(
                     writer,
                     &simfile.charts[idx],
                     simfile,
@@ -4454,7 +4506,7 @@ fn write_json_all_with<W: Write, const MATERIALIZE_TIMING: bool, const MATERIALI
 }
 
 pub fn write_json_all<W: Write>(simfile: &SimfileSummary, writer: &mut W) -> io::Result<()> {
-    write_json_all_with::<W, false, false>(simfile, writer)
+    write_json_all_with::<W, false, false, false>(simfile, writer)
 }
 
 #[cfg(feature = "profile")]
@@ -4462,7 +4514,7 @@ pub(crate) fn profile_write_json_materialized<W: Write>(
     simfile: &SimfileSummary,
     writer: &mut W,
 ) -> io::Result<()> {
-    write_json_all_with::<W, true, false>(simfile, writer)
+    write_json_all_with::<W, true, false, false>(simfile, writer)
 }
 
 #[cfg(feature = "profile")]
@@ -4470,7 +4522,15 @@ pub(crate) fn profile_write_json_nps_materialized<W: Write>(
     simfile: &SimfileSummary,
     writer: &mut W,
 ) -> io::Result<()> {
-    write_json_all_with::<W, false, true>(simfile, writer)
+    write_json_all_with::<W, false, true, false>(simfile, writer)
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_write_json_streams_materialized<W: Write>(
+    simfile: &SimfileSummary,
+    writer: &mut W,
+) -> io::Result<()> {
+    write_json_all_with::<W, false, false, true>(simfile, writer)
 }
 
 #[cfg(feature = "profile")]
@@ -4488,6 +4548,14 @@ pub(crate) fn profile_write_json_nps<W: Write, const MATERIALIZE: bool>(
     chart: &ChartSummary,
 ) -> io::Result<()> {
     write_json_nps_with::<W, MATERIALIZE>(writer, chart, 0)
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_write_json_streams<W: Write, const MATERIALIZE: bool>(
+    writer: &mut W,
+    chart: &ChartSummary,
+) -> io::Result<()> {
+    write_json_stream_info_with::<W, MATERIALIZE>(writer, chart, 0)
 }
 
 const CSV_HEADER_BASE: &str = "Title,Subtitle,Artist,Title trans,Subtitle trans,Artist trans,Length,BPM,BPM Tier,min_bpm,max_bpm,average_bpm,median bpm,BPM-data,offset,file_md5_hash,step_type,difficulty,rating,step_artist,tech_notation,sha1_hash,bpm_neutral_hash,total_arrows,left_arrows,down_arrows,up_arrows,right_arrows,total_steps,jumps,hands,holds,rolls,mines,lifts,fakes,stops_freezes,delays,warps,speeds,scrolls,total_streams,16th_streams,20th_streams,24th_streams,32nd_streams,total_breaks,sn_breaks,stream_percent,adj_stream_percent,max_nps,median_nps,matrix_rating";

@@ -103,6 +103,7 @@ enum Mode {
     Json,
     JsonFull,
     JsonNps,
+    JsonStreams,
     JsonTiming,
     CourseJson,
     CourseCsv,
@@ -192,6 +193,7 @@ fn parse_args() -> (Mode, usize) {
                     "json" => Mode::Json,
                     "json-full" => Mode::JsonFull,
                     "json-nps" => Mode::JsonNps,
+                    "json-streams" => Mode::JsonStreams,
                     "json-timing" => Mode::JsonTiming,
                     "course-json" => Mode::CourseJson,
                     "course-csv" => Mode::CourseCsv,
@@ -275,7 +277,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
         },
-        Mode::JsonNps | Mode::JsonTiming => rssp::AnalysisOptions::default(),
+        Mode::JsonNps | Mode::JsonStreams | Mode::JsonTiming => rssp::AnalysisOptions::default(),
         Mode::Annotations => rssp::AnalysisOptions {
             mono_threshold: 6,
             compute_note_annotations: true,
@@ -370,6 +372,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::JsonNps => {
                 unreachable!("NPS JSON mode uses its dedicated allocation runner")
+            }
+            Mode::JsonStreams => {
+                unreachable!("stream JSON mode uses its dedicated allocation runner")
             }
             Mode::BackgroundChanges => {
                 unreachable!("background change mode uses its dedicated allocation runner")
@@ -581,6 +586,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Json => "json",
         Mode::JsonFull => "json-full",
         Mode::JsonNps => "json-nps",
+        Mode::JsonStreams => "json-streams",
         Mode::JsonTiming => "json-timing",
         Mode::CourseJson => "course-json",
         Mode::CourseCsv => "course-csv",
@@ -1359,14 +1365,16 @@ fn run_metadata_analyze_alloc(iterations: usize) {
     );
 }
 
-fn run_timing_json_phase(
+fn run_json_report_phase(
+    mode: &str,
     phase: &str,
+    item_count: usize,
     iterations: usize,
     summary: &rssp::report::SimfileSummary,
     write: impl Fn(&rssp::report::SimfileSummary, &mut Vec<u8>) -> std::io::Result<()>,
 ) {
     let mut warm_output = Vec::new();
-    write(summary, &mut warm_output).expect("timing JSON benchmark should write");
+    write(summary, &mut warm_output).expect("JSON benchmark should write");
     black_box(warm_output);
 
     reset_counters();
@@ -1375,8 +1383,7 @@ fn run_timing_json_phase(
     let mut checksum = 0usize;
     for _ in 0..iterations {
         let mut output = Vec::new();
-        write(black_box(summary), black_box(&mut output))
-            .expect("timing JSON benchmark should write");
+        write(black_box(summary), black_box(&mut output)).expect("JSON benchmark should write");
         checksum = checksum.wrapping_add(output.len());
         black_box(output);
     }
@@ -1385,17 +1392,18 @@ fn run_timing_json_phase(
     let divisor = iterations as f64;
     println!(
         concat!(
-            "mode=json-timing phase={} iters={} checksum={} elapsed_s={:.6} ",
-            "throughput_segments_s={:.3} alloc_calls_per_iter={:.1} ",
+            "mode={} phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_items_s={:.3} alloc_calls_per_iter={:.1} ",
             "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
             "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
             "live_growth_bytes={} peak_live_growth_bytes={}"
         ),
+        mode,
         phase,
         iterations,
         black_box(checksum),
         elapsed.as_secs_f64(),
-        report_timing_bench::SEGMENT_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        item_count as f64 * divisor / elapsed.as_secs_f64(),
         (after.alloc_calls - before.alloc_calls) as f64 / divisor,
         (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
         (after.realloc_calls - before.realloc_calls) as f64 / divisor,
@@ -1410,60 +1418,23 @@ fn run_timing_json_alloc(iterations: usize) {
     let fixture = report_timing_bench::fixture();
     let summary = rssp::analyze(fixture.as_bytes(), "ssc", &report_timing_bench::options())
         .expect("timing JSON benchmark should analyze");
-    run_timing_json_phase(
+    run_json_report_phase(
+        "json-timing",
         "materialized",
+        report_timing_bench::SEGMENT_COUNT,
         iterations,
         &summary,
         rssp::profile::write_json_materialized,
     );
-    run_timing_json_phase("streamed", iterations, &summary, |summary, output| {
-        rssp::report::write_reports(summary, rssp::report::OutputMode::JSON, output)
-    });
-}
-
-fn run_nps_json_phase(
-    phase: &str,
-    iterations: usize,
-    summary: &rssp::report::SimfileSummary,
-    write: impl Fn(&rssp::report::SimfileSummary, &mut Vec<u8>) -> std::io::Result<()>,
-) {
-    let mut warm_output = Vec::new();
-    write(summary, &mut warm_output).expect("NPS JSON benchmark should write");
-    black_box(warm_output);
-
-    reset_counters();
-    let before = Counters::read();
-    let start = Instant::now();
-    let mut checksum = 0usize;
-    for _ in 0..iterations {
-        let mut output = Vec::new();
-        write(black_box(summary), black_box(&mut output)).expect("NPS JSON benchmark should write");
-        checksum = checksum.wrapping_add(output.len());
-        black_box(output);
-    }
-    let elapsed = start.elapsed();
-    let after = Counters::read();
-    let divisor = iterations as f64;
-    println!(
-        concat!(
-            "mode=json-nps phase={} iters={} checksum={} elapsed_s={:.6} ",
-            "throughput_measures_s={:.3} alloc_calls_per_iter={:.1} ",
-            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
-            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
-            "live_growth_bytes={} peak_live_growth_bytes={}"
-        ),
-        phase,
+    run_json_report_phase(
+        "json-timing",
+        "streamed",
+        report_timing_bench::SEGMENT_COUNT,
         iterations,
-        black_box(checksum),
-        elapsed.as_secs_f64(),
-        report_nps_bench::MEASURE_COUNT as f64 * divisor / elapsed.as_secs_f64(),
-        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
-        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
-        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
-        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
-        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
-        after.live_bytes as isize - before.live_bytes as isize,
-        after.peak_live_bytes.saturating_sub(before.live_bytes),
+        &summary,
+        |summary, output| {
+            rssp::report::write_reports(summary, rssp::report::OutputMode::JSON, output)
+        },
     );
 }
 
@@ -1471,15 +1442,48 @@ fn run_nps_json_alloc(iterations: usize) {
     let fixture = report_nps_bench::fixture();
     let summary = rssp::analyze(&fixture, "ssc", &report_nps_bench::options())
         .expect("NPS JSON benchmark should analyze");
-    run_nps_json_phase(
+    run_json_report_phase(
+        "json-nps",
         "materialized",
+        report_nps_bench::MEASURE_COUNT,
         iterations,
         &summary,
         rssp::profile::write_json_nps_report_materialized,
     );
-    run_nps_json_phase("streamed", iterations, &summary, |summary, output| {
-        rssp::report::write_reports(summary, rssp::report::OutputMode::JSON, output)
-    });
+    run_json_report_phase(
+        "json-nps",
+        "streamed",
+        report_nps_bench::MEASURE_COUNT,
+        iterations,
+        &summary,
+        |summary, output| {
+            rssp::report::write_reports(summary, rssp::report::OutputMode::JSON, output)
+        },
+    );
+}
+
+fn run_stream_json_alloc(iterations: usize) {
+    let fixture = report_nps_bench::fixture();
+    let summary = rssp::analyze(&fixture, "ssc", &report_nps_bench::options())
+        .expect("stream JSON benchmark should analyze");
+    run_json_report_phase(
+        "json-streams",
+        "materialized",
+        report_nps_bench::MEASURE_COUNT,
+        iterations,
+        &summary,
+        rssp::profile::write_json_streams_report_materialized,
+    );
+    run_json_report_phase(
+        "json-streams",
+        "streamed",
+        report_nps_bench::MEASURE_COUNT,
+        iterations,
+        &summary,
+        |summary, output| {
+            rssp::report::write_reports(summary, rssp::report::OutputMode::JSON, output)
+        },
+    );
 }
 
 fn run_bgchanges_phase(
@@ -1858,6 +1862,10 @@ fn main() {
         }
         Mode::JsonNps => {
             run_nps_json_alloc(iterations);
+            return;
+        }
+        Mode::JsonStreams => {
+            run_stream_json_alloc(iterations);
             return;
         }
         Mode::JsonTiming => {
