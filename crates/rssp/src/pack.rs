@@ -68,12 +68,19 @@ fn sort_paths_ci(paths: &mut [PathBuf]) {
     paths.sort_by_cached_key(|p| assets::lc_name(p));
 }
 
+fn should_replace(first: Option<&Path>, candidate: &Path) -> bool {
+    first.is_none_or(|current| assets::cmp_name_ci(candidate, current).is_lt())
+}
+
 fn keep_first_path(first: &mut Option<PathBuf>, candidate: PathBuf) {
-    if first
-        .as_ref()
-        .is_none_or(|current| assets::cmp_name_ci(&candidate, current).is_lt())
-    {
+    if should_replace(first.as_deref(), &candidate) {
         *first = Some(candidate);
+    }
+}
+
+fn keep_first_ref(first: &mut Option<PathBuf>, candidate: &Path) {
+    if should_replace(first.as_deref(), candidate) {
+        *first = Some(candidate.to_path_buf());
     }
 }
 
@@ -218,11 +225,13 @@ fn pick_first_img(dir: &Path, mut matches: impl FnMut(&Path) -> bool) -> Option<
     first
 }
 
+#[cfg(any(test, feature = "profile"))]
 fn pick_pack_dir_img(pack_dir: &Path) -> Option<PathBuf> {
     pick_first_img(pack_dir, |_| true)
 }
 
-fn pick_ini_img(pack_dir: &Path, hint: &str) -> Option<PathBuf> {
+#[cfg(any(test, feature = "profile"))]
+fn pick_ini_img_legacy(pack_dir: &Path, hint: &str) -> Option<PathBuf> {
     let hint = hint.trim();
     if hint.is_empty() {
         return None;
@@ -234,6 +243,38 @@ fn pick_ini_img(pack_dir: &Path, hint: &str) -> Option<PathBuf> {
     } else {
         assets::is_dir_ci(pack_dir, subdir).unwrap_or_else(|| pack_dir.join(subdir))
     };
+    pick_first_img(&dir, |path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| assets::match_mask_ci(name, mask))
+    })
+}
+
+fn normalized_img_hint(hint: &str) -> Option<String> {
+    let hint = hint.trim();
+    (!hint.is_empty()).then(|| assets::to_slash(hint))
+}
+
+fn split_img_hint(hint: &str) -> (&str, &str) {
+    hint.rsplit_once('/').unwrap_or(("", hint))
+}
+
+fn root_img_mask(hint: Option<&str>) -> Option<&str> {
+    let (subdir, mask) = split_img_hint(hint?);
+    subdir.is_empty().then_some(mask)
+}
+
+fn pick_ini_img(
+    pack_dir: &Path,
+    hint: Option<&str>,
+    root_match: Option<PathBuf>,
+) -> Option<PathBuf> {
+    let hint = hint?;
+    let (subdir, mask) = split_img_hint(hint);
+    if subdir.is_empty() {
+        return root_match;
+    }
+    let dir = assets::is_dir_ci(pack_dir, subdir).unwrap_or_else(|| pack_dir.join(subdir));
     pick_first_img(&dir, |path| {
         path.file_name()
             .and_then(|name| name.to_str())
@@ -336,6 +377,145 @@ pub fn scan_song_dir(dir: &Path, opt: ScanOpt) -> Result<Option<SongScan>, ScanE
     }
 }
 
+struct PackRoot {
+    banner: Option<PathBuf>,
+    background: Option<PathBuf>,
+    songs: Vec<SongScan>,
+}
+
+struct RootEntries {
+    first_img: Option<PathBuf>,
+    banner: Option<PathBuf>,
+    background: Option<PathBuf>,
+    songs: Vec<SongScan>,
+}
+
+/// Takes one worker-owned snapshot of a pack root and releases it when the
+/// scan ends. It has no shared state, eviction, or gameplay miss path; memory
+/// is bounded by the returned songs plus three selected image paths, and work
+/// is one root entry visit plus each candidate song's normal scan.
+fn scan_root_entries(
+    dir: &Path,
+    opt: ScanOpt,
+    banner_mask: Option<&str>,
+    background_mask: Option<&str>,
+) -> Result<RootEntries, ScanError> {
+    let mut first_img = None;
+    let mut banner = None;
+    let mut background = None;
+    let mut songs = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path();
+        if assets::is_mac_resource_fork(&path) {
+            continue;
+        }
+        if path.is_dir() {
+            if let Some(song) = scan_song_dir(&path, opt)? {
+                songs.push(song);
+            }
+            continue;
+        }
+        if !path.is_file()
+            || path
+                .extension()
+                .and_then(|value| value.to_str())
+                .and_then(assets::img_rank)
+                .is_none()
+        {
+            continue;
+        }
+        keep_first_ref(&mut first_img, &path);
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if banner_mask.is_some_and(|mask| assets::match_mask_ci(name, mask)) {
+            keep_first_ref(&mut banner, &path);
+        }
+        if background_mask.is_some_and(|mask| assets::match_mask_ci(name, mask)) {
+            keep_first_ref(&mut background, &path);
+        }
+    }
+    Ok(RootEntries {
+        first_img,
+        banner,
+        background,
+        songs,
+    })
+}
+
+fn scan_pack_root(
+    dir: &Path,
+    opt: ScanOpt,
+    banner: &str,
+    background: &str,
+) -> Result<PackRoot, ScanError> {
+    let banner_hint = normalized_img_hint(banner);
+    let background_hint = normalized_img_hint(background);
+    let root = scan_root_entries(
+        dir,
+        opt,
+        root_img_mask(banner_hint.as_deref()),
+        root_img_mask(background_hint.as_deref()),
+    )?;
+    Ok(PackRoot {
+        banner: pick_ini_img(dir, banner_hint.as_deref(), root.banner).or(root.first_img),
+        background: pick_ini_img(dir, background_hint.as_deref(), root.background),
+        songs: root.songs,
+    })
+}
+
+#[cfg(any(test, feature = "profile"))]
+fn scan_pack_root_legacy(
+    dir: &Path,
+    opt: ScanOpt,
+    banner: &str,
+    background: &str,
+) -> Result<PackRoot, ScanError> {
+    let ini_banner = pick_ini_img_legacy(dir, banner);
+    let background = pick_ini_img_legacy(dir, background);
+    let banner = ini_banner.or_else(|| pick_pack_dir_img(dir));
+    let mut songs = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path();
+        if assets::is_mac_resource_fork(&path) || !path.is_dir() {
+            continue;
+        }
+        if let Some(song) = scan_song_dir(&path, opt)? {
+            songs.push(song);
+        }
+    }
+    Ok(PackRoot {
+        banner,
+        background,
+        songs,
+    })
+}
+
+#[cfg(feature = "profile")]
+pub(crate) type ProfilePackRoot = (Option<PathBuf>, Option<PathBuf>, Vec<SongScan>);
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_pack_root(
+    dir: &Path,
+    opt: ScanOpt,
+    banner: &str,
+    background: &str,
+    legacy: bool,
+) -> Result<ProfilePackRoot, ScanError> {
+    let root = if legacy {
+        scan_pack_root_legacy(dir, opt, banner, background)?
+    } else {
+        scan_pack_root(dir, opt, banner, background)?
+    };
+    Ok((root.banner, root.background, root.songs))
+}
+
 pub fn scan_pack_dir(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, ScanError> {
     if assets::is_mac_resource_fork(dir) || !dir.is_dir() {
         return Ok(None);
@@ -388,9 +568,8 @@ pub fn scan_pack_dir(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, ScanE
         SyncPref::Default
     };
 
-    let ini_banner = pick_ini_img(dir, &banner);
-    let ini_background = pick_ini_img(dir, &background);
-    let auto_background = if ini_background.is_none() {
+    let root = scan_pack_root(dir, opt, &banner, &background)?;
+    let auto_background = if root.background.is_none() {
         assets::resolve_song_assets(dir, "", "").1
     } else {
         None
@@ -398,27 +577,11 @@ pub fn scan_pack_dir(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, ScanE
 
     // ITGmania group banners are simpler than song assets: if the pack root
     // contains any image, the first one is treated as the group banner.
-    let banner_path = ini_banner
-        .or_else(|| pick_pack_dir_img(dir))
+    let banner_path = root
+        .banner
         .or_else(|| pick_pack_parent_img(dir, group_name));
-    let background_path = ini_background.or(auto_background);
-
-    let mut songs = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let Ok(entry) = entry else {
-            continue;
-        };
-        let path = entry.path();
-        if assets::is_mac_resource_fork(&path) {
-            continue;
-        }
-        if !path.is_dir() {
-            continue;
-        }
-        if let Some(song) = scan_song_dir(&path, opt)? {
-            songs.push(song);
-        }
-    }
+    let background_path = root.background.or(auto_background);
+    let songs = root.songs;
 
     if songs.is_empty() {
         return Ok(None);
@@ -497,7 +660,8 @@ pub fn find_simfiles(root: &Path, opt: ScanOpt) -> Vec<PathBuf> {
 mod tests {
     use super::{
         DupPolicy, PackIniRaw, ScanError, ScanOpt, find_simfiles, parse_pack_ini,
-        pick_pack_parent_img, scan_pack_dir, scan_song_dir, scan_songs_dir,
+        pick_pack_parent_img, scan_pack_dir, scan_pack_root, scan_pack_root_legacy, scan_song_dir,
+        scan_songs_dir,
     };
     use crate::assets;
     use std::fs;
@@ -688,6 +852,51 @@ mod tests {
         let scan = scan_pack_dir(&root, ScanOpt::default()).unwrap().unwrap();
         assert_eq!(scan.banner_path, Some(root.join("alpha.png")));
         assert_eq!(scan.background_path, Some(root.join("backA.jpg")));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn one_pass_pack_root_matches_repeated_scans() {
+        let root = test_dir("one-pass-root-parity");
+        for name in ["Zeta.png", "alpha.png", "backB.jpg", "backA.jpg"] {
+            write_file(&root.join(name));
+        }
+        write_file(&root.join("._ignored.png"));
+        let images = root.join("Images");
+        fs::create_dir(&images).unwrap();
+        write_file(&images.join("BannerZ.PNG"));
+        write_file(&images.join("bannerA.png"));
+        for name in ["SongB", "SongA"] {
+            let song = root.join(name);
+            fs::create_dir(&song).unwrap();
+            write_file(&song.join("chart.ssc"));
+            write_file(&song.join("fallback.sm"));
+        }
+
+        for (banner, background, expected_banner, expected_background) in [
+            (
+                "Images/banner*.png",
+                "back*.jpg",
+                images.join("bannerA.png"),
+                Some(root.join("backA.jpg")),
+            ),
+            ("missing*.png", "missing*.jpg", root.join("alpha.png"), None),
+        ] {
+            let legacy =
+                scan_pack_root_legacy(&root, ScanOpt::default(), banner, background).unwrap();
+            let one_pass = scan_pack_root(&root, ScanOpt::default(), banner, background).unwrap();
+            assert_eq!(one_pass.banner, legacy.banner);
+            assert_eq!(one_pass.background, legacy.background);
+            assert_eq!(one_pass.banner, Some(expected_banner));
+            assert_eq!(one_pass.background, expected_background);
+            assert_eq!(one_pass.songs.len(), legacy.songs.len());
+            for (actual, expected) in one_pass.songs.iter().zip(&legacy.songs) {
+                assert_eq!(actual.dir, expected.dir);
+                assert_eq!(actual.simfile, expected.simfile);
+                assert_eq!(actual.extension, expected.extension);
+            }
+        }
 
         let _ = fs::remove_dir_all(root);
     }

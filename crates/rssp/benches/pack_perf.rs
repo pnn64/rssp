@@ -30,6 +30,43 @@ fn bench_pack_scan(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_pack_root(c: &mut Criterion) {
+    let fixture = pack_bench::PackFixture::new();
+    let opt = rssp::pack::ScanOpt::default();
+
+    let mut group = c.benchmark_group("pack_root_discovery");
+    group.sample_size(20);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(pack_bench::ROOT_ENTRY_COUNT as u64));
+    group.bench_function("legacy_repeated_scans", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::profile::pack_root_legacy(
+                    black_box(fixture.pack_dir()),
+                    black_box(opt),
+                    black_box(pack_bench::BANNER_HINT),
+                    black_box(pack_bench::BACKGROUND_HINT),
+                )
+                .expect("benchmark pack root should scan"),
+            )
+        });
+    });
+    group.bench_function("one_pass", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::profile::pack_root(
+                    black_box(fixture.pack_dir()),
+                    black_box(opt),
+                    black_box(pack_bench::BANNER_HINT),
+                    black_box(pack_bench::BACKGROUND_HINT),
+                )
+                .expect("benchmark pack root should scan"),
+            )
+        });
+    });
+    group.finish();
+}
+
 fn bench_background_changes(c: &mut Criterion) {
     let fixture = assets_bench::AssetFixture::new();
 
@@ -248,6 +285,7 @@ fn bench_selection_algorithms(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_pack_scan,
+    bench_pack_root,
     bench_background_changes,
     bench_asset_fallbacks,
     bench_song_assets,

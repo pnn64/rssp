@@ -13,6 +13,10 @@ pub mod profile {
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
 
+    use crate::pack::{ScanError, ScanOpt, SongScan};
+
+    pub type PackRootResult = (Option<PathBuf>, Option<PathBuf>, Vec<SongScan>);
+
     #[must_use]
     pub fn first_path_ci(paths: &[PathBuf]) -> Option<&Path> {
         paths
@@ -52,6 +56,24 @@ pub mod profile {
     #[must_use]
     pub fn name_eq_ci(actual: &OsStr, expected: &str) -> bool {
         crate::assets::name_eq_ci(actual, expected)
+    }
+
+    pub fn pack_root(
+        dir: &Path,
+        opt: ScanOpt,
+        banner: &str,
+        background: &str,
+    ) -> Result<PackRootResult, ScanError> {
+        crate::pack::profile_pack_root(dir, opt, banner, background, false)
+    }
+
+    pub fn pack_root_legacy(
+        dir: &Path,
+        opt: ScanOpt,
+        banner: &str,
+        background: &str,
+    ) -> Result<PackRootResult, ScanError> {
+        crate::pack::profile_pack_root(dir, opt, banner, background, true)
     }
 }
 

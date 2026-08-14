@@ -12,6 +12,9 @@ use std::time::Duration;
 #[path = "support/course.rs"]
 mod course_bench;
 #[cfg(windows)]
+#[path = "support/pack.rs"]
+mod pack_bench;
+#[cfg(windows)]
 #[path = "support/step_parity.rs"]
 mod step_parity_bench;
 
@@ -593,6 +596,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let mut stream_tokens = Vec::new();
     let course_fixture = course_bench::CourseFixture::new();
     let course_options = course_bench::fast_options();
+    let pack_fixture = pack_bench::PackFixture::new();
 
     let mut optimizations = c.benchmark_group("cycles/optimizations");
     optimizations.sample_size(100);
@@ -787,6 +791,38 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     course.finish();
+
+    let mut pack = c.benchmark_group("cycles/pack_root_discovery");
+    pack.sample_size(20);
+    pack.measurement_time(Duration::from_secs(3));
+    pack.throughput(Throughput::Elements(pack_bench::ROOT_ENTRY_COUNT as u64));
+    pack.bench_function("legacy_repeated_scans", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::profile::pack_root_legacy(
+                    black_box(pack_fixture.pack_dir()),
+                    black_box(rssp::pack::ScanOpt::default()),
+                    black_box(pack_bench::BANNER_HINT),
+                    black_box(pack_bench::BACKGROUND_HINT),
+                )
+                .expect("benchmark pack root should scan"),
+            )
+        });
+    });
+    pack.bench_function("one_pass", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::profile::pack_root(
+                    black_box(pack_fixture.pack_dir()),
+                    black_box(rssp::pack::ScanOpt::default()),
+                    black_box(pack_bench::BANNER_HINT),
+                    black_box(pack_bench::BACKGROUND_HINT),
+                )
+                .expect("benchmark pack root should scan"),
+            )
+        });
+    });
+    pack.finish();
 
     let mut analysis = c.benchmark_group("cycles/analysis_scratch");
     analysis.sample_size(10);

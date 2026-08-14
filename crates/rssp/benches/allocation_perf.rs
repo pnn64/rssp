@@ -104,6 +104,7 @@ enum Mode {
     CourseCsv,
     CourseAnalyze,
     CourseStepType,
+    PackRoot,
     PackScan,
     BackgroundChanges,
     AssetFallbacks,
@@ -191,6 +192,7 @@ fn parse_args() -> (Mode, usize) {
                     "course-csv" => Mode::CourseCsv,
                     "course-analyze" => Mode::CourseAnalyze,
                     "course-stepstype" => Mode::CourseStepType,
+                    "pack-root" => Mode::PackRoot,
                     "pack-scan" => Mode::PackScan,
                     "background-changes" => Mode::BackgroundChanges,
                     "asset-fallbacks" => Mode::AssetFallbacks,
@@ -256,6 +258,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         },
         Mode::CourseAnalyze => rssp::AnalysisOptions::default(),
         Mode::CourseStepType => rssp::AnalysisOptions::default(),
+        Mode::PackRoot => rssp::AnalysisOptions::default(),
         Mode::PackScan => rssp::AnalysisOptions::default(),
         Mode::BackgroundChanges => rssp::AnalysisOptions::default(),
         Mode::AssetFallbacks => rssp::AnalysisOptions::default(),
@@ -383,6 +386,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::CourseStepType => {
                 unreachable!("course step-type mode uses its dedicated allocation runner")
+            }
+            Mode::PackRoot => {
+                unreachable!("pack root mode uses its dedicated allocation runner")
             }
             Mode::PackScan => {
                 unreachable!("pack scan mode uses its dedicated allocation runner")
@@ -571,6 +577,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::CourseCsv => "course-csv",
         Mode::CourseAnalyze => "course-analyze",
         Mode::CourseStepType => "course-stepstype",
+        Mode::PackRoot => "pack-root",
         Mode::PackScan => "pack-scan",
         Mode::BackgroundChanges => "background-changes",
         Mode::AssetFallbacks => "asset-fallbacks",
@@ -1189,6 +1196,70 @@ fn run_stepstype_alloc(iterations: usize) {
     });
 }
 
+fn run_pack_root_phase(phase: &str, iterations: usize, legacy: bool) {
+    let fixture = pack_bench::PackFixture::new();
+    let scan = |legacy| {
+        if legacy {
+            rssp::profile::pack_root_legacy(
+                fixture.pack_dir(),
+                rssp::pack::ScanOpt::default(),
+                pack_bench::BANNER_HINT,
+                pack_bench::BACKGROUND_HINT,
+            )
+        } else {
+            rssp::profile::pack_root(
+                fixture.pack_dir(),
+                rssp::pack::ScanOpt::default(),
+                pack_bench::BANNER_HINT,
+                pack_bench::BACKGROUND_HINT,
+            )
+        }
+    };
+    black_box(scan(legacy).expect("benchmark pack root should scan"));
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let (banner, background, songs) = scan(legacy).expect("benchmark pack root should scan");
+        checksum = checksum
+            .wrapping_add(banner.is_some() as usize)
+            .wrapping_add(background.is_some() as usize)
+            .wrapping_add(songs.len());
+        black_box((banner, background, songs));
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=pack-root phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_entries_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        pack_bench::ROOT_ENTRY_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_pack_root_alloc(iterations: usize) {
+    run_pack_root_phase("legacy-repeated-scans", iterations, true);
+    run_pack_root_phase("one-pass", iterations, false);
+}
+
 fn run_pack_scan_alloc(iterations: usize) {
     let fixture = pack_bench::PackFixture::new();
     black_box(
@@ -1660,6 +1731,10 @@ fn main() {
         }
         Mode::CourseStepType => {
             run_stepstype_alloc(iterations);
+            return;
+        }
+        Mode::PackRoot => {
+            run_pack_root_alloc(iterations);
             return;
         }
         Mode::PackScan => {

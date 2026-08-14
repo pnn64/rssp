@@ -2,6 +2,9 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 pub const SONG_COUNT: usize = 64;
+pub const ROOT_ENTRY_COUNT: usize = 1 + 128 + SONG_COUNT;
+pub const BANNER_HINT: &str = "missing*.png";
+pub const BACKGROUND_HINT: &str = "background*.jpg";
 
 pub struct PackFixture {
     root: PathBuf,
@@ -22,7 +25,7 @@ impl PackFixture {
         let mut pack_ini = String::new();
         writeln!(
             &mut pack_ini,
-            "[Group]\nVersion=1\nBanner=missing*.png\nBackground=background*.jpg"
+            "[Group]\nVersion=1\nBanner={BANNER_HINT}\nBackground={BACKGROUND_HINT}"
         )
         .expect("writing to a String should succeed");
         std::fs::write(pack_dir.join("Pack.ini"), pack_ini)
