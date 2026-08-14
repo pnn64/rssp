@@ -1481,7 +1481,7 @@ mod tests {
 
             assert_eq!(actual, expected);
             let mut prior = Vec::new();
-            write_json_all_with::<_, true, false, false, false>(&summary, &mut prior)
+            write_json_all_with::<_, true, false, false, false, false>(&summary, &mut prior)
                 .expect("materialized timing arrays should write");
             assert_eq!(actual, prior);
             serde_json::from_slice::<serde_json::Value>(&actual)
@@ -1566,7 +1566,9 @@ mod tests {
         fast_options.compute_tech_counts = false;
         fast_options.compute_pattern_counts = false;
         let mut custom_options = crate::AnalysisOptions::default();
-        custom_options.custom_patterns = vec!["LDU".to_string(), "RUR".to_string()];
+        custom_options.custom_patterns = ["RUR", "L\"U", "LDU", "D\\R", "rur"]
+            .map(str::to_string)
+            .into();
 
         for options in &[
             crate::AnalysisOptions::default(),
@@ -4058,7 +4060,7 @@ fn write_json_nps_with<W: Write, const MATERIALIZE: bool>(
     object.finish()
 }
 
-fn write_json_pattern_counts<W: Write>(
+fn write_json_pattern_counts_with<W: Write, const MATERIALIZE_CUSTOM: bool>(
     writer: &mut W,
     chart: &ChartSummary,
     indent: usize,
@@ -4362,12 +4364,22 @@ fn write_json_pattern_counts<W: Write>(
         )?;
     }
 
-    if !chart.custom_patterns.is_empty() {
+    if MATERIALIZE_CUSTOM && !chart.custom_patterns.is_empty() {
         let mut custom = JsonMap::new();
         for pattern in &chart.custom_patterns {
             custom.insert(pattern.pattern.clone(), JsonValue::from(pattern.count));
         }
         object.field_value("custom_patterns", &JsonValue::Object(custom))?;
+    } else if !chart.custom_patterns.is_empty() {
+        object.field_with("custom_patterns", |writer, indent| {
+            let mut custom = JsonObjectWriter::new(writer, indent)?;
+            // Analysis deduplicates names and retains their stable input order,
+            // matching serde_json's preserve_order map without rebuilding it.
+            for pattern in &chart.custom_patterns {
+                custom.field_u32(&pattern.pattern, pattern.count)?;
+            }
+            custom.finish()
+        })?;
     }
     object.finish()
 }
@@ -4378,6 +4390,7 @@ fn write_json_chart_with<
     const MATERIALIZE_NPS: bool,
     const MATERIALIZE_STREAMS: bool,
     const MATERIALIZE_BPM_TEXT: bool,
+    const MATERIALIZE_CUSTOM: bool,
 >(
     writer: &mut W,
     chart: &ChartSummary,
@@ -4416,7 +4429,7 @@ fn write_json_chart_with<
             write_json_mono_candle_stats(writer, chart, indent)
         })?;
         object.field_with("pattern_counts", |writer, indent| {
-            write_json_pattern_counts(writer, chart, indent)
+            write_json_pattern_counts_with::<W, MATERIALIZE_CUSTOM>(writer, chart, indent)
         })?;
     }
     if simfile.tech_counts_enabled {
@@ -4433,7 +4446,7 @@ fn write_json_chart<W: Write>(
     simfile: &SimfileSummary,
     indent: usize,
 ) -> io::Result<()> {
-    write_json_chart_with::<W, false, false, false, false>(writer, chart, simfile, indent)
+    write_json_chart_with::<W, false, false, false, false, false>(writer, chart, simfile, indent)
 }
 
 #[cfg(test)]
@@ -4529,6 +4542,7 @@ fn write_json_all_with<
     const MATERIALIZE_NPS: bool,
     const MATERIALIZE_STREAMS: bool,
     const MATERIALIZE_BPM_TEXT: bool,
+    const MATERIALIZE_CUSTOM: bool,
 >(
     simfile: &SimfileSummary,
     writer: &mut W,
@@ -4568,6 +4582,7 @@ fn write_json_all_with<
                     MATERIALIZE_NPS,
                     MATERIALIZE_STREAMS,
                     MATERIALIZE_BPM_TEXT,
+                    MATERIALIZE_CUSTOM,
                 >(writer, &simfile.charts[idx], simfile, item_indent)
             },
         )
@@ -4577,7 +4592,7 @@ fn write_json_all_with<
 }
 
 pub fn write_json_all<W: Write>(simfile: &SimfileSummary, writer: &mut W) -> io::Result<()> {
-    write_json_all_with::<W, false, false, false, false>(simfile, writer)
+    write_json_all_with::<W, false, false, false, false, false>(simfile, writer)
 }
 
 #[cfg(feature = "profile")]
@@ -4585,7 +4600,7 @@ pub(crate) fn profile_write_json_materialized<W: Write>(
     simfile: &SimfileSummary,
     writer: &mut W,
 ) -> io::Result<()> {
-    write_json_all_with::<W, true, false, false, false>(simfile, writer)
+    write_json_all_with::<W, true, false, false, false, false>(simfile, writer)
 }
 
 #[cfg(feature = "profile")]
@@ -4593,7 +4608,7 @@ pub(crate) fn profile_write_json_nps_materialized<W: Write>(
     simfile: &SimfileSummary,
     writer: &mut W,
 ) -> io::Result<()> {
-    write_json_all_with::<W, false, true, false, false>(simfile, writer)
+    write_json_all_with::<W, false, true, false, false, false>(simfile, writer)
 }
 
 #[cfg(feature = "profile")]
@@ -4601,7 +4616,7 @@ pub(crate) fn profile_write_json_streams_materialized<W: Write>(
     simfile: &SimfileSummary,
     writer: &mut W,
 ) -> io::Result<()> {
-    write_json_all_with::<W, false, false, true, false>(simfile, writer)
+    write_json_all_with::<W, false, false, true, false, false>(simfile, writer)
 }
 
 #[cfg(feature = "profile")]
@@ -4609,7 +4624,23 @@ pub(crate) fn profile_write_json_bpm_text_materialized<W: Write>(
     simfile: &SimfileSummary,
     writer: &mut W,
 ) -> io::Result<()> {
-    write_json_all_with::<W, false, false, false, true>(simfile, writer)
+    write_json_all_with::<W, false, false, false, true, false>(simfile, writer)
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_write_json_custom_report_materialized<W: Write>(
+    simfile: &SimfileSummary,
+    writer: &mut W,
+) -> io::Result<()> {
+    write_json_all_with::<W, false, false, false, false, true>(simfile, writer)
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_write_json_pattern_counts<W: Write, const MATERIALIZE: bool>(
+    writer: &mut W,
+    chart: &ChartSummary,
+) -> io::Result<()> {
+    write_json_pattern_counts_with::<W, MATERIALIZE>(writer, chart, 0)
 }
 
 #[cfg(feature = "profile")]

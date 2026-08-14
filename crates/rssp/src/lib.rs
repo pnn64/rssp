@@ -191,6 +191,27 @@ pub mod profile {
     ) -> std::io::Result<()> {
         crate::report::profile_write_json_streams::<W, true>(writer, chart)
     }
+
+    pub fn write_json_custom_report_materialized<W: std::io::Write>(
+        simfile: &crate::report::SimfileSummary,
+        writer: &mut W,
+    ) -> std::io::Result<()> {
+        crate::report::profile_write_json_custom_report_materialized(simfile, writer)
+    }
+
+    pub fn write_json_custom_patterns<W: std::io::Write>(
+        writer: &mut W,
+        chart: &crate::report::ChartSummary,
+    ) -> std::io::Result<()> {
+        crate::report::profile_write_json_pattern_counts::<W, false>(writer, chart)
+    }
+
+    pub fn write_json_custom_patterns_materialized<W: std::io::Write>(
+        writer: &mut W,
+        chart: &crate::report::ChartSummary,
+    ) -> std::io::Result<()> {
+        crate::report::profile_write_json_pattern_counts::<W, true>(writer, chart)
+    }
 }
 
 pub use rssp_core::{

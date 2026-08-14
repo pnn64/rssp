@@ -24,6 +24,9 @@ mod pack_bench;
 #[path = "support/report_nps.rs"]
 mod report_nps_bench;
 #[cfg(windows)]
+#[path = "support/report_patterns.rs"]
+mod report_patterns_bench;
+#[cfg(windows)]
 #[path = "support/report_timing.rs"]
 mod report_timing_bench;
 #[cfg(windows)]
@@ -644,6 +647,16 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         .charts
         .first()
         .expect("hash BPM cycle fixture should contain a legacy chart");
+    let custom_report_summary = report_patterns_bench::summary();
+    let custom_report_chart = custom_report_summary
+        .charts
+        .first()
+        .expect("custom pattern cycle fixture should contain a chart");
+    let custom_report_patterns = custom_report_summary
+        .charts
+        .iter()
+        .map(|chart| chart.custom_patterns.len())
+        .sum::<usize>();
     let nps_report_fixture = report_nps_bench::fixture();
     let nps_report_summary =
         rssp::analyze(&nps_report_fixture, "ssc", &report_nps_bench::options())
@@ -1084,6 +1097,65 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     hash_bpms_full.finish();
+
+    let mut custom_patterns = c.benchmark_group("cycles/report_json_custom_patterns");
+    custom_patterns.sample_size(20);
+    custom_patterns.measurement_time(Duration::from_secs(3));
+    custom_patterns.throughput(Throughput::Elements(
+        custom_report_chart.custom_patterns.len() as u64,
+    ));
+    custom_patterns.bench_function("materialized_map", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_custom_patterns_materialized(
+                black_box(&mut output),
+                black_box(custom_report_chart),
+            )
+            .expect("materialized custom pattern JSON should write");
+            black_box(output)
+        });
+    });
+    custom_patterns.bench_function("streamed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_custom_patterns(
+                black_box(&mut output),
+                black_box(custom_report_chart),
+            )
+            .expect("streamed custom pattern JSON should write");
+            black_box(output)
+        });
+    });
+    custom_patterns.finish();
+
+    let mut custom_patterns_full = c.benchmark_group("cycles/report_json_custom_patterns_full");
+    custom_patterns_full.sample_size(20);
+    custom_patterns_full.measurement_time(Duration::from_secs(3));
+    custom_patterns_full.throughput(Throughput::Elements(custom_report_patterns as u64));
+    custom_patterns_full.bench_function("materialized_map", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_custom_report_materialized(
+                black_box(&custom_report_summary),
+                black_box(&mut output),
+            )
+            .expect("materialized custom pattern report should write");
+            black_box(output)
+        });
+    });
+    custom_patterns_full.bench_function("streamed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::report::write_reports(
+                black_box(&custom_report_summary),
+                rssp::report::OutputMode::JSON,
+                black_box(&mut output),
+            )
+            .expect("streamed custom pattern report should write");
+            black_box(output)
+        });
+    });
+    custom_patterns_full.finish();
 
     let mut timing_arrays = c.benchmark_group("cycles/report_json_timing_arrays");
     timing_arrays.sample_size(20);

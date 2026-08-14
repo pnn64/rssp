@@ -16,6 +16,8 @@ mod metadata_bench;
 mod pack_bench;
 #[path = "support/report_nps.rs"]
 mod report_nps_bench;
+#[path = "support/report_patterns.rs"]
+mod report_patterns_bench;
 #[path = "support/report_timing.rs"]
 mod report_timing_bench;
 #[path = "support/step_parity.rs"]
@@ -102,6 +104,7 @@ enum Mode {
     Csv,
     Json,
     JsonBpmText,
+    JsonCustomPatterns,
     JsonFull,
     JsonHashBpms,
     JsonNps,
@@ -194,6 +197,7 @@ fn parse_args() -> (Mode, usize) {
                     "csv" => Mode::Csv,
                     "json" => Mode::Json,
                     "json-bpm-text" => Mode::JsonBpmText,
+                    "json-custom-patterns" => Mode::JsonCustomPatterns,
                     "json-full" => Mode::JsonFull,
                     "json-hash-bpms" => Mode::JsonHashBpms,
                     "json-nps" => Mode::JsonNps,
@@ -282,6 +286,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             ..rssp::AnalysisOptions::default()
         },
         Mode::JsonBpmText
+        | Mode::JsonCustomPatterns
         | Mode::JsonHashBpms
         | Mode::JsonNps
         | Mode::JsonStreams
@@ -383,6 +388,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::JsonBpmText => {
                 unreachable!("BPM text JSON mode uses its dedicated allocation runner")
+            }
+            Mode::JsonCustomPatterns => {
+                unreachable!("custom pattern JSON mode uses its dedicated allocation runner")
             }
             Mode::JsonHashBpms => {
                 unreachable!("hash BPM JSON mode uses its dedicated allocation runner")
@@ -599,6 +607,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Csv => "csv",
         Mode::Json => "json",
         Mode::JsonBpmText => "json-bpm-text",
+        Mode::JsonCustomPatterns => "json-custom-patterns",
         Mode::JsonFull => "json-full",
         Mode::JsonHashBpms => "json-hash-bpms",
         Mode::JsonNps => "json-nps",
@@ -1510,6 +1519,33 @@ fn run_hash_bpms_json_alloc(iterations: usize) {
     );
 }
 
+fn run_custom_pattern_json_alloc(iterations: usize) {
+    let summary = report_patterns_bench::summary();
+    let pattern_count = summary
+        .charts
+        .iter()
+        .map(|chart| chart.custom_patterns.len())
+        .sum();
+    run_json_report_phase(
+        "json-custom-patterns",
+        "materialized-map",
+        pattern_count,
+        iterations,
+        &summary,
+        rssp::profile::write_json_custom_report_materialized,
+    );
+    run_json_report_phase(
+        "json-custom-patterns",
+        "streamed",
+        pattern_count,
+        iterations,
+        &summary,
+        |summary, output| {
+            rssp::report::write_reports(summary, rssp::report::OutputMode::JSON, output)
+        },
+    );
+}
+
 fn run_nps_json_alloc(iterations: usize) {
     let fixture = report_nps_bench::fixture();
     let summary = rssp::analyze(&fixture, "ssc", &report_nps_bench::options())
@@ -1938,6 +1974,10 @@ fn main() {
         }
         Mode::JsonBpmText => {
             run_bpm_text_json_alloc(iterations);
+            return;
+        }
+        Mode::JsonCustomPatterns => {
+            run_custom_pattern_json_alloc(iterations);
             return;
         }
         Mode::JsonHashBpms => {

@@ -6,6 +6,8 @@ const FIXTURE: &str = include_str!("fixtures/camellia_mix.ssc");
 
 #[path = "support/report_nps.rs"]
 mod report_nps_bench;
+#[path = "support/report_patterns.rs"]
+mod report_patterns_bench;
 #[path = "support/report_timing.rs"]
 mod report_timing_bench;
 
@@ -427,6 +429,73 @@ fn bench_stream_json(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_custom_pattern_json(c: &mut Criterion) {
+    let summary = report_patterns_bench::summary();
+    let chart = summary
+        .charts
+        .first()
+        .expect("custom pattern JSON fixture should contain a chart");
+    let report_patterns = summary
+        .charts
+        .iter()
+        .map(|chart| chart.custom_patterns.len())
+        .sum::<usize>();
+
+    let mut group = c.benchmark_group("report_json_custom_patterns");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(chart.custom_patterns.len() as u64));
+    group.bench_function("materialized_map", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_custom_patterns_materialized(
+                black_box(&mut output),
+                black_box(chart),
+            )
+            .expect("materialized custom pattern JSON should write");
+            black_box(output);
+        });
+    });
+    group.bench_function("streamed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_custom_patterns(black_box(&mut output), black_box(chart))
+                .expect("streamed custom pattern JSON should write");
+            black_box(output);
+        });
+    });
+    group.finish();
+
+    let mut group = c.benchmark_group("report_json_custom_patterns_full");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(report_patterns as u64));
+    group.bench_function("materialized_map", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_custom_report_materialized(
+                black_box(&summary),
+                black_box(&mut output),
+            )
+            .expect("materialized custom pattern report should write");
+            black_box(output);
+        });
+    });
+    group.bench_function("streamed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::report::write_reports(
+                black_box(&summary),
+                rssp::report::OutputMode::JSON,
+                black_box(&mut output),
+            )
+            .expect("streamed custom pattern report should write");
+            black_box(output);
+        });
+    });
+    group.finish();
+}
+
 fn bench_csv(c: &mut Criterion) {
     let summary =
         rssp::analyze(FIXTURE.as_bytes(), "ssc", &fast_options()).expect("fixture should analyze");
@@ -533,6 +602,7 @@ criterion_group!(
     bench_hash_bpms_json,
     bench_nps_json,
     bench_stream_json,
+    bench_custom_pattern_json,
     bench_csv,
     bench_json,
     bench_course_json
