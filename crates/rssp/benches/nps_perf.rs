@@ -1,4 +1,4 @@
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -454,15 +454,36 @@ fn equally_spaced_chart(measures: usize, rows_per_measure: usize) -> Vec<u8> {
 
 fn bench_equally_spaced(c: &mut Criterion) {
     let chart = equally_spaced_chart(1_024, 48);
+    let minimized = rssp::stats::minimize_chart_for_hash(&chart, 4);
     let mut group = c.benchmark_group("equally_spaced");
     group.sample_size(100);
     group.measurement_time(Duration::from_secs(2));
+    group.throughput(Throughput::Elements(1_024));
     group.bench_function("dense_chart", |b| {
         b.iter(|| {
             black_box(rssp::stats::measure_equally_spaced(
                 black_box(&chart),
                 black_box(4),
             ));
+        });
+    });
+    group.bench_function("materialized_minimized", |b| {
+        b.iter(|| {
+            black_box(rssp::stats::measure_equally_spaced(
+                black_box(&minimized),
+                black_box(4),
+            ));
+        });
+    });
+    group.bench_function("visitor_minimized", |b| {
+        b.iter(|| {
+            let mut checksum = 0usize;
+            rssp::stats::visit_measure_spacing(black_box(&minimized), black_box(4), |spaced| {
+                checksum = checksum.wrapping_add(usize::from(spaced));
+                Ok::<(), std::convert::Infallible>(())
+            })
+            .expect("infallible spacing visitor should succeed");
+            black_box(checksum);
         });
     });
     group.finish();

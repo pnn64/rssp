@@ -585,6 +585,8 @@ mod tests {
             20000000\n\
             00000000\n\
             30000000\n;";
+        let chart5 = b"10000\n01000\n,\n20000\n00000\n30000\n;";
+        let chart10 = b"1000000000\n0000010000\n,\n2000000000\n0000000000\n3000000000\n;";
 
         assert_eq!(
             measure_equally_spaced(chart4, 4),
@@ -594,6 +596,23 @@ mod tests {
             measure_equally_spaced(chart8, 8),
             equally_spaced_reference(chart8, 8)
         );
+
+        for (chart, lanes) in [
+            (chart4.as_slice(), 4),
+            (chart5.as_slice(), 5),
+            (chart8.as_slice(), 8),
+            (chart10.as_slice(), 10),
+        ] {
+            let minimized = crate::stats::minimize_chart_for_hash(chart, lanes);
+            let expected = measure_equally_spaced(&minimized, lanes);
+            let mut actual = Vec::new();
+            crate::stats::visit_measure_spacing(&minimized, lanes, |spaced| {
+                actual.push(spaced);
+                Ok::<(), std::convert::Infallible>(())
+            })
+            .expect("infallible spacing visitor should succeed");
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]

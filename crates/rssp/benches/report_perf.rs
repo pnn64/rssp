@@ -4,6 +4,8 @@ use std::time::Duration;
 
 const FIXTURE: &str = include_str!("fixtures/camellia_mix.ssc");
 
+#[path = "support/report_nps.rs"]
+mod report_nps_bench;
 #[path = "support/report_timing.rs"]
 mod report_timing_bench;
 
@@ -153,6 +155,67 @@ fn bench_timing_json(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_nps_json(c: &mut Criterion) {
+    let fixture = report_nps_bench::fixture();
+    let summary = rssp::analyze(&fixture, "ssc", &report_nps_bench::options())
+        .expect("NPS JSON fixture should analyze");
+    let chart = summary
+        .charts
+        .first()
+        .expect("NPS JSON fixture should contain a chart");
+
+    let mut group = c.benchmark_group("report_json_nps_spacing");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(report_nps_bench::MEASURE_COUNT as u64));
+    group.bench_function("materialized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_nps_materialized(black_box(&mut output), black_box(chart))
+                .expect("materialized NPS JSON should write");
+            black_box(output);
+        });
+    });
+    group.bench_function("streamed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_nps(black_box(&mut output), black_box(chart))
+                .expect("streamed NPS JSON should write");
+            black_box(output);
+        });
+    });
+    group.finish();
+
+    let mut group = c.benchmark_group("report_json_nps");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(report_nps_bench::MEASURE_COUNT as u64));
+    group.bench_function("materialized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_nps_report_materialized(
+                black_box(&summary),
+                black_box(&mut output),
+            )
+            .expect("materialized NPS JSON report should write");
+            black_box(output);
+        });
+    });
+    group.bench_function("streamed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::report::write_reports(
+                black_box(&summary),
+                rssp::report::OutputMode::JSON,
+                black_box(&mut output),
+            )
+            .expect("streamed NPS JSON report should write");
+            black_box(output);
+        });
+    });
+    group.finish();
+}
+
 fn bench_csv(c: &mut Criterion) {
     let summary =
         rssp::analyze(FIXTURE.as_bytes(), "ssc", &fast_options()).expect("fixture should analyze");
@@ -256,6 +319,7 @@ criterion_group!(
     benches,
     bench_timing_snapshot,
     bench_timing_json,
+    bench_nps_json,
     bench_csv,
     bench_json,
     bench_course_json

@@ -126,6 +126,27 @@ pub mod profile {
     ) -> std::io::Result<()> {
         crate::report::profile_write_json_timing::<W, true>(writer, chart, simfile)
     }
+
+    pub fn write_json_nps_report_materialized<W: std::io::Write>(
+        simfile: &crate::report::SimfileSummary,
+        writer: &mut W,
+    ) -> std::io::Result<()> {
+        crate::report::profile_write_json_nps_materialized(simfile, writer)
+    }
+
+    pub fn write_json_nps<W: std::io::Write>(
+        writer: &mut W,
+        chart: &crate::report::ChartSummary,
+    ) -> std::io::Result<()> {
+        crate::report::profile_write_json_nps::<W, false>(writer, chart)
+    }
+
+    pub fn write_json_nps_materialized<W: std::io::Write>(
+        writer: &mut W,
+        chart: &crate::report::ChartSummary,
+    ) -> std::io::Result<()> {
+        crate::report::profile_write_json_nps::<W, true>(writer, chart)
+    }
 }
 
 pub use rssp_core::{

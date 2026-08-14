@@ -12,6 +12,7 @@ use crate::math::{round_dp, round_sig_figs_6, round_sig_figs_itg, roundtrip_bpm_
 use crate::patterns::{CustomPatternSummary, PatternCounts, PatternVariant};
 use crate::stats::{
     ArrowStats, RADAR_CATEGORY_COUNT, StreamCounts, measure_equally_spaced, stream_sequences,
+    visit_measure_spacing,
 };
 use crate::step_parity::{RowAnnotation, TechCounts};
 use crate::timing::{
@@ -1462,7 +1463,7 @@ mod tests {
 
             assert_eq!(actual, expected);
             let mut prior = Vec::new();
-            write_json_all_with::<_, true>(&summary, &mut prior)
+            write_json_all_with::<_, true, false>(&summary, &mut prior)
                 .expect("materialized timing arrays should write");
             assert_eq!(actual, prior);
             serde_json::from_slice::<serde_json::Value>(&actual)
@@ -3899,9 +3900,28 @@ fn write_json_timing_with<W: Write, const MATERIALIZE: bool>(
     object.finish()
 }
 
-fn write_json_nps<W: Write>(writer: &mut W, chart: &ChartSummary, indent: usize) -> io::Result<()> {
+fn write_json_spacing<W: Write>(writer: &mut W, chart: &ChartSummary) -> io::Result<()> {
     let lanes = crate::step_type_lanes(&chart.step_type_str);
-    let equally_spaced = measure_equally_spaced(&chart.minimized_note_data, lanes);
+    writer.write_all(b"[")?;
+    let mut first = true;
+    visit_measure_spacing(&chart.minimized_note_data, lanes, |value| {
+        if !first {
+            writer.write_all(b", ")?;
+        }
+        first = false;
+        writer.write_all(if value { b"true" } else { b"false" })
+    })?;
+    writer.write_all(b"]")
+}
+
+fn write_json_nps_with<W: Write, const MATERIALIZE: bool>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    indent: usize,
+) -> io::Result<()> {
+    let lanes = crate::step_type_lanes(&chart.step_type_str);
+    let equally_spaced =
+        MATERIALIZE.then(|| measure_equally_spaced(&chart.minimized_note_data, lanes));
     let mut object = JsonObjectWriter::new(writer, indent)?;
     object.field_f64("max_nps", chart.max_nps)?;
     object.field_f64("median_nps", chart.median_nps)?;
@@ -3920,9 +3940,12 @@ fn write_json_nps<W: Write>(writer: &mut W, chart: &ChartSummary, indent: usize)
         )
     })?;
     object.field_with("equally_spaced_per_measure", |writer, _| {
-        write_json_scalar_iter(writer, equally_spaced, |writer, value| {
-            writer.write_all(if value { b"true" } else { b"false" })
-        })
+        if let Some(values) = equally_spaced {
+            return write_json_scalar_iter(writer, values, |writer, value| {
+                writer.write_all(if value { b"true" } else { b"false" })
+            });
+        }
+        write_json_spacing(writer, chart)
     })?;
     object.finish()
 }
@@ -4241,7 +4264,7 @@ fn write_json_pattern_counts<W: Write>(
     object.finish()
 }
 
-fn write_json_chart_with<W: Write, const MATERIALIZE: bool>(
+fn write_json_chart_with<W: Write, const MATERIALIZE_TIMING: bool, const MATERIALIZE_NPS: bool>(
     writer: &mut W,
     chart: &ChartSummary,
     simfile: &SimfileSummary,
@@ -4258,13 +4281,13 @@ fn write_json_chart_with<W: Write, const MATERIALIZE: bool>(
         write_json_gimmicks(writer, chart, simfile, indent)
     })?;
     object.field_with("timing", |writer, indent| {
-        write_json_timing_with::<W, MATERIALIZE>(writer, chart, simfile, indent)
+        write_json_timing_with::<W, MATERIALIZE_TIMING>(writer, chart, simfile, indent)
     })?;
     object.field_with("stream_info", |writer, indent| {
         write_json_stream_info(writer, chart, indent)
     })?;
     object.field_with("nps", |writer, indent| {
-        write_json_nps(writer, chart, indent)
+        write_json_nps_with::<W, MATERIALIZE_NPS>(writer, chart, indent)
     })?;
     object.field_with("breakdown", |writer, indent| {
         write_json_sn_breakdown(writer, chart, indent)
@@ -4294,7 +4317,7 @@ fn write_json_chart<W: Write>(
     simfile: &SimfileSummary,
     indent: usize,
 ) -> io::Result<()> {
-    write_json_chart_with::<W, false>(writer, chart, simfile, indent)
+    write_json_chart_with::<W, false, false>(writer, chart, simfile, indent)
 }
 
 #[cfg(test)]
@@ -4384,7 +4407,7 @@ fn write_json_all_materialized<W: Write>(
     writeln!(writer)
 }
 
-fn write_json_all_with<W: Write, const MATERIALIZE: bool>(
+fn write_json_all_with<W: Write, const MATERIALIZE_TIMING: bool, const MATERIALIZE_NPS: bool>(
     simfile: &SimfileSummary,
     writer: &mut W,
 ) -> io::Result<()> {
@@ -4417,7 +4440,7 @@ fn write_json_all_with<W: Write, const MATERIALIZE: bool>(
             simfile.charts.len(),
             indent,
             |writer, idx, item_indent| {
-                write_json_chart_with::<W, MATERIALIZE>(
+                write_json_chart_with::<W, MATERIALIZE_TIMING, MATERIALIZE_NPS>(
                     writer,
                     &simfile.charts[idx],
                     simfile,
@@ -4431,7 +4454,7 @@ fn write_json_all_with<W: Write, const MATERIALIZE: bool>(
 }
 
 pub fn write_json_all<W: Write>(simfile: &SimfileSummary, writer: &mut W) -> io::Result<()> {
-    write_json_all_with::<W, false>(simfile, writer)
+    write_json_all_with::<W, false, false>(simfile, writer)
 }
 
 #[cfg(feature = "profile")]
@@ -4439,7 +4462,15 @@ pub(crate) fn profile_write_json_materialized<W: Write>(
     simfile: &SimfileSummary,
     writer: &mut W,
 ) -> io::Result<()> {
-    write_json_all_with::<W, true>(simfile, writer)
+    write_json_all_with::<W, true, false>(simfile, writer)
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_write_json_nps_materialized<W: Write>(
+    simfile: &SimfileSummary,
+    writer: &mut W,
+) -> io::Result<()> {
+    write_json_all_with::<W, false, true>(simfile, writer)
 }
 
 #[cfg(feature = "profile")]
@@ -4449,6 +4480,14 @@ pub(crate) fn profile_write_json_timing<W: Write, const MATERIALIZE: bool>(
     simfile: &SimfileSummary,
 ) -> io::Result<()> {
     write_json_timing_with::<W, MATERIALIZE>(writer, chart, simfile, 0)
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_write_json_nps<W: Write, const MATERIALIZE: bool>(
+    writer: &mut W,
+    chart: &ChartSummary,
+) -> io::Result<()> {
+    write_json_nps_with::<W, MATERIALIZE>(writer, chart, 0)
 }
 
 const CSV_HEADER_BASE: &str = "Title,Subtitle,Artist,Title trans,Subtitle trans,Artist trans,Length,BPM,BPM Tier,min_bpm,max_bpm,average_bpm,median bpm,BPM-data,offset,file_md5_hash,step_type,difficulty,rating,step_artist,tech_notation,sha1_hash,bpm_neutral_hash,total_arrows,left_arrows,down_arrows,up_arrows,right_arrows,total_steps,jumps,hands,holds,rolls,mines,lifts,fakes,stops_freezes,delays,warps,speeds,scrolls,total_streams,16th_streams,20th_streams,24th_streams,32nd_streams,total_breaks,sn_breaks,stream_percent,adj_stream_percent,max_nps,median_nps,matrix_rating";

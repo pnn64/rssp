@@ -19,6 +19,9 @@ mod course_bench;
 #[path = "support/pack.rs"]
 mod pack_bench;
 #[cfg(windows)]
+#[path = "support/report_nps.rs"]
+mod report_nps_bench;
+#[cfg(windows)]
 #[path = "support/report_timing.rs"]
 mod report_timing_bench;
 #[cfg(windows)]
@@ -618,6 +621,14 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         .charts
         .first()
         .expect("timing JSON cycle fixture should contain a chart");
+    let nps_report_fixture = report_nps_bench::fixture();
+    let nps_report_summary =
+        rssp::analyze(&nps_report_fixture, "ssc", &report_nps_bench::options())
+            .expect("NPS JSON cycle fixture should analyze");
+    let nps_report_chart = nps_report_summary
+        .charts
+        .first()
+        .expect("NPS JSON cycle fixture should contain a chart");
 
     let mut optimizations = c.benchmark_group("cycles/optimizations");
     optimizations.sample_size(100);
@@ -959,6 +970,60 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     timing_report.finish();
+
+    let mut nps_spacing = c.benchmark_group("cycles/report_json_nps_spacing");
+    nps_spacing.sample_size(20);
+    nps_spacing.measurement_time(Duration::from_secs(3));
+    nps_spacing.throughput(Throughput::Elements(report_nps_bench::MEASURE_COUNT as u64));
+    nps_spacing.bench_function("materialized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_nps_materialized(
+                black_box(&mut output),
+                black_box(nps_report_chart),
+            )
+            .expect("materialized NPS JSON should write");
+            black_box(output)
+        });
+    });
+    nps_spacing.bench_function("streamed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_nps(black_box(&mut output), black_box(nps_report_chart))
+                .expect("streamed NPS JSON should write");
+            black_box(output)
+        });
+    });
+    nps_spacing.finish();
+
+    let mut nps_report = c.benchmark_group("cycles/report_json_nps");
+    nps_report.sample_size(20);
+    nps_report.measurement_time(Duration::from_secs(3));
+    nps_report.throughput(Throughput::Elements(report_nps_bench::MEASURE_COUNT as u64));
+    nps_report.bench_function("materialized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_nps_report_materialized(
+                black_box(&nps_report_summary),
+                black_box(&mut output),
+            )
+            .expect("materialized NPS JSON report should write");
+            black_box(output)
+        });
+    });
+    nps_report.bench_function("streamed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::report::write_reports(
+                black_box(&nps_report_summary),
+                rssp::report::OutputMode::JSON,
+                black_box(&mut output),
+            )
+            .expect("streamed NPS JSON report should write");
+            black_box(output)
+        });
+    });
+    nps_report.finish();
 
     let mut analysis = c.benchmark_group("cycles/analysis_scratch");
     analysis.sample_size(10);

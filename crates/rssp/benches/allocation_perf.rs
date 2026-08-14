@@ -14,6 +14,8 @@ mod course_bench;
 mod metadata_bench;
 #[path = "support/pack.rs"]
 mod pack_bench;
+#[path = "support/report_nps.rs"]
+mod report_nps_bench;
 #[path = "support/report_timing.rs"]
 mod report_timing_bench;
 #[path = "support/step_parity.rs"]
@@ -100,6 +102,7 @@ enum Mode {
     Csv,
     Json,
     JsonFull,
+    JsonNps,
     JsonTiming,
     CourseJson,
     CourseCsv,
@@ -188,6 +191,7 @@ fn parse_args() -> (Mode, usize) {
                     "csv" => Mode::Csv,
                     "json" => Mode::Json,
                     "json-full" => Mode::JsonFull,
+                    "json-nps" => Mode::JsonNps,
                     "json-timing" => Mode::JsonTiming,
                     "course-json" => Mode::CourseJson,
                     "course-csv" => Mode::CourseCsv,
@@ -271,7 +275,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
         },
-        Mode::JsonTiming => rssp::AnalysisOptions::default(),
+        Mode::JsonNps | Mode::JsonTiming => rssp::AnalysisOptions::default(),
         Mode::Annotations => rssp::AnalysisOptions {
             mono_threshold: 6,
             compute_note_annotations: true,
@@ -363,6 +367,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::JsonTiming => {
                 unreachable!("timing JSON mode uses its dedicated allocation runner")
+            }
+            Mode::JsonNps => {
+                unreachable!("NPS JSON mode uses its dedicated allocation runner")
             }
             Mode::BackgroundChanges => {
                 unreachable!("background change mode uses its dedicated allocation runner")
@@ -573,6 +580,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Csv => "csv",
         Mode::Json => "json",
         Mode::JsonFull => "json-full",
+        Mode::JsonNps => "json-nps",
         Mode::JsonTiming => "json-timing",
         Mode::CourseJson => "course-json",
         Mode::CourseCsv => "course-csv",
@@ -1413,6 +1421,67 @@ fn run_timing_json_alloc(iterations: usize) {
     });
 }
 
+fn run_nps_json_phase(
+    phase: &str,
+    iterations: usize,
+    summary: &rssp::report::SimfileSummary,
+    write: impl Fn(&rssp::report::SimfileSummary, &mut Vec<u8>) -> std::io::Result<()>,
+) {
+    let mut warm_output = Vec::new();
+    write(summary, &mut warm_output).expect("NPS JSON benchmark should write");
+    black_box(warm_output);
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let mut output = Vec::new();
+        write(black_box(summary), black_box(&mut output)).expect("NPS JSON benchmark should write");
+        checksum = checksum.wrapping_add(output.len());
+        black_box(output);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=json-nps phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_measures_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        report_nps_bench::MEASURE_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_nps_json_alloc(iterations: usize) {
+    let fixture = report_nps_bench::fixture();
+    let summary = rssp::analyze(&fixture, "ssc", &report_nps_bench::options())
+        .expect("NPS JSON benchmark should analyze");
+    run_nps_json_phase(
+        "materialized",
+        iterations,
+        &summary,
+        rssp::profile::write_json_nps_report_materialized,
+    );
+    run_nps_json_phase("streamed", iterations, &summary, |summary, output| {
+        rssp::report::write_reports(summary, rssp::report::OutputMode::JSON, output)
+    });
+}
+
 fn run_bgchanges_phase(
     phase: &str,
     iterations: usize,
@@ -1785,6 +1854,10 @@ fn main() {
         }
         Mode::MetadataAnalyze => {
             run_metadata_analyze_alloc(iterations);
+            return;
+        }
+        Mode::JsonNps => {
+            run_nps_json_alloc(iterations);
             return;
         }
         Mode::JsonTiming => {

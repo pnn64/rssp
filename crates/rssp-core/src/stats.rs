@@ -1166,6 +1166,55 @@ where
     }
 }
 
+/// Visits spacing flags for note data that has already been minimized.
+///
+/// # Errors
+///
+/// Returns the first error produced by `visit`.
+pub fn visit_measure_spacing<E>(
+    data: &[u8],
+    lanes: usize,
+    visit: impl FnMut(bool) -> Result<(), E>,
+) -> Result<(), E> {
+    match lanes {
+        5 => visit_spacing_impl::<5, _, _>(data, visit),
+        8 => visit_spacing_impl::<8, _, _>(data, visit),
+        10 => visit_spacing_impl::<10, _, _>(data, visit),
+        _ => visit_spacing_impl::<4, _, _>(data, visit),
+    }
+}
+
+fn visit_spacing_impl<const L: usize, E, F>(data: &[u8], mut visit: F) -> Result<(), E>
+where
+    F: FnMut(bool) -> Result<(), E>,
+{
+    let (mut spaced, mut done) = (true, false);
+    let mut line_off = 0usize;
+    while let Some(raw) = next_line(data, &mut line_off) {
+        let line = skip_ws(raw);
+        if line.is_empty() || line[0] == b'/' {
+            continue;
+        }
+        match line[0] {
+            b',' => {
+                visit(spaced)?;
+                spaced = true;
+            }
+            b';' => {
+                visit(spaced)?;
+                done = true;
+                break;
+            }
+            _ if line.len() >= L => spaced &= line[..L].iter().copied().any(is_note),
+            _ => {}
+        }
+    }
+    if !done {
+        visit(spaced)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn for_each_minimized_row(
     data: &[u8],
     lanes: usize,
