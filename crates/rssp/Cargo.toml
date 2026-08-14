@@ -137,6 +137,7 @@ harness = false
 [[bench]]
 name = "nps_perf"
 harness = false
+required-features = ["profile"]
 
 [[bench]]
 name = "breakdown_perf"

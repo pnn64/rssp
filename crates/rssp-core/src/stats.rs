@@ -1450,12 +1450,61 @@ fn process_timing_row<const L: usize>(
 
 #[must_use]
 pub fn measure_densities(data: &[u8], lanes: usize) -> Vec<usize> {
-    dispatch_lanes!(lanes, densities_impl(data))
+    let mut scratch = DensityScratch::with_capacity(density_capacity(data.len(), lanes));
+    fill_densities(data, lanes, &mut scratch);
+    scratch.densities
 }
 
-fn densities_impl<const L: usize>(data: &[u8]) -> Vec<usize> {
-    let mut densities = Vec::with_capacity(data.len() / ((L + 1) * 4) + 1);
-    let mut measure = Vec::with_capacity(64);
+#[derive(Default)]
+pub(crate) struct DensityScratch {
+    measure: Vec<u8>,
+    densities: Vec<usize>,
+}
+
+impl DensityScratch {
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        Self {
+            measure: Vec::with_capacity(64),
+            densities: Vec::with_capacity(capacity),
+        }
+    }
+}
+
+pub(crate) const fn density_capacity(data_len: usize, lanes: usize) -> usize {
+    data_len / ((lanes + 1) * 4) + 1
+}
+
+pub(crate) fn measure_densities_with_scratch<'a>(
+    data: &[u8],
+    lanes: usize,
+    scratch: &'a mut DensityScratch,
+) -> &'a [usize] {
+    fill_densities(data, lanes, scratch);
+    &scratch.densities
+}
+
+fn fill_densities(data: &[u8], lanes: usize, scratch: &mut DensityScratch) {
+    scratch.measure.clear();
+    scratch.densities.clear();
+    scratch.measure.reserve(64);
+    scratch
+        .densities
+        .reserve(density_capacity(data.len(), lanes));
+
+    let DensityScratch { measure, densities } = scratch;
+    match lanes {
+        5 => fill_densities_impl::<5>(data, measure, densities),
+        8 => fill_densities_impl::<8>(data, measure, densities),
+        10 => fill_densities_impl::<10>(data, measure, densities),
+        _ => fill_densities_impl::<4>(data, measure, densities),
+    }
+}
+
+fn fill_densities_impl<const L: usize>(
+    data: &[u8],
+    measure: &mut Vec<u8>,
+    densities: &mut Vec<usize>,
+) {
     let mut measure_steps = 0usize;
     let mut done = false;
 
@@ -1467,9 +1516,9 @@ fn densities_impl<const L: usize>(data: &[u8]) -> Vec<usize> {
         }
 
         match line[0] {
-            b',' => push_density_measure(&mut measure, &mut measure_steps, &mut densities),
+            b',' => densities.push(take_density_measure(measure, &mut measure_steps)),
             b';' => {
-                push_density_measure(&mut measure, &mut measure_steps, &mut densities);
+                densities.push(take_density_measure(measure, &mut measure_steps));
                 done = true;
                 break;
             }
@@ -1483,34 +1532,28 @@ fn densities_impl<const L: usize>(data: &[u8]) -> Vec<usize> {
     }
 
     if !done {
-        push_density_measure(&mut measure, &mut measure_steps, &mut densities);
+        densities.push(take_density_measure(measure, &mut measure_steps));
     }
-
-    densities
 }
 
-fn push_density_measure(
-    measure: &mut Vec<u8>,
-    measure_steps: &mut usize,
-    densities: &mut Vec<usize>,
-) {
-    if measure.is_empty() {
-        densities.push(0);
-        return;
-    }
-    let shift = density_reduce_shift(measure);
-    let density = if shift == 0 {
-        *measure_steps
+fn take_density_measure(measure: &mut Vec<u8>, measure_steps: &mut usize) -> usize {
+    let density = if measure.is_empty() {
+        0
     } else {
-        let step = 1usize << shift;
-        let len = measure.len() >> shift;
-        (0..len)
-            .map(|i| usize::from((measure[i * step] & DENSITY_ROW_STEP) != 0))
-            .sum()
+        let shift = density_reduce_shift(measure);
+        if shift == 0 {
+            *measure_steps
+        } else {
+            let step = 1usize << shift;
+            let len = measure.len() >> shift;
+            (0..len)
+                .map(|i| usize::from((measure[i * step] & DENSITY_ROW_STEP) != 0))
+                .sum()
+        }
     };
-    densities.push(density);
     measure.clear();
     *measure_steps = 0;
+    density
 }
 
 #[inline(always)]

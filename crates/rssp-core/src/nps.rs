@@ -20,9 +20,44 @@ pub struct ChartNpsInfo {
     pub peak_nps: f64,
 }
 
+/// Computes peak NPS for every supported chart in a simfile.
+///
+/// # Errors
+///
+/// Returns an error when the extension is unsupported or the simfile cannot
+/// be parsed.
 pub fn compute_chart_peak_nps(
     simfile_data: &[u8],
     extension: &str,
+) -> Result<Vec<ChartNpsInfo>, String> {
+    compute_chart_peak_nps_with(
+        simfile_data,
+        extension,
+        true,
+        |chart, lanes, timing, scratch| {
+            let densities = crate::stats::measure_densities_with_scratch(chart, lanes, scratch);
+            compute_peak_nps_with_timing(densities, timing)
+        },
+    )
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn compute_chart_peak_nps_legacy_for_bench(
+    simfile_data: &[u8],
+    extension: &str,
+) -> Result<Vec<ChartNpsInfo>, String> {
+    compute_chart_peak_nps_with(simfile_data, extension, false, |chart, lanes, timing, _| {
+        let densities = crate::stats::measure_densities(chart, lanes);
+        compute_peak_nps_with_timing(&densities, timing)
+    })
+}
+
+fn compute_chart_peak_nps_with(
+    simfile_data: &[u8],
+    extension: &str,
+    reuse_densities: bool,
+    peak_nps: impl Fn(&[u8], usize, &TimingData, &mut crate::stats::DensityScratch) -> f64,
 ) -> Result<Vec<ChartNpsInfo>, String> {
     let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
 
@@ -65,8 +100,25 @@ pub fn compute_chart_peak_nps(
     let cleaned_global_fakes = clean_timing_map(global_fakes_raw);
 
     let entries = parsed_data.notes_list;
+    let density_capacity = if reuse_densities {
+        entries
+            .iter()
+            .filter_map(|entry| {
+                crate::supported_stepstype_lanes_bytes(entry.fields[0])
+                    .map(|lanes| crate::stats::density_capacity(entry.note_data.len(), lanes))
+            })
+            .max()
+            .unwrap_or(0)
+    } else {
+        0
+    };
     let mut results = Vec::with_capacity(entries.len());
     let mut global_timing = None;
+    let mut density_scratch = if reuse_densities {
+        crate::stats::DensityScratch::with_capacity(density_capacity)
+    } else {
+        crate::stats::DensityScratch::default()
+    };
 
     for entry in entries {
         if entry.field_count < 5 {
@@ -90,8 +142,6 @@ pub fn compute_chart_peak_nps(
             meter_raw.as_ref(),
             extension,
         );
-
-        let measure_densities = crate::stats::measure_densities(chart_data, lanes);
 
         let timing_src = crate::timing::resolve_chart_timing(
             allow_steps_timing,
@@ -198,7 +248,7 @@ pub fn compute_chart_peak_nps(
             })
         };
 
-        let max_nps = compute_peak_nps_with_timing(&measure_densities, timing);
+        let max_nps = peak_nps(chart_data, lanes, timing, &mut density_scratch);
 
         results.push(ChartNpsInfo {
             step_type,
@@ -212,7 +262,9 @@ pub fn compute_chart_peak_nps(
 
 #[cfg(test)]
 mod batch_tests {
-    use super::compute_chart_peak_nps;
+    use super::{
+        compute_chart_peak_nps, compute_chart_peak_nps_with, compute_peak_nps_with_timing,
+    };
 
     const INHERITED_TIMING_FIXTURE: &[u8] =
         include_bytes!("../../rssp/benches/fixtures/camellia_mix.ssc");
@@ -234,6 +286,29 @@ mod batch_tests {
             assert_eq!(chart.step_type, "dance-single");
             assert_eq!(chart.difficulty, difficulty);
             assert!((chart.peak_nps - peak_nps).abs() < 1.0e-12);
+        }
+    }
+
+    #[test]
+    fn reused_batch_matches_materialized_densities() {
+        let expected = compute_chart_peak_nps_with(
+            INHERITED_TIMING_FIXTURE,
+            "ssc",
+            false,
+            |chart, lanes, timing, _| {
+                let densities = crate::stats::measure_densities(chart, lanes);
+                compute_peak_nps_with_timing(&densities, timing)
+            },
+        )
+        .expect("materialized analysis should succeed");
+        let actual = compute_chart_peak_nps(INHERITED_TIMING_FIXTURE, "ssc")
+            .expect("reused-buffer analysis should succeed");
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert_eq!(actual.step_type, expected.step_type);
+            assert_eq!(actual.difficulty, expected.difficulty);
+            assert_eq!(actual.peak_nps, expected.peak_nps);
         }
     }
 }

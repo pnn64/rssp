@@ -570,6 +570,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let mut nps_scratch = Vec::new();
     let custom_patterns = custom_pattern_input(256);
     let analysis_fixture = include_bytes!("fixtures/camellia_mix.ssc");
+    let nps_fixture = include_bytes!("fixtures/watch_yo_step.ssc");
     let analysis_options = rssp::AnalysisOptions::default();
     let mut analysis_scratch = rssp::AnalysisScratch::default();
     let mut stream_tokens = Vec::new();
@@ -650,6 +651,26 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             black_box(rssp::patterns::compile_custom_patterns(black_box(
                 &custom_patterns,
             )));
+        });
+    });
+    optimizations.throughput(Throughput::Bytes(nps_fixture.len() as u64));
+    optimizations.bench_function("peak_nps_materialized", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::nps::compute_chart_peak_nps_legacy_for_bench(
+                    black_box(nps_fixture),
+                    black_box("ssc"),
+                )
+                .expect("fixture should analyze"),
+            );
+        });
+    });
+    optimizations.bench_function("peak_nps_reused", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::compute_chart_peak_nps(black_box(nps_fixture), black_box("ssc"))
+                    .expect("fixture should analyze"),
+            );
         });
     });
     optimizations.finish();

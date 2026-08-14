@@ -241,7 +241,17 @@ fn bench_nps_pipeline(c: &mut Criterion) {
     let mut group = c.benchmark_group("nps_pipeline");
     group.sample_size(200);
     group.measurement_time(Duration::from_secs(2));
-    group.bench_function("compute_chart_peak_nps", |b| {
+    group.bench_function("compute_chart_peak_nps_materialized", |b| {
+        b.iter(|| {
+            let nps = rssp::nps::compute_chart_peak_nps_legacy_for_bench(
+                black_box(fixture),
+                black_box(EXTENSION),
+            )
+            .expect("nps should succeed");
+            black_box(nps);
+        });
+    });
+    group.bench_function("compute_chart_peak_nps_reused", |b| {
         b.iter(|| {
             let nps = rssp::compute_chart_peak_nps(black_box(fixture), black_box(EXTENSION))
                 .expect("nps should succeed");
