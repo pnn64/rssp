@@ -12,8 +12,9 @@ use crate::step_parity;
 
 use crate::bpm::{
     clean_and_normalize_float_digits, clean_and_normalize_speeds_float_digits,
-    clean_timing_map_cow, compute_bpm_range_and_stats, compute_measure_nps_vec_with_timing,
-    compute_tier_bpm, get_nps_stats_with_scratch, normalize_float_digits,
+    clean_timing_map_cow, compute_bpm_range_and_stats, compute_bpm_range_and_stats_with_scratch,
+    compute_measure_nps_vec_with_timing, compute_tier_bpm, get_nps_stats_with_scratch,
+    normalize_float_digits,
 };
 use crate::hash::compute_chart_hash_pair;
 use crate::math::{round_dp, round_sig_figs_6};
@@ -69,12 +70,15 @@ impl Default for AnalysisOptions {
 /// Reusable temporary storage for repeated simfile analysis.
 ///
 /// One workspace is single-thread-only and may be reused sequentially across
-/// any mix of 4-lane and 8-lane simfiles. It retains the largest parity, NPS,
-/// and stream-token buffers it has needed; drop it to release that memory.
+/// any mix of 4-lane and 8-lane simfiles. It retains the largest parity, BPM,
+/// NPS, and stream-token buffers it has needed; drop it to release that memory.
 #[derive(Default)]
 pub struct AnalysisScratch {
     parity4: Option<step_parity::TimingRowsScratch<4>>,
     parity8: Option<step_parity::TimingRowsScratch<8>>,
+    global_bpm_map: Vec<(f64, f64)>,
+    chart_bpm_map: Vec<(f64, f64)>,
+    bpm_values: Vec<f64>,
     nps: Vec<f64>,
     stream_tokens: Vec<stats::Token>,
 }
@@ -84,6 +88,9 @@ impl std::fmt::Debug for AnalysisScratch {
         f.debug_struct("AnalysisScratch")
             .field("has_parity4", &self.parity4.is_some())
             .field("has_parity8", &self.parity8.is_some())
+            .field("global_bpm_capacity", &self.global_bpm_map.capacity())
+            .field("chart_bpm_capacity", &self.chart_bpm_map.capacity())
+            .field("bpm_value_capacity", &self.bpm_values.capacity())
             .field("nps_capacity", &self.nps.capacity())
             .field("stream_capacity", &self.stream_tokens.capacity())
             .finish()
@@ -535,7 +542,7 @@ pub fn profile_chart_metadata_strings(
 }
 
 /// Processes a single chart's data to produce a `ChartSummary`.
-fn build_chart_summary(
+fn build_chart_summary<const REUSE_BPMS: bool>(
     entry: &ParsedChartEntry<'_>,
     global_attacks_opt: Option<&[u8]>,
     global_bpms_raw: &str,
@@ -557,6 +564,7 @@ fn build_chart_summary(
     compiled_custom_patterns: &CompiledCustomPatterns,
     parity_scratch4: &mut Option<step_parity::TimingRowsScratch<4>>,
     parity_scratch8: &mut Option<step_parity::TimingRowsScratch<8>>,
+    chart_bpm_scratch: &mut Vec<(f64, f64)>,
     nps_scratch: &mut Vec<f64>,
     stream_tokens: &mut Vec<stats::Token>,
     options: &AnalysisOptions,
@@ -753,42 +761,49 @@ fn build_chart_summary(
         parse_radar_values_bytes(chart_radar_values_opt, true)
     };
     let chart_has_own_timing = timing_src.chart_has_own_timing;
-    let (timing_segments, bpm_map): (Arc<TimingSegments>, Cow<'_, [(f64, f64)]>) =
-        if chart_has_own_timing {
-            let timing_segments = Arc::new(compute_timing_segments(
-                chart_bpms_timing,
-                timing_src.global_bpms,
-                chart_stops_timing,
-                timing_src.global_stops,
-                chart_delays_timing,
-                timing_src.global_delays,
-                chart_warps_timing,
-                timing_src.global_warps,
-                chart_speeds_timing,
-                timing_src.global_speeds,
-                chart_scrolls_timing,
-                timing_src.global_scrolls,
-                chart_fakes_timing,
-                timing_src.global_fakes,
-                timing_format,
-                true,
-            ));
-            let bpm_map = timing_segments
-                .bpms
-                .iter()
-                .map(|(beat, bpm)| (f64::from(*beat), f64::from(*bpm)))
-                .collect();
-            (timing_segments, Cow::Owned(bpm_map))
+    let timing_segments = if chart_has_own_timing {
+        Arc::new(compute_timing_segments(
+            chart_bpms_timing,
+            timing_src.global_bpms,
+            chart_stops_timing,
+            timing_src.global_stops,
+            chart_delays_timing,
+            timing_src.global_delays,
+            chart_warps_timing,
+            timing_src.global_warps,
+            chart_speeds_timing,
+            timing_src.global_speeds,
+            chart_scrolls_timing,
+            timing_src.global_scrolls,
+            chart_fakes_timing,
+            timing_src.global_fakes,
+            timing_format,
+            true,
+        ))
+    } else {
+        Arc::clone(global_timing_segments)
+    };
+    let owned_bpm_map;
+    let bpm_map = if chart_has_own_timing {
+        let bpms = timing_segments
+            .bpms
+            .iter()
+            .map(|(beat, bpm)| (f64::from(*beat), f64::from(*bpm)));
+        if REUSE_BPMS {
+            chart_bpm_scratch.clear();
+            chart_bpm_scratch.extend(bpms);
+            chart_bpm_scratch.as_slice()
         } else {
-            (
-                Arc::clone(global_timing_segments),
-                Cow::Borrowed(global_bpm_map),
-            )
-        };
+            owned_bpm_map = bpms.collect::<Vec<_>>();
+            owned_bpm_map.as_slice()
+        }
+    } else {
+        global_bpm_map
+    };
 
     let metrics = compute_derived_chart_metrics(
         &measure_densities,
-        bpm_map.as_ref(),
+        bpm_map,
         &minimized_chart,
         bpms_to_use,
         stream_tokens,
@@ -1024,6 +1039,25 @@ pub fn analyze(
 /// Returns an error when the extension is unsupported, parsing fails, or no
 /// supported chart is present.
 pub fn analyze_with_scratch(
+    simfile_data: &[u8],
+    extension: &str,
+    options: &AnalysisOptions,
+    scratch: &mut AnalysisScratch,
+) -> Result<SimfileSummary, String> {
+    analyze_with_scratch_impl::<true>(simfile_data, extension, options, scratch)
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_analyze_with_allocating_bpms(
+    simfile_data: &[u8],
+    extension: &str,
+    options: &AnalysisOptions,
+    scratch: &mut AnalysisScratch,
+) -> Result<SimfileSummary, String> {
+    analyze_with_scratch_impl::<false>(simfile_data, extension, options, scratch)
+}
+
+fn analyze_with_scratch_impl<const REUSE_BPMS: bool>(
     simfile_data: &[u8],
     extension: &str,
     options: &AnalysisOptions,
@@ -1267,13 +1301,24 @@ pub fn analyze_with_scratch(
         timing_format,
         true,
     ));
-    let global_bpm_map: Vec<(f64, f64)> = global_timing_segments
+    let global_bpms = global_timing_segments
         .bpms
         .iter()
-        .map(|(beat, bpm)| (f64::from(*beat), f64::from(*bpm)))
-        .collect();
-    let (min_bpm_i32, max_bpm_i32, median_bpm_raw, average_bpm_raw) =
-        compute_bpm_range_and_stats(&global_bpm_map);
+        .map(|(beat, bpm)| (f64::from(*beat), f64::from(*bpm)));
+    let owned_global_bpm_map;
+    let global_bpm_map = if REUSE_BPMS {
+        scratch.global_bpm_map.clear();
+        scratch.global_bpm_map.extend(global_bpms);
+        scratch.global_bpm_map.as_slice()
+    } else {
+        owned_global_bpm_map = global_bpms.collect::<Vec<_>>();
+        owned_global_bpm_map.as_slice()
+    };
+    let (min_bpm_i32, max_bpm_i32, median_bpm_raw, average_bpm_raw) = if REUSE_BPMS {
+        compute_bpm_range_and_stats_with_scratch(global_bpm_map, &mut scratch.bpm_values)
+    } else {
+        compute_bpm_range_and_stats(global_bpm_map)
+    };
     let median_bpm = round_dp(median_bpm_raw, 2);
     let average_bpm = round_dp(average_bpm_raw, 2);
     let global_attacks_opt = parsed_data.attacks.as_deref();
@@ -1286,7 +1331,7 @@ pub fn analyze_with_scratch(
     let options_ref = &options;
     let compiled_custom_patterns_ref = &compiled_custom_patterns;
     for entry in entries {
-        if let Some((summary, chart_length)) = build_chart_summary(
+        if let Some((summary, chart_length)) = build_chart_summary::<REUSE_BPMS>(
             &entry,
             global_attacks_opt,
             &cleaned_global_bpms,
@@ -1299,7 +1344,7 @@ pub fn analyze_with_scratch(
             &normalized_global_bpms,
             &global_timing_segments,
             &mut global_timing,
-            &global_bpm_map,
+            global_bpm_map,
             offset,
             extension,
             timing_format,
@@ -1308,6 +1353,7 @@ pub fn analyze_with_scratch(
             compiled_custom_patterns_ref,
             &mut scratch.parity4,
             &mut scratch.parity8,
+            &mut scratch.chart_bpm_map,
             &mut scratch.nps,
             &mut scratch.stream_tokens,
             options_ref,
@@ -1448,7 +1494,8 @@ pub fn compute_all_hashes(
 mod tests {
     use super::{
         AnalysisOptions, AnalysisScratch, ChartMetadataStrings, analyze, analyze_with_scratch,
-        chart_metadata_strings, compute_all_hashes, decode_trim_owned, decode_unescape_owned,
+        analyze_with_scratch_impl, chart_metadata_strings, compute_all_hashes, decode_trim_owned,
+        decode_unescape_owned,
     };
     use crate::parse::{
         decode_bytes, normalize_chart_desc, normalize_chart_name, unescape_tag, unescape_trim,
@@ -1472,16 +1519,53 @@ mod tests {
             compute_note_annotations: true,
             ..AnalysisOptions::default()
         };
-        let expected = analyze(FIXTURE, "ssc", &options).expect("analysis should succeed");
+        let mut legacy_scratch = AnalysisScratch::default();
+        let expected =
+            analyze_with_scratch_impl::<false>(FIXTURE, "ssc", &options, &mut legacy_scratch)
+                .expect("legacy analysis should succeed");
         let mut scratch = AnalysisScratch::default();
 
         let first = analyze_with_scratch(FIXTURE, "ssc", &options, &mut scratch)
             .expect("first reused analysis should succeed");
+        let bpm_capacities = (
+            scratch.global_bpm_map.capacity(),
+            scratch.chart_bpm_map.capacity(),
+            scratch.bpm_values.capacity(),
+        );
         let second = analyze_with_scratch(FIXTURE, "ssc", &options, &mut scratch)
             .expect("second reused analysis should succeed");
 
         assert_eq!(json(&first), json(&expected));
         assert_eq!(json(&second), json(&expected));
+        assert!(bpm_capacities.0 > 0 && bpm_capacities.2 > 0);
+        assert_eq!(
+            (
+                scratch.global_bpm_map.capacity(),
+                scratch.chart_bpm_map.capacity(),
+                scratch.bpm_values.capacity(),
+            ),
+            bpm_capacities
+        );
+
+        const LOCAL_TIMING: &[u8] = concat!(
+            "#VERSION:0.83;\n#BPMS:0=120,8=180;\n",
+            "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n",
+            "#DESCRIPTION:local timing;\n#DIFFICULTY:Challenge;\n#METER:10;\n#CREDIT:;\n",
+            "#BPMS:0=150,4=200;\n#NOTES:\n1000\n0100\n0010\n0001\n;\n"
+        )
+        .as_bytes();
+        let expected =
+            analyze_with_scratch_impl::<false>(LOCAL_TIMING, "ssc", &options, &mut legacy_scratch)
+                .expect("legacy local timing analysis should succeed");
+        let first = analyze_with_scratch(LOCAL_TIMING, "ssc", &options, &mut scratch)
+            .expect("local timing analysis should succeed");
+        let chart_capacity = scratch.chart_bpm_map.capacity();
+        let second = analyze_with_scratch(LOCAL_TIMING, "ssc", &options, &mut scratch)
+            .expect("repeated local timing analysis should succeed");
+        assert_eq!(json(&first), json(&expected));
+        assert_eq!(json(&second), json(&expected));
+        assert!(chart_capacity > 0);
+        assert_eq!(scratch.chart_bpm_map.capacity(), chart_capacity);
     }
 
     #[test]

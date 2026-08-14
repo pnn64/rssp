@@ -311,6 +311,36 @@ fn bench_bpm_format(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_bpm_stats(c: &mut Criterion) {
+    let map: Vec<_> = (0..4_096)
+        .map(|index| {
+            (
+                index as f64 * 4.0,
+                60.125 + ((index * 977) % 1_000) as f64 / 8.0,
+            )
+        })
+        .collect();
+    let mut values = Vec::with_capacity(map.len());
+
+    let mut group = c.benchmark_group("bpm_range_stats");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.bench_function("allocating", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::compute_bpm_range_and_stats(black_box(&map)));
+        });
+    });
+    group.bench_function("reused", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::compute_bpm_range_and_stats_with_scratch(
+                black_box(&map),
+                black_box(&mut values),
+            ));
+        });
+    });
+    group.finish();
+}
+
 fn mine_chart(measures: usize, rows_per_measure: usize) -> Vec<u8> {
     let mut chart = Vec::with_capacity(measures * rows_per_measure * 5);
     for measure in 0..measures {
@@ -497,6 +527,7 @@ criterion_group!(
     bench_bpm_pipeline,
     bench_bpm_inner,
     bench_bpm_format,
+    bench_bpm_stats,
     bench_mines_nonfake,
     bench_parse_bpm_map,
     bench_timing_segment_cleanup

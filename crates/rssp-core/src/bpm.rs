@@ -858,7 +858,7 @@ pub fn compute_bpm_stats(values: &[f64]) -> (f64, f64) {
     } else {
         filtered.extend_from_slice(values);
     }
-    bpm_stats_from_values(filtered, all_values_are_displayable)
+    bpm_stats_from_values(&mut filtered, all_values_are_displayable)
 }
 
 #[must_use]
@@ -876,16 +876,32 @@ pub fn compute_bpm_map_stats(map: &[(f64, f64)]) -> (f64, f64) {
     if !all_values_are_displayable {
         filtered.extend(map.iter().map(|&(_, bpm)| bpm));
     }
-    bpm_stats_from_values(filtered, all_values_are_displayable)
+    bpm_stats_from_values(&mut filtered, all_values_are_displayable)
 }
 
 #[must_use]
 pub fn compute_bpm_range_and_stats(map: &[(f64, f64)]) -> (i32, i32, f64, f64) {
+    let mut values = Vec::with_capacity(map.len());
+    compute_bpm_range_and_stats_with_scratch(map, &mut values)
+}
+
+/// Computes display BPM range and statistics with reusable selection storage.
+///
+/// The buffer is cleared before use and retains enough capacity for subsequent
+/// maps, avoiding one temporary allocation per call in batch analysis.
+#[must_use]
+pub fn compute_bpm_range_and_stats_with_scratch(
+    map: &[(f64, f64)],
+    values: &mut Vec<f64>,
+) -> (i32, i32, f64, f64) {
+    values.clear();
     if map.is_empty() {
         return (0, 0, 0.0, 0.0);
     }
 
-    let mut values = Vec::with_capacity(map.len());
+    if values.capacity() < map.len() {
+        values.reserve(map.len());
+    }
     let (mut min, mut max) = (f64::MAX, f64::MIN);
     for &(_, bpm) in map {
         if is_display_bpm(bpm) {
@@ -913,7 +929,7 @@ pub fn compute_bpm_range_and_stats(map: &[(f64, f64)]) -> (i32, i32, f64, f64) {
     )
 }
 
-fn bpm_stats_from_values(mut values: Vec<f64>, can_select: bool) -> (f64, f64) {
+fn bpm_stats_from_values(values: &mut [f64], can_select: bool) -> (f64, f64) {
     const SELECTION_MIN_VALUES: usize = 64;
 
     if can_select && values.len() >= SELECTION_MIN_VALUES {
@@ -1293,15 +1309,24 @@ mod tests {
             large_map,
         ];
 
+        let mut scratch = Vec::new();
         for map in cases {
             let expected_range = compute_bpm_range(&map);
             let expected_stats = sorted_bpm_stats_reference(&map);
             let actual = compute_bpm_range_and_stats(&map);
+            let reused = compute_bpm_range_and_stats_with_scratch(&map, &mut scratch);
 
             assert_eq!((actual.0, actual.1), expected_range);
             assert_eq!(actual.2, expected_stats.0);
             assert!((actual.3 - expected_stats.1).abs() < 1.0e-10);
+            assert_eq!(reused, actual);
         }
+        let capacity = scratch.capacity();
+        assert_eq!(
+            compute_bpm_range_and_stats_with_scratch(&[(0.0, 120.0)], &mut scratch),
+            compute_bpm_range_and_stats(&[(0.0, 120.0)])
+        );
+        assert_eq!(scratch.capacity(), capacity);
     }
 
     #[test]

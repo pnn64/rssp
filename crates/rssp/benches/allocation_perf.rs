@@ -99,6 +99,7 @@ enum Mode {
     Nps,
     Minimize,
     Bpms,
+    BpmStats,
     Tech,
     Snapshot,
     Csv,
@@ -192,6 +193,7 @@ fn parse_args() -> (Mode, usize) {
                     "nps" => Mode::Nps,
                     "minimize" => Mode::Minimize,
                     "bpms" => Mode::Bpms,
+                    "bpm-stats" => Mode::BpmStats,
                     "tech" => Mode::Tech,
                     "snapshot" => Mode::Snapshot,
                     "csv" => Mode::Csv,
@@ -262,6 +264,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             compute_pattern_counts: false,
             ..rssp::AnalysisOptions::default()
         },
+        Mode::BpmStats => rssp::AnalysisOptions::default(),
         Mode::Full | Mode::AnalysisReuse => rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
@@ -351,6 +354,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
                 .expect("fixture BPM snapshots should compute");
                 checksum = checksum.wrapping_add(bpms.len());
                 black_box(bpms);
+            }
+            Mode::BpmStats => {
+                unreachable!("BPM stats mode uses its dedicated allocation runner")
             }
             Mode::Tech => {
                 for _ in 0..256 {
@@ -602,6 +608,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Nps => "nps",
         Mode::Minimize => "minimize",
         Mode::Bpms => "bpms",
+        Mode::BpmStats => "bpm-stats",
         Mode::Tech => "tech",
         Mode::Snapshot => "snapshot",
         Mode::Csv => "csv",
@@ -943,9 +950,27 @@ fn run_analysis_reuse_alloc(
                 .expect("fixture should analyze")
         },
     );
+    let mut allocating_scratch = rssp::AnalysisScratch::default();
+    run_analysis_alloc_phase(
+        "reused-bpm-allocating",
+        iterations,
+        corpus,
+        options,
+        base_live_bytes,
+        |sim| {
+            rssp::profile::analyze_with_allocating_bpms(
+                sim.raw.as_slice(),
+                sim.extension,
+                options,
+                &mut allocating_scratch,
+            )
+            .expect("fixture should analyze")
+        },
+    );
+    drop(allocating_scratch);
     let mut scratch = rssp::AnalysisScratch::default();
     run_analysis_alloc_phase(
-        "reused",
+        "reused-bpm-buffers",
         iterations,
         corpus,
         options,
@@ -955,6 +980,70 @@ fn run_analysis_reuse_alloc(
                 .expect("fixture should analyze")
         },
     );
+}
+
+fn run_bpm_stats_alloc_phase(
+    phase: &str,
+    iterations: usize,
+    map: &[(f64, f64)],
+    mut compute: impl FnMut(&[(f64, f64)]) -> (i32, i32, f64, f64),
+) {
+    black_box(compute(map));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0u64;
+    for _ in 0..iterations {
+        let result = compute(black_box(map));
+        checksum = checksum
+            .wrapping_add(result.0 as u64)
+            .wrapping_add(result.1 as u64)
+            .wrapping_add(result.2.to_bits())
+            .wrapping_add(result.3.to_bits());
+        black_box(result);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=bpm-stats phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_entries_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        map.len() as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_bpm_stats_alloc(iterations: usize) {
+    let map: Vec<_> = (0..4_096)
+        .map(|index| {
+            (
+                index as f64 * 4.0,
+                60.125 + ((index * 977) % 1_000) as f64 / 8.0,
+            )
+        })
+        .collect();
+    run_bpm_stats_alloc_phase("allocating", iterations, &map, |map| {
+        rssp::bpm::compute_bpm_range_and_stats(map)
+    });
+    let mut values = Vec::with_capacity(map.len());
+    run_bpm_stats_alloc_phase("reused", iterations, &map, |map| {
+        rssp::bpm::compute_bpm_range_and_stats_with_scratch(map, &mut values)
+    });
 }
 
 fn run_nps_alloc_phase(
@@ -1920,6 +2009,10 @@ fn run_matrix_alloc(iterations: usize) {
 fn main() {
     let (mode, iterations) = parse_args();
     match mode {
+        Mode::BpmStats => {
+            run_bpm_stats_alloc(iterations);
+            return;
+        }
         Mode::CustomCompile => {
             run_custom_pattern_alloc(iterations);
             return;

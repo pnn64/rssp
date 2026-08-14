@@ -589,6 +589,15 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let nps_values: Vec<_> = (0..1_025)
         .map(|idx| ((idx * 37) % 257) as f64 / 7.0)
         .collect();
+    let bpm_stats_map: Vec<_> = (0..4_096)
+        .map(|index| {
+            (
+                index as f64 * 4.0,
+                60.125 + ((index * 977) % 1_000) as f64 / 8.0,
+            )
+        })
+        .collect();
+    let mut bpm_stats_values = Vec::with_capacity(bpm_stats_map.len());
     let mut nps_scratch = Vec::new();
     let custom_patterns = custom_pattern_input(256);
     let analysis_fixture = include_bytes!("fixtures/camellia_mix.ssc");
@@ -607,6 +616,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         .max_by_key(|(data, _)| data.len())
         .expect("minimizer cycle fixture should contain a supported chart");
     let analysis_options = rssp::AnalysisOptions::default();
+    let mut allocating_analysis_scratch = rssp::AnalysisScratch::default();
     let mut analysis_scratch = rssp::AnalysisScratch::default();
     let mut stream_tokens = Vec::new();
     let course_fixture = course_bench::CourseFixture::new();
@@ -825,6 +835,27 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     optimizations.finish();
+
+    let mut bpm_stats = c.benchmark_group("cycles/bpm_range_stats");
+    bpm_stats.sample_size(20);
+    bpm_stats.measurement_time(Duration::from_secs(3));
+    bpm_stats.throughput(Throughput::Elements(bpm_stats_map.len() as u64));
+    bpm_stats.bench_function("allocating", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::compute_bpm_range_and_stats(black_box(
+                &bpm_stats_map,
+            )))
+        });
+    });
+    bpm_stats.bench_function("reused", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::compute_bpm_range_and_stats_with_scratch(
+                black_box(&bpm_stats_map),
+                black_box(&mut bpm_stats_values),
+            ))
+        });
+    });
+    bpm_stats.finish();
 
     let mut course = c.benchmark_group("cycles/course_cache");
     course.sample_size(20);
@@ -1344,7 +1375,20 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             );
         });
     });
-    analysis.bench_function("reused", |b| {
+    analysis.bench_function("reused_bpm_allocating", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::profile::analyze_with_allocating_bpms(
+                    black_box(analysis_fixture),
+                    black_box("ssc"),
+                    black_box(&analysis_options),
+                    black_box(&mut allocating_analysis_scratch),
+                )
+                .expect("fixture should analyze"),
+            );
+        });
+    });
+    analysis.bench_function("reused_bpm_buffers", |b| {
         b.iter(|| {
             black_box(
                 rssp::analyze_with_scratch(

@@ -92,6 +92,20 @@ pub mod profile {
         crate::assets::profile_bgchanges_double_find(song_dir, simfile_data)
     }
 
+    pub fn analyze_with_allocating_bpms(
+        simfile_data: &[u8],
+        extension: &str,
+        options: &crate::AnalysisOptions,
+        scratch: &mut crate::AnalysisScratch,
+    ) -> Result<crate::SimfileSummary, String> {
+        crate::analysis::profile_analyze_with_allocating_bpms(
+            simfile_data,
+            extension,
+            options,
+            scratch,
+        )
+    }
+
     #[must_use]
     #[inline]
     pub fn bg_delimiter(rem: &str) -> Option<usize> {
