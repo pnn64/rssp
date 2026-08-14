@@ -1351,13 +1351,14 @@ fn run_metadata_analyze_alloc(iterations: usize) {
     );
 }
 
-fn run_timing_json_alloc(iterations: usize) {
-    let fixture = report_timing_bench::fixture();
-    let summary = rssp::analyze(fixture.as_bytes(), "ssc", &report_timing_bench::options())
-        .expect("timing JSON benchmark should analyze");
+fn run_timing_json_phase(
+    phase: &str,
+    iterations: usize,
+    summary: &rssp::report::SimfileSummary,
+    write: impl Fn(&rssp::report::SimfileSummary, &mut Vec<u8>) -> std::io::Result<()>,
+) {
     let mut warm_output = Vec::new();
-    rssp::report::write_reports(&summary, rssp::report::OutputMode::JSON, &mut warm_output)
-        .expect("timing JSON benchmark should write");
+    write(summary, &mut warm_output).expect("timing JSON benchmark should write");
     black_box(warm_output);
 
     reset_counters();
@@ -1366,12 +1367,8 @@ fn run_timing_json_alloc(iterations: usize) {
     let mut checksum = 0usize;
     for _ in 0..iterations {
         let mut output = Vec::new();
-        rssp::report::write_reports(
-            black_box(&summary),
-            rssp::report::OutputMode::JSON,
-            black_box(&mut output),
-        )
-        .expect("timing JSON benchmark should write");
+        write(black_box(summary), black_box(&mut output))
+            .expect("timing JSON benchmark should write");
         checksum = checksum.wrapping_add(output.len());
         black_box(output);
     }
@@ -1380,12 +1377,13 @@ fn run_timing_json_alloc(iterations: usize) {
     let divisor = iterations as f64;
     println!(
         concat!(
-            "mode=json-timing iters={} checksum={} elapsed_s={:.6} ",
+            "mode=json-timing phase={} iters={} checksum={} elapsed_s={:.6} ",
             "throughput_segments_s={:.3} alloc_calls_per_iter={:.1} ",
             "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
             "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
             "live_growth_bytes={} peak_live_growth_bytes={}"
         ),
+        phase,
         iterations,
         black_box(checksum),
         elapsed.as_secs_f64(),
@@ -1398,6 +1396,21 @@ fn run_timing_json_alloc(iterations: usize) {
         after.live_bytes as isize - before.live_bytes as isize,
         after.peak_live_bytes.saturating_sub(before.live_bytes),
     );
+}
+
+fn run_timing_json_alloc(iterations: usize) {
+    let fixture = report_timing_bench::fixture();
+    let summary = rssp::analyze(fixture.as_bytes(), "ssc", &report_timing_bench::options())
+        .expect("timing JSON benchmark should analyze");
+    run_timing_json_phase(
+        "materialized",
+        iterations,
+        &summary,
+        rssp::profile::write_json_materialized,
+    );
+    run_timing_json_phase("streamed", iterations, &summary, |summary, output| {
+        rssp::report::write_reports(summary, rssp::report::OutputMode::JSON, output)
+    });
 }
 
 fn run_bgchanges_phase(

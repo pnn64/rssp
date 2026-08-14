@@ -1030,39 +1030,16 @@ struct NormalizedTimingTables {
     scrolls: Vec<(f64, f64)>,
 }
 
-fn build_normalized_timing_tables(
-    chart: &ChartSummary,
-    simfile: &SimfileSummary,
-) -> NormalizedTimingTables {
+struct TimingTextTables {
+    time_signatures: Vec<(f64, i32, i32)>,
+    labels: Vec<(f64, String)>,
+    tickcounts: Vec<(f64, i32)>,
+    combos: Vec<(f64, i32, i32)>,
+}
+
+fn build_timing_text_tables(chart: &ChartSummary, simfile: &SimfileSummary) -> TimingTextTables {
     let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
-    let timing = &chart.timing_segments;
     let finalize = |value: f64| timing_fixed_6(value);
-
-    let mut speeds = timing
-        .speeds
-        .iter()
-        .map(|(beat, ratio, delay, unit)| {
-            let unit = i32::from(*unit == SpeedUnit::Seconds);
-            (f64::from(*beat), f64::from(*ratio), f64::from(*delay), unit)
-        })
-        .collect();
-    speeds = normalize_speeds_like_itg(speeds);
-    for (beat, ratio, delay, _) in &mut speeds {
-        *beat = finalize(*beat);
-        *ratio = finalize(*ratio);
-        *delay = finalize(*delay);
-    }
-
-    let mut scrolls = timing
-        .scrolls
-        .iter()
-        .map(|(beat, ratio)| (f64::from(*beat), f64::from(*ratio)))
-        .collect();
-    scrolls = normalize_scrolls_like_itg(scrolls);
-    for (beat, ratio) in &mut scrolls {
-        *beat = finalize(*beat);
-        *ratio = finalize(*ratio);
-    }
 
     let mut time_signatures = parse_time_signatures(chart_or_global(
         allow_steps_timing,
@@ -1100,6 +1077,53 @@ fn build_normalized_timing_tables(
     for (beat, _, _) in &mut combos {
         *beat = finalize(*beat);
     }
+
+    TimingTextTables {
+        time_signatures,
+        labels,
+        tickcounts,
+        combos,
+    }
+}
+
+fn build_normalized_timing_tables(
+    chart: &ChartSummary,
+    simfile: &SimfileSummary,
+) -> NormalizedTimingTables {
+    let timing = &chart.timing_segments;
+    let finalize = |value: f64| timing_fixed_6(value);
+    let mut speeds = normalize_speeds_like_itg(
+        timing
+            .speeds
+            .iter()
+            .map(|(beat, ratio, delay, unit)| {
+                let unit = i32::from(*unit == SpeedUnit::Seconds);
+                (f64::from(*beat), f64::from(*ratio), f64::from(*delay), unit)
+            })
+            .collect(),
+    );
+    for (beat, ratio, delay, _) in &mut speeds {
+        *beat = finalize(*beat);
+        *ratio = finalize(*ratio);
+        *delay = finalize(*delay);
+    }
+    let mut scrolls = normalize_scrolls_like_itg(
+        timing
+            .scrolls
+            .iter()
+            .map(|(beat, ratio)| (f64::from(*beat), f64::from(*ratio)))
+            .collect(),
+    );
+    for (beat, ratio) in &mut scrolls {
+        *beat = finalize(*beat);
+        *ratio = finalize(*ratio);
+    }
+    let TimingTextTables {
+        time_signatures,
+        labels,
+        tickcounts,
+        combos,
+    } = build_timing_text_tables(chart, simfile);
 
     NormalizedTimingTables {
         time_signatures,
@@ -1184,7 +1208,8 @@ mod tests {
         parse_combos, parse_labels, parse_tickcounts, parse_time_signatures, push_bpm_range,
         push_duration, push_num, push_str, steps_timing_allowed, timing_fixed_6, write_csv_course,
         write_csv_course_materialized, write_json_all, write_json_all_materialized,
-        write_json_course, write_json_course_materialized, write_json_stream_sequences,
+        write_json_all_with, write_json_course, write_json_course_materialized,
+        write_json_stream_sequences,
     };
 
     fn timing_fixed_6_materialized(value: f64) -> f64 {
@@ -1436,6 +1461,10 @@ mod tests {
             write_json_all(&summary, &mut actual).expect("streaming JSON should write");
 
             assert_eq!(actual, expected);
+            let mut prior = Vec::new();
+            write_json_all_with::<_, true>(&summary, &mut prior)
+                .expect("materialized timing arrays should write");
+            assert_eq!(actual, prior);
             serde_json::from_slice::<serde_json::Value>(&actual)
                 .expect("streaming output should be valid JSON");
         }
@@ -3612,15 +3641,93 @@ fn write_json_pair_iter<W: Write>(
     writer.write_all(b"]")
 }
 
-fn write_json_pair_array<W: Write>(
+fn write_json_speed_iter<W: Write>(
     writer: &mut W,
-    values: &[(f64, f64)],
+    values: impl IntoIterator<Item = (f64, f64, f64, i32)>,
     indent: usize,
 ) -> io::Result<()> {
-    write_json_pair_iter(writer, values.iter().copied(), indent)
+    let mut values = values.into_iter().peekable();
+    if values.peek().is_none() {
+        return writer.write_all(b"[]");
+    }
+
+    writer.write_all(b"[\n")?;
+    let item_indent = indent + 2;
+    for (index, (beat, ratio, delay, unit)) in values.enumerate() {
+        if index != 0 {
+            writer.write_all(b",\n")?;
+        }
+        write_indent(writer, item_indent)?;
+        writer.write_all(b"[")?;
+        write_json_raw_f64(writer, beat)?;
+        writer.write_all(b", ")?;
+        write_json_raw_f64(writer, ratio)?;
+        writer.write_all(b", ")?;
+        write_json_raw_f64(writer, delay)?;
+        write!(writer, ", {unit}]")?;
+    }
+    writer.write_all(b"\n")?;
+    write_indent(writer, indent)?;
+    writer.write_all(b"]")
 }
 
-fn write_json_timing<W: Write>(
+fn write_json_native_speeds<W: Write>(
+    writer: &mut W,
+    speeds: &[(f32, f32, f32, SpeedUnit)],
+    indent: usize,
+) -> io::Result<()> {
+    if speeds.is_empty() {
+        return write_json_speed_iter(writer, [(0.0, 1.0, 0.0, 0)], indent);
+    }
+
+    writer.write_all(b"[\n")?;
+    let item_indent = indent + 2;
+    for (index, &(beat, ratio, delay, unit)) in speeds.iter().enumerate() {
+        if index != 0 {
+            writer.write_all(b",\n")?;
+        }
+        write_indent(writer, item_indent)?;
+        writer.write_all(b"[")?;
+        write_json_raw_f64(writer, timing_fixed_6(f64::from(beat)))?;
+        writer.write_all(b", ")?;
+        write_json_raw_f64(writer, timing_fixed_6(f64::from(ratio)))?;
+        writer.write_all(b", ")?;
+        write_json_raw_f64(writer, timing_fixed_6(f64::from(delay)))?;
+        write!(writer, ", {}]", i32::from(unit == SpeedUnit::Seconds))?;
+    }
+    writer.write_all(b"\n")?;
+    write_indent(writer, indent)?;
+    writer.write_all(b"]")
+}
+
+fn write_json_native_scrolls<W: Write>(
+    writer: &mut W,
+    scrolls: &[(f32, f32)],
+    indent: usize,
+) -> io::Result<()> {
+    if scrolls.is_empty() {
+        return write_json_pair_iter(writer, [(0.0, 1.0)], indent);
+    }
+
+    writer.write_all(b"[\n")?;
+    let item_indent = indent + 2;
+    for (index, &(beat, ratio)) in scrolls.iter().enumerate() {
+        if index != 0 {
+            writer.write_all(b",\n")?;
+        }
+        write_indent(writer, item_indent)?;
+        writer.write_all(b"[")?;
+        write_json_raw_f64(writer, timing_fixed_6(f64::from(beat)))?;
+        writer.write_all(b", ")?;
+        write_json_raw_f64(writer, timing_fixed_6(f64::from(ratio)))?;
+        writer.write_all(b"]")?;
+    }
+    writer.write_all(b"\n")?;
+    write_indent(writer, indent)?;
+    writer.write_all(b"]")
+}
+
+fn write_json_timing_with<W: Write, const MATERIALIZE: bool>(
     writer: &mut W,
     chart: &ChartSummary,
     simfile: &SimfileSummary,
@@ -3632,14 +3739,26 @@ fn write_json_timing<W: Write>(
     let beat0_group_offset_seconds = 0.0;
     let bpms_formatted = format_bpm_segments_f32_like_itg(&timing.bpms);
     let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw_f32(&timing.bpms);
-    let NormalizedTimingTables {
-        time_signatures,
-        labels,
-        tickcounts,
-        combos,
-        speeds,
-        scrolls,
-    } = build_normalized_timing_tables(chart, simfile);
+    let materialized = MATERIALIZE.then(|| build_normalized_timing_tables(chart, simfile));
+    let text = (!MATERIALIZE).then(|| build_timing_text_tables(chart, simfile));
+    let (time_signatures, labels, tickcounts, combos) = if let Some(tables) = &materialized {
+        (
+            tables.time_signatures.as_slice(),
+            tables.labels.as_slice(),
+            tables.tickcounts.as_slice(),
+            tables.combos.as_slice(),
+        )
+    } else {
+        let tables = text
+            .as_ref()
+            .expect("streamed timing tables must be available");
+        (
+            tables.time_signatures.as_slice(),
+            tables.labels.as_slice(),
+            tables.tickcounts.as_slice(),
+            tables.combos.as_slice(),
+        )
+    };
 
     let bpm_min = round_sig_figs_6(round_sig_figs_itg(bpm_min_raw));
     let bpm_max = round_sig_figs_6(round_sig_figs_itg(bpm_max_raw));
@@ -3753,19 +3872,16 @@ fn write_json_timing<W: Write>(
         })
     })?;
     object.field_with("speeds", |writer, indent| {
-        write_json_multiline_array(writer, speeds.len(), indent, |writer, idx, _| {
-            let (beat, ratio, delay, unit) = speeds[idx];
-            writer.write_all(b"[")?;
-            write_json_raw_f64(writer, beat)?;
-            writer.write_all(b", ")?;
-            write_json_raw_f64(writer, ratio)?;
-            writer.write_all(b", ")?;
-            write_json_raw_f64(writer, delay)?;
-            write!(writer, ", {unit}]")
-        })
+        if let Some(tables) = &materialized {
+            return write_json_speed_iter(writer, tables.speeds.iter().copied(), indent);
+        }
+        write_json_native_speeds(writer, &timing.speeds, indent)
     })?;
     object.field_with("scrolls", |writer, indent| {
-        write_json_pair_array(writer, &scrolls, indent)
+        if let Some(tables) = &materialized {
+            return write_json_pair_iter(writer, tables.scrolls.iter().copied(), indent);
+        }
+        write_json_native_scrolls(writer, &timing.scrolls, indent)
     })?;
     object.field_with("fakes", |writer, indent| {
         write_json_pair_iter(
@@ -4125,7 +4241,7 @@ fn write_json_pattern_counts<W: Write>(
     object.finish()
 }
 
-fn write_json_chart<W: Write>(
+fn write_json_chart_with<W: Write, const MATERIALIZE: bool>(
     writer: &mut W,
     chart: &ChartSummary,
     simfile: &SimfileSummary,
@@ -4142,7 +4258,7 @@ fn write_json_chart<W: Write>(
         write_json_gimmicks(writer, chart, simfile, indent)
     })?;
     object.field_with("timing", |writer, indent| {
-        write_json_timing(writer, chart, simfile, indent)
+        write_json_timing_with::<W, MATERIALIZE>(writer, chart, simfile, indent)
     })?;
     object.field_with("stream_info", |writer, indent| {
         write_json_stream_info(writer, chart, indent)
@@ -4170,6 +4286,15 @@ fn write_json_chart<W: Write>(
         })?;
     }
     object.finish()
+}
+
+fn write_json_chart<W: Write>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    simfile: &SimfileSummary,
+    indent: usize,
+) -> io::Result<()> {
+    write_json_chart_with::<W, false>(writer, chart, simfile, indent)
 }
 
 #[cfg(test)]
@@ -4259,7 +4384,10 @@ fn write_json_all_materialized<W: Write>(
     writeln!(writer)
 }
 
-pub fn write_json_all<W: Write>(simfile: &SimfileSummary, writer: &mut W) -> io::Result<()> {
+fn write_json_all_with<W: Write, const MATERIALIZE: bool>(
+    simfile: &SimfileSummary,
+    writer: &mut W,
+) -> io::Result<()> {
     let mut root = JsonObjectWriter::new(writer, 0)?;
     root.field_string("title", &simfile.title_str)?;
     root.field_string("subtitle", &simfile.subtitle_str)?;
@@ -4289,12 +4417,38 @@ pub fn write_json_all<W: Write>(simfile: &SimfileSummary, writer: &mut W) -> io:
             simfile.charts.len(),
             indent,
             |writer, idx, item_indent| {
-                write_json_chart(writer, &simfile.charts[idx], simfile, item_indent)
+                write_json_chart_with::<W, MATERIALIZE>(
+                    writer,
+                    &simfile.charts[idx],
+                    simfile,
+                    item_indent,
+                )
             },
         )
     })?;
     root.finish()?;
     writeln!(writer)
+}
+
+pub fn write_json_all<W: Write>(simfile: &SimfileSummary, writer: &mut W) -> io::Result<()> {
+    write_json_all_with::<W, false>(simfile, writer)
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_write_json_materialized<W: Write>(
+    simfile: &SimfileSummary,
+    writer: &mut W,
+) -> io::Result<()> {
+    write_json_all_with::<W, true>(simfile, writer)
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_write_json_timing<W: Write, const MATERIALIZE: bool>(
+    writer: &mut W,
+    chart: &ChartSummary,
+    simfile: &SimfileSummary,
+) -> io::Result<()> {
+    write_json_timing_with::<W, MATERIALIZE>(writer, chart, simfile, 0)
 }
 
 const CSV_HEADER_BASE: &str = "Title,Subtitle,Artist,Title trans,Subtitle trans,Artist trans,Length,BPM,BPM Tier,min_bpm,max_bpm,average_bpm,median bpm,BPM-data,offset,file_md5_hash,step_type,difficulty,rating,step_artist,tech_notation,sha1_hash,bpm_neutral_hash,total_arrows,left_arrows,down_arrows,up_arrows,right_arrows,total_steps,jumps,hands,holds,rolls,mines,lifts,fakes,stops_freezes,delays,warps,speeds,scrolls,total_streams,16th_streams,20th_streams,24th_streams,32nd_streams,total_breaks,sn_breaks,stream_percent,adj_stream_percent,max_nps,median_nps,matrix_rating";

@@ -19,6 +19,9 @@ mod course_bench;
 #[path = "support/pack.rs"]
 mod pack_bench;
 #[cfg(windows)]
+#[path = "support/report_timing.rs"]
+mod report_timing_bench;
+#[cfg(windows)]
 #[path = "support/step_parity.rs"]
 mod step_parity_bench;
 
@@ -604,6 +607,17 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let asset_fixture = assets_bench::AssetFixture::with_movies(1);
     let delimiter_fields = assets_bench::delimiter_fields();
     let delimiter_bytes = delimiter_fields.iter().map(String::len).sum::<usize>();
+    let report_fixture = report_timing_bench::fixture();
+    let report_summary = rssp::analyze(
+        report_fixture.as_bytes(),
+        "ssc",
+        &report_timing_bench::options(),
+    )
+    .expect("timing JSON cycle fixture should analyze");
+    let report_chart = report_summary
+        .charts
+        .first()
+        .expect("timing JSON cycle fixture should contain a chart");
 
     let mut optimizations = c.benchmark_group("cycles/optimizations");
     optimizations.sample_size(100);
@@ -882,6 +896,69 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     delimiter.finish();
+
+    let mut timing_arrays = c.benchmark_group("cycles/report_json_timing_arrays");
+    timing_arrays.sample_size(20);
+    timing_arrays.measurement_time(Duration::from_secs(3));
+    timing_arrays.throughput(Throughput::Elements(
+        report_timing_bench::SEGMENT_COUNT as u64,
+    ));
+    timing_arrays.bench_function("materialized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_timing_materialized(
+                black_box(&mut output),
+                black_box(report_chart),
+                black_box(&report_summary),
+            )
+            .expect("materialized timing JSON should write");
+            black_box(output)
+        });
+    });
+    timing_arrays.bench_function("streamed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_timing(
+                black_box(&mut output),
+                black_box(report_chart),
+                black_box(&report_summary),
+            )
+            .expect("streamed timing JSON should write");
+            black_box(output)
+        });
+    });
+    timing_arrays.finish();
+
+    let mut timing_report = c.benchmark_group("cycles/report_json_timing");
+    timing_report.sample_size(20);
+    timing_report.measurement_time(Duration::from_secs(3));
+    timing_report.throughput(Throughput::Elements(
+        report_timing_bench::SEGMENT_COUNT as u64,
+    ));
+    timing_report.bench_function("materialized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_materialized(
+                black_box(&report_summary),
+                black_box(&mut output),
+            )
+            .expect("materialized timing JSON report should write");
+            black_box(output)
+        });
+    });
+    timing_report.bench_function("streamed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::report::write_reports(
+                black_box(&report_summary),
+                rssp::report::OutputMode::JSON,
+                black_box(&mut output),
+            )
+            .expect("streamed timing JSON report should write");
+            black_box(output)
+        });
+    });
+    timing_report.finish();
 
     let mut analysis = c.benchmark_group("cycles/analysis_scratch");
     analysis.sample_size(10);

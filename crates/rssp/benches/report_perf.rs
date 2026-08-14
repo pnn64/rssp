@@ -87,6 +87,42 @@ fn bench_timing_json(c: &mut Criterion) {
     let fixture = report_timing_bench::fixture();
     let summary = rssp::analyze(fixture.as_bytes(), "ssc", &report_timing_bench::options())
         .expect("fixture should analyze");
+    let chart = summary
+        .charts
+        .first()
+        .expect("fixture should contain a chart");
+
+    let mut group = c.benchmark_group("report_json_timing_arrays");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(
+        report_timing_bench::SEGMENT_COUNT as u64,
+    ));
+    group.bench_function("materialized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_timing_materialized(
+                black_box(&mut output),
+                black_box(chart),
+                black_box(&summary),
+            )
+            .expect("materialized timing JSON should write");
+            black_box(output);
+        });
+    });
+    group.bench_function("streamed", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_timing(
+                black_box(&mut output),
+                black_box(chart),
+                black_box(&summary),
+            )
+            .expect("streamed timing JSON should write");
+            black_box(output);
+        });
+    });
+    group.finish();
 
     let mut group = c.benchmark_group("report_json_timing");
     group.sample_size(100);
@@ -94,7 +130,15 @@ fn bench_timing_json(c: &mut Criterion) {
     group.throughput(Throughput::Elements(
         report_timing_bench::SEGMENT_COUNT as u64,
     ));
-    group.bench_function("write_512_segments", |b| {
+    group.bench_function("materialized", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            rssp::profile::write_json_materialized(black_box(&summary), black_box(&mut output))
+                .expect("materialized timing JSON report should write");
+            black_box(output);
+        });
+    });
+    group.bench_function("streamed", |b| {
         b.iter(|| {
             let mut output = Vec::new();
             rssp::report::write_reports(

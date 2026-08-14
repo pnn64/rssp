@@ -103,6 +103,29 @@ pub mod profile {
     pub fn bg_delimiter_legacy(rem: &str) -> Option<usize> {
         crate::assets::profile_find_bg_delimiter_legacy(rem)
     }
+
+    pub fn write_json_materialized<W: std::io::Write>(
+        simfile: &crate::report::SimfileSummary,
+        writer: &mut W,
+    ) -> std::io::Result<()> {
+        crate::report::profile_write_json_materialized(simfile, writer)
+    }
+
+    pub fn write_json_timing<W: std::io::Write>(
+        writer: &mut W,
+        chart: &crate::report::ChartSummary,
+        simfile: &crate::report::SimfileSummary,
+    ) -> std::io::Result<()> {
+        crate::report::profile_write_json_timing::<W, false>(writer, chart, simfile)
+    }
+
+    pub fn write_json_timing_materialized<W: std::io::Write>(
+        writer: &mut W,
+        chart: &crate::report::ChartSummary,
+        simfile: &crate::report::SimfileSummary,
+    ) -> std::io::Result<()> {
+        crate::report::profile_write_json_timing::<W, true>(writer, chart, simfile)
+    }
 }
 
 pub use rssp_core::{
