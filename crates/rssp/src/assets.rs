@@ -6,6 +6,8 @@ use std::io;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use memchr::memchr2;
+
 use crate::parse::{decode_bytes, extract_bgchanges_values, unescape_tag};
 
 const RANDOM_BACKGROUND_FILE: &str = "-random-";
@@ -643,9 +645,34 @@ fn match_bg_file(
         .map(|(file_len, file_index)| (file_len, (!fallback_is_ambiguous).then_some(file_index)))
 }
 
-fn for_each_bgchange_pair(
+fn find_bg_delimiter(rem: &str) -> Option<usize> {
+    memchr2(b'=', b',', rem.as_bytes())
+}
+
+#[cfg(any(test, feature = "profile"))]
+fn find_bg_delimiter_legacy(rem: &str) -> Option<usize> {
+    match (rem.find('='), rem.find(',')) {
+        (Some(equals), Some(comma)) => Some(equals.min(comma)),
+        (Some(equals), None) => Some(equals),
+        (None, Some(comma)) => Some(comma),
+        (None, None) => None,
+    }
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_find_bg_delimiter(rem: &str) -> Option<usize> {
+    find_bg_delimiter(rem)
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_find_bg_delimiter_legacy(rem: &str) -> Option<usize> {
+    find_bg_delimiter_legacy(rem)
+}
+
+fn for_each_bgchange_pair_with(
     changes: &str,
     files: &BgFileCatalog,
+    find_delimiter: &impl Fn(&str) -> Option<usize>,
     mut handle: impl FnMut(&str, &str, Option<usize>),
 ) {
     let changes = strip_newlines(changes);
@@ -672,14 +699,7 @@ fn for_each_bgchange_pair(
             (found, delimiter, file_index)
         } else {
             let rem = &changes[start..];
-            let eq = rem.find('=').map(|index| start + index);
-            let comma = rem.find(',').map(|index| start + index);
-            let end = match (eq, comma) {
-                (Some(eq), Some(comma)) => eq.min(comma),
-                (Some(eq), None) => eq,
-                (None, Some(comma)) => comma,
-                (None, None) => changes.len(),
-            };
+            let end = start + find_delimiter(rem).unwrap_or(rem.len());
             let field = &changes[start..end];
             let delimiter = changes.as_bytes().get(end).copied();
             start = end + usize::from(delimiter.is_some());
@@ -715,6 +735,24 @@ fn for_each_bgchange_pair(
             Some(_) => unreachable!("background change delimiter must be '=' or ','"),
         }
     }
+}
+
+#[cfg(test)]
+fn for_each_bgchange_pair(
+    changes: &str,
+    files: &BgFileCatalog,
+    handle: impl FnMut(&str, &str, Option<usize>),
+) {
+    for_each_bgchange_pair_with(changes, files, &find_bg_delimiter, handle);
+}
+
+#[cfg(test)]
+fn for_each_bgchange_pair_legacy(
+    changes: &str,
+    files: &BgFileCatalog,
+    handle: impl FnMut(&str, &str, Option<usize>),
+) {
+    for_each_bgchange_pair_with(changes, files, &find_bg_delimiter_legacy, handle);
 }
 
 fn resolve_bgchange_target(
@@ -799,6 +837,7 @@ fn resolve_bgchanges_with(
     simfile_data: &[u8],
     files: &BgFileCatalog,
     fallback_movie: impl FnOnce() -> Option<PathBuf>,
+    find_delimiter: impl Fn(&str) -> Option<usize>,
 ) -> Vec<ResolvedBackgroundChange> {
     let mut resolution_status = BgResolutionStatus::new(files.files.len());
     let mut out: Vec<ResolvedBackgroundChange> = Vec::new();
@@ -807,23 +846,28 @@ fn resolve_bgchanges_with(
     for raw in extract_bgchanges_values(simfile_data) {
         let decoded = decode_bytes(raw);
         let text = unescape_tag(decoded.as_ref());
-        for_each_bgchange_pair(text.as_ref(), files, |start_beat, target, file_index| {
-            let Some(change) = parse_bgchange_pair(
-                song_dir,
-                start_beat,
-                target,
-                file_index,
-                files,
-                &mut resolution_status,
-            ) else {
-                return;
-            };
-            if matches!(change.target, BackgroundChangeTarget::NoSongBg) {
-                saw_no_song_bg = true;
-                return;
-            }
-            upsert_bgchange(&mut out, change, &mut beats_ordered);
-        });
+        for_each_bgchange_pair_with(
+            text.as_ref(),
+            files,
+            &find_delimiter,
+            |start_beat, target, file_index| {
+                let Some(change) = parse_bgchange_pair(
+                    song_dir,
+                    start_beat,
+                    target,
+                    file_index,
+                    files,
+                    &mut resolution_status,
+                ) else {
+                    return;
+                };
+                if matches!(change.target, BackgroundChangeTarget::NoSongBg) {
+                    saw_no_song_bg = true;
+                    return;
+                }
+                upsert_bgchange(&mut out, change, &mut beats_ordered);
+            },
+        );
     }
     let has_explicit_movie = out.iter().any(|change| {
         matches!(
@@ -876,13 +920,34 @@ pub fn resolve_background_changes_like_itg(
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
     let (files, movie) = list_song_dir_rel_files::<true>(song_dir);
-    resolve_bgchanges_with(song_dir, simfile_data, &files, || movie)
+    resolve_bgchanges_with(song_dir, simfile_data, &files, || movie, find_bg_delimiter)
 }
 
 #[cfg(any(test, feature = "profile"))]
 fn resolve_bgchanges_legacy(song_dir: &Path, simfile_data: &[u8]) -> Vec<ResolvedBackgroundChange> {
     let (files, _) = list_song_dir_rel_files::<false>(song_dir);
-    resolve_bgchanges_with(song_dir, simfile_data, &files, || only_movie_file(song_dir))
+    resolve_bgchanges_with(
+        song_dir,
+        simfile_data,
+        &files,
+        || only_movie_file(song_dir),
+        find_bg_delimiter,
+    )
+}
+
+#[cfg(any(test, feature = "profile"))]
+fn resolve_bgchanges_double_find(
+    song_dir: &Path,
+    simfile_data: &[u8],
+) -> Vec<ResolvedBackgroundChange> {
+    let (files, movie) = list_song_dir_rel_files::<true>(song_dir);
+    resolve_bgchanges_with(
+        song_dir,
+        simfile_data,
+        &files,
+        || movie,
+        find_bg_delimiter_legacy,
+    )
 }
 
 #[cfg(feature = "profile")]
@@ -893,15 +958,24 @@ pub(crate) fn profile_bgchanges_legacy(
     resolve_bgchanges_legacy(song_dir, simfile_data)
 }
 
+#[cfg(feature = "profile")]
+pub(crate) fn profile_bgchanges_double_find(
+    song_dir: &Path,
+    simfile_data: &[u8],
+) -> Vec<ResolvedBackgroundChange> {
+    resolve_bgchanges_double_find(song_dir, simfile_data)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use super::{
         BackgroundChangeTarget, BgFileCatalog, BgResolutionStatus, ResolvedBackgroundChange,
-        cmp_name_ci, for_each_bgchange_pair, is_dir_ci, is_file_ci, lc_name, list_image_candidates,
-        match_bg_file, resolve_background_changes_like_itg, resolve_bgchanges_legacy,
-        resolve_music_path_like_itg, resolve_song_assets, strip_newlines, upsert_bgchange,
+        cmp_name_ci, for_each_bgchange_pair, for_each_bgchange_pair_legacy, is_dir_ci, is_file_ci,
+        lc_name, list_image_candidates, match_bg_file, resolve_background_changes_like_itg,
+        resolve_bgchanges_legacy, resolve_music_path_like_itg, resolve_song_assets, strip_newlines,
+        upsert_bgchange,
     };
 
     struct TempDir(PathBuf);
@@ -1009,7 +1083,12 @@ mod tests {
         for_each_bgchange_pair(changes, &files, |start_beat, target, _| {
             actual.push((start_beat.to_string(), target.to_string()));
         });
+        let mut legacy = Vec::new();
+        for_each_bgchange_pair_legacy(changes, &files, |start_beat, target, _| {
+            legacy.push((start_beat.to_string(), target.to_string()));
+        });
         assert_eq!(actual, expected, "changes={changes:?}");
+        assert_eq!(actual, legacy, "changes={changes:?}");
     }
 
     #[test]

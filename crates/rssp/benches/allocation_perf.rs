@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
+#[allow(dead_code)]
 #[path = "support/assets.rs"]
 mod assets_bench;
 #[path = "support/course.rs"]
@@ -1403,23 +1404,16 @@ fn run_bgchanges_phase(
     phase: &str,
     iterations: usize,
     fixture: &assets_bench::AssetFixture,
-    legacy: bool,
+    resolve: impl Fn(&std::path::Path, &[u8]) -> Vec<rssp::assets::ResolvedBackgroundChange>,
 ) {
-    let resolve = || {
-        if legacy {
-            rssp::profile::background_changes_legacy(fixture.song_dir(), fixture.simfile())
-        } else {
-            rssp::assets::resolve_background_changes_like_itg(fixture.song_dir(), fixture.simfile())
-        }
-    };
-    black_box(resolve());
+    black_box(resolve(fixture.song_dir(), fixture.simfile()));
 
     reset_counters();
     let before = Counters::read();
     let start = Instant::now();
     let mut checksum = 0usize;
     for _ in 0..iterations {
-        let changes = resolve();
+        let changes = resolve(black_box(fixture.song_dir()), black_box(fixture.simfile()));
         checksum = checksum.wrapping_add(changes.len());
         black_box(changes);
     }
@@ -1451,8 +1445,15 @@ fn run_bgchanges_phase(
 
 fn run_background_changes_alloc(iterations: usize) {
     let fixture = assets_bench::AssetFixture::with_movies(1);
-    run_bgchanges_phase("root-rescan", iterations, &fixture, true);
-    run_bgchanges_phase("catalog-movie", iterations, &fixture, false);
+    run_bgchanges_phase("root-rescan", iterations, &fixture, |dir, data| {
+        rssp::profile::background_changes_legacy(dir, data)
+    });
+    run_bgchanges_phase("double-find", iterations, &fixture, |dir, data| {
+        rssp::profile::background_changes_double_find(dir, data)
+    });
+    run_bgchanges_phase("single-scan", iterations, &fixture, |dir, data| {
+        rssp::assets::resolve_background_changes_like_itg(dir, data)
+    });
 }
 
 fn run_asset_fallbacks_alloc(iterations: usize) {

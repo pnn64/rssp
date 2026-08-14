@@ -602,6 +602,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let course_options = course_bench::fast_options();
     let pack_fixture = pack_bench::PackFixture::new();
     let asset_fixture = assets_bench::AssetFixture::with_movies(1);
+    let delimiter_fields = assets_bench::delimiter_fields();
+    let delimiter_bytes = delimiter_fields.iter().map(String::len).sum::<usize>();
 
     let mut optimizations = c.benchmark_group("cycles/optimizations");
     optimizations.sample_size(100);
@@ -841,6 +843,14 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             ))
         });
     });
+    background.bench_function("double_find", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::background_changes_double_find(
+                black_box(asset_fixture.song_dir()),
+                black_box(asset_fixture.simfile()),
+            ))
+        });
+    });
     background.bench_function("catalog_movie", |b| {
         b.iter(|| {
             black_box(rssp::assets::resolve_background_changes_like_itg(
@@ -850,6 +860,28 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     background.finish();
+
+    let mut delimiter = c.benchmark_group("cycles/background_delimiter_scan");
+    delimiter.throughput(Throughput::Bytes(delimiter_bytes as u64));
+    delimiter.bench_function("double_find", |b| {
+        b.iter(|| {
+            let sum = delimiter_fields
+                .iter()
+                .filter_map(|field| rssp::profile::bg_delimiter_legacy(black_box(field)))
+                .sum::<usize>();
+            black_box(sum)
+        });
+    });
+    delimiter.bench_function("memchr2", |b| {
+        b.iter(|| {
+            let sum = delimiter_fields
+                .iter()
+                .filter_map(|field| rssp::profile::bg_delimiter(black_box(field)))
+                .sum::<usize>();
+            black_box(sum)
+        });
+    });
+    delimiter.finish();
 
     let mut analysis = c.benchmark_group("cycles/analysis_scratch");
     analysis.sample_size(10);

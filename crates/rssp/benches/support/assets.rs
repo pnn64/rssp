@@ -8,6 +8,19 @@ pub const IMAGE_COUNT: usize = 256;
 pub const NON_IMAGE_COUNT: usize = 256;
 pub const MOVIE_COUNT: usize = 128;
 pub const SOUND_COUNT: usize = 129;
+pub const DELIMITER_FIELD_COUNT: usize = 4_096;
+
+pub fn delimiter_fields() -> Vec<String> {
+    (0..DELIMITER_FIELD_COUNT)
+        .map(|index| {
+            if index.is_multiple_of(2) {
+                format!("{index:08}=Visuals/Background-Layer-{index:08}.png,tail")
+            } else {
+                format!("{index:08},Visuals/Background-Layer-{index:08}.png=tail")
+            }
+        })
+        .collect()
+}
 
 pub struct AssetFixture {
     root: PathBuf,

@@ -83,6 +83,26 @@ pub mod profile {
     ) -> Vec<crate::assets::ResolvedBackgroundChange> {
         crate::assets::profile_bgchanges_legacy(song_dir, simfile_data)
     }
+
+    #[must_use]
+    pub fn background_changes_double_find(
+        song_dir: &Path,
+        simfile_data: &[u8],
+    ) -> Vec<crate::assets::ResolvedBackgroundChange> {
+        crate::assets::profile_bgchanges_double_find(song_dir, simfile_data)
+    }
+
+    #[must_use]
+    #[inline]
+    pub fn bg_delimiter(rem: &str) -> Option<usize> {
+        crate::assets::profile_find_bg_delimiter(rem)
+    }
+
+    #[must_use]
+    #[inline]
+    pub fn bg_delimiter_legacy(rem: &str) -> Option<usize> {
+        crate::assets::profile_find_bg_delimiter_legacy(rem)
+    }
 }
 
 pub use rssp_core::{

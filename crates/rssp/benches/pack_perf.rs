@@ -91,6 +91,54 @@ fn bench_background_changes(c: &mut Criterion) {
         });
     });
     group.finish();
+
+    let mut delimiters = c.benchmark_group("background_delimiters");
+    delimiters.sample_size(30);
+    delimiters.measurement_time(Duration::from_secs(3));
+    delimiters.throughput(Throughput::Elements(assets_bench::CHANGE_COUNT as u64));
+    delimiters.bench_function("double_find", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::background_changes_double_find(
+                black_box(fixture.song_dir()),
+                black_box(fixture.simfile()),
+            ))
+        });
+    });
+    delimiters.bench_function("single_scan", |b| {
+        b.iter(|| {
+            black_box(rssp::assets::resolve_background_changes_like_itg(
+                black_box(fixture.song_dir()),
+                black_box(fixture.simfile()),
+            ))
+        });
+    });
+    delimiters.finish();
+}
+
+fn bench_delimiter_scan(c: &mut Criterion) {
+    let fields = assets_bench::delimiter_fields();
+    let bytes = fields.iter().map(String::len).sum::<usize>();
+    let mut group = c.benchmark_group("background_delimiter_scan");
+    group.throughput(Throughput::Bytes(bytes as u64));
+    group.bench_function("double_find", |b| {
+        b.iter(|| {
+            let sum = fields
+                .iter()
+                .filter_map(|field| rssp::profile::bg_delimiter_legacy(black_box(field)))
+                .sum::<usize>();
+            black_box(sum)
+        });
+    });
+    group.bench_function("memchr2", |b| {
+        b.iter(|| {
+            let sum = fields
+                .iter()
+                .filter_map(|field| rssp::profile::bg_delimiter(black_box(field)))
+                .sum::<usize>();
+            black_box(sum)
+        });
+    });
+    group.finish();
 }
 
 fn bench_asset_fallbacks(c: &mut Criterion) {
@@ -295,6 +343,7 @@ criterion_group!(
     bench_pack_scan,
     bench_pack_root,
     bench_background_changes,
+    bench_delimiter_scan,
     bench_asset_fallbacks,
     bench_song_assets,
     bench_selection_algorithms
