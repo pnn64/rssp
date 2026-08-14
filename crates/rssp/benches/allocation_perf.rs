@@ -103,6 +103,7 @@ enum Mode {
     CourseJson,
     CourseCsv,
     CourseAnalyze,
+    CourseStepType,
     PackScan,
     BackgroundChanges,
     AssetFallbacks,
@@ -189,6 +190,7 @@ fn parse_args() -> (Mode, usize) {
                     "course-json" => Mode::CourseJson,
                     "course-csv" => Mode::CourseCsv,
                     "course-analyze" => Mode::CourseAnalyze,
+                    "course-stepstype" => Mode::CourseStepType,
                     "pack-scan" => Mode::PackScan,
                     "background-changes" => Mode::BackgroundChanges,
                     "asset-fallbacks" => Mode::AssetFallbacks,
@@ -253,6 +255,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             ..rssp::AnalysisOptions::default()
         },
         Mode::CourseAnalyze => rssp::AnalysisOptions::default(),
+        Mode::CourseStepType => rssp::AnalysisOptions::default(),
         Mode::PackScan => rssp::AnalysisOptions::default(),
         Mode::BackgroundChanges => rssp::AnalysisOptions::default(),
         Mode::AssetFallbacks => rssp::AnalysisOptions::default(),
@@ -377,6 +380,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::CourseAnalyze => {
                 unreachable!("course analysis mode uses its dedicated allocation runner")
+            }
+            Mode::CourseStepType => {
+                unreachable!("course step-type mode uses its dedicated allocation runner")
             }
             Mode::PackScan => {
                 unreachable!("pack scan mode uses its dedicated allocation runner")
@@ -564,6 +570,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::CourseJson => "course-json",
         Mode::CourseCsv => "course-csv",
         Mode::CourseAnalyze => "course-analyze",
+        Mode::CourseStepType => "course-stepstype",
         Mode::PackScan => "pack-scan",
         Mode::BackgroundChanges => "background-changes",
         Mode::AssetFallbacks => "asset-fallbacks",
@@ -1041,33 +1048,20 @@ fn run_minimize_alloc(iterations: usize, corpus: &[SimInput]) {
     });
 }
 
-fn run_course_analyze_alloc(iterations: usize) {
-    let fixture = course_bench::CourseFixture::new();
-    let options = course_bench::clone_heavy_options();
-    black_box(
-        rssp::course::analyze_crs_path(
-            fixture.course_path(),
-            Some(fixture.songs_dir()),
-            "dance-single",
-            "Medium",
-            options.clone(),
-        )
-        .expect("benchmark course should analyze"),
-    );
-
+fn run_course_analyze_phase(
+    phase: &str,
+    iterations: usize,
+    fixture: &course_bench::CourseFixture,
+    options: &rssp::AnalysisOptions,
+    analyze: impl Fn(&course_bench::CourseFixture, rssp::AnalysisOptions) -> rssp::CourseSummary,
+) {
+    black_box(analyze(fixture, options.clone()));
     reset_counters();
     let before = Counters::read();
     let start = Instant::now();
     let mut checksum = 0usize;
     for _ in 0..iterations {
-        let summary = rssp::course::analyze_crs_path(
-            black_box(fixture.course_path()),
-            Some(black_box(fixture.songs_dir())),
-            black_box("dance-single"),
-            black_box("Medium"),
-            black_box(options.clone()),
-        )
-        .expect("benchmark course should analyze");
+        let summary = analyze(black_box(fixture), black_box(options.clone()));
         checksum = checksum.wrapping_add(summary.entries.len());
         black_box(summary);
     }
@@ -1076,12 +1070,13 @@ fn run_course_analyze_alloc(iterations: usize) {
     let divisor = iterations as f64;
     println!(
         concat!(
-            "mode=course-analyze iters={} checksum={} elapsed_s={:.6} ",
+            "mode=course-analyze phase={} iters={} checksum={} elapsed_s={:.6} ",
             "throughput_entries_s={:.3} alloc_calls_per_iter={:.1} ",
             "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
             "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
             "live_growth_bytes={} peak_live_growth_bytes={}"
         ),
+        phase,
         iterations,
         black_box(checksum),
         elapsed.as_secs_f64(),
@@ -1094,6 +1089,104 @@ fn run_course_analyze_alloc(iterations: usize) {
         after.live_bytes as isize - before.live_bytes as isize,
         after.peak_live_bytes.saturating_sub(before.live_bytes),
     );
+}
+
+fn run_course_analyze_alloc(iterations: usize) {
+    let fixture = course_bench::CourseFixture::new();
+    let options = course_bench::clone_heavy_options();
+    run_course_analyze_phase(
+        "cache-all",
+        iterations,
+        &fixture,
+        &options,
+        |fixture, options| {
+            rssp::course::analyze_crs_path_cache_all_for_bench(
+                fixture.course_path(),
+                Some(fixture.songs_dir()),
+                "dance-single",
+                "Medium",
+                options,
+            )
+            .expect("benchmark course should analyze")
+        },
+    );
+    run_course_analyze_phase(
+        "cache-repeated",
+        iterations,
+        &fixture,
+        &options,
+        |fixture, options| {
+            rssp::course::analyze_crs_path(
+                fixture.course_path(),
+                Some(fixture.songs_dir()),
+                "dance-single",
+                "Medium",
+                options,
+            )
+            .expect("benchmark course should analyze")
+        },
+    );
+}
+
+fn run_stepstype_phase(phase: &str, iterations: usize, compare: impl Fn(&str, &str) -> bool) {
+    const CASES: [(&str, &str); 8] = [
+        ("dance-single", "dance-single"),
+        (" DANCE_SINGLE ", "dance-single"),
+        ("dance-double", "dance-single"),
+        ("DANCE-SOLO", "dance-single"),
+        ("pump_single", "pump-single"),
+        ("lights-cabinet", "lights-cabinet"),
+        ("kb7-single", "dance-single"),
+        ("非ASCII-single", "dance-single"),
+    ];
+    const REPEATS: usize = 512;
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        for _ in 0..REPEATS {
+            for (raw, normalized) in CASES {
+                checksum = checksum
+                    .wrapping_add(usize::from(compare(black_box(raw), black_box(normalized))));
+            }
+        }
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    let comparisons = (CASES.len() * REPEATS) as f64 * divisor;
+    println!(
+        concat!(
+            "mode=course-stepstype phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_comparisons_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        comparisons / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_stepstype_alloc(iterations: usize) {
+    run_stepstype_phase("allocating", iterations, |raw, normalized| {
+        rssp::course::profile_stepstype_eq_legacy(raw, normalized)
+    });
+    run_stepstype_phase("bytes", iterations, |raw, normalized| {
+        rssp::course::profile_stepstype_eq(raw, normalized)
+    });
 }
 
 fn run_pack_scan_alloc(iterations: usize) {
@@ -1563,6 +1656,10 @@ fn main() {
         }
         Mode::CourseAnalyze => {
             run_course_analyze_alloc(iterations);
+            return;
+        }
+        Mode::CourseStepType => {
+            run_stepstype_alloc(iterations);
             return;
         }
         Mode::PackScan => {

@@ -8,6 +8,10 @@ use std::hint::black_box;
 use std::time::Duration;
 
 #[cfg(windows)]
+#[allow(dead_code)]
+#[path = "support/course.rs"]
+mod course_bench;
+#[cfg(windows)]
 #[path = "support/step_parity.rs"]
 mod step_parity_bench;
 
@@ -587,10 +591,48 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let analysis_options = rssp::AnalysisOptions::default();
     let mut analysis_scratch = rssp::AnalysisScratch::default();
     let mut stream_tokens = Vec::new();
+    let course_fixture = course_bench::CourseFixture::new();
+    let course_options = course_bench::fast_options();
 
     let mut optimizations = c.benchmark_group("cycles/optimizations");
     optimizations.sample_size(100);
     optimizations.measurement_time(Duration::from_secs(2));
+    const STEP_CASES: [(&str, &str); 8] = [
+        ("dance-single", "dance-single"),
+        (" DANCE_SINGLE ", "dance-single"),
+        ("dance-double", "dance-single"),
+        ("DANCE-SOLO", "dance-single"),
+        ("pump_single", "pump-single"),
+        ("lights-cabinet", "lights-cabinet"),
+        ("kb7-single", "dance-single"),
+        ("非ASCII-single", "dance-single"),
+    ];
+    const STEP_BATCH: usize = 512;
+    optimizations.throughput(Throughput::Elements((STEP_CASES.len() * STEP_BATCH) as u64));
+    optimizations.bench_function("stepstype_allocating", |b| {
+        b.iter(|| {
+            for _ in 0..STEP_BATCH {
+                for (raw, normalized) in STEP_CASES {
+                    black_box(rssp::course::profile_stepstype_eq_legacy(
+                        black_box(raw),
+                        black_box(normalized),
+                    ));
+                }
+            }
+        });
+    });
+    optimizations.bench_function("stepstype_bytes", |b| {
+        b.iter(|| {
+            for _ in 0..STEP_BATCH {
+                for (raw, normalized) in STEP_CASES {
+                    black_box(rssp::course::profile_stepstype_eq(
+                        black_box(raw),
+                        black_box(normalized),
+                    ));
+                }
+            }
+        });
+    });
     optimizations.throughput(Throughput::Elements(stream_densities.len() as u64));
     optimizations.bench_function("stream_outputs", |b| {
         b.iter(|| {
@@ -711,6 +753,40 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     optimizations.finish();
+
+    let mut course = c.benchmark_group("cycles/course_cache");
+    course.sample_size(20);
+    course.measurement_time(Duration::from_secs(3));
+    course.throughput(Throughput::Elements(course_bench::SONG_COUNT as u64));
+    course.bench_function("cache_all", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::course::analyze_crs_path_cache_all_for_bench(
+                    black_box(course_fixture.course_path()),
+                    Some(black_box(course_fixture.songs_dir())),
+                    black_box("dance-single"),
+                    black_box("Medium"),
+                    black_box(course_options.clone()),
+                )
+                .expect("benchmark course should analyze"),
+            );
+        });
+    });
+    course.bench_function("cache_repeated", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::course::analyze_crs_path(
+                    black_box(course_fixture.course_path()),
+                    Some(black_box(course_fixture.songs_dir())),
+                    black_box("dance-single"),
+                    black_box("Medium"),
+                    black_box(course_options.clone()),
+                )
+                .expect("benchmark course should analyze"),
+            );
+        });
+    });
+    course.finish();
 
     let mut analysis = c.benchmark_group("cycles/analysis_scratch");
     analysis.sample_size(10);

@@ -166,6 +166,7 @@ harness = false
 [[bench]]
 name = "course_perf"
 harness = false
+required-features = ["profile"]
 
 [[bench]]
 name = "pack_perf"

@@ -33,6 +33,7 @@ pub struct CourseFile {
 }
 
 const COURSE_BANNER_EXTS: [&str; 5] = ["png", "jpg", "jpeg", "bmp", "gif"];
+const MAX_CACHED_SIMS: usize = 128;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CourseEntry {
@@ -142,6 +143,37 @@ fn parse_course_difficulty(raw: &str) -> Option<Difficulty> {
 
 fn normalize_stepstype(raw: &str) -> String {
     raw.trim().to_ascii_lowercase().replace('_', "-")
+}
+
+#[inline(always)]
+const fn norm_step_byte(byte: u8) -> u8 {
+    if byte == b'_' {
+        b'-'
+    } else {
+        byte.to_ascii_lowercase()
+    }
+}
+
+#[inline(always)]
+fn stepstype_eq(raw: &str, normalized: &str) -> bool {
+    raw.trim()
+        .bytes()
+        .map(norm_step_byte)
+        .eq(normalized.bytes())
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+#[must_use]
+pub fn profile_stepstype_eq_legacy(raw: &str, normalized: &str) -> bool {
+    normalize_stepstype(raw) == normalized
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+#[must_use]
+pub fn profile_stepstype_eq(raw: &str, normalized: &str) -> bool {
+    stepstype_eq(raw, normalized)
 }
 
 const fn diff_from_idx(idx: i32) -> Difficulty {
@@ -968,7 +1000,7 @@ fn select_chart<'a>(
     difficulty: Difficulty,
 ) -> Option<&'a ChartSummary> {
     sim.charts.iter().find(|c| {
-        normalize_stepstype(&c.step_type_str) == step_type
+        stepstype_eq(&c.step_type_str, step_type)
             && c.difficulty_str
                 .eq_ignore_ascii_case(difficulty_label(difficulty))
     })
@@ -1008,12 +1040,58 @@ fn dedup_push(vec: &mut Vec<String>, seen: &mut HashSet<CourseHashKey>, value: &
     }
 }
 
+fn analyze_course_song(
+    path: &Path,
+    options: &AnalysisOptions,
+    scratch: &mut AnalysisScratch,
+) -> Result<SimfileSummary, String> {
+    let opened = simfile::open(path).map_err(|e| e.to_string())?;
+    crate::analysis::analyze_with_scratch(&opened.data, opened.extension, options, scratch)
+}
+
 pub fn analyze_crs_path(
     course_path: &Path,
     songs_dir: Option<&Path>,
     target_step_type: &str,
     course_difficulty: &str,
     options: AnalysisOptions,
+) -> Result<CourseSummary, String> {
+    analyze_crs_path_impl(
+        course_path,
+        songs_dir,
+        target_step_type,
+        course_difficulty,
+        &options,
+        false,
+    )
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+pub fn analyze_crs_path_cache_all_for_bench(
+    course_path: &Path,
+    songs_dir: Option<&Path>,
+    target_step_type: &str,
+    course_difficulty: &str,
+    options: AnalysisOptions,
+) -> Result<CourseSummary, String> {
+    analyze_crs_path_impl(
+        course_path,
+        songs_dir,
+        target_step_type,
+        course_difficulty,
+        &options,
+        true,
+    )
+}
+
+fn analyze_crs_path_impl(
+    course_path: &Path,
+    songs_dir: Option<&Path>,
+    target_step_type: &str,
+    course_difficulty: &str,
+    options: &AnalysisOptions,
+    cache_all: bool,
 ) -> Result<CourseSummary, String> {
     let start = Instant::now();
     let data = std::fs::read(course_path).map_err(|e| e.to_string())?;
@@ -1029,9 +1107,31 @@ pub fn analyze_crs_path(
     let step_type = normalize_stepstype(target_step_type);
 
     let entry_count = course.entries.len();
-    let bounded_cache_capacity = entry_count.min(128);
-    let mut sim_cache: HashMap<PathBuf, SimfileSummary> =
-        HashMap::with_capacity(bounded_cache_capacity);
+    let mut song_uses: HashMap<(Option<&str>, &str), usize> = HashMap::new();
+    if !cache_all {
+        song_uses.reserve(entry_count);
+        for entry in &course.entries {
+            if let CourseSong::Fixed { group, song } = &entry.song {
+                *song_uses.entry((group.as_deref(), song)).or_default() += 1;
+            }
+        }
+    }
+    let repeated_songs = song_uses.values().filter(|&&uses| uses > 1).count();
+
+    // Function-local course cache documentation:
+    // - Owner/thread safety: the calling worker owns it; it is never shared.
+    // - Lifetime/warmup: one course analysis; populated lazily on repeated songs.
+    // - Capacity: at most 128 simfile summaries; insertion saturates at the cap.
+    // - Miss/overflow: analyze at this load-time boundary; overflow bypasses insertion.
+    // - Eviction/destruction: no eviction; entries drop on return, off gameplay frames.
+    // - Instrumentation: allocation_perf tracks peak heap; no persistent counters needed.
+    // - Worst-frame cost: none during gameplay; a miss costs one simfile analysis here.
+    let cache_capacity = if cache_all {
+        entry_count
+    } else {
+        repeated_songs.min(MAX_CACHED_SIMS)
+    };
+    let mut sim_cache: HashMap<PathBuf, SimfileSummary> = HashMap::with_capacity(cache_capacity);
     let mut entries = Vec::with_capacity(entry_count);
     let mut hash_list = Vec::new();
     let mut hash_seen = HashSet::new();
@@ -1064,18 +1164,28 @@ pub fn analyze_crs_path(
             .map_err(|e| format!("Failed scanning {}: {e:?}", song_dir.display()))?;
         let scan = scan.ok_or_else(|| format!("No simfile in {}", song_dir.display()))?;
 
-        let sim: &SimfileSummary = match sim_cache.entry(scan.simfile) {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                let opened = simfile::open(entry.key()).map_err(|e| e.to_string())?;
-                let summary = crate::analysis::analyze_with_scratch(
-                    &opened.data,
-                    opened.extension,
-                    &options,
-                    &mut analysis_scratch,
-                )?;
-                entry.insert(summary)
+        let cache_song = cache_all
+            || song_uses
+                .get(&(group.as_deref(), song.as_str()))
+                .is_some_and(|&uses| uses > 1);
+        let cache_has_room = cache_all || sim_cache.len() < MAX_CACHED_SIMS;
+        let uncached_sim;
+        let sim: &SimfileSummary = if cache_song {
+            match sim_cache.entry(scan.simfile) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) if cache_has_room => {
+                    let summary = analyze_course_song(entry.key(), options, &mut analysis_scratch)?;
+                    entry.insert(summary)
+                }
+                Entry::Vacant(entry) => {
+                    let path = entry.into_key();
+                    uncached_sim = analyze_course_song(&path, options, &mut analysis_scratch)?;
+                    &uncached_sim
+                }
             }
+        } else {
+            uncached_sim = analyze_course_song(&scan.simfile, options, &mut analysis_scratch)?;
+            &uncached_sim
         };
 
         let base_chart = select_chart(sim, &step_type, base_diff).ok_or_else(|| {
@@ -1140,6 +1250,7 @@ pub fn analyze_crs_path(
     total.median_nps = round_dp(median_nps_raw, 2);
     total.short_hash = hash_list.join(", ");
     total.bpm_neutral_hash = bpm_neutral_hash_list.join(", ");
+    drop(song_uses);
 
     let elapsed = start.elapsed();
     let total_length = total.duration_seconds.floor().max(0.0) as i32;
@@ -1162,7 +1273,8 @@ pub fn analyze_crs_path(
 #[cfg(test)]
 mod tests {
     use super::{
-        CourseHashKey, CourseSong, Difficulty, SongSort, analyze_crs_path, dedup_push, parse_crs,
+        CourseHashKey, CourseSong, Difficulty, SongSort, analyze_crs_path, analyze_crs_path_impl,
+        dedup_push, normalize_stepstype, parse_crs, stepstype_eq,
     };
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
@@ -1221,6 +1333,30 @@ mod tests {
         }
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn allocation_free_stepstype_match_preserves_normalization() {
+        let cases = [
+            "dance-single",
+            " DANCE_SINGLE ",
+            "pump_Double",
+            "lights-cabinet",
+            "dance_solo",
+            "非ASCII-single",
+            "",
+        ];
+        let targets = ["dance-single", "pump-double", "lights-cabinet", ""];
+
+        for raw in cases {
+            for normalized in targets {
+                assert_eq!(
+                    stepstype_eq(raw, normalized),
+                    normalize_stepstype(raw) == normalized,
+                    "raw={raw:?} normalized={normalized:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1305,6 +1441,15 @@ mod tests {
             compute_tech_counts: false,
             ..crate::AnalysisOptions::default()
         };
+        let cached_all = analyze_crs_path_impl(
+            &course_path,
+            Some(&songs_dir),
+            "dance-single",
+            "Medium",
+            &options,
+            true,
+        )
+        .expect("legacy cache policy should analyze");
         let summary = analyze_crs_path(
             &course_path,
             Some(&songs_dir),
@@ -1329,5 +1474,21 @@ mod tests {
         assert!(summary.chart.custom_patterns.is_empty());
         assert!(!summary.pattern_counts_enabled);
         assert!(!summary.tech_counts_enabled);
+
+        let mut expected_json = Vec::new();
+        let mut actual_json = Vec::new();
+        crate::report::write_course_reports(
+            &cached_all,
+            crate::report::OutputMode::JSON,
+            &mut expected_json,
+        )
+        .expect("legacy cache summary should serialize");
+        crate::report::write_course_reports(
+            &summary,
+            crate::report::OutputMode::JSON,
+            &mut actual_json,
+        )
+        .expect("repeated-only cache summary should serialize");
+        assert_eq!(actual_json, expected_json);
     }
 }
