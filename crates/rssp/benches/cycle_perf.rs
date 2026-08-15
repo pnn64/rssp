@@ -905,6 +905,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let mut analysis_scratch = rssp::AnalysisScratch::default();
     let mut stream_tokens = Vec::new();
     let course_fixture = course_bench::CourseFixture::new();
+    let course_input =
+        std::fs::read(course_fixture.course_path()).expect("benchmark course should be readable");
     let course_options = course_bench::fast_options();
     let pack_fixture = pack_bench::PackFixture::new();
     let asset_fixture = assets_bench::AssetFixture::with_movies(1);
@@ -1216,6 +1218,20 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     bpm_stats.finish();
+
+    let mut course_parse = c.benchmark_group("cycles/course_parse");
+    course_parse.sample_size(50);
+    course_parse.measurement_time(Duration::from_secs(3));
+    course_parse.throughput(Throughput::Elements(course_bench::SONG_COUNT as u64));
+    course_parse.bench_function("parse_64", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::course::parse_crs(black_box(&course_input))
+                    .expect("benchmark course should parse"),
+            );
+        });
+    });
+    course_parse.finish();
 
     let mut course = c.benchmark_group("cycles/course_cache");
     course.sample_size(20);

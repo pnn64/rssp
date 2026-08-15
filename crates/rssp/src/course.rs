@@ -284,20 +284,22 @@ fn parse_song(raw: &str) -> (CourseSong, bool) {
         return (CourseSong::SortPick { sort, index }, false);
     }
 
-    let normalized = raw.replace('\\', "/");
-    if let Some(group) = normalized.strip_suffix("/*").map(str::trim)
+    if let Some(group) = raw
+        .strip_suffix("/*")
+        .or_else(|| raw.strip_suffix("\\*"))
+        .map(str::trim)
         && !group.is_empty()
     {
         return (
             CourseSong::RandomWithinGroup {
-                group: group.to_string(),
+                group: group.replace('\\', "/"),
             },
             true,
         );
     }
 
-    let mut parts = normalized
-        .split('/')
+    let mut parts = raw
+        .split(['/', '\\'])
         .map(str::trim)
         .filter(|s| !s.is_empty());
     let first = parts.next().unwrap_or_default();

@@ -66,6 +66,57 @@ fn bench_course_analysis(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_course_parse(c: &mut Criterion) {
+    let fixture = course_bench::CourseFixture::new();
+    let input = std::fs::read(fixture.course_path()).expect("benchmark course should be readable");
+    let parsed = rssp::course::parse_crs(&input).expect("benchmark course should parse");
+    assert_eq!(parsed.entries.len(), course_bench::SONG_COUNT);
+    assert_eq!(
+        parsed.entries.first().map(|entry| &entry.song),
+        Some(&rssp::course::CourseSong::Fixed {
+            group: Some("Group".to_string()),
+            song: "Song000".to_string(),
+        })
+    );
+    assert_eq!(
+        parsed.entries.last().map(|entry| &entry.song),
+        Some(&rssp::course::CourseSong::Fixed {
+            group: Some("Group".to_string()),
+            song: "Song063".to_string(),
+        })
+    );
+    let separators = rssp::course::parse_crs(
+        b"#COURSE:Separators;\n#SONG:Group\\Song:Challenge:;\n#SONG:Nested\\Group\\*:Challenge:;",
+    )
+    .expect("backslash course should parse");
+    assert_eq!(
+        separators.entries[0].song,
+        rssp::course::CourseSong::Fixed {
+            group: Some("Group".to_string()),
+            song: "Song".to_string(),
+        }
+    );
+    assert_eq!(
+        separators.entries[1].song,
+        rssp::course::CourseSong::RandomWithinGroup {
+            group: "Nested/Group".to_string(),
+        }
+    );
+
+    let mut group = c.benchmark_group("course_parse");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(course_bench::SONG_COUNT as u64));
+    group.bench_function("parse_64", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::course::parse_crs(black_box(&input)).expect("benchmark course should parse"),
+            );
+        });
+    });
+    group.finish();
+}
+
 fn bench_stepstype_match(c: &mut Criterion) {
     const CASES: [(&str, &str); 8] = [
         ("dance-single", "dance-single"),
@@ -156,6 +207,7 @@ fn bench_pattern_merge(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_course_analysis,
+    bench_course_parse,
     bench_stepstype_match,
     bench_pattern_merge
 );
