@@ -126,6 +126,7 @@ enum Mode {
     CourseSelectParse,
     CourseAnalyze,
     CourseStepType,
+    CourseBanner,
     PackRoot,
     PackScan,
     BackgroundChanges,
@@ -230,6 +231,7 @@ fn parse_args() -> (Mode, usize) {
                     "course-select-parse" => Mode::CourseSelectParse,
                     "course-analyze" => Mode::CourseAnalyze,
                     "course-stepstype" => Mode::CourseStepType,
+                    "course-banner" => Mode::CourseBanner,
                     "pack-root" => Mode::PackRoot,
                     "pack-scan" => Mode::PackScan,
                     "background-changes" => Mode::BackgroundChanges,
@@ -306,7 +308,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         | Mode::CourseSelectMods
         | Mode::CourseSelectParse
         | Mode::CourseAnalyze => rssp::AnalysisOptions::default(),
-        Mode::CourseStepType => rssp::AnalysisOptions::default(),
+        Mode::CourseStepType | Mode::CourseBanner => rssp::AnalysisOptions::default(),
         Mode::PackRoot => rssp::AnalysisOptions::default(),
         Mode::PackScan => rssp::AnalysisOptions::default(),
         Mode::BackgroundChanges => rssp::AnalysisOptions::default(),
@@ -474,6 +476,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::CourseStepType => {
                 unreachable!("course step-type mode uses its dedicated allocation runner")
+            }
+            Mode::CourseBanner => {
+                unreachable!("course banner mode uses its dedicated allocation runner")
             }
             Mode::PackRoot => {
                 unreachable!("pack root mode uses its dedicated allocation runner")
@@ -681,6 +686,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::CourseSelectParse => "course-select-parse",
         Mode::CourseAnalyze => "course-analyze",
         Mode::CourseStepType => "course-stepstype",
+        Mode::CourseBanner => "course-banner",
         Mode::PackRoot => "pack-root",
         Mode::PackScan => "pack-scan",
         Mode::BackgroundChanges => "background-changes",
@@ -2322,6 +2328,59 @@ fn run_stepstype_alloc(iterations: usize) {
     });
 }
 
+fn run_course_banner_phase(
+    fixture: &course_bench::BannerFixture,
+    phase: &str,
+    iterations: usize,
+    legacy: bool,
+) {
+    let resolve = || rssp::course::profile_course_banner(fixture.course_path(), "", legacy);
+    assert_eq!(resolve(), Some(fixture.expected_banner()));
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let banner = resolve().expect("benchmark banner should resolve");
+        checksum = checksum.wrapping_add(banner.as_os_str().len());
+        black_box(banner);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=course-banner phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_entries_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        course_bench::BANNER_ENTRY_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_course_banner_alloc(iterations: usize) {
+    let fixture = course_bench::BannerFixture::new();
+    let legacy = rssp::course::profile_course_banner(fixture.course_path(), "", true);
+    let current = rssp::course::profile_course_banner(fixture.course_path(), "", false);
+    assert_eq!(current, legacy, "course banner selection must not change");
+    run_course_banner_phase(&fixture, "legacy-five-scans", iterations, true);
+    run_course_banner_phase(&fixture, "one-scan-ranked", iterations, false);
+}
+
 fn run_pack_root_phase(phase: &str, iterations: usize, legacy: bool) {
     let fixture = pack_bench::PackFixture::new();
     let scan = |legacy| {
@@ -3068,6 +3127,10 @@ fn main() {
         }
         Mode::CourseStepType => {
             run_stepstype_alloc(iterations);
+            return;
+        }
+        Mode::CourseBanner => {
+            run_course_banner_alloc(iterations);
             return;
         }
         Mode::PackRoot => {

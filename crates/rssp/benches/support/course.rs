@@ -11,6 +11,7 @@ pub const SELECT_MODS: &[u8] =
     b" 1.5x, reverse, mirror, noholds, nomines, sudden, noshowcourse, nodifficult ";
 pub const SELECT_COUNT: usize = 64;
 pub const SELECT_PARAMS: u64 = 12;
+pub const BANNER_ENTRY_COUNT: usize = 258;
 
 pub fn select_input() -> Vec<u8> {
     let mut course = String::with_capacity(64 + SELECT_COUNT * 256);
@@ -74,6 +75,52 @@ impl CourseFixture {
 }
 
 impl Drop for CourseFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+pub struct BannerFixture {
+    root: PathBuf,
+    course_path: PathBuf,
+}
+
+impl BannerFixture {
+    pub fn new() -> Self {
+        const EXTS: [&str; 5] = ["PNG", "jpg", "JPEG", "bmp", "GIF"];
+        let root =
+            std::env::temp_dir().join(format!("rssp-course-banner-bench-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).expect("banner benchmark root should be creatable");
+        let course_path = root.join("Performance Mix.crs");
+        std::fs::write(&course_path, []).expect("benchmark course should be writable");
+        for index in 0..128 {
+            std::fs::write(
+                root.join(format!(
+                    "pERFORMANCE mIX-{index:03}.{}",
+                    EXTS[index % EXTS.len()]
+                )),
+                [],
+            )
+            .expect("benchmark banner should be writable");
+            std::fs::write(root.join(format!("Unrelated-{index:03}.txt")), [])
+                .expect("unrelated benchmark file should be writable");
+        }
+        std::fs::create_dir(root.join("Performance Mix-directory.png"))
+            .expect("benchmark directory should be creatable");
+        Self { root, course_path }
+    }
+
+    pub fn course_path(&self) -> &Path {
+        &self.course_path
+    }
+
+    pub fn expected_banner(&self) -> PathBuf {
+        self.root.join("pERFORMANCE mIX-000.PNG")
+    }
+}
+
+impl Drop for BannerFixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
     }

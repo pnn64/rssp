@@ -905,6 +905,15 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let mut analysis_scratch = rssp::AnalysisScratch::default();
     let mut stream_tokens = Vec::new();
     let course_fixture = course_bench::CourseFixture::new();
+    let banner_fixture = course_bench::BannerFixture::new();
+    let legacy_banner = rssp::course::profile_course_banner(banner_fixture.course_path(), "", true);
+    let current_banner =
+        rssp::course::profile_course_banner(banner_fixture.course_path(), "", false);
+    assert_eq!(
+        current_banner, legacy_banner,
+        "course banner selection must not change"
+    );
+    assert_eq!(current_banner, Some(banner_fixture.expected_banner()));
     let course_input =
         std::fs::read(course_fixture.course_path()).expect("benchmark course should be readable");
     let select_input = course_bench::select_input();
@@ -1310,6 +1319,32 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     course.finish();
+
+    let mut course_banner = c.benchmark_group("cycles/course_banner_258");
+    course_banner.sample_size(20);
+    course_banner.measurement_time(Duration::from_secs(3));
+    course_banner.throughput(Throughput::Elements(
+        course_bench::BANNER_ENTRY_COUNT as u64,
+    ));
+    course_banner.bench_function("legacy_five_scans", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_course_banner(
+                black_box(banner_fixture.course_path()),
+                black_box(""),
+                true,
+            ))
+        });
+    });
+    course_banner.bench_function("one_scan_ranked", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_course_banner(
+                black_box(banner_fixture.course_path()),
+                black_box(""),
+                false,
+            ))
+        });
+    });
+    course_banner.finish();
 
     let mut pack = c.benchmark_group("cycles/pack_root_discovery");
     pack.sample_size(20);

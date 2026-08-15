@@ -686,8 +686,9 @@ fn parse_course_meter_tag(value: &[u8], meters: &mut [Option<i32>; 6]) {
     }
 }
 
+#[cfg(any(test, feature = "profile"))]
 #[inline(always)]
-fn has_banner_prefix(path: &Path, stem_lc: &str, ext: &str) -> bool {
+fn has_banner_prefix_old(path: &Path, stem_lc: &str, ext: &str) -> bool {
     if !path.is_file() {
         return false;
     }
@@ -703,21 +704,42 @@ fn has_banner_prefix(path: &Path, stem_lc: &str, ext: &str) -> bool {
     file_stem.to_ascii_lowercase().starts_with(stem_lc)
 }
 
-fn push_banner_ext_matches(dir: &Path, stem_lc: &str, ext: &str, out: &mut Vec<PathBuf>) {
+#[cfg(any(test, feature = "profile"))]
+fn push_banner_matches_old(dir: &Path, stem_lc: &str, ext: &str, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     let mut matches: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
-        .filter(|p| has_banner_prefix(p, stem_lc, ext))
+        .filter(|p| has_banner_prefix_old(p, stem_lc, ext))
         .collect();
     matches.sort_by_cached_key(|p| assets::lc_name(p));
     out.extend(matches);
 }
 
-#[must_use]
-pub fn resolve_course_banner_path(course_path: &Path, banner_tag: &str) -> Option<PathBuf> {
+#[inline(always)]
+fn starts_ascii_ci(actual: &str, expected: &str) -> bool {
+    actual
+        .as_bytes()
+        .get(..expected.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(expected.as_bytes()))
+}
+
+fn banner_rank(path: &Path, course_stem: &str) -> Option<usize> {
+    if !path.is_file() {
+        return None;
+    }
+    let path_ext = path.extension()?.to_str()?;
+    let rank = COURSE_BANNER_EXTS
+        .iter()
+        .position(|ext| path_ext.eq_ignore_ascii_case(ext))?;
+    let file_stem = path.file_stem()?.to_str()?;
+    starts_ascii_ci(file_stem, course_stem).then_some(rank)
+}
+
+#[cfg(any(test, feature = "profile"))]
+fn resolve_banner_old(course_path: &Path, banner_tag: &str) -> Option<PathBuf> {
     let banner_tag = banner_tag.trim();
     if !banner_tag.is_empty() {
         let tag_path = Path::new(banner_tag);
@@ -740,9 +762,60 @@ pub fn resolve_course_banner_path(course_path: &Path, banner_tag: &str) -> Optio
 
     let mut possible = Vec::new();
     for ext in COURSE_BANNER_EXTS {
-        push_banner_ext_matches(parent, &stem_lc, ext, &mut possible);
+        push_banner_matches_old(parent, &stem_lc, ext, &mut possible);
     }
     possible.into_iter().next()
+}
+
+#[must_use]
+pub fn resolve_course_banner_path(course_path: &Path, banner_tag: &str) -> Option<PathBuf> {
+    let banner_tag = banner_tag.trim();
+    if !banner_tag.is_empty() {
+        let tag_path = Path::new(banner_tag);
+        if tag_path.is_absolute() {
+            return tag_path.is_file().then_some(tag_path.to_path_buf());
+        }
+        let parent = course_path.parent().unwrap_or_else(|| Path::new(""));
+        let joined = parent.join(tag_path);
+        return joined.is_file().then_some(joined);
+    }
+
+    let parent = course_path.parent().unwrap_or_else(|| Path::new(""));
+    let course_stem = course_path.file_stem()?.to_string_lossy();
+    if course_stem.is_empty() {
+        return None;
+    }
+
+    let entries = std::fs::read_dir(parent).ok()?;
+    let mut possible: [Option<PathBuf>; COURSE_BANNER_EXTS.len()] = Default::default();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(rank) = banner_rank(&path, &course_stem) else {
+            continue;
+        };
+        if possible[rank]
+            .as_deref()
+            .is_none_or(|current| assets::cmp_name_ci(&path, current).is_lt())
+        {
+            possible[rank] = Some(path);
+        }
+    }
+    possible.into_iter().flatten().next()
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+#[must_use]
+pub fn profile_course_banner(
+    course_path: &Path,
+    banner_tag: &str,
+    legacy: bool,
+) -> Option<PathBuf> {
+    if legacy {
+        resolve_banner_old(course_path, banner_tag)
+    } else {
+        resolve_course_banner_path(course_path, banner_tag)
+    }
 }
 
 pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
