@@ -102,6 +102,28 @@ fn bench_course_parse(c: &mut Criterion) {
             group: "Nested/Group".to_string(),
         }
     );
+    let difficulties = rssp::course::parse_crs(
+        b"#COURSE:Difficulties;\n#SONG:Song: Expert :;\n#SONG:Song:LIGHT:;\n#SONG:Song:difficult:;\n#SONG:Song:12..14:;\n#SONG:Song: Custom :;\n#SONG:Song:\xA0Expert\xA0:;\n#SONG:Song:\xA0:;",
+    )
+    .expect("difficulty aliases should parse");
+    assert_eq!(
+        difficulties
+            .entries
+            .iter()
+            .map(|entry| entry.steps.clone())
+            .collect::<Vec<_>>(),
+        [
+            rssp::course::StepsSpec::Difficulty(rssp::course::Difficulty::Challenge),
+            rssp::course::StepsSpec::Difficulty(rssp::course::Difficulty::Easy),
+            rssp::course::StepsSpec::Difficulty(rssp::course::Difficulty::Medium),
+            rssp::course::StepsSpec::MeterRange { low: 12, high: 14 },
+            rssp::course::StepsSpec::Unknown {
+                raw: "Custom".to_string(),
+            },
+            rssp::course::StepsSpec::Difficulty(rssp::course::Difficulty::Challenge),
+            rssp::course::StepsSpec::Unknown { raw: String::new() },
+        ]
+    );
 
     let mut group = c.benchmark_group("course_parse");
     group.sample_size(100);

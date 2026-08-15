@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, hash_map::Entry};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -9,7 +10,6 @@ use web_time::{Duration, Instant};
 use crate::analysis::{AnalysisOptions, AnalysisScratch, PreparedAnalysis, analyze_prepared_in};
 use crate::assets;
 use crate::math::{round_dp, round_sig_figs_6};
-use crate::normalize_difficulty_label;
 use crate::nps::get_nps_stats;
 use crate::pack;
 use crate::parse::{clean_tag, decode_bytes, extract_sections, unescape_tag};
@@ -246,7 +246,20 @@ const fn trim_ascii(mut s: &[u8]) -> &[u8] {
 }
 
 fn decode_trim(bytes: &[u8]) -> String {
-    decode_bytes(trim_ascii(bytes)).trim().to_string()
+    decode_trimmed(bytes).into_owned()
+}
+
+fn decode_trimmed(bytes: &[u8]) -> Cow<'_, str> {
+    match decode_bytes(trim_ascii(bytes)) {
+        Cow::Borrowed(value) => Cow::Borrowed(value.trim()),
+        Cow::Owned(mut value) => {
+            let start = value.len() - value.trim_start().len();
+            let len = value.trim().len();
+            value.replace_range(..start, "");
+            value.truncate(len);
+            Cow::Owned(value)
+        }
+    }
 }
 
 fn decode_unescape_trim(bytes: &[u8]) -> String {
@@ -318,14 +331,33 @@ fn parse_song(raw: &str) -> (CourseSong, bool) {
 }
 
 fn parse_difficulty_label(label: &str) -> Option<Difficulty> {
-    match label.trim().to_ascii_lowercase().as_str() {
-        "beginner" => Some(Difficulty::Beginner),
-        "easy" => Some(Difficulty::Easy),
-        "medium" => Some(Difficulty::Medium),
-        "hard" => Some(Difficulty::Hard),
-        "challenge" => Some(Difficulty::Challenge),
-        "edit" => Some(Difficulty::Edit),
-        _ => None,
+    let label = label.trim();
+    if label.eq_ignore_ascii_case("beginner") {
+        Some(Difficulty::Beginner)
+    } else if ["easy", "basic", "light"]
+        .iter()
+        .any(|value| label.eq_ignore_ascii_case(value))
+    {
+        Some(Difficulty::Easy)
+    } else if ["medium", "another", "trick", "standard", "difficult"]
+        .iter()
+        .any(|value| label.eq_ignore_ascii_case(value))
+    {
+        Some(Difficulty::Medium)
+    } else if ["hard", "ssr", "maniac", "heavy"]
+        .iter()
+        .any(|value| label.eq_ignore_ascii_case(value))
+    {
+        Some(Difficulty::Hard)
+    } else if ["challenge", "expert", "oni", "smaniac"]
+        .iter()
+        .any(|value| label.eq_ignore_ascii_case(value))
+    {
+        Some(Difficulty::Challenge)
+    } else if label.eq_ignore_ascii_case("edit") {
+        Some(Difficulty::Edit)
+    } else {
+        None
     }
 }
 
@@ -339,8 +371,7 @@ fn parse_meter_range(raw: &str) -> Option<(i32, i32)> {
 
 fn parse_steps(raw: &str) -> StepsSpec {
     let raw = raw.trim();
-    let normalized = normalize_difficulty_label(raw);
-    if let Some(diff) = parse_difficulty_label(&normalized) {
+    if let Some(diff) = parse_difficulty_label(raw) {
         return StepsSpec::Difficulty(diff);
     }
     if let Some((low, high)) = parse_meter_range(raw) {
@@ -392,10 +423,12 @@ fn parse_song_entry(params: &[&[u8]]) -> CourseEntry {
     let diff_raw = params.get(1).copied().unwrap_or_default();
     let mods_raw = params.get(2).copied().unwrap_or_default();
 
-    let (song, secret_default) = parse_song(&decode_trim(song_raw));
-    let steps = parse_steps(&decode_trim(diff_raw));
-    let mods_str = decode_trim(mods_raw);
-    let (secret, no_difficult, gain_lives, modifiers) = apply_song_mods(secret_default, &mods_str);
+    let song_text = decode_trimmed(song_raw);
+    let diff_text = decode_trimmed(diff_raw);
+    let mods_text = decode_trimmed(mods_raw);
+    let (song, secret_default) = parse_song(&song_text);
+    let steps = parse_steps(&diff_text);
+    let (secret, no_difficult, gain_lives, modifiers) = apply_song_mods(secret_default, &mods_text);
 
     CourseEntry {
         song,
