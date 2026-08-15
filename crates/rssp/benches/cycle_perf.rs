@@ -212,6 +212,21 @@ fn large_pair_map(entries: usize) -> String {
 }
 
 #[cfg(windows)]
+fn control_pair_map(entries: usize) -> String {
+    use std::fmt::Write;
+
+    let mut map = String::with_capacity(entries * 20);
+    for idx in 0..entries {
+        if idx != 0 {
+            map.push(',');
+        }
+        write!(&mut map, "\u{000b}{}={}\u{000b}", idx * 4, 60 + idx % 300)
+            .expect("writing to a String cannot fail");
+    }
+    map
+}
+
+#[cfg(windows)]
 fn large_speed_map(entries: usize) -> String {
     use std::fmt::Write;
 
@@ -359,6 +374,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     eprintln!("cycle_perf measurement=QueryThreadCycleTime logical_cpu={cpu}");
 
     let pair_map = large_pair_map(ENTRIES);
+    let control_pair_map = control_pair_map(ENTRIES);
     let speed_map = large_speed_map(ENTRIES);
     let stop_map = large_stop_map(ENTRIES);
     let medium_pair_map = large_pair_map(512);
@@ -482,6 +498,12 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             black_box(rssp::bpm::clean_and_normalize_float_digits(black_box(
                 &pair_map,
             )));
+        });
+    });
+    normalization.throughput(Throughput::Bytes(control_pair_map.len() as u64));
+    normalization.bench_function("control_pair_map", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::clean_timing_map(black_box(&control_pair_map)));
         });
     });
     normalization.throughput(Throughput::Bytes(speed_map.len() as u64));

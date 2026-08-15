@@ -102,6 +102,7 @@ enum Mode {
     NpsCursor,
     Minimize,
     Bpms,
+    CleanMap,
     DisplayBpm,
     BpmStats,
     Tech,
@@ -199,6 +200,7 @@ fn parse_args() -> (Mode, usize) {
                     "nps-cursor" => Mode::NpsCursor,
                     "minimize" => Mode::Minimize,
                     "bpms" => Mode::Bpms,
+                    "clean-map" => Mode::CleanMap,
                     "display-bpm" => Mode::DisplayBpm,
                     "bpm-stats" => Mode::BpmStats,
                     "tech" => Mode::Tech,
@@ -271,9 +273,11 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             compute_pattern_counts: false,
             ..rssp::AnalysisOptions::default()
         },
-        Mode::BpmStats | Mode::DisplayBpm | Mode::TimingBuild | Mode::NpsCursor => {
-            rssp::AnalysisOptions::default()
-        }
+        Mode::BpmStats
+        | Mode::CleanMap
+        | Mode::DisplayBpm
+        | Mode::TimingBuild
+        | Mode::NpsCursor => rssp::AnalysisOptions::default(),
         Mode::Full | Mode::AnalysisReuse => rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
@@ -364,7 +368,7 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
                 checksum = checksum.wrapping_add(bpms.len());
                 black_box(bpms);
             }
-            Mode::BpmStats | Mode::DisplayBpm => {
+            Mode::BpmStats | Mode::CleanMap | Mode::DisplayBpm => {
                 unreachable!("mode uses its dedicated allocation runner")
             }
             Mode::Tech => {
@@ -619,6 +623,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::NpsCursor => "nps-cursor",
         Mode::Minimize => "minimize",
         Mode::Bpms => "bpms",
+        Mode::CleanMap => "clean-map",
         Mode::DisplayBpm => "display-bpm",
         Mode::BpmStats => "bpm-stats",
         Mode::Tech => "tech",
@@ -1356,6 +1361,57 @@ fn run_display_bpm_alloc(iterations: usize) {
         black_box(checksum),
         elapsed.as_secs_f64(),
         CASES.len() as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_clean_map_alloc(iterations: usize) {
+    use std::fmt::Write;
+
+    const ENTRIES: usize = 512;
+    let mut raw = String::with_capacity(ENTRIES * 20);
+    let mut expected = String::with_capacity(ENTRIES * 16);
+    for idx in 0..ENTRIES {
+        if idx != 0 {
+            raw.push(',');
+            expected.push(',');
+        }
+        write!(&mut raw, "\u{000b}{}={}\u{000b}", idx * 4, 60 + idx % 300)
+            .expect("writing to a String cannot fail");
+        write!(&mut expected, "{}={}", idx * 4, 60 + idx % 300)
+            .expect("writing to a String cannot fail");
+    }
+    assert_eq!(rssp::bpm::clean_timing_map(&raw), expected);
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let cleaned = rssp::bpm::clean_timing_map(black_box(&raw));
+        checksum = checksum.wrapping_add(cleaned.len());
+        black_box(cleaned);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=clean-map iters={} checksum={} elapsed_s={:.6} throughput_mib_s={:.3} ",
+            "alloc_calls_per_iter={:.1} dealloc_calls_per_iter={:.1} ",
+            "realloc_calls_per_iter={:.1} alloc_bytes_per_iter={:.1} ",
+            "realloc_bytes_per_iter={:.1} live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        raw.len() as f64 * divisor / elapsed.as_secs_f64() / (1024.0 * 1024.0),
         (after.alloc_calls - before.alloc_calls) as f64 / divisor,
         (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
         (after.realloc_calls - before.realloc_calls) as f64 / divisor,
@@ -2624,6 +2680,10 @@ fn main() {
     match mode {
         Mode::BpmStats => {
             run_bpm_stats_alloc(iterations);
+            return;
+        }
+        Mode::CleanMap => {
+            run_clean_map_alloc(iterations);
             return;
         }
         Mode::DisplayBpm => {

@@ -203,20 +203,37 @@ pub fn clean_and_normalize_speeds_float_digits(param: &str) -> (String, String) 
 pub fn clean_timing_map(param: &str) -> String {
     let mut out = String::with_capacity(param.len());
     for entry in param.split(',') {
-        if entry.is_empty() {
-            continue;
-        }
-        let t = strip_control(entry);
-        let t = t.trim();
-        if t.is_empty() {
-            continue;
-        }
-        if !out.is_empty() {
-            out.push(',');
-        }
-        out.push_str(t);
+        push_clean_entry(&mut out, entry);
     }
     out
+}
+
+fn push_clean_entry(out: &mut String, entry: &str) {
+    let checkpoint = out.len();
+    if checkpoint != 0 {
+        out.push(',');
+    }
+    let start = out.len();
+    if has_control(entry) {
+        let mut started = false;
+        let mut end = start;
+        for ch in entry.chars() {
+            if ch.is_control() || (!started && ch.is_whitespace()) {
+                continue;
+            }
+            started = true;
+            out.push(ch);
+            if !ch.is_whitespace() {
+                end = out.len();
+            }
+        }
+        out.truncate(end);
+    } else {
+        out.push_str(entry.trim());
+    }
+    if out.len() == start {
+        out.truncate(checkpoint);
+    }
 }
 
 pub fn chart_timing_tag_raw(tag: Option<&[u8]>) -> Option<String> {

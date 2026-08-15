@@ -5,6 +5,22 @@ use std::time::Duration;
 
 const FIXTURE: &str = include_str!("fixtures/bpm_fixture.ssc");
 
+fn control_pair_map(entries: usize) -> (String, String) {
+    let mut raw = String::with_capacity(entries * 20);
+    let mut expected = String::with_capacity(entries * 16);
+    for idx in 0..entries {
+        if idx != 0 {
+            raw.push(',');
+            expected.push(',');
+        }
+        write!(&mut raw, "\u{000b}{}={}\u{000b}", idx * 4, 60 + idx % 300)
+            .expect("writing to a String cannot fail");
+        write!(&mut expected, "{}={}", idx * 4, 60 + idx % 300)
+            .expect("writing to a String cannot fail");
+    }
+    (raw, expected)
+}
+
 fn inherited_timing_fixture(chart_count: usize, bpm_count: usize) -> String {
     use std::fmt::Write;
 
@@ -311,6 +327,34 @@ fn bench_bpm_format(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_clean_timing_map(c: &mut Criterion) {
+    const CASES: [(&str, &str); 6] = [
+        ("", ""),
+        (",0=120,,4=180,", "0=120,4=180"),
+        (" \u{000b}\t0=120\t\u{000b} ", "0=120"),
+        ("\u{000b}0=\t120\u{000b}", "0=120"),
+        ("0=\t120", "0=\t120"),
+        ("\u{00a0}\u{000b}0=120\u{000b}\u{00a0}", "0=120"),
+    ];
+    for (raw, expected) in CASES {
+        assert_eq!(rssp::bpm::clean_timing_map(raw), expected);
+    }
+
+    let (raw, expected) = control_pair_map(512);
+    assert_eq!(rssp::bpm::clean_timing_map(&raw), expected);
+
+    let mut group = c.benchmark_group("clean_timing_map");
+    group.throughput(criterion::Throughput::Bytes(raw.len() as u64));
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("control_512", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::clean_timing_map(black_box(&raw)));
+        });
+    });
+    group.finish();
+}
+
 fn bench_display_bpm(c: &mut Criterion) {
     const CASES: [(Option<&str>, f64, f64, f64); 4] = [
         (None, 120.0, 180.0, 1.0),
@@ -565,6 +609,7 @@ criterion_group!(
     bench_bpm_pipeline,
     bench_bpm_inner,
     bench_bpm_format,
+    bench_clean_timing_map,
     bench_display_bpm,
     bench_bpm_stats,
     bench_mines_nonfake,
