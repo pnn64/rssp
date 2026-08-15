@@ -2481,16 +2481,18 @@ impl RowAnnotation {
     }
 }
 
-fn collect_annotations_and_counts(
+fn collect_annotations_in(
     rows: &[Row],
     placements: &[FootPlacement],
     layout: &StageLayout,
-) -> (TechCounts, Vec<RowAnnotation>) {
+    out: &mut Vec<RowAnnotation>,
+) -> TechCounts {
     let n = rows.len();
-    let mut out = Vec::with_capacity(n);
+    out.clear();
     if n == 0 || placements.len() != n {
-        return (TechCounts::default(), out);
+        return TechCounts::default();
     }
+    out.reserve(n);
     let mut counts = TechCounts::default();
 
     let cols = layout_cols(layout).min(MAX_COLUMNS);
@@ -2567,15 +2569,7 @@ fn collect_annotations_and_counts(
         prev_pos = curr_pos;
     }
 
-    (counts, out)
-}
-
-fn collect_annotations(
-    rows: &[Row],
-    placements: &[FootPlacement],
-    layout: &StageLayout,
-) -> Vec<RowAnnotation> {
-    collect_annotations_and_counts(rows, placements, layout).1
+    counts
 }
 
 #[inline(always)]
@@ -3087,6 +3081,50 @@ pub fn analyze_and_annotate_timing_rows_known_holds<const LANES: usize>(
     has_holds: bool,
     scratch: &mut TimingRowsScratch<LANES>,
 ) -> (TechCounts, Vec<RowAnnotation>) {
+    let mut out = Vec::new();
+    let counts = analyze_and_annotate_timing_rows_known_holds_in(
+        rows,
+        row_to_beat,
+        timing,
+        has_holds,
+        scratch,
+        &mut out,
+    );
+    (counts, out)
+}
+
+/// An allocation-reusing variant of [`analyze_and_annotate_timing_rows`].
+/// Clears `out` while retaining its capacity, then fills it with the current
+/// row annotations and returns their aggregate tech counts.
+pub fn analyze_and_annotate_timing_rows_in<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    scratch: &mut TimingRowsScratch<LANES>,
+    out: &mut Vec<RowAnnotation>,
+) -> TechCounts {
+    let has_holds = rows_have_holds(rows, layout_cols(scratch.generator.layout));
+    analyze_and_annotate_timing_rows_known_holds_in(
+        rows,
+        row_to_beat,
+        timing,
+        has_holds,
+        scratch,
+        out,
+    )
+}
+
+/// An allocation-reusing variant of
+/// [`analyze_and_annotate_timing_rows_known_holds`].
+pub fn analyze_and_annotate_timing_rows_known_holds_in<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    has_holds: bool,
+    scratch: &mut TimingRowsScratch<LANES>,
+    out: &mut Vec<RowAnnotation>,
+) -> TechCounts {
+    out.clear();
     let cols = layout_cols(scratch.generator.layout);
     if !parity_analyze_rows(
         &mut scratch.generator,
@@ -3097,12 +3135,13 @@ pub fn analyze_and_annotate_timing_rows_known_holds<const LANES: usize>(
         cols,
         has_holds,
     ) {
-        return (TechCounts::default(), Vec::new());
+        return TechCounts::default();
     }
-    collect_annotations_and_counts(
+    collect_annotations_in(
         &scratch.generator.rows,
         &scratch.generator.result_columns,
         scratch.generator.layout,
+        out,
     )
 }
 
@@ -3128,23 +3167,16 @@ pub fn annotate_timing_rows_known_holds<const LANES: usize>(
     has_holds: bool,
     scratch: &mut TimingRowsScratch<LANES>,
 ) -> Vec<RowAnnotation> {
-    let cols = layout_cols(scratch.generator.layout);
-    if !parity_analyze_rows(
-        &mut scratch.generator,
-        &mut scratch.hold_heads,
+    let mut out = Vec::new();
+    analyze_and_annotate_timing_rows_known_holds_in(
         rows,
         row_to_beat,
         timing,
-        cols,
         has_holds,
-    ) {
-        return Vec::new();
-    }
-    collect_annotations(
-        &scratch.generator.rows,
-        &scratch.generator.result_columns,
-        scratch.generator.layout,
-    )
+        scratch,
+        &mut out,
+    );
+    out
 }
 
 fn time_between_beats(start: f32, end: f32, bpm_map: &[(f64, f64)]) -> f64 {
@@ -3413,6 +3445,51 @@ mod tests {
 
         assert_eq!(combined.0, separate_counts);
         assert_eq!(combined.1, separate_annotations);
+    }
+
+    #[test]
+    fn in_place_annotations_match_owned_and_reuse_capacity() {
+        let data = b"1000
+0010
+0001
+0100
+1001
+;";
+        let timing = basic_timing();
+        let (_minimized, _stats, _densities, rows, row_to_beat, _last) =
+            minimize_rows_typed::<4>(data);
+        let mut owned_scratch = timing_rows_scratch::<4>().expect("dance-single layout");
+        let owned =
+            analyze_and_annotate_timing_rows(&rows, &row_to_beat, &timing, &mut owned_scratch);
+
+        let mut reused = Vec::with_capacity(rows.len() + 8);
+        reused.push(RowAnnotation::default());
+        let allocation = reused.as_ptr();
+        let capacity = reused.capacity();
+        let mut reused_scratch = timing_rows_scratch::<4>().expect("dance-single layout");
+        let counts = analyze_and_annotate_timing_rows_in(
+            &rows,
+            &row_to_beat,
+            &timing,
+            &mut reused_scratch,
+            &mut reused,
+        );
+
+        assert_eq!(counts, owned.0);
+        assert_eq!(reused, owned.1);
+        assert_eq!(reused.capacity(), capacity);
+        assert_eq!(reused.as_ptr(), allocation);
+
+        let empty_counts = analyze_and_annotate_timing_rows_in(
+            &[],
+            &[],
+            &timing,
+            &mut reused_scratch,
+            &mut reused,
+        );
+        assert_eq!(empty_counts, TechCounts::default());
+        assert!(reused.is_empty());
+        assert_eq!(reused.capacity(), capacity);
     }
 
     #[test]

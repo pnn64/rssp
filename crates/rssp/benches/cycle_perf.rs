@@ -1503,6 +1503,17 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         rssp::step_parity::legacy_timing_rows_scratch::<4>().expect("dance-single parity layout");
     let mut legacy_double =
         rssp::step_parity::legacy_timing_rows_scratch::<8>().expect("dance-double parity layout");
+    let mut annotation_scratch =
+        rssp::step_parity::timing_rows_scratch::<4>().expect("dance-single parity layout");
+    let mut reused_annotations = Vec::new();
+    rssp::step_parity::analyze_and_annotate_timing_rows_known_holds_in(
+        &single_rows,
+        &single_beats,
+        &parity_timing,
+        false,
+        &mut annotation_scratch,
+        &mut reused_annotations,
+    );
 
     let mut parity = c.benchmark_group("cycles/step_parity");
     parity.sample_size(50);
@@ -1530,6 +1541,33 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
                 false,
                 black_box(&mut single_scratch),
             ));
+        });
+    });
+    parity.bench_function("annotations_single_owned", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::step_parity::analyze_and_annotate_timing_rows_known_holds(
+                    black_box(&single_rows),
+                    black_box(&single_beats),
+                    black_box(&parity_timing),
+                    false,
+                    black_box(&mut annotation_scratch),
+                ),
+            );
+        });
+    });
+    parity.bench_function("annotations_single_reused", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::step_parity::analyze_and_annotate_timing_rows_known_holds_in(
+                    black_box(&single_rows),
+                    black_box(&single_beats),
+                    black_box(&parity_timing),
+                    false,
+                    black_box(&mut annotation_scratch),
+                    black_box(&mut reused_annotations),
+                ),
+            );
         });
     });
     parity.bench_function("dense_single_cold", |b| {

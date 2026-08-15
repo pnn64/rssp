@@ -318,6 +318,14 @@ fn bench_counts_with_annotations(c: &mut Criterion) {
         .expect("dance-single parity layout should exist");
     let mut combined_scratch = rssp::step_parity::timing_rows_scratch::<4>()
         .expect("dance-single parity layout should exist");
+    let mut annotations = Vec::new();
+    rssp::step_parity::analyze_and_annotate_timing_rows_in(
+        &input.rows,
+        &input.row_to_beat,
+        &input.timing,
+        &mut combined_scratch,
+        &mut annotations,
+    );
 
     let mut group = c.benchmark_group("counts_with_annotations");
     group.sample_size(100);
@@ -339,13 +347,24 @@ fn bench_counts_with_annotations(c: &mut Criterion) {
             black_box((counts, annotations));
         });
     });
-    group.bench_function("combined_solve", |b| {
+    group.bench_function("combined_owned", |b| {
         b.iter(|| {
             black_box(rssp::step_parity::analyze_and_annotate_timing_rows(
                 black_box(&input.rows),
                 black_box(&input.row_to_beat),
                 black_box(&input.timing),
                 black_box(&mut combined_scratch),
+            ));
+        });
+    });
+    group.bench_function("combined_reused", |b| {
+        b.iter(|| {
+            black_box(rssp::step_parity::analyze_and_annotate_timing_rows_in(
+                black_box(&input.rows),
+                black_box(&input.row_to_beat),
+                black_box(&input.timing),
+                black_box(&mut combined_scratch),
+                black_box(&mut annotations),
             ));
         });
     });

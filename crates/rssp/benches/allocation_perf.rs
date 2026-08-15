@@ -770,6 +770,79 @@ fn run_parity_alloc<const LANES: usize>(
         before,
         after,
     );
+
+    let mut annotation_scratch =
+        rssp::step_parity::timing_rows_scratch::<LANES>().expect("supported parity layout");
+    drop(
+        rssp::step_parity::analyze_and_annotate_timing_rows_known_holds(
+            &rows,
+            &beats,
+            &timing,
+            has_holds,
+            &mut annotation_scratch,
+        ),
+    );
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    for _ in 0..iterations {
+        black_box(
+            rssp::step_parity::analyze_and_annotate_timing_rows_known_holds(
+                black_box(&rows),
+                black_box(&beats),
+                black_box(&timing),
+                has_holds,
+                black_box(&mut annotation_scratch),
+            ),
+        );
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    print_parity_alloc(
+        mode,
+        "annotations-owned",
+        iterations,
+        row_count,
+        elapsed,
+        before,
+        after,
+    );
+
+    let mut annotations = Vec::new();
+    rssp::step_parity::analyze_and_annotate_timing_rows_known_holds_in(
+        &rows,
+        &beats,
+        &timing,
+        has_holds,
+        &mut annotation_scratch,
+        &mut annotations,
+    );
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    for _ in 0..iterations {
+        black_box(
+            rssp::step_parity::analyze_and_annotate_timing_rows_known_holds_in(
+                black_box(&rows),
+                black_box(&beats),
+                black_box(&timing),
+                has_holds,
+                black_box(&mut annotation_scratch),
+                black_box(&mut annotations),
+            ),
+        );
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    print_parity_alloc(
+        mode,
+        "annotations-reused",
+        iterations,
+        row_count,
+        elapsed,
+        before,
+        after,
+    );
 }
 
 fn custom_pattern_input(unique_count: usize) -> Vec<String> {
