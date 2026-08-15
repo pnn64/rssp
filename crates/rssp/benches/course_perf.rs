@@ -145,7 +145,7 @@ fn bench_course_parse(c: &mut Criterion) {
         rssp::course::StepsSpec::Unknown { raw: String::new() }
     );
     let selected = rssp::course::parse_crs(
-        b"#COURSE:Select;\n#SONGSELECT:TITLE=thank u\\, next:GROUP=A,B:MODS=2x,noshowcourse,nodifficult;",
+        b"#COURSE:Select;\n#SONGSELECT:TITLE=thank u\\, next:GROUP=A,B:ARTIST=Artist\\=Name:MODS=2x,noshowcourse,nodifficult;",
     )
     .expect("song selection should parse");
     let rssp::course::CourseSong::Select(selection) = &selected.entries[0].song else {
@@ -153,6 +153,7 @@ fn bench_course_parse(c: &mut Criterion) {
     };
     assert_eq!(selection.titles, ["thank u, next"]);
     assert_eq!(selection.groups, ["A", "B"]);
+    assert_eq!(selection.artists, ["Artist=Name"]);
     assert_eq!(selected.entries[0].modifiers, "2x");
     assert!(selected.entries[0].secret);
     assert!(selected.entries[0].no_difficult);
@@ -228,6 +229,53 @@ fn bench_select_mods(c: &mut Criterion) {
             black_box(rssp::course::profile_select_mods(black_box(
                 course_bench::SELECT_MODS,
             )));
+        });
+    });
+    group.finish();
+}
+
+fn bench_select_parse(c: &mut Criterion) {
+    let input = course_bench::select_input();
+    let parsed = rssp::course::parse_crs(&input).expect("selection benchmark should parse");
+    assert_eq!(parsed.entries.len(), course_bench::SELECT_COUNT);
+    let rssp::course::CourseSong::Select(first) = &parsed.entries[0].song else {
+        panic!("first benchmark entry should be a selection");
+    };
+    assert_eq!(first.titles, ["Song000", "Alt 000"]);
+    assert_eq!(first.groups, ["Group A", "Group B"]);
+    assert_eq!(first.difficulties.len(), 2);
+    assert_eq!(first.meter_range, Some((8, 12)));
+    assert_eq!(first.sort, Some(rssp::course::SongSort::FewestPlays));
+    assert_eq!(first.index, 3);
+    assert_eq!(parsed.entries[0].modifiers, "2x");
+    assert!(parsed.entries[0].secret);
+    assert!(parsed.entries[0].no_difficult);
+    let rssp::course::CourseSong::Select(last) = &parsed.entries[63].song else {
+        panic!("last benchmark entry should be a selection");
+    };
+    assert_eq!(last.titles, ["Song063", "Alt 063"]);
+    let invalid = rssp::course::parse_crs(
+        b"#COURSE:Invalid Select;\n#SONGSELECT:TITLE=A=B;\n#SONGSELECT:TITLE;\n#SONGSELECT:TITLE=Good;",
+    )
+    .expect("invalid selection entries should be skipped");
+    assert_eq!(invalid.entries.len(), 1);
+    let rssp::course::CourseSong::Select(valid) = &invalid.entries[0].song else {
+        panic!("remaining benchmark entry should be a selection");
+    };
+    assert_eq!(valid.titles, ["Good"]);
+
+    let mut group = c.benchmark_group("course_select_parse");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(
+        course_bench::SELECT_COUNT as u64 * course_bench::SELECT_PARAMS,
+    ));
+    group.bench_function("parse_64", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::course::parse_crs(black_box(&input))
+                    .expect("selection benchmark should parse"),
+            );
         });
     });
     group.finish();
@@ -326,6 +374,7 @@ criterion_group!(
     bench_course_parse,
     bench_song_mods,
     bench_select_mods,
+    bench_select_parse,
     bench_stepstype_match,
     bench_pattern_merge
 );

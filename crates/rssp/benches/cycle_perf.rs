@@ -907,6 +907,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let course_fixture = course_bench::CourseFixture::new();
     let course_input =
         std::fs::read(course_fixture.course_path()).expect("benchmark course should be readable");
+    let select_input = course_bench::select_input();
     let course_options = course_bench::fast_options();
     let pack_fixture = pack_bench::PackFixture::new();
     let asset_fixture = assets_bench::AssetFixture::with_movies(1);
@@ -1259,6 +1260,22 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     select_mods.finish();
+
+    let mut select_parse = c.benchmark_group("cycles/course_select_parse");
+    select_parse.sample_size(50);
+    select_parse.measurement_time(Duration::from_secs(3));
+    select_parse.throughput(Throughput::Elements(
+        course_bench::SELECT_COUNT as u64 * course_bench::SELECT_PARAMS,
+    ));
+    select_parse.bench_function("parse_64", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::course::parse_crs(black_box(&select_input))
+                    .expect("selection benchmark should parse"),
+            );
+        });
+    });
+    select_parse.finish();
 
     let mut course = c.benchmark_group("cycles/course_cache");
     course.sample_size(20);

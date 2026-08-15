@@ -130,14 +130,33 @@ pub enum StepsSpec {
 }
 
 fn parse_course_difficulty(raw: &str) -> Option<Difficulty> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "beginner" => Some(Difficulty::Beginner),
-        "easy" | "basic" | "light" => Some(Difficulty::Easy),
-        "regular" | "medium" | "another" | "trick" | "standard" => Some(Difficulty::Medium),
-        "difficult" | "hard" | "ssr" | "maniac" | "heavy" => Some(Difficulty::Hard),
-        "challenge" | "expert" | "oni" | "smaniac" => Some(Difficulty::Challenge),
-        "edit" => Some(Difficulty::Edit),
-        _ => None,
+    let raw = raw.trim();
+    if raw.eq_ignore_ascii_case("beginner") {
+        Some(Difficulty::Beginner)
+    } else if ["easy", "basic", "light"]
+        .iter()
+        .any(|value| raw.eq_ignore_ascii_case(value))
+    {
+        Some(Difficulty::Easy)
+    } else if ["regular", "medium", "another", "trick", "standard"]
+        .iter()
+        .any(|value| raw.eq_ignore_ascii_case(value))
+    {
+        Some(Difficulty::Medium)
+    } else if ["difficult", "hard", "ssr", "maniac", "heavy"]
+        .iter()
+        .any(|value| raw.eq_ignore_ascii_case(value))
+    {
+        Some(Difficulty::Hard)
+    } else if ["challenge", "expert", "oni", "smaniac"]
+        .iter()
+        .any(|value| raw.eq_ignore_ascii_case(value))
+    {
+        Some(Difficulty::Challenge)
+    } else if raw.eq_ignore_ascii_case("edit") {
+        Some(Difficulty::Edit)
+    } else {
+        None
     }
 }
 
@@ -230,6 +249,25 @@ fn split_unescaped(block: &[u8], delim: u8) -> Vec<&[u8]> {
     let mut out = Vec::new();
     visit_unescaped(block, delim, |item| out.push(item));
     out
+}
+
+fn split_pair(block: &[u8], delim: u8) -> Option<(&[u8], &[u8])> {
+    let (mut split, mut bs) = (None, 0usize);
+    for (i, &byte) in block.iter().enumerate() {
+        if byte == b'\\' {
+            bs += 1;
+            continue;
+        }
+        if byte == delim && bs & 1 == 0 {
+            if split.is_some() {
+                return None;
+            }
+            split = Some(i);
+        }
+        bs = 0;
+    }
+    let split = split?;
+    Some((&block[..split], &block[split + 1..]))
 }
 
 fn split_entry_fields(block: &[u8]) -> [&[u8]; 3] {
@@ -485,7 +523,7 @@ fn parse_select_list(raw: &[u8], out: &mut Vec<String>) -> bool {
 }
 
 fn parse_select_range(raw: &[u8]) -> Option<(f64, f64)> {
-    let raw = decode_trim(raw);
+    let raw = decode_trimmed(raw);
     let mut values = raw.split('-');
     let first = values.next()?.trim().parse::<f64>().ok()?;
     let last = values
@@ -500,19 +538,27 @@ fn parse_select_range(raw: &[u8]) -> Option<(f64, f64)> {
 }
 
 fn parse_select_sort(raw: &[u8]) -> Option<(Option<SongSort>, i32)> {
-    let parts = split_unescaped(raw, b',');
-    if parts.len() != 2 {
+    let (sort_raw, index_raw) = split_pair(raw, b',')?;
+    let sort_raw = decode_trimmed(sort_raw);
+    let sort = if sort_raw.eq_ignore_ascii_case("randomize") {
+        None
+    } else if sort_raw.eq_ignore_ascii_case("mostplays") || sort_raw.eq_ignore_ascii_case("best") {
+        Some(SongSort::MostPlays)
+    } else if sort_raw.eq_ignore_ascii_case("fewestplays") || sort_raw.eq_ignore_ascii_case("worst")
+    {
+        Some(SongSort::FewestPlays)
+    } else if sort_raw.eq_ignore_ascii_case("topgrades")
+        || sort_raw.eq_ignore_ascii_case("gradebest")
+    {
+        Some(SongSort::TopGrades)
+    } else if sort_raw.eq_ignore_ascii_case("lowestgrades")
+        || sort_raw.eq_ignore_ascii_case("gradeworst")
+    {
+        Some(SongSort::LowestGrades)
+    } else {
         return None;
-    }
-    let sort = match decode_trim(parts[0]).to_ascii_lowercase().as_str() {
-        "randomize" => None,
-        "mostplays" | "best" => Some(SongSort::MostPlays),
-        "fewestplays" | "worst" => Some(SongSort::FewestPlays),
-        "topgrades" | "gradebest" => Some(SongSort::TopGrades),
-        "lowestgrades" | "gradeworst" => Some(SongSort::LowestGrades),
-        _ => return None,
     };
-    let index = (decode_trim(parts[1]).parse::<i32>().unwrap_or(0) - 1).clamp(0, 500);
+    let index = (decode_trimmed(index_raw).parse::<i32>().unwrap_or(0) - 1).clamp(0, 500);
     Some((sort, index))
 }
 
@@ -554,7 +600,49 @@ pub fn profile_select_mods(raw: &[u8]) -> (bool, bool, String) {
     (entry.secret, entry.no_difficult, entry.modifiers)
 }
 
-fn parse_song_select(params: &[&[u8]]) -> Option<CourseEntry> {
+fn apply_select_param(entry: &mut CourseEntry, param: &[u8]) -> Option<()> {
+    let (name_raw, value) = split_pair(param, b'=')?;
+    let name = decode_trimmed(name_raw);
+    let CourseSong::Select(select) = &mut entry.song else {
+        unreachable!("SONGSELECT parser always constructs selection criteria");
+    };
+    if name.eq_ignore_ascii_case("TITLE") {
+        parse_select_list(value, &mut select.titles).then_some(())?;
+    } else if name.eq_ignore_ascii_case("GROUP") {
+        parse_select_list(value, &mut select.groups).then_some(())?;
+    } else if name.eq_ignore_ascii_case("ARTIST") {
+        parse_select_list(value, &mut select.artists).then_some(())?;
+    } else if name.eq_ignore_ascii_case("GENRE") {
+        parse_select_list(value, &mut select.genres).then_some(())?;
+    } else if name.eq_ignore_ascii_case("DIFFICULTY") {
+        visit_unescaped(value, b',', |raw| {
+            if let Some(diff) = parse_course_difficulty(&decode_trimmed(raw)) {
+                select.difficulties.push(diff);
+            }
+        });
+    } else if name.eq_ignore_ascii_case("METER") {
+        let (low, high) = parse_select_range(value)?;
+        select.meter_range = Some((low as i32, high as i32));
+    } else if name.eq_ignore_ascii_case("BPMRANGE") {
+        select.bpm_range = Some(parse_select_range(value)?);
+    } else if name.eq_ignore_ascii_case("DURATION") {
+        let (low, high) = parse_select_range(value)?;
+        select.duration_range = Some((low as f32, high as f32));
+    } else if name.eq_ignore_ascii_case("SORT") {
+        let (sort, index) = parse_select_sort(value)?;
+        select.sort = sort;
+        select.index = index;
+    } else if name.eq_ignore_ascii_case("GAINLIVES") {
+        entry.gain_lives = decode_trimmed(value).parse().unwrap_or(0);
+    } else if name.eq_ignore_ascii_case("GAINSECONDS") {
+        entry.gain_seconds = decode_trimmed(value).parse::<i32>().unwrap_or(0) as f32;
+    } else if name.eq_ignore_ascii_case("MODS") {
+        apply_select_mods(entry, value);
+    }
+    Some(())
+}
+
+fn parse_song_select(raw: &[u8]) -> Option<CourseEntry> {
     let mut entry = CourseEntry {
         song: CourseSong::Select(SongSelect::default()),
         steps: StepsSpec::Unknown { raw: String::new() },
@@ -564,60 +652,13 @@ fn parse_song_select(params: &[&[u8]]) -> Option<CourseEntry> {
         gain_seconds: 0.0,
         gain_lives: -1,
     };
-
-    for param in params {
-        let parts = split_unescaped(param, b'=');
-        if parts.len() != 2 {
-            return None;
+    let mut valid = true;
+    visit_unescaped(raw, b':', |param| {
+        if valid {
+            valid = apply_select_param(&mut entry, param).is_some();
         }
-        let name = decode_trim(parts[0]);
-        let value = parts[1];
-        let CourseSong::Select(select) = &mut entry.song else {
-            unreachable!("SONGSELECT parser always constructs selection criteria");
-        };
-        if name.eq_ignore_ascii_case("TITLE") {
-            if !parse_select_list(value, &mut select.titles) {
-                return None;
-            }
-        } else if name.eq_ignore_ascii_case("GROUP") {
-            if !parse_select_list(value, &mut select.groups) {
-                return None;
-            }
-        } else if name.eq_ignore_ascii_case("ARTIST") {
-            if !parse_select_list(value, &mut select.artists) {
-                return None;
-            }
-        } else if name.eq_ignore_ascii_case("GENRE") {
-            if !parse_select_list(value, &mut select.genres) {
-                return None;
-            }
-        } else if name.eq_ignore_ascii_case("DIFFICULTY") {
-            for raw in split_unescaped(value, b',') {
-                if let Some(diff) = parse_course_difficulty(&decode_trim(raw)) {
-                    select.difficulties.push(diff);
-                }
-            }
-        } else if name.eq_ignore_ascii_case("METER") {
-            let (low, high) = parse_select_range(value)?;
-            select.meter_range = Some((low as i32, high as i32));
-        } else if name.eq_ignore_ascii_case("BPMRANGE") {
-            select.bpm_range = Some(parse_select_range(value)?);
-        } else if name.eq_ignore_ascii_case("DURATION") {
-            let (low, high) = parse_select_range(value)?;
-            select.duration_range = Some((low as f32, high as f32));
-        } else if name.eq_ignore_ascii_case("SORT") {
-            let (sort, index) = parse_select_sort(value)?;
-            select.sort = sort;
-            select.index = index;
-        } else if name.eq_ignore_ascii_case("GAINLIVES") {
-            entry.gain_lives = decode_trim(value).parse().unwrap_or(0);
-        } else if name.eq_ignore_ascii_case("GAINSECONDS") {
-            entry.gain_seconds = decode_trim(value).parse::<i32>().unwrap_or(0) as f32;
-        } else if name.eq_ignore_ascii_case("MODS") {
-            apply_select_mods(&mut entry, value);
-        }
-    }
-    Some(entry)
+    });
+    valid.then_some(entry)
 }
 
 fn parse_course_meter_tag(value: &[u8], meters: &mut [Option<i32>; 6]) {
@@ -776,8 +817,7 @@ pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
             continue;
         }
         if name_bytes.eq_ignore_ascii_case(b"SONGSELECT") {
-            let params = split_unescaped(value, b':');
-            if let Some(entry) = parse_song_select(&params) {
+            if let Some(entry) = parse_song_select(value) {
                 entries.push(entry);
             }
         }

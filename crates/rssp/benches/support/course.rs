@@ -9,6 +9,21 @@ pub const MODS: &str =
 pub const SELECT_MOD_COUNT: u64 = 8;
 pub const SELECT_MODS: &[u8] =
     b" 1.5x, reverse, mirror, noholds, nomines, sudden, noshowcourse, nodifficult ";
+pub const SELECT_COUNT: usize = 64;
+pub const SELECT_PARAMS: u64 = 12;
+
+pub fn select_input() -> Vec<u8> {
+    let mut course = String::with_capacity(64 + SELECT_COUNT * 256);
+    course.push_str("#COURSE:Selection Performance;\n");
+    for index in 0..SELECT_COUNT {
+        writeln!(
+            &mut course,
+            "#SONGSELECT:TITLE=Song{index:03},Alt {index:03}:GROUP=Group A,Group B:ARTIST=Artist:GENRE=Genre A,Genre B:DIFFICULTY=Medium,Hard:METER=8-12:BPMRANGE=100-200:DURATION=90-150:SORT=FewestPlays,4:GAINSECONDS=5:GAINLIVES=2:MODS=2x,noshowcourse,nodifficult;"
+        )
+        .expect("writing to a String should succeed");
+    }
+    course.into_bytes()
+}
 
 pub struct CourseFixture {
     root: PathBuf,
