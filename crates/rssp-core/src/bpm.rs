@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::fmt::Write as _;
 
 use crate::math::{fmt_dec3_half_up, push_dec3_half_up, round_sig_figs_itg, roundtrip_bpm_itg};
 use crate::parse::{
@@ -300,6 +301,18 @@ fn parse_display_bpm(tag: &str) -> Option<(f64, f64)> {
     Some((min, max))
 }
 
+fn push_display_bpm(out: &mut String, value: f64, rate: f64) {
+    if rate == 1.0 {
+        write!(out, "{value:.0}").expect("writing to a String cannot fail");
+        return;
+    }
+    let start = out.len();
+    write!(out, "{value:.1}").expect("writing to a String cannot fail");
+    if out[start..].ends_with(".0") {
+        out.truncate(out.len() - 2);
+    }
+}
+
 pub fn resolve_display_bpm(
     chart_tag: Option<&str>,
     actual_min: f64,
@@ -316,22 +329,12 @@ pub fn resolve_display_bpm(
         max = actual_max;
     }
     let (smin, smax) = (min * rate, max * rate);
-    let fmt = |v: f64| {
-        if rate == 1.0 {
-            format!("{v:.0}")
-        } else {
-            let mut s = format!("{v:.1}");
-            if s.ends_with(".0") {
-                s.truncate(s.len() - 2);
-            }
-            s
-        }
-    };
-    let display = if smin == smax {
-        fmt(smin)
-    } else {
-        format!("{} - {}", fmt(smin), fmt(smax))
-    };
+    let mut display = String::with_capacity(16);
+    push_display_bpm(&mut display, smin, rate);
+    if smin != smax {
+        display.push_str(" - ");
+        push_display_bpm(&mut display, smax, rate);
+    }
     (smin, smax, display)
 }
 

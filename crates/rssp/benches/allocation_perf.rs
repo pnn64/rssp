@@ -102,6 +102,7 @@ enum Mode {
     NpsCursor,
     Minimize,
     Bpms,
+    DisplayBpm,
     BpmStats,
     Tech,
     Snapshot,
@@ -198,6 +199,7 @@ fn parse_args() -> (Mode, usize) {
                     "nps-cursor" => Mode::NpsCursor,
                     "minimize" => Mode::Minimize,
                     "bpms" => Mode::Bpms,
+                    "display-bpm" => Mode::DisplayBpm,
                     "bpm-stats" => Mode::BpmStats,
                     "tech" => Mode::Tech,
                     "snapshot" => Mode::Snapshot,
@@ -269,7 +271,9 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             compute_pattern_counts: false,
             ..rssp::AnalysisOptions::default()
         },
-        Mode::BpmStats | Mode::TimingBuild | Mode::NpsCursor => rssp::AnalysisOptions::default(),
+        Mode::BpmStats | Mode::DisplayBpm | Mode::TimingBuild | Mode::NpsCursor => {
+            rssp::AnalysisOptions::default()
+        }
         Mode::Full | Mode::AnalysisReuse => rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
@@ -360,8 +364,8 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
                 checksum = checksum.wrapping_add(bpms.len());
                 black_box(bpms);
             }
-            Mode::BpmStats => {
-                unreachable!("BPM stats mode uses its dedicated allocation runner")
+            Mode::BpmStats | Mode::DisplayBpm => {
+                unreachable!("mode uses its dedicated allocation runner")
             }
             Mode::Tech => {
                 for _ in 0..256 {
@@ -615,6 +619,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::NpsCursor => "nps-cursor",
         Mode::Minimize => "minimize",
         Mode::Bpms => "bpms",
+        Mode::DisplayBpm => "display-bpm",
         Mode::BpmStats => "bpm-stats",
         Mode::Tech => "tech",
         Mode::Snapshot => "snapshot",
@@ -1307,6 +1312,58 @@ fn run_bpm_stats_alloc(iterations: usize) {
     run_bpm_stats_alloc_phase("reused", iterations, &map, |map| {
         rssp::bpm::compute_bpm_range_and_stats_with_scratch(map, &mut values)
     });
+}
+
+fn run_display_bpm_alloc(iterations: usize) {
+    const CASES: [(Option<&str>, f64, f64, f64); 4] = [
+        (None, 120.0, 180.0, 1.0),
+        (Some("150"), 120.0, 180.0, 1.0),
+        (Some("120:180"), 120.0, 180.0, 1.25),
+        (Some("*"), 90.0, 240.0, 1.1),
+    ];
+    for (tag, min, max, rate) in CASES {
+        black_box(rssp::bpm::resolve_display_bpm(tag, min, max, rate));
+    }
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        for (tag, min, max, rate) in CASES {
+            let result = rssp::bpm::resolve_display_bpm(
+                black_box(tag),
+                black_box(min),
+                black_box(max),
+                black_box(rate),
+            );
+            checksum = checksum.wrapping_add(result.2.len());
+            black_box(result);
+        }
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=display-bpm iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_values_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        CASES.len() as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
 }
 
 fn run_nps_alloc_phase(
@@ -2567,6 +2624,10 @@ fn main() {
     match mode {
         Mode::BpmStats => {
             run_bpm_stats_alloc(iterations);
+            return;
+        }
+        Mode::DisplayBpm => {
+            run_display_bpm_alloc(iterations);
             return;
         }
         Mode::CustomCompile => {

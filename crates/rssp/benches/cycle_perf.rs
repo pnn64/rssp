@@ -405,6 +405,32 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     });
     parsing.finish();
 
+    const DISPLAY_CASES: [(Option<&str>, f64, f64, f64); 4] = [
+        (None, 120.0, 180.0, 1.0),
+        (Some("150"), 120.0, 180.0, 1.0),
+        (Some("120:180"), 120.0, 180.0, 1.25),
+        (Some("*"), 90.0, 240.0, 1.1),
+    ];
+    let mut display_bpm = c.benchmark_group("cycles/display_bpm");
+    display_bpm.throughput(Throughput::Elements(1_024));
+    display_bpm.sample_size(100);
+    display_bpm.measurement_time(Duration::from_secs(2));
+    display_bpm.bench_function("mixed_1024", |b| {
+        b.iter(|| {
+            for _ in 0..256 {
+                for (tag, min, max, rate) in DISPLAY_CASES {
+                    black_box(rssp::bpm::resolve_display_bpm(
+                        black_box(tag),
+                        black_box(min),
+                        black_box(max),
+                        black_box(rate),
+                    ));
+                }
+            }
+        });
+    });
+    display_bpm.finish();
+
     let mut tech_notation = c.benchmark_group("cycles/tech_notation");
     tech_notation.sample_size(100);
     tech_notation.measurement_time(Duration::from_secs(2));

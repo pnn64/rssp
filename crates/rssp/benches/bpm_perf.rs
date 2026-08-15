@@ -311,6 +311,44 @@ fn bench_bpm_format(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_display_bpm(c: &mut Criterion) {
+    const CASES: [(Option<&str>, f64, f64, f64); 4] = [
+        (None, 120.0, 180.0, 1.0),
+        (Some("150"), 120.0, 180.0, 1.0),
+        (Some("120:180"), 120.0, 180.0, 1.25),
+        (Some("*"), 90.0, 240.0, 1.1),
+    ];
+    let mut checksum = 0u64;
+    for (tag, min, max, rate) in CASES {
+        let result = rssp::bpm::resolve_display_bpm(tag, min, max, rate);
+        checksum ^= result.0.to_bits().rotate_left(7) ^ result.1.to_bits();
+        for byte in result.2.bytes() {
+            checksum = checksum.rotate_left(5) ^ u64::from(byte);
+        }
+    }
+    assert_eq!(checksum, 17_060_450_905_395_141_691);
+
+    let mut group = c.benchmark_group("display_bpm");
+    group.throughput(criterion::Throughput::Elements(1_024));
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("mixed_1024", |b| {
+        b.iter(|| {
+            for _ in 0..256 {
+                for (tag, min, max, rate) in CASES {
+                    black_box(rssp::bpm::resolve_display_bpm(
+                        black_box(tag),
+                        black_box(min),
+                        black_box(max),
+                        black_box(rate),
+                    ));
+                }
+            }
+        });
+    });
+    group.finish();
+}
+
 fn bench_bpm_stats(c: &mut Criterion) {
     let map: Vec<_> = (0..4_096)
         .map(|index| {
@@ -527,6 +565,7 @@ criterion_group!(
     bench_bpm_pipeline,
     bench_bpm_inner,
     bench_bpm_format,
+    bench_display_bpm,
     bench_bpm_stats,
     bench_mines_nonfake,
     bench_parse_bpm_map,
