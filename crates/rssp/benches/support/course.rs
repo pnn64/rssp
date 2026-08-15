@@ -45,7 +45,11 @@ impl CourseFixture {
         std::fs::create_dir_all(&group_dir).expect("benchmark root should be creatable");
 
         let mut course = String::with_capacity(64 + SONG_COUNT * 48);
-        course.push_str("#COURSE:Performance Course;\n");
+        course.push_str(concat!(
+            "#COURSE:Performance Course;\n",
+            "#REPEAT:Maybe YES after completion;\n",
+            "#METER:Beginner:3:Easy:6:Medium:9:Hard:12:Challenge:15:Edit:18;\n",
+        ));
         for index in 0..SONG_COUNT {
             let song = format!("Song{index:03}");
             let song_dir = group_dir.join(&song);

@@ -916,6 +916,20 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     assert_eq!(current_banner, Some(banner_fixture.expected_banner()));
     let course_input =
         std::fs::read(course_fixture.course_path()).expect("benchmark course should be readable");
+    let legacy_course = rssp::course::profile_parse_crs(&course_input, true)
+        .expect("legacy benchmark course should parse");
+    let current_course = rssp::course::profile_parse_crs(&course_input, false)
+        .expect("benchmark course should parse");
+    assert_eq!(current_course.name, legacy_course.name);
+    assert_eq!(current_course.name_translit, legacy_course.name_translit);
+    assert_eq!(current_course.scripter, legacy_course.scripter);
+    assert_eq!(current_course.description, legacy_course.description);
+    assert_eq!(current_course.banner, legacy_course.banner);
+    assert_eq!(current_course.background, legacy_course.background);
+    assert_eq!(current_course.repeat, legacy_course.repeat);
+    assert_eq!(current_course.lives, legacy_course.lives);
+    assert_eq!(current_course.meters, legacy_course.meters);
+    assert_eq!(current_course.entries, legacy_course.entries);
     let select_input = course_bench::select_input();
     let course_options = course_bench::fast_options();
     let pack_fixture = pack_bench::PackFixture::new();
@@ -1255,10 +1269,18 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     course_parse.sample_size(50);
     course_parse.measurement_time(Duration::from_secs(3));
     course_parse.throughput(Throughput::Elements(course_bench::SONG_COUNT as u64));
-    course_parse.bench_function("parse_64", |b| {
+    course_parse.bench_function("legacy_control_allocs", |b| {
         b.iter(|| {
             black_box(
-                rssp::course::parse_crs(black_box(&course_input))
+                rssp::course::profile_parse_crs(black_box(&course_input), true)
+                    .expect("benchmark course should parse"),
+            );
+        });
+    });
+    course_parse.bench_function("stream_control_fields", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::course::profile_parse_crs(black_box(&course_input), false)
                     .expect("benchmark course should parse"),
             );
         });

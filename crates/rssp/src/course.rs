@@ -244,6 +244,7 @@ fn visit_unescaped<'a>(block: &'a [u8], delim: u8, mut visit: impl FnMut(&'a [u8
     visit(&block[start..]);
 }
 
+#[cfg(feature = "profile")]
 #[inline(always)]
 fn split_unescaped(block: &[u8], delim: u8) -> Vec<&[u8]> {
     let mut out = Vec::new();
@@ -330,8 +331,14 @@ fn decode_trimmed(bytes: &[u8]) -> Cow<'_, str> {
     }
 }
 
-fn parse_repeat(s: &str) -> bool {
-    s.to_ascii_lowercase().contains("yes")
+fn parse_repeat(raw: &[u8]) -> bool {
+    raw.windows(3)
+        .any(|window| window.eq_ignore_ascii_case(b"yes"))
+}
+
+#[cfg(feature = "profile")]
+fn parse_repeat_legacy(raw: &[u8]) -> bool {
+    decode_trim(raw).to_ascii_lowercase().contains("yes")
 }
 
 fn parse_sort_pick(raw: &str) -> Option<(SongSort, i32)> {
@@ -661,7 +668,39 @@ fn parse_song_select(raw: &[u8]) -> Option<CourseEntry> {
     valid.then_some(entry)
 }
 
+fn set_course_meter(diff_raw: &[u8], meter_raw: &[u8], meters: &mut [Option<i32>; 6]) {
+    let diff_raw = decode_trimmed(diff_raw);
+    let meter_raw = decode_trimmed(meter_raw);
+    if let Some(diff) = parse_course_difficulty(&diff_raw)
+        && let Ok(meter) = meter_raw.parse::<i32>()
+    {
+        meters[diff as usize] = Some(meter.max(0));
+    }
+}
+
 fn parse_course_meter_tag(value: &[u8], meters: &mut [Option<i32>; 6]) {
+    let mut field_count = 0usize;
+    let mut pending = None;
+    visit_unescaped(value, b':', |field| {
+        field_count += 1;
+        if let Some(diff) = pending.take() {
+            set_course_meter(diff, field, meters);
+        } else {
+            pending = Some(field);
+        }
+    });
+
+    if field_count == 1 {
+        let meter = decode_trimmed(pending.expect("one field was visited"))
+            .parse::<i32>()
+            .unwrap_or(0)
+            .max(0);
+        meters[Difficulty::Medium as usize] = Some(meter);
+    }
+}
+
+#[cfg(feature = "profile")]
+fn parse_course_meter_tag_legacy(value: &[u8], meters: &mut [Option<i32>; 6]) {
     let params = split_unescaped(value, b':');
     if params.is_empty() {
         return;
@@ -818,7 +857,7 @@ pub fn profile_course_banner(
     }
 }
 
-pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
+fn parse_crs_with<const LEGACY: bool>(data: &[u8]) -> Result<CourseFile, String> {
     let mut name = String::new();
     let mut name_translit = String::new();
     let mut scripter = String::new();
@@ -866,7 +905,18 @@ pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
             continue;
         }
         if name_bytes.eq_ignore_ascii_case(b"REPEAT") {
-            repeat = parse_repeat(&decode_trim(value));
+            repeat = if LEGACY {
+                #[cfg(feature = "profile")]
+                {
+                    parse_repeat_legacy(value)
+                }
+                #[cfg(not(feature = "profile"))]
+                {
+                    unreachable!("legacy parser requires profile feature")
+                }
+            } else {
+                parse_repeat(value)
+            };
             continue;
         }
         if name_bytes.eq_ignore_ascii_case(b"BANNER") {
@@ -882,7 +932,14 @@ pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
             continue;
         }
         if name_bytes.eq_ignore_ascii_case(b"METER") {
-            parse_course_meter_tag(value, &mut meters);
+            if LEGACY {
+                #[cfg(feature = "profile")]
+                parse_course_meter_tag_legacy(value, &mut meters);
+                #[cfg(not(feature = "profile"))]
+                unreachable!("legacy parser requires profile feature");
+            } else {
+                parse_course_meter_tag(value, &mut meters);
+            }
             continue;
         }
         if name_bytes.eq_ignore_ascii_case(b"SONG") {
@@ -912,6 +969,20 @@ pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
         meters,
         entries,
     })
+}
+
+pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
+    parse_crs_with::<false>(data)
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+pub fn profile_parse_crs(data: &[u8], legacy: bool) -> Result<CourseFile, String> {
+    if legacy {
+        parse_crs_with::<true>(data)
+    } else {
+        parse_crs_with::<false>(data)
+    }
 }
 
 const fn empty_timing_segments() -> TimingSegments {

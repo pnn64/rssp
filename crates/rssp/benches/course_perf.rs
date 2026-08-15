@@ -33,6 +33,19 @@ fn analyze_course_cache_all(
     .expect("benchmark course should analyze")
 }
 
+fn assert_same_course(left: &rssp::course::CourseFile, right: &rssp::course::CourseFile) {
+    assert_eq!(left.name, right.name);
+    assert_eq!(left.name_translit, right.name_translit);
+    assert_eq!(left.scripter, right.scripter);
+    assert_eq!(left.description, right.description);
+    assert_eq!(left.banner, right.banner);
+    assert_eq!(left.background, right.background);
+    assert_eq!(left.repeat, right.repeat);
+    assert_eq!(left.lives, right.lives);
+    assert_eq!(left.meters, right.meters);
+    assert_eq!(left.entries, right.entries);
+}
+
 fn bench_course_analysis(c: &mut Criterion) {
     let fixture = course_bench::CourseFixture::new();
     let fast_options = course_bench::fast_options();
@@ -70,7 +83,36 @@ fn bench_course_parse(c: &mut Criterion) {
     let fixture = course_bench::CourseFixture::new();
     let input = std::fs::read(fixture.course_path()).expect("benchmark course should be readable");
     let parsed = rssp::course::parse_crs(&input).expect("benchmark course should parse");
+    let legacy = rssp::course::profile_parse_crs(&input, true)
+        .expect("legacy benchmark course should parse");
+    assert_same_course(&parsed, &legacy);
     assert_eq!(parsed.entries.len(), course_bench::SONG_COUNT);
+    assert!(parsed.repeat);
+    assert_eq!(
+        parsed.meters,
+        [Some(3), Some(6), Some(9), Some(12), Some(15), Some(18)]
+    );
+    const CONTROL_CASES: [&[u8]; 4] = [
+        b"#COURSE:Controls;#REPEAT:\xA0mAyBe YES\xA0;#METER: Beginner : -3 :HARD:12:Odd;",
+        b"#COURSE:Single;#REPEAT:not enabled;#METER: 17 ;",
+        b"#COURSE:Empty;#REPEAT:ye\xFFs;#METER:;",
+        b"#COURSE:Escaped;#METER:Hard\\:Alias:99:Easy:7;",
+    ];
+    for control in CONTROL_CASES {
+        let current = rssp::course::profile_parse_crs(control, false)
+            .expect("control edge case should parse");
+        let legacy = rssp::course::profile_parse_crs(control, true)
+            .expect("legacy control edge case should parse");
+        assert_same_course(&current, &legacy);
+    }
+    let controls = rssp::course::profile_parse_crs(CONTROL_CASES[0], false)
+        .expect("control values should parse");
+    assert!(controls.repeat);
+    assert_eq!(controls.meters, [Some(0), None, None, Some(12), None, None]);
+    let single = rssp::course::profile_parse_crs(CONTROL_CASES[1], false)
+        .expect("single meter should parse");
+    assert!(!single.repeat);
+    assert_eq!(single.meters, [None, None, Some(17), None, None, None]);
     assert_eq!(
         parsed.entries.first().map(|entry| &entry.song),
         Some(&rssp::course::CourseSong::Fixed {
@@ -162,10 +204,19 @@ fn bench_course_parse(c: &mut Criterion) {
     group.sample_size(100);
     group.measurement_time(Duration::from_secs(3));
     group.throughput(Throughput::Elements(course_bench::SONG_COUNT as u64));
-    group.bench_function("parse_64", |b| {
+    group.bench_function("legacy_control_allocs", |b| {
         b.iter(|| {
             black_box(
-                rssp::course::parse_crs(black_box(&input)).expect("benchmark course should parse"),
+                rssp::course::profile_parse_crs(black_box(&input), true)
+                    .expect("benchmark course should parse"),
+            );
+        });
+    });
+    group.bench_function("stream_control_fields", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::course::profile_parse_crs(black_box(&input), false)
+                    .expect("benchmark course should parse"),
             );
         });
     });

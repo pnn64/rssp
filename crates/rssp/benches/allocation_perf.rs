@@ -1856,18 +1856,14 @@ fn run_course_analyze_phase(
     );
 }
 
-fn run_course_parse_alloc(iterations: usize) {
-    let fixture = course_bench::CourseFixture::new();
-    let input = std::fs::read(fixture.course_path()).expect("benchmark course should be readable");
-    let parsed = rssp::course::parse_crs(&input).expect("benchmark course should parse");
-    assert_eq!(parsed.entries.len(), course_bench::SONG_COUNT);
-
+fn run_course_parse_phase(input: &[u8], phase: &str, iterations: usize, legacy: bool) {
     reset_counters();
     let before = Counters::read();
     let start = Instant::now();
     let mut checksum = 0usize;
     for _ in 0..iterations {
-        let parsed = rssp::course::parse_crs(black_box(&input)).expect("course should parse");
+        let parsed =
+            rssp::course::profile_parse_crs(black_box(input), legacy).expect("course should parse");
         checksum = checksum.wrapping_add(parsed.entries.len());
         black_box(parsed);
     }
@@ -1876,12 +1872,13 @@ fn run_course_parse_alloc(iterations: usize) {
     let divisor = iterations as f64;
     println!(
         concat!(
-            "mode=course-parse iters={} checksum={} elapsed_s={:.6} ",
+            "mode=course-parse phase={} iters={} checksum={} elapsed_s={:.6} ",
             "throughput_entries_s={:.3} alloc_calls_per_iter={:.1} ",
             "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
             "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
             "live_growth_bytes={} peak_live_growth_bytes={}"
         ),
+        phase,
         iterations,
         black_box(checksum),
         elapsed.as_secs_f64(),
@@ -1894,6 +1891,27 @@ fn run_course_parse_alloc(iterations: usize) {
         after.live_bytes as isize - before.live_bytes as isize,
         after.peak_live_bytes.saturating_sub(before.live_bytes),
     );
+}
+
+fn run_course_parse_alloc(iterations: usize) {
+    let fixture = course_bench::CourseFixture::new();
+    let input = std::fs::read(fixture.course_path()).expect("benchmark course should be readable");
+    let current =
+        rssp::course::profile_parse_crs(&input, false).expect("benchmark course should parse");
+    let legacy = rssp::course::profile_parse_crs(&input, true)
+        .expect("legacy benchmark course should parse");
+    assert_eq!(current.entries, legacy.entries);
+    assert_eq!(current.repeat, legacy.repeat);
+    assert_eq!(current.meters, legacy.meters);
+    assert_eq!(current.entries.len(), course_bench::SONG_COUNT);
+    assert!(current.repeat);
+    assert_eq!(
+        current.meters,
+        [Some(3), Some(6), Some(9), Some(12), Some(15), Some(18)]
+    );
+
+    run_course_parse_phase(&input, "legacy-control-allocs", iterations, true);
+    run_course_parse_phase(&input, "stream-control-fields", iterations, false);
 }
 
 fn run_course_mods_alloc(iterations: usize) {
