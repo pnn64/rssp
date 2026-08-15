@@ -32,7 +32,7 @@ use crate::stats::{
     RADAR_CATEGORY_COUNT, StreamCounts, compute_stream_outputs_with_scratch,
     compute_timing_aware_stats_from_rows_with_row_to_beat,
     compute_timing_aware_stats_no_holds_from_rows, compute_timing_aware_stats_with_row_to_beat,
-    minimize_chart_count_rows, minimize_rows_typed,
+    minimize_chart_count_rows, minimize_rows_typed_in,
 };
 use crate::tech::parse_tech_notation;
 use crate::timing::{
@@ -71,7 +71,8 @@ impl Default for AnalysisOptions {
 ///
 /// One workspace is single-thread-only and may be reused sequentially across
 /// any mix of 4-lane and 8-lane simfiles. It retains the largest parity, BPM,
-/// NPS, and stream-token buffers it has needed; drop it to release that memory.
+/// NPS, typed-row, and stream-token buffers it has needed; drop it to release
+/// that memory.
 #[derive(Default)]
 pub struct AnalysisScratch {
     parity4: Option<step_parity::TimingRowsScratch<4>>,
@@ -80,6 +81,8 @@ pub struct AnalysisScratch {
     chart_bpm_map: Vec<(f64, f64)>,
     bpm_values: Vec<f64>,
     nps: Vec<f64>,
+    rows4: stats::TypedRowsScratch<4>,
+    rows8: stats::TypedRowsScratch<8>,
     stream_tokens: Vec<stats::Token>,
 }
 
@@ -92,6 +95,8 @@ impl std::fmt::Debug for AnalysisScratch {
             .field("chart_bpm_capacity", &self.chart_bpm_map.capacity())
             .field("bpm_value_capacity", &self.bpm_values.capacity())
             .field("nps_capacity", &self.nps.capacity())
+            .field("rows4_capacity", &self.rows4.row_capacity())
+            .field("rows8_capacity", &self.rows8.row_capacity())
             .field("stream_capacity", &self.stream_tokens.capacity())
             .finish()
     }
@@ -598,6 +603,8 @@ fn build_chart_summary<const REUSE_BPMS: bool>(
     compiled_custom_patterns: &CompiledCustomPatterns,
     parity_scratch4: &mut Option<step_parity::TimingRowsScratch<4>>,
     parity_scratch8: &mut Option<step_parity::TimingRowsScratch<8>>,
+    rows4: &mut stats::TypedRowsScratch<4>,
+    rows8: &mut stats::TypedRowsScratch<8>,
     chart_bpm_scratch: &mut Vec<(f64, f64)>,
     nps_scratch: &mut Vec<f64>,
     stream_tokens: &mut Vec<stats::Token>,
@@ -650,28 +657,28 @@ fn build_chart_summary<const REUSE_BPMS: bool>(
     let want_parity_rows =
         matches!(lanes, 4 | 8) && (options.compute_tech_counts || options.compute_note_annotations);
     let rows_collected = compute_patterns || want_parity_rows;
-    let (mut rows4, mut rows8) = (Vec::new(), Vec::new());
+    rows4.clear();
+    rows8.clear();
     let (mut minimized_chart, mut stats, measure_densities, row_to_beat, last_beat) =
         if compute_patterns {
-            let (chart, stats, densities, rows, row_to_beat, last_beat) =
-                minimize_rows_typed::<4>(chart_data);
-            rows4 = rows;
+            let (chart, stats, densities, row_to_beat, last_beat) =
+                minimize_rows_typed_in::<4>(chart_data, rows4);
             (chart, stats, densities, row_to_beat, last_beat)
         } else if !want_parity_rows {
             let (chart, stats, densities, row_to_beat, last_beat) =
                 minimize_chart_count_rows(chart_data, lanes);
             (chart, stats, densities, row_to_beat, last_beat)
         } else if lanes == 8 {
-            let (chart, stats, densities, rows, row_to_beat, last_beat) =
-                minimize_rows_typed::<8>(chart_data);
-            rows8 = rows;
+            let (chart, stats, densities, row_to_beat, last_beat) =
+                minimize_rows_typed_in::<8>(chart_data, rows8);
             (chart, stats, densities, row_to_beat, last_beat)
         } else {
-            let (chart, stats, densities, rows, row_to_beat, last_beat) =
-                minimize_rows_typed::<4>(chart_data);
-            rows4 = rows;
+            let (chart, stats, densities, row_to_beat, last_beat) =
+                minimize_rows_typed_in::<4>(chart_data, rows4);
             (chart, stats, densities, row_to_beat, last_beat)
         };
+    let rows4 = rows4.rows();
+    let rows8 = rows8.rows();
     if let Some(pos) = minimized_chart.iter().rposition(|&b| b != b'\n') {
         minimized_chart.truncate(pos + 1);
     }
@@ -844,7 +851,7 @@ fn build_chart_summary<const REUSE_BPMS: bool>(
     );
 
     let pattern_analysis = compute_patterns.then(|| {
-        analyze_patterns_from_rows(&rows4, options.mono_threshold, compiled_custom_patterns)
+        analyze_patterns_from_rows(rows4, options.mono_threshold, compiled_custom_patterns)
     });
     let (detected_patterns, (anchor_left, anchor_down, anchor_up, anchor_right)) = pattern_analysis
         .as_ref()
@@ -907,16 +914,16 @@ fn build_chart_summary<const REUSE_BPMS: bool>(
                     &row_to_beat,
                 )
             } else if stats.holds == 0 && stats.rolls == 0 {
-                compute_timing_aware_stats_no_holds_from_rows::<4>(&rows4, timing, &row_to_beat)
+                compute_timing_aware_stats_no_holds_from_rows::<4>(rows4, timing, &row_to_beat)
             } else {
                 compute_timing_aware_stats_from_rows_with_row_to_beat::<4>(
-                    &rows4,
+                    rows4,
                     timing,
                     &row_to_beat,
                 )
             };
             let (tech_counts, note_annotations) = parity_outputs(
-                &rows4,
+                rows4,
                 &row_to_beat,
                 timing,
                 has_hold_notes,
@@ -936,16 +943,16 @@ fn build_chart_summary<const REUSE_BPMS: bool>(
                     &row_to_beat,
                 )
             } else if stats.holds == 0 && stats.rolls == 0 {
-                compute_timing_aware_stats_no_holds_from_rows::<8>(&rows8, timing, &row_to_beat)
+                compute_timing_aware_stats_no_holds_from_rows::<8>(rows8, timing, &row_to_beat)
             } else {
                 compute_timing_aware_stats_from_rows_with_row_to_beat::<8>(
-                    &rows8,
+                    rows8,
                     timing,
                     &row_to_beat,
                 )
             };
             let (tech_counts, note_annotations) = parity_outputs(
-                &rows8,
+                rows8,
                 &row_to_beat,
                 timing,
                 has_hold_notes,
@@ -1414,6 +1421,8 @@ fn analyze_with_scratch_impl<const REUSE_BPMS: bool>(
             compiled_custom_patterns_ref,
             &mut scratch.parity4,
             &mut scratch.parity8,
+            &mut scratch.rows4,
+            &mut scratch.rows8,
             &mut scratch.chart_bpm_map,
             &mut scratch.nps,
             &mut scratch.stream_tokens,
@@ -1588,24 +1597,29 @@ mod tests {
 
         let first = analyze_with_scratch(FIXTURE, "ssc", &options, &mut scratch)
             .expect("first reused analysis should succeed");
-        let bpm_capacities = (
+        let scratch_capacities = (
             scratch.global_bpm_map.capacity(),
             scratch.chart_bpm_map.capacity(),
             scratch.bpm_values.capacity(),
+            scratch.rows4.row_capacity(),
+            scratch.rows8.row_capacity(),
         );
         let second = analyze_with_scratch(FIXTURE, "ssc", &options, &mut scratch)
             .expect("second reused analysis should succeed");
 
         assert_eq!(json(&first), json(&expected));
         assert_eq!(json(&second), json(&expected));
-        assert!(bpm_capacities.0 > 0 && bpm_capacities.2 > 0);
+        assert!(scratch_capacities.0 > 0 && scratch_capacities.2 > 0);
+        assert!(scratch_capacities.3 > 0);
         assert_eq!(
             (
                 scratch.global_bpm_map.capacity(),
                 scratch.chart_bpm_map.capacity(),
                 scratch.bpm_values.capacity(),
+                scratch.rows4.row_capacity(),
+                scratch.rows8.row_capacity(),
             ),
-            bpm_capacities
+            scratch_capacities
         );
 
         const LOCAL_TIMING: &[u8] = concat!(

@@ -1438,6 +1438,100 @@ fn run_minimize_alloc(iterations: usize, corpus: &[SimInput]) {
     run_minimize_phase("output_backed", iterations, &inputs, |data, lanes| {
         rssp::stats::minimize_chart_count_rows(data, lanes)
     });
+    run_typed_rows_alloc(iterations, &inputs);
+}
+
+fn run_typed_rows_phase(
+    phase: &str,
+    iterations: usize,
+    input: &MinimizeInput,
+    base_live_bytes: usize,
+    mut minimize: impl FnMut(&[u8]) -> usize,
+) {
+    black_box(minimize(&input.raw));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        checksum = checksum.wrapping_add(minimize(black_box(&input.raw)));
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    let bytes = input.raw.len() as f64 * divisor;
+    println!(
+        concat!(
+            "mode=minimize phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_mib_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} retained_bytes={} peak_working_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        bytes / elapsed.as_secs_f64() / (1024.0 * 1024.0),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        before.live_bytes.saturating_sub(base_live_bytes),
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_typed_rows_alloc(iterations: usize, inputs: &[MinimizeInput]) {
+    let input = inputs
+        .iter()
+        .filter(|input| input.lanes == 4)
+        .max_by_key(|input| input.raw.len())
+        .expect("minimize corpus should contain a 4-lane chart");
+    let base_live_bytes = LIVE_BYTES.load(Ordering::Relaxed);
+    run_typed_rows_phase(
+        "typed-rows-owned",
+        iterations,
+        input,
+        base_live_bytes,
+        |data| {
+            let (chart, stats, densities, rows, beats, last) =
+                rssp::stats::minimize_rows_typed::<4>(data);
+            let checksum = chart
+                .len()
+                .wrapping_add(stats.total_arrows as usize)
+                .wrapping_add(densities.len())
+                .wrapping_add(rows.len())
+                .wrapping_add(beats.len())
+                .wrapping_add(last.to_bits() as usize);
+            black_box((chart, stats, densities, rows, beats, last));
+            checksum
+        },
+    );
+
+    let mut rows = rssp::stats::TypedRowsScratch::<4>::default();
+    run_typed_rows_phase(
+        "typed-rows-reused",
+        iterations,
+        input,
+        base_live_bytes,
+        |data| {
+            let (chart, stats, densities, beats, last) =
+                rssp::stats::minimize_rows_typed_in::<4>(data, &mut rows);
+            let checksum = chart
+                .len()
+                .wrapping_add(stats.total_arrows as usize)
+                .wrapping_add(densities.len())
+                .wrapping_add(rows.rows().len())
+                .wrapping_add(beats.len())
+                .wrapping_add(last.to_bits() as usize);
+            black_box((chart, stats, densities, beats, last));
+            black_box(rows.rows());
+            checksum
+        },
+    );
 }
 
 fn run_course_analyze_phase(

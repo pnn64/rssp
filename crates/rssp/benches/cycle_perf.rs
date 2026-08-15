@@ -155,6 +155,49 @@ impl Measurement for ThreadCycles {
 }
 
 #[cfg(windows)]
+fn typed_rows_owned(data: &[u8]) -> usize {
+    let (chart, stats, densities, rows, beats, last) = rssp::stats::minimize_rows_typed::<4>(data);
+    let checksum = chart
+        .len()
+        .wrapping_add(stats.total_arrows as usize)
+        .wrapping_add(densities.len())
+        .wrapping_add(rows.len())
+        .wrapping_add(beats.len())
+        .wrapping_add(last.to_bits() as usize);
+    black_box((
+        chart.as_slice(),
+        &stats,
+        densities.as_slice(),
+        rows.as_slice(),
+        beats.as_slice(),
+        last,
+    ));
+    checksum
+}
+
+#[cfg(windows)]
+fn typed_rows_reused(data: &[u8], scratch: &mut rssp::stats::TypedRowsScratch<4>) -> usize {
+    let (chart, stats, densities, beats, last) =
+        rssp::stats::minimize_rows_typed_in::<4>(data, scratch);
+    let checksum = chart
+        .len()
+        .wrapping_add(stats.total_arrows as usize)
+        .wrapping_add(densities.len())
+        .wrapping_add(scratch.rows().len())
+        .wrapping_add(beats.len())
+        .wrapping_add(last.to_bits() as usize);
+    black_box((
+        chart.as_slice(),
+        &stats,
+        densities.as_slice(),
+        scratch.rows(),
+        beats.as_slice(),
+        last,
+    ));
+    checksum
+}
+
+#[cfg(windows)]
 fn large_pair_map(entries: usize) -> String {
     use std::fmt::Write;
 
@@ -633,6 +676,15 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         })
         .max_by_key(|(data, _)| data.len())
         .expect("minimizer cycle fixture should contain a supported chart");
+    let minimize_typed_chart = minimize_parsed
+        .notes_list
+        .iter()
+        .filter(|entry| rssp::supported_stepstype_lanes_bytes(entry.fields[0]) == Some(4))
+        .max_by_key(|entry| entry.note_data.len())
+        .map(|entry| entry.note_data)
+        .expect("minimizer cycle fixture should contain a 4-lane chart");
+    let mut typed_rows = rssp::stats::TypedRowsScratch::<4>::default();
+    rssp::stats::minimize_rows_typed_in::<4>(minimize_typed_chart, &mut typed_rows);
     let analysis_options = rssp::AnalysisOptions::default();
     let mut allocating_analysis_scratch = rssp::AnalysisScratch::default();
     let mut analysis_scratch = rssp::AnalysisScratch::default();
@@ -903,6 +955,26 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
                 black_box(rssp::stats::minimize_chart_count_rows(
                     black_box(minimize_chart.0),
                     black_box(minimize_chart.1),
+                ));
+            }
+        });
+    });
+    optimizations.throughput(Throughput::Bytes(
+        (minimize_typed_chart.len() * MINIMIZE_BATCH) as u64,
+    ));
+    optimizations.bench_function("typed_rows_owned", |b| {
+        b.iter(|| {
+            for _ in 0..MINIMIZE_BATCH {
+                black_box(typed_rows_owned(black_box(minimize_typed_chart)));
+            }
+        });
+    });
+    optimizations.bench_function("typed_rows_reused", |b| {
+        b.iter(|| {
+            for _ in 0..MINIMIZE_BATCH {
+                black_box(typed_rows_reused(
+                    black_box(minimize_typed_chart),
+                    &mut typed_rows,
                 ));
             }
         });

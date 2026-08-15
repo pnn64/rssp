@@ -579,6 +579,7 @@ fn finalize_measure<const L: usize, R, N, C>(
 
 fn minimize_chart_core<const L: usize, R, N, C>(
     data: &[u8],
+    measure: &mut Vec<[u8; L]>,
     on_rows: &mut R,
     on_line: &mut N,
     on_count: &mut C,
@@ -589,7 +590,8 @@ where
     C: FnMut(&[u8; L]) -> RowCount,
 {
     let mut output = Vec::with_capacity(data.len());
-    let mut measure = Vec::with_capacity(64);
+    measure.clear();
+    measure.reserve(64);
     let mut densities = Vec::with_capacity(data.len() / ((L + 1) * 4) + 1);
     let (mut midx, mut done) = (0usize, false);
 
@@ -603,7 +605,7 @@ where
         match line[0] {
             b',' => {
                 finalize_measure(
-                    &mut measure,
+                    measure,
                     midx,
                     &mut output,
                     &mut densities,
@@ -616,7 +618,7 @@ where
             }
             b';' => {
                 finalize_measure(
-                    &mut measure,
+                    measure,
                     midx,
                     &mut output,
                     &mut densities,
@@ -638,7 +640,7 @@ where
 
     if !done {
         finalize_measure(
-            &mut measure,
+            measure,
             midx,
             &mut output,
             &mut densities,
@@ -653,6 +655,20 @@ where
 
 fn process_chart<const L: usize, R, N>(
     data: &[u8],
+    on_rows: &mut R,
+    on_line: &mut N,
+) -> (Vec<u8>, ArrowStats, Vec<usize>)
+where
+    R: FnMut(usize, usize),
+    N: FnMut(&[u8; L], usize, usize, usize, bool),
+{
+    let mut measure = Vec::with_capacity(64);
+    process_chart_in(data, &mut measure, on_rows, on_line)
+}
+
+fn process_chart_in<const L: usize, R, N>(
+    data: &[u8],
+    measure: &mut Vec<[u8; L]>,
     on_rows: &mut R,
     on_line: &mut N,
 ) -> (Vec<u8>, ArrowStats, Vec<usize>)
@@ -676,7 +692,7 @@ where
             &mut object_depths,
         )
     };
-    let (output, densities) = minimize_chart_core(data, on_rows, on_line, &mut count);
+    let (output, densities) = minimize_chart_core(data, measure, on_rows, on_line, &mut count);
     has_phantom |= phantom_depths.iter().any(|&d| d != 0);
 
     // Fix phantom holds
@@ -1055,8 +1071,61 @@ fn minimize_timing_rows<const L: usize>(data: &[u8]) -> (Vec<[u8; L]>, Vec<f32>,
 pub fn minimize_rows_typed<const L: usize>(
     data: &[u8],
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<[u8; L]>, Vec<f32>, f64) {
-    let mut beats = Vec::with_capacity(data.len() / (L + 1));
-    let mut rows = Vec::with_capacity(beats.capacity());
+    let mut scratch = TypedRowsScratch::default();
+    let (out, stats, dens, beats, last) = minimize_rows_typed_in(data, &mut scratch);
+    (out, stats, dens, scratch.rows, beats, last)
+}
+
+/// Reusable temporary storage for typed-row chart minimization.
+#[derive(Default)]
+pub struct TypedRowsScratch<const L: usize> {
+    rows: Vec<[u8; L]>,
+    measure: Vec<[u8; L]>,
+}
+
+impl<const L: usize> TypedRowsScratch<L> {
+    /// Minimized typed rows from the latest call.
+    #[must_use]
+    pub fn rows(&self) -> &[[u8; L]] {
+        &self.rows
+    }
+
+    /// Clears prior rows while retaining both internal allocations.
+    pub fn clear(&mut self) {
+        self.rows.clear();
+        self.measure.clear();
+    }
+
+    /// Capacity of the retained typed-row output buffer.
+    #[must_use]
+    pub fn row_capacity(&self) -> usize {
+        self.rows.capacity()
+    }
+}
+
+impl<const L: usize> core::fmt::Debug for TypedRowsScratch<L> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TypedRowsScratch")
+            .field("row_capacity", &self.rows.capacity())
+            .field("measure_capacity", &self.measure.capacity())
+            .finish()
+    }
+}
+
+/// Minimizes chart data while reusing its typed-row and measure allocations.
+///
+/// The output, densities, and beat positions remain owned because callers
+/// retain them; the temporary typed rows can be cleared and reused between
+/// charts.
+pub fn minimize_rows_typed_in<const L: usize>(
+    data: &[u8],
+    scratch: &mut TypedRowsScratch<L>,
+) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
+    let capacity = data.len() / (L + 1);
+    scratch.clear();
+    let TypedRowsScratch { rows, measure } = scratch;
+    rows.reserve(capacity);
+    let mut beats = Vec::with_capacity(capacity);
     let (mut last_m, mut last_r, mut last_rows) = (None, 0, 0);
 
     let mut on_rows = |m, r| append_row_beats(&mut beats, m, r);
@@ -1067,9 +1136,9 @@ pub fn minimize_rows_typed<const L: usize>(
         }
     };
 
-    let (out, stats, dens) = process_chart::<L, _, _>(data, &mut on_rows, &mut on_line);
+    let (out, stats, dens) = process_chart_in::<L, _, _>(data, measure, &mut on_rows, &mut on_line);
     let last = calc_last_beat(last_m, last_r, last_rows);
-    (out, stats, dens, rows, beats, last)
+    (out, stats, dens, beats, last)
 }
 
 pub fn minimize_chart_rows_bits(
@@ -1840,6 +1909,40 @@ mod tests {
             count_only,
             (expected_chart, expected_stats, expected_densities)
         );
+    }
+
+    fn assert_typed_in_matches_owned<const L: usize>(data: &[u8]) {
+        let (chart, stats, densities, expected_rows, beats, last) = minimize_rows_typed::<L>(data);
+        let mut scratch = TypedRowsScratch::default();
+        minimize_rows_typed_in(data, &mut scratch);
+        let allocation = scratch.rows().as_ptr();
+        let capacity = scratch.row_capacity();
+
+        let actual = minimize_rows_typed_in(data, &mut scratch);
+
+        assert_eq!(actual.0, chart);
+        assert_eq!(actual.1, stats);
+        assert_eq!(actual.2, densities);
+        assert_eq!(scratch.rows(), expected_rows);
+        assert_eq!(actual.3, beats);
+        assert_eq!(actual.4, last);
+        assert_eq!(scratch.rows().as_ptr(), allocation);
+        assert_eq!(scratch.row_capacity(), capacity);
+
+        let empty = minimize_rows_typed_in(b"", &mut scratch);
+        assert!(scratch.rows().is_empty());
+        assert_eq!(
+            empty,
+            (Vec::new(), ArrowStats::default(), vec![0], Vec::new(), 0.0)
+        );
+        assert_eq!(scratch.rows().as_ptr(), allocation);
+        assert_eq!(scratch.row_capacity(), capacity);
+    }
+
+    #[test]
+    fn in_place_typed_rows_match_owned_and_reuse_capacity() {
+        assert_typed_in_matches_owned::<4>(&generated_chart::<4>());
+        assert_typed_in_matches_owned::<8>(&generated_chart::<8>());
     }
 
     #[test]
