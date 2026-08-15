@@ -409,7 +409,7 @@ fn parse_steps(raw: &str) -> StepsSpec {
 }
 
 fn apply_song_mods(mut secret: bool, mods_raw: &str) -> (bool, bool, i32, String) {
-    let mut out_mods = Vec::new();
+    let mut out_mods = String::new();
     let mut no_difficult = false;
     let mut gain_lives = -1;
 
@@ -438,10 +438,21 @@ fn apply_song_mods(mut secret: bool, mods_raw: &str) -> (bool, bool, i32, String
             }
             continue;
         }
-        out_mods.push(mod_str.to_string());
+        if out_mods.is_empty() {
+            out_mods.reserve(mods_raw.len());
+        } else {
+            out_mods.push(',');
+        }
+        out_mods.push_str(mod_str);
     }
 
-    (secret, no_difficult, gain_lives, out_mods.join(","))
+    (secret, no_difficult, gain_lives, out_mods)
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+pub fn profile_song_mods(secret: bool, mods_raw: &str) -> (bool, bool, i32, String) {
+    apply_song_mods(secret, mods_raw)
 }
 
 fn parse_song_entry(value: &[u8]) -> CourseEntry {

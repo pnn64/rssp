@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 
 const SIMFILE: &[u8] = include_bytes!("../fixtures/hash_fixture.ssc");
 pub const SONG_COUNT: usize = 64;
+pub const MOD_COUNT: u64 = 9;
+pub const MODS: &str =
+    " 1.5x, reverse, mirror, noholds, nomines, sudden, showcourse, nodifficult, award2 ";
 
 pub struct CourseFixture {
     root: PathBuf,

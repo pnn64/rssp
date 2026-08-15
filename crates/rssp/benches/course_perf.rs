@@ -159,6 +159,36 @@ fn bench_course_parse(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_song_mods(c: &mut Criterion) {
+    assert_eq!(
+        rssp::course::profile_song_mods(true, course_bench::MODS),
+        (
+            false,
+            true,
+            2,
+            "1.5x,reverse,mirror,noholds,nomines,sudden".to_string(),
+        )
+    );
+    assert_eq!(
+        rssp::course::profile_song_mods(true, "showcourse,nodifficult,award3"),
+        (false, true, 3, String::new())
+    );
+
+    let mut group = c.benchmark_group("course_song_mods");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(course_bench::MOD_COUNT));
+    group.bench_function("apply", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_song_mods(
+                black_box(true),
+                black_box(course_bench::MODS),
+            ));
+        });
+    });
+    group.finish();
+}
+
 fn bench_stepstype_match(c: &mut Criterion) {
     const CASES: [(&str, &str); 8] = [
         ("dance-single", "dance-single"),
@@ -250,6 +280,7 @@ criterion_group!(
     benches,
     bench_course_analysis,
     bench_course_parse,
+    bench_song_mods,
     bench_stepstype_match,
     bench_pattern_merge
 );

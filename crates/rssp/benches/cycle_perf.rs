@@ -1233,6 +1233,20 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     });
     course_parse.finish();
 
+    let mut course_mods = c.benchmark_group("cycles/course_song_mods");
+    course_mods.sample_size(100);
+    course_mods.measurement_time(Duration::from_secs(3));
+    course_mods.throughput(Throughput::Elements(course_bench::MOD_COUNT));
+    course_mods.bench_function("apply", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_song_mods(
+                black_box(true),
+                black_box(course_bench::MODS),
+            ));
+        });
+    });
+    course_mods.finish();
+
     let mut course = c.benchmark_group("cycles/course_cache");
     course.sample_size(20);
     course.measurement_time(Duration::from_secs(3));

@@ -121,6 +121,7 @@ enum Mode {
     CourseJson,
     CourseCsv,
     CourseParse,
+    CourseMods,
     CourseAnalyze,
     CourseStepType,
     PackRoot,
@@ -222,6 +223,7 @@ fn parse_args() -> (Mode, usize) {
                     "course-json" => Mode::CourseJson,
                     "course-csv" => Mode::CourseCsv,
                     "course-parse" => Mode::CourseParse,
+                    "course-mods" => Mode::CourseMods,
                     "course-analyze" => Mode::CourseAnalyze,
                     "course-stepstype" => Mode::CourseStepType,
                     "pack-root" => Mode::PackRoot,
@@ -295,7 +297,9 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
         },
-        Mode::CourseParse | Mode::CourseAnalyze => rssp::AnalysisOptions::default(),
+        Mode::CourseParse | Mode::CourseMods | Mode::CourseAnalyze => {
+            rssp::AnalysisOptions::default()
+        }
         Mode::CourseStepType => rssp::AnalysisOptions::default(),
         Mode::PackRoot => rssp::AnalysisOptions::default(),
         Mode::PackScan => rssp::AnalysisOptions::default(),
@@ -449,6 +453,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::CourseParse => {
                 unreachable!("course parse mode uses its dedicated allocation runner")
+            }
+            Mode::CourseMods => {
+                unreachable!("course modifier mode uses its dedicated allocation runner")
             }
             Mode::CourseAnalyze => {
                 unreachable!("course analysis mode uses its dedicated allocation runner")
@@ -657,6 +664,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::CourseJson => "course-json",
         Mode::CourseCsv => "course-csv",
         Mode::CourseParse => "course-parse",
+        Mode::CourseMods => "course-mods",
         Mode::CourseAnalyze => "course-analyze",
         Mode::CourseStepType => "course-stepstype",
         Mode::PackRoot => "pack-root",
@@ -1864,6 +1872,56 @@ fn run_course_parse_alloc(iterations: usize) {
     );
 }
 
+fn run_course_mods_alloc(iterations: usize) {
+    assert_eq!(
+        rssp::course::profile_song_mods(true, course_bench::MODS),
+        (
+            false,
+            true,
+            2,
+            "1.5x,reverse,mirror,noholds,nomines,sudden".to_string(),
+        )
+    );
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let (secret, no_difficult, gain_lives, modifiers) =
+            rssp::course::profile_song_mods(black_box(true), black_box(course_bench::MODS));
+        checksum = checksum
+            .wrapping_add(usize::from(secret))
+            .wrapping_add(usize::from(no_difficult))
+            .wrapping_add(gain_lives as usize)
+            .wrapping_add(modifiers.len());
+        black_box(modifiers);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=course-mods iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_modifiers_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        course_bench::MOD_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
 fn run_course_analyze_alloc(iterations: usize) {
     let fixture = course_bench::CourseFixture::new();
     let options = course_bench::clone_heavy_options();
@@ -2883,6 +2941,10 @@ fn main() {
         }
         Mode::CourseParse => {
             run_course_parse_alloc(iterations);
+            return;
+        }
+        Mode::CourseMods => {
+            run_course_mods_alloc(iterations);
             return;
         }
         Mode::TimingBuild => {
