@@ -99,6 +99,7 @@ enum Mode {
     Durations,
     TimingBuild,
     Nps,
+    NpsCursor,
     Minimize,
     Bpms,
     BpmStats,
@@ -194,6 +195,7 @@ fn parse_args() -> (Mode, usize) {
                     "durations" => Mode::Durations,
                     "timing-build" => Mode::TimingBuild,
                     "nps" => Mode::Nps,
+                    "nps-cursor" => Mode::NpsCursor,
                     "minimize" => Mode::Minimize,
                     "bpms" => Mode::Bpms,
                     "bpm-stats" => Mode::BpmStats,
@@ -267,7 +269,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             compute_pattern_counts: false,
             ..rssp::AnalysisOptions::default()
         },
-        Mode::BpmStats | Mode::TimingBuild => rssp::AnalysisOptions::default(),
+        Mode::BpmStats | Mode::TimingBuild | Mode::NpsCursor => rssp::AnalysisOptions::default(),
         Mode::Full | Mode::AnalysisReuse => rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
@@ -371,8 +373,8 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
                     black_box(notation);
                 }
             }
-            Mode::Matrix | Mode::AnalysisReuse | Mode::StreamOutputs => {
-                unreachable!("matrix mode uses its dedicated allocation runner")
+            Mode::Matrix | Mode::AnalysisReuse | Mode::StreamOutputs | Mode::NpsCursor => {
+                unreachable!("mode uses its dedicated allocation runner")
             }
             Mode::Minimize => {
                 unreachable!("minimize mode uses its paired allocation runner")
@@ -610,6 +612,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Durations => "durations",
         Mode::TimingBuild => "timing-build",
         Mode::Nps => "nps",
+        Mode::NpsCursor => "nps-cursor",
         Mode::Minimize => "minimize",
         Mode::Bpms => "bpms",
         Mode::BpmStats => "bpm-stats",
@@ -1725,6 +1728,98 @@ fn run_timing_build_alloc(iterations: usize) {
     );
 }
 
+fn run_nps_vec_alloc(
+    phase: &str,
+    measures: usize,
+    iterations: usize,
+    mut compute: impl FnMut() -> Vec<f64>,
+) {
+    let checksum = |values: &[f64]| {
+        values.iter().fold(0u64, |sum, value| {
+            sum.rotate_left(7) ^ value.to_bits().wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        })
+    };
+    let expected = checksum(&compute());
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut combined = 0u64;
+    for _ in 0..iterations {
+        let values = compute();
+        let actual = checksum(&values);
+        assert_eq!(actual, expected);
+        combined = combined.wrapping_add(actual);
+        black_box(values);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=nps-cursor phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_measures_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(combined),
+        elapsed.as_secs_f64(),
+        measures as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_nps_cursor_alloc(iterations: usize) {
+    let (bpms, stops, _) = timing_build_fixture();
+    let timing = rssp::timing::timing_data_from_chart_data(
+        0.0,
+        0.0,
+        None,
+        &bpms,
+        None,
+        &stops,
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        rssp::timing::TimingFormat::Ssc,
+        true,
+    );
+    let timing_densities: Vec<_> = (0..512)
+        .map(|idx| [0, 16, 20, 24, 32][(idx * 7) % 5])
+        .collect();
+    run_nps_vec_alloc("timing-events", timing_densities.len(), iterations, || {
+        rssp::bpm::compute_measure_nps_vec_with_timing(
+            black_box(&timing_densities),
+            black_box(&timing),
+        )
+    });
+
+    let bpm_densities: Vec<_> = (0..4_096)
+        .map(|idx| [0, 16, 20, 24, 32][(idx * 7) % 5])
+        .collect();
+    let bpm_map: Vec<_> = (0..4_096)
+        .map(|idx| (idx as f64 * 4.0, 60.0 + ((idx * 37) % 300) as f64))
+        .collect();
+    run_nps_vec_alloc("bpm-map", bpm_densities.len(), iterations, || {
+        rssp::bpm::compute_measure_nps_vec(black_box(&bpm_densities), black_box(&bpm_map))
+    });
+}
+
 fn run_stepstype_phase(phase: &str, iterations: usize, compare: impl Fn(&str, &str) -> bool) {
     const CASES: [(&str, &str); 8] = [
         ("dance-single", "dance-single"),
@@ -2492,6 +2587,10 @@ fn main() {
         }
         Mode::TimingBuild => {
             run_timing_build_alloc(iterations);
+            return;
+        }
+        Mode::NpsCursor => {
+            run_nps_cursor_alloc(iterations);
             return;
         }
         Mode::CourseStepType => {

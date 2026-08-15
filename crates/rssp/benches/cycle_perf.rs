@@ -695,6 +695,63 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     });
     timing_build.finish();
 
+    let cursor_densities: Vec<_> = (0..512)
+        .map(|idx| [0, 16, 20, 24, 32][(idx * 7) % 5])
+        .collect();
+    let cursor_timing = rssp::timing::timing_data_from_chart_data(
+        0.0,
+        0.0,
+        None,
+        &medium_pair_map,
+        None,
+        &medium_stop_map,
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        rssp::timing::TimingFormat::Ssc,
+        true,
+    );
+    let mut nps_cursor = c.benchmark_group("cycles/nps_timing_cursor");
+    nps_cursor.throughput(Throughput::Elements(cursor_densities.len() as u64));
+    nps_cursor.sample_size(100);
+    nps_cursor.measurement_time(Duration::from_secs(2));
+    nps_cursor.bench_function("measure_512", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::compute_measure_nps_vec_with_timing(
+                black_box(&cursor_densities),
+                black_box(&cursor_timing),
+            ));
+        });
+    });
+    nps_cursor.finish();
+
+    let bpm_cursor_densities: Vec<_> = (0..4_096)
+        .map(|idx| [0, 16, 20, 24, 32][(idx * 7) % 5])
+        .collect();
+    let bpm_cursor_bpms: Vec<_> = (0..4_096)
+        .map(|idx| (idx as f64 * 4.0, 60.0 + ((idx * 37) % 300) as f64))
+        .collect();
+    let mut nps_bpm_cursor = c.benchmark_group("cycles/nps_bpm_cursor");
+    nps_bpm_cursor.throughput(Throughput::Elements(bpm_cursor_densities.len() as u64));
+    nps_bpm_cursor.sample_size(100);
+    nps_bpm_cursor.measurement_time(Duration::from_secs(2));
+    nps_bpm_cursor.bench_function("measure_4096", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::compute_measure_nps_vec(
+                black_box(&bpm_cursor_densities),
+                black_box(&bpm_cursor_bpms),
+            ));
+        });
+    });
+    nps_bpm_cursor.finish();
+
     let stream_densities: Vec<_> = (0..16_384)
         .map(|idx| match idx % 23 {
             0..=7 => 16,

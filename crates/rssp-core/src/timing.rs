@@ -1948,7 +1948,11 @@ fn get_elapsed_time(t: &TimingData, state: &mut GetBeatState, target_beat: f64) 
 
 fn get_elapsed_time_f32(t: &TimingData, state: &mut GetBeatStateF32, target_beat: f32) -> f32 {
     let find_marker = target_beat < f32::MAX;
-    let mut bps = get_bpm_for_row_f32(t, state.last_row) / 60.0;
+    let mut bps = if state.bpm_idx == 0 {
+        get_bpm_for_row_f32(t, state.last_row)
+    } else {
+        t.beat_to_time[state.bpm_idx - 1].bpm as f32
+    } / 60.0;
     let mut curr_segment = state.bpm_idx + state.warp_idx + state.stop_idx + state.delay_idx;
 
     while curr_segment < u32::MAX as usize {
