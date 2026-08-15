@@ -21,20 +21,24 @@ fn control_pair_map(entries: usize) -> (String, String) {
     (raw, expected)
 }
 
-fn control_normalize_map(entries: usize) -> (String, String) {
+fn control_normalize_map(entries: usize) -> (String, String, String) {
     let mut raw = String::with_capacity(entries * 20);
+    let mut cleaned = String::with_capacity(entries * 16);
     let mut expected = String::with_capacity(entries * 24);
     for idx in 0..entries {
         if idx != 0 {
             raw.push(',');
+            cleaned.push(',');
             expected.push(',');
         }
         write!(&mut raw, "+\u{000b}{}=+\u{000b}{}", idx * 4, 60 + idx % 300)
             .expect("writing to a String cannot fail");
+        write!(&mut cleaned, "+{}=+{}", idx * 4, 60 + idx % 300)
+            .expect("writing to a String cannot fail");
         write!(&mut expected, "{}.000={}.000", idx * 4, 60 + idx % 300)
             .expect("writing to a String cannot fail");
     }
-    (raw, expected)
+    (raw, cleaned, expected)
 }
 
 fn inherited_timing_fixture(chart_count: usize, bpm_count: usize) -> String {
@@ -384,7 +388,7 @@ fn bench_control_normalize(c: &mut Criterion) {
     let long = format!("+\u{000b}{}=120", "0".repeat(80));
     assert_eq!(rssp::bpm::normalize_float_digits(&long), "0.000=120.000");
 
-    let (raw, expected) = control_normalize_map(512);
+    let (raw, _, expected) = control_normalize_map(512);
     assert_eq!(rssp::bpm::normalize_float_digits(&raw), expected);
 
     let mut group = c.benchmark_group("control_normalize");
@@ -394,6 +398,29 @@ fn bench_control_normalize(c: &mut Criterion) {
     group.bench_function("pair_512", |b| {
         b.iter(|| {
             black_box(rssp::bpm::normalize_float_digits(black_box(&raw)));
+        });
+    });
+    group.finish();
+}
+
+fn bench_control_fused(c: &mut Criterion) {
+    let (raw, cleaned, normalized) = control_normalize_map(512);
+    assert_eq!(
+        rssp::bpm::clean_and_normalize_float_digits(&raw),
+        (cleaned, normalized)
+    );
+    assert_eq!(
+        rssp::bpm::clean_and_normalize_speeds_float_digits("+\u{000b}0=+\u{000b}1=+\u{000b}2=0"),
+        ("+0=+1=+2=0".to_owned(), "0.000=1.000=2.000=0".to_owned())
+    );
+
+    let mut group = c.benchmark_group("control_fused");
+    group.throughput(criterion::Throughput::Bytes(raw.len() as u64));
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("pair_512", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::clean_and_normalize_float_digits(black_box(&raw)));
         });
     });
     group.finish();
@@ -655,6 +682,7 @@ criterion_group!(
     bench_bpm_format,
     bench_clean_timing_map,
     bench_control_normalize,
+    bench_control_fused,
     bench_display_bpm,
     bench_bpm_stats,
     bench_mines_nonfake,

@@ -145,19 +145,10 @@ pub fn clean_and_normalize_float_digits(param: &str) -> (String, String) {
     let mut normalized = String::with_capacity(param.len());
 
     for entry in param.split(',') {
-        if entry.is_empty() {
+        let Some(start) = push_clean_entry(&mut cleaned, entry) else {
             continue;
-        }
-        let entry = strip_control(entry);
-        let entry = entry.trim();
-        if entry.is_empty() {
-            continue;
-        }
-
-        if !cleaned.is_empty() {
-            cleaned.push(',');
-        }
-        cleaned.push_str(entry);
+        };
+        let entry = &cleaned[start..];
 
         if let Some((beat, value)) = entry.split_once('=')
             && let (Ok(beat), Ok(value)) = (beat.trim().parse::<f64>(), value.trim().parse::<f64>())
@@ -180,19 +171,10 @@ pub fn clean_and_normalize_speeds_float_digits(param: &str) -> (String, String) 
     let mut normalized = String::with_capacity(param.len());
 
     for entry in param.split(',') {
-        if entry.is_empty() {
+        let Some(start) = push_clean_entry(&mut cleaned, entry) else {
             continue;
-        }
-        let entry = strip_control(entry);
-        let entry = entry.trim();
-        if entry.is_empty() {
-            continue;
-        }
-
-        if !cleaned.is_empty() {
-            cleaned.push(',');
-        }
-        cleaned.push_str(entry);
+        };
+        let entry = &cleaned[start..];
 
         let mut split = entry.split('=');
         if let (Some(beat), Some(ratio), Some(delay), Some(unit)) =
@@ -223,12 +205,12 @@ pub fn clean_and_normalize_speeds_float_digits(param: &str) -> (String, String) 
 pub fn clean_timing_map(param: &str) -> String {
     let mut out = String::with_capacity(param.len());
     for entry in param.split(',') {
-        push_clean_entry(&mut out, entry);
+        let _ = push_clean_entry(&mut out, entry);
     }
     out
 }
 
-fn push_clean_entry(out: &mut String, entry: &str) {
+fn push_clean_entry(out: &mut String, entry: &str) -> Option<usize> {
     let checkpoint = out.len();
     if checkpoint != 0 {
         out.push(',');
@@ -253,6 +235,9 @@ fn push_clean_entry(out: &mut String, entry: &str) {
     }
     if out.len() == start {
         out.truncate(checkpoint);
+        None
+    } else {
+        Some(start)
     }
 }
 

@@ -530,6 +530,13 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             )));
         });
     });
+    normalization.bench_function("control_fused_map", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::clean_and_normalize_float_digits(black_box(
+                &control_normalize_map,
+            )));
+        });
+    });
     normalization.throughput(Throughput::Bytes(speed_map.len() as u64));
     normalization.bench_function("speed_map_separate", |b| {
         b.iter(|| {
