@@ -98,6 +98,7 @@ enum Mode {
     Hashes,
     Durations,
     TimingBuild,
+    TimingText,
     Nps,
     NpsCursor,
     Minimize,
@@ -203,6 +204,7 @@ fn parse_args() -> (Mode, usize) {
                     "hashes" => Mode::Hashes,
                     "durations" => Mode::Durations,
                     "timing-build" => Mode::TimingBuild,
+                    "timing-text" => Mode::TimingText,
                     "nps" => Mode::Nps,
                     "nps-cursor" => Mode::NpsCursor,
                     "minimize" => Mode::Minimize,
@@ -293,6 +295,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         | Mode::FusedMap
         | Mode::DisplayBpm
         | Mode::TimingBuild
+        | Mode::TimingText
         | Mode::NpsCursor => rssp::AnalysisOptions::default(),
         Mode::Full | Mode::AnalysisReuse => rssp::AnalysisOptions {
             mono_threshold: 6,
@@ -658,6 +661,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Hashes => "hashes",
         Mode::Durations => "durations",
         Mode::TimingBuild => "timing-build",
+        Mode::TimingText => "timing-text",
         Mode::Nps => "nps",
         Mode::NpsCursor => "nps-cursor",
         Mode::Minimize => "minimize",
@@ -2175,6 +2179,89 @@ fn run_timing_build_alloc(iterations: usize) {
     );
 }
 
+fn run_timing_text_phase(
+    fixture: &report_timing_bench::TimingTextFixture,
+    phase: &str,
+    iterations: usize,
+    legacy: bool,
+) {
+    let parse = || {
+        rssp::profile::timing_text(
+            &fixture.time_signatures,
+            &fixture.labels,
+            &fixture.tickcounts,
+            &fixture.combos,
+            legacy,
+        )
+    };
+    black_box(parse());
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let (time_signatures, labels, tickcounts, combos) = parse();
+        checksum = checksum
+            .wrapping_add(time_signatures.len())
+            .wrapping_add(labels.len())
+            .wrapping_add(tickcounts.len())
+            .wrapping_add(combos.len());
+        black_box((time_signatures, labels, tickcounts, combos));
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=timing-text phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_segments_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        (report_timing_bench::SEGMENT_COUNT * 4) as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_timing_text_alloc(iterations: usize) {
+    let fixture = report_timing_bench::timing_text();
+    let legacy = rssp::profile::timing_text(
+        &fixture.time_signatures,
+        &fixture.labels,
+        &fixture.tickcounts,
+        &fixture.combos,
+        true,
+    );
+    let current = rssp::profile::timing_text(
+        &fixture.time_signatures,
+        &fixture.labels,
+        &fixture.tickcounts,
+        &fixture.combos,
+        false,
+    );
+    assert_eq!(current, legacy, "timing text behavior must not change");
+    let [time_signatures, labels, tickcounts, combos] = report_timing_bench::TIMING_TEXT_EDGE;
+    assert_eq!(
+        rssp::profile::timing_text(time_signatures, labels, tickcounts, combos, false),
+        rssp::profile::timing_text(time_signatures, labels, tickcounts, combos, true),
+        "timing text edge behavior must not change"
+    );
+    run_timing_text_phase(&fixture, "legacy-staged", iterations, true);
+    run_timing_text_phase(&fixture, "streamed-presized", iterations, false);
+}
+
 fn run_nps_vec_alloc(
     phase: &str,
     measures: usize,
@@ -3119,6 +3206,10 @@ fn main() {
         }
         Mode::TimingBuild => {
             run_timing_build_alloc(iterations);
+            return;
+        }
+        Mode::TimingText => {
+            run_timing_text_alloc(iterations);
             return;
         }
         Mode::NpsCursor => {

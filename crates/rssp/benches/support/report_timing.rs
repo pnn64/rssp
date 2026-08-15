@@ -2,6 +2,55 @@ use std::fmt::Write as _;
 
 pub const SEGMENT_COUNT: usize = 512;
 
+pub struct TimingTextFixture {
+    pub time_signatures: String,
+    pub labels: String,
+    pub tickcounts: String,
+    pub combos: String,
+}
+
+pub fn timing_text() -> TimingTextFixture {
+    let mut fixture = TimingTextFixture {
+        time_signatures: String::with_capacity(SEGMENT_COUNT * 12),
+        labels: String::with_capacity(SEGMENT_COUNT * 24),
+        tickcounts: String::with_capacity(SEGMENT_COUNT * 10),
+        combos: String::with_capacity(SEGMENT_COUNT * 14),
+    };
+    for index in 0..SEGMENT_COUNT {
+        let separator = if index == 0 { "" } else { "," };
+        let beat = index * 4;
+        write!(
+            &mut fixture.time_signatures,
+            "{separator}{beat}={}={}",
+            3 + index % 5,
+            4 << (index & 1)
+        )
+        .unwrap();
+        write!(&mut fixture.labels, "{separator}{beat}=Section {index:03}").unwrap();
+        write!(
+            &mut fixture.tickcounts,
+            "{separator}{beat}={}",
+            4 + index % 12
+        )
+        .unwrap();
+        write!(
+            &mut fixture.combos,
+            "{separator}{beat}={}={}",
+            1 + index % 4,
+            1 + index % 6
+        )
+        .unwrap();
+    }
+    fixture
+}
+
+pub const TIMING_TEXT_EDGE: [&str; 4] = [
+    "8=3=4,invalid,0=4=4,8=7=8,4=4=4",
+    "8=Later,invalid,0=Song Start,8=Replacement,4=Middle",
+    "8=8,invalid,0=4,8=12,4=6",
+    "8=2=3,invalid,0=1=1,8=4=5,4=2=2",
+];
+
 fn build_fixture(chart_bpms: bool) -> String {
     fn push_pairs(out: &mut String, count: usize, mut value: impl FnMut(usize) -> f64) {
         for index in 0..count {

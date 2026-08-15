@@ -155,6 +155,24 @@ pub mod profile {
         crate::report::profile_write_json_timing::<W, true>(writer, chart, simfile)
     }
 
+    pub type TimingText = (
+        Vec<(f64, i32, i32)>,
+        Vec<(f64, String)>,
+        Vec<(f64, i32)>,
+        Vec<(f64, i32, i32)>,
+    );
+
+    #[must_use]
+    pub fn timing_text(
+        time_signatures: &str,
+        labels: &str,
+        tickcounts: &str,
+        combos: &str,
+        legacy: bool,
+    ) -> TimingText {
+        crate::report::profile_timing_text(time_signatures, labels, tickcounts, combos, legacy)
+    }
+
     pub fn write_json_bpm_text_report_materialized<W: std::io::Write>(
         simfile: &crate::report::SimfileSummary,
         writer: &mut W,

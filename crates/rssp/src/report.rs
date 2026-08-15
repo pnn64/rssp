@@ -890,7 +890,8 @@ fn add_indefinite_segment<T: PartialEq>(segments: &mut Vec<(f64, T)>, beat: f64,
     }
 }
 
-fn tidy_indefinite_segments<T: PartialEq>(segments: Vec<(f64, T)>) -> Vec<(f64, T)> {
+#[cfg(any(test, feature = "profile"))]
+fn tidy_segments_old<T: PartialEq>(segments: Vec<(f64, T)>) -> Vec<(f64, T)> {
     let mut out = Vec::with_capacity(segments.len());
     for (beat, value) in segments {
         add_indefinite_segment(&mut out, beat, value);
@@ -898,7 +899,29 @@ fn tidy_indefinite_segments<T: PartialEq>(segments: Vec<(f64, T)>) -> Vec<(f64, 
     out
 }
 
-fn parse_time_signatures(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
+fn tidy_indefinite_segments<T: PartialEq>(mut segments: Vec<(f64, T)>) -> Vec<(f64, T)> {
+    let input_len = segments.len();
+    let input = segments.as_mut_ptr();
+    // SAFETY: Each consumed entry adds at most one output, so before reading
+    // index `i`, output occupies only slots below `i`. Reading `i` first lets
+    // the normalizer reuse that slot without touching unread entries, and the
+    // original capacity prevents reallocation from invalidating `input`.
+    unsafe { segments.set_len(0) };
+    for index in 0..input_len {
+        debug_assert!(segments.len() <= index);
+        // SAFETY: `index` addresses an initialized, unread element from the
+        // original length. It is read before output may overwrite this slot.
+        let (beat, value) = unsafe { input.add(index).read() };
+        add_indefinite_segment(&mut segments, beat, value);
+    }
+    segments
+}
+
+fn parse_time_signatures_with<const PREALLOC: bool>(
+    opt: Option<&str>,
+    capacity: usize,
+    tidy: impl FnOnce(Vec<(f64, (i32, i32))>) -> Vec<(f64, (i32, i32))>,
+) -> Vec<(f64, i32, i32)> {
     let Some(s) = opt else {
         return vec![(0.0, 4, 4)];
     };
@@ -928,6 +951,9 @@ fn parse_time_signatures(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
         let Ok(den) = den_str.trim().parse::<i32>() else {
             continue;
         };
+        if PREALLOC && raw.is_empty() {
+            raw.reserve(capacity);
+        }
         raw.push((beat, (num, den)));
     }
 
@@ -942,13 +968,17 @@ fn parse_time_signatures(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
         raw.insert(0, (0.0, (4, 4)));
     }
 
-    tidy_indefinite_segments(raw)
+    tidy(raw)
         .into_iter()
         .map(|(beat, (num, den))| (beat, num, den))
         .collect()
 }
 
-fn parse_tickcounts(opt: Option<&str>) -> Vec<(f64, i32)> {
+fn parse_tickcounts_with<const PREALLOC: bool>(
+    opt: Option<&str>,
+    capacity: usize,
+    tidy: impl FnOnce(Vec<(f64, i32)>) -> Vec<(f64, i32)>,
+) -> Vec<(f64, i32)> {
     let Some(s) = opt else {
         return vec![(0.0, 4)];
     };
@@ -972,6 +1002,9 @@ fn parse_tickcounts(opt: Option<&str>) -> Vec<(f64, i32)> {
         let Ok(count) = count_str.trim().parse::<i32>() else {
             continue;
         };
+        if PREALLOC && raw.is_empty() {
+            raw.reserve(capacity);
+        }
         raw.push((beat, count));
     }
 
@@ -979,10 +1012,14 @@ fn parse_tickcounts(opt: Option<&str>) -> Vec<(f64, i32)> {
         return vec![(0.0, 4)];
     }
 
-    tidy_indefinite_segments(raw)
+    tidy(raw)
 }
 
-fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
+fn parse_combos_with<const PREALLOC: bool>(
+    opt: Option<&str>,
+    capacity: usize,
+    tidy: impl FnOnce(Vec<(f64, (i32, i32))>) -> Vec<(f64, (i32, i32))>,
+) -> Vec<(f64, i32, i32)> {
     let Some(s) = opt else {
         return vec![(0.0, 1, 1)];
     };
@@ -1012,6 +1049,9 @@ fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
         let Ok(miss) = miss_str.trim().parse::<i32>() else {
             continue;
         };
+        if PREALLOC && raw.is_empty() {
+            raw.reserve(capacity);
+        }
         raw.push((beat, (combo, miss)));
     }
 
@@ -1019,10 +1059,45 @@ fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
         return vec![(0.0, 1, 1)];
     }
 
-    tidy_indefinite_segments(raw)
+    tidy(raw)
         .into_iter()
         .map(|(beat, (combo, miss))| (beat, combo, miss))
         .collect()
+}
+
+fn estimate_text_segments(text: &str, bytes_per_segment: usize) -> usize {
+    // Avoid a delimiter-count pass while bounding corrupt-input over-reservation.
+    text.len().div_ceil(bytes_per_segment).clamp(4, 4_096)
+}
+
+fn parse_time_signatures(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
+    let capacity = opt.map_or(0, |text| estimate_text_segments(text, 7) + 1);
+    parse_time_signatures_with::<true>(opt, capacity, tidy_indefinite_segments)
+}
+
+fn parse_tickcounts(opt: Option<&str>) -> Vec<(f64, i32)> {
+    let capacity = opt.map_or(0, |text| estimate_text_segments(text, 6));
+    parse_tickcounts_with::<true>(opt, capacity, tidy_indefinite_segments)
+}
+
+fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
+    let capacity = opt.map_or(0, |text| estimate_text_segments(text, 8));
+    parse_combos_with::<true>(opt, capacity, tidy_indefinite_segments)
+}
+
+#[cfg(any(test, feature = "profile"))]
+fn parse_time_signatures_old(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
+    parse_time_signatures_with::<false>(opt, 0, tidy_segments_old)
+}
+
+#[cfg(any(test, feature = "profile"))]
+fn parse_tickcounts_old(opt: Option<&str>) -> Vec<(f64, i32)> {
+    parse_tickcounts_with::<false>(opt, 0, tidy_segments_old)
+}
+
+#[cfg(any(test, feature = "profile"))]
+fn parse_combos_old(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
+    parse_combos_with::<false>(opt, 0, tidy_segments_old)
 }
 
 struct NormalizedTimingTables {
@@ -1709,7 +1784,11 @@ mod tests {
     }
 }
 
-fn parse_labels(opt: Option<&str>) -> Vec<(f64, String)> {
+fn parse_labels_with<const PREALLOC: bool>(
+    opt: Option<&str>,
+    capacity: usize,
+    tidy: impl FnOnce(Vec<(f64, String)>) -> Vec<(f64, String)>,
+) -> Vec<(f64, String)> {
     let Some(s) = opt else {
         return vec![(0.0, "Song Start".to_string())];
     };
@@ -1730,6 +1809,9 @@ fn parse_labels(opt: Option<&str>) -> Vec<(f64, String)> {
         if label.is_empty() {
             continue;
         }
+        if PREALLOC && raw.is_empty() {
+            raw.reserve(capacity);
+        }
         raw.push((beat, label));
     }
 
@@ -1737,7 +1819,50 @@ fn parse_labels(opt: Option<&str>) -> Vec<(f64, String)> {
         return vec![(0.0, "Song Start".to_string())];
     }
 
-    tidy_indefinite_segments(raw)
+    tidy(raw)
+}
+
+fn parse_labels(opt: Option<&str>) -> Vec<(f64, String)> {
+    let capacity = opt.map_or(0, |text| estimate_text_segments(text, 16));
+    parse_labels_with::<true>(opt, capacity, tidy_indefinite_segments)
+}
+
+#[cfg(any(test, feature = "profile"))]
+fn parse_labels_old(opt: Option<&str>) -> Vec<(f64, String)> {
+    parse_labels_with::<false>(opt, 0, tidy_segments_old)
+}
+
+#[cfg(feature = "profile")]
+pub(crate) type ProfileTimingText = (
+    Vec<(f64, i32, i32)>,
+    Vec<(f64, String)>,
+    Vec<(f64, i32)>,
+    Vec<(f64, i32, i32)>,
+);
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_timing_text(
+    time_signatures: &str,
+    labels: &str,
+    tickcounts: &str,
+    combos: &str,
+    legacy: bool,
+) -> ProfileTimingText {
+    if legacy {
+        (
+            parse_time_signatures_old(Some(time_signatures)),
+            parse_labels_old(Some(labels)),
+            parse_tickcounts_old(Some(tickcounts)),
+            parse_combos_old(Some(combos)),
+        )
+    } else {
+        (
+            parse_time_signatures(Some(time_signatures)),
+            parse_labels(Some(labels)),
+            parse_tickcounts(Some(tickcounts)),
+            parse_combos(Some(combos)),
+        )
+    }
 }
 
 fn count_timing_segments_from_str(s: &str) -> u32 {

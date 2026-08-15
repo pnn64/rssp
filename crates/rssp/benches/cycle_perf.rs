@@ -922,6 +922,28 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let asset_fixture = assets_bench::AssetFixture::with_movies(1);
     let delimiter_fields = assets_bench::delimiter_fields();
     let delimiter_bytes = delimiter_fields.iter().map(String::len).sum::<usize>();
+    let timing_text_fixture = report_timing_bench::timing_text();
+    let legacy_timing_text = rssp::profile::timing_text(
+        &timing_text_fixture.time_signatures,
+        &timing_text_fixture.labels,
+        &timing_text_fixture.tickcounts,
+        &timing_text_fixture.combos,
+        true,
+    );
+    let current_timing_text = rssp::profile::timing_text(
+        &timing_text_fixture.time_signatures,
+        &timing_text_fixture.labels,
+        &timing_text_fixture.tickcounts,
+        &timing_text_fixture.combos,
+        false,
+    );
+    assert_eq!(current_timing_text, legacy_timing_text);
+    let [time_signatures, labels, tickcounts, combos] = report_timing_bench::TIMING_TEXT_EDGE;
+    assert_eq!(
+        rssp::profile::timing_text(time_signatures, labels, tickcounts, combos, false),
+        rssp::profile::timing_text(time_signatures, labels, tickcounts, combos, true),
+        "timing text edge behavior must not change"
+    );
     let report_fixture = report_timing_bench::fixture();
     let report_summary = rssp::analyze(
         report_fixture.as_bytes(),
@@ -1642,6 +1664,36 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     custom_patterns_full.finish();
+
+    let mut timing_text = c.benchmark_group("cycles/timing_text_2048");
+    timing_text.sample_size(100);
+    timing_text.measurement_time(Duration::from_secs(3));
+    timing_text.throughput(Throughput::Elements(
+        (report_timing_bench::SEGMENT_COUNT * 4) as u64,
+    ));
+    timing_text.bench_function("legacy_staged", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::timing_text(
+                black_box(&timing_text_fixture.time_signatures),
+                black_box(&timing_text_fixture.labels),
+                black_box(&timing_text_fixture.tickcounts),
+                black_box(&timing_text_fixture.combos),
+                true,
+            ))
+        });
+    });
+    timing_text.bench_function("streamed_presized", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::timing_text(
+                black_box(&timing_text_fixture.time_signatures),
+                black_box(&timing_text_fixture.labels),
+                black_box(&timing_text_fixture.tickcounts),
+                black_box(&timing_text_fixture.combos),
+                false,
+            ))
+        });
+    });
+    timing_text.finish();
 
     let mut timing_arrays = c.benchmark_group("cycles/report_json_timing_arrays");
     timing_arrays.sample_size(20);

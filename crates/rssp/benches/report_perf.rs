@@ -304,6 +304,44 @@ fn bench_hash_bpms_json(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_timing_text(c: &mut Criterion) {
+    let fixture = report_timing_bench::timing_text();
+    let parse = |legacy| {
+        rssp::profile::timing_text(
+            &fixture.time_signatures,
+            &fixture.labels,
+            &fixture.tickcounts,
+            &fixture.combos,
+            legacy,
+        )
+    };
+    assert_eq!(
+        parse(false),
+        parse(true),
+        "timing text behavior must not change"
+    );
+    let [time_signatures, labels, tickcounts, combos] = report_timing_bench::TIMING_TEXT_EDGE;
+    assert_eq!(
+        rssp::profile::timing_text(time_signatures, labels, tickcounts, combos, false),
+        rssp::profile::timing_text(time_signatures, labels, tickcounts, combos, true),
+        "timing text edge behavior must not change"
+    );
+
+    let mut group = c.benchmark_group("timing_text_2048");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(
+        (report_timing_bench::SEGMENT_COUNT * 4) as u64,
+    ));
+    group.bench_function("legacy_staged", |b| {
+        b.iter(|| black_box(parse(black_box(true))));
+    });
+    group.bench_function("streamed_presized", |b| {
+        b.iter(|| black_box(parse(black_box(false))));
+    });
+    group.finish();
+}
+
 fn bench_nps_json(c: &mut Criterion) {
     let fixture = report_nps_bench::fixture();
     let summary = rssp::analyze(&fixture, "ssc", &report_nps_bench::options())
@@ -599,6 +637,7 @@ criterion_group!(
     benches,
     bench_timing_snapshot,
     bench_timing_json,
+    bench_timing_text,
     bench_hash_bpms_json,
     bench_nps_json,
     bench_stream_json,
