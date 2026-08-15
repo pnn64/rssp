@@ -36,11 +36,12 @@ fn inherited_timing_fixture(chart_count: usize, bpm_count: usize) -> String {
     fixture
 }
 
-fn timing_build_fixture() -> (String, String) {
+fn timing_build_fixture() -> (String, String, String) {
     use std::fmt::Write;
 
     let mut bpms = String::with_capacity(512 * 16);
     let mut stops = String::with_capacity(256 * 16);
+    let mut speeds = String::with_capacity(512 * 16);
     for index in 0..512 {
         if index != 0 {
             bpms.push(',');
@@ -53,7 +54,21 @@ fn timing_build_fixture() -> (String, String) {
         }
         write!(&mut stops, "{}=0.125", index * 8 + 2).unwrap();
     }
-    (bpms, stops)
+    for index in 0..512 {
+        if index != 0 {
+            speeds.push(',');
+        }
+        write!(
+            &mut speeds,
+            "{}={}={}={}",
+            index * 4,
+            1 + index % 7,
+            1 + index % 4,
+            index & 1
+        )
+        .unwrap();
+    }
+    (bpms, stops, speeds)
 }
 
 #[derive(Clone)]
@@ -481,11 +496,11 @@ fn bench_duration_timing(c: &mut Criterion) {
 }
 
 fn bench_timing_build(c: &mut Criterion) {
-    let (bpms, stops) = timing_build_fixture();
+    let (bpms, stops, speeds) = timing_build_fixture();
     let mut group = c.benchmark_group("timing_build_ssc");
     group.sample_size(200);
     group.measurement_time(Duration::from_secs(2));
-    group.bench_function("bpm_512_stops_256", |b| {
+    group.bench_function("bpm_512_stops_256_speeds_512", |b| {
         b.iter(|| {
             black_box(rssp::timing::timing_data_from_chart_data(
                 0.0,
@@ -499,7 +514,7 @@ fn bench_timing_build(c: &mut Criterion) {
                 None,
                 "",
                 None,
-                "",
+                black_box(&speeds),
                 None,
                 "",
                 None,

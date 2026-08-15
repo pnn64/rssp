@@ -240,7 +240,7 @@ fn parse_segments_positive(s: &str) -> Vec<Segment> {
 }
 
 fn parse_speeds(s: &str) -> Vec<SpeedSegment> {
-    const ESTIMATED_COMPONENT_BYTES: usize = 11;
+    const ESTIMATED_COMPONENT_BYTES: usize = 10;
 
     if s.is_empty() {
         return Vec::new();
@@ -1430,17 +1430,18 @@ fn timing_data_build(
 
     if !timing.speeds.is_empty() {
         let mut prev_ratio = 1.0;
+        let mut cursor = BeatTimeCursor::new(&timing);
         timing.speed_runtime = timing
             .speeds
             .iter()
             .map(|seg| {
-                let start = get_time_for_beat(&timing, seg.beat);
+                let start = cursor.time_for_beat(seg.beat);
                 let end = if seg.delay <= 0.0 {
                     start
                 } else if seg.unit == SpeedUnit::Seconds {
                     start + seg.delay
                 } else {
-                    get_time_for_beat(&timing, seg.beat + seg.delay)
+                    cursor.time_for_beat(seg.beat + seg.delay)
                 };
                 let rt = SpeedRuntime {
                     start_time: start,
@@ -1705,6 +1706,38 @@ pub fn get_time_for_beat(t: &TimingData, beat: f64) -> f64 {
 
 pub(crate) type FixedTimingParts = (f32, f32, f64);
 
+struct BeatTimeCursor<'a> {
+    timing: &'a TimingData,
+    state: GetBeatState,
+    last_target_row: i32,
+}
+
+impl<'a> BeatTimeCursor<'a> {
+    fn new(timing: &'a TimingData) -> Self {
+        Self {
+            timing,
+            state: GetBeatState {
+                last_time: -timing.beat0_offset_sec - timing.global_offset_sec,
+                ..Default::default()
+            },
+            last_target_row: i32::MIN,
+        }
+    }
+
+    fn time_for_beat(&mut self, target_beat: f64) -> f64 {
+        let target_row = beat_to_note_row(target_beat);
+        if target_row < self.last_target_row {
+            self.state = GetBeatState {
+                last_time: -self.timing.beat0_offset_sec - self.timing.global_offset_sec,
+                ..Default::default()
+            };
+        }
+        let elapsed = get_elapsed_time(self.timing, &mut self.state, target_beat);
+        self.last_target_row = target_row;
+        elapsed - self.timing.global_offset_sec
+    }
+}
+
 #[inline(always)]
 pub(crate) fn fixed_timing_parts(t: &TimingData) -> Option<FixedTimingParts> {
     if t.beat_to_time.len() == 1
@@ -1786,8 +1819,7 @@ fn get_time_internal(t: &TimingData, target_beat: f64) -> f64 {
         last_time: -t.beat0_offset_sec - t.global_offset_sec,
         ..Default::default()
     };
-    get_elapsed_time(t, &mut state, target_beat);
-    state.last_time
+    get_elapsed_time(t, &mut state, target_beat)
 }
 
 fn get_beat_internal(t: &TimingData, elapsed: f64, start_time: f64) -> BeatInfo {
@@ -1862,7 +1894,7 @@ fn get_beat_internal(t: &TimingData, elapsed: f64, start_time: f64) -> BeatInfo 
     }
 }
 
-fn get_elapsed_time(t: &TimingData, state: &mut GetBeatState, target_beat: f64) {
+fn get_elapsed_time(t: &TimingData, state: &mut GetBeatState, target_beat: f64) -> f64 {
     let find_marker = target_beat < f64::MAX;
     let mut bps = get_bpm_for_beat(t, note_row_to_beat(state.last_row)) / 60.0;
 
@@ -1877,6 +1909,9 @@ fn get_elapsed_time(t: &TimingData, state: &mut GetBeatState, target_beat: f64) 
         } else {
             note_row_to_beat(event_row - state.last_row) / bps
         };
+        if event_type == TimingEvent::Marker {
+            return state.last_time + dt;
+        }
         state.last_time += dt;
 
         match event_type {
@@ -1893,7 +1928,7 @@ fn get_elapsed_time(t: &TimingData, state: &mut GetBeatState, target_beat: f64) 
                 state.last_time += t.delays[state.delay_idx].value;
                 state.delay_idx += 1;
             }
-            TimingEvent::Marker => return,
+            TimingEvent::Marker => unreachable!("marker is returned before state mutation"),
             TimingEvent::Warp => {
                 state.is_warping = true;
                 let w = &t.warps[state.warp_idx];
@@ -1904,6 +1939,7 @@ fn get_elapsed_time(t: &TimingData, state: &mut GetBeatState, target_beat: f64) 
         }
         state.last_row = event_row;
     }
+    state.last_time
 }
 
 fn get_elapsed_time_f32(t: &TimingData, state: &mut GetBeatStateF32, target_beat: f32) -> f32 {

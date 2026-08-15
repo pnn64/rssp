@@ -226,6 +226,28 @@ fn large_speed_map(entries: usize) -> String {
 }
 
 #[cfg(windows)]
+fn transition_speed_map(entries: usize) -> String {
+    use std::fmt::Write;
+
+    let mut map = String::with_capacity(entries * 20);
+    for idx in 0..entries {
+        if idx != 0 {
+            map.push(',');
+        }
+        write!(
+            &mut map,
+            "{}={}={}={}",
+            idx * 4,
+            1 + idx % 7,
+            1 + idx % 4,
+            idx & 1
+        )
+        .unwrap();
+    }
+    map
+}
+
+#[cfg(windows)]
 fn large_stop_map(entries: usize) -> String {
     use std::fmt::Write;
 
@@ -341,6 +363,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let stop_map = large_stop_map(ENTRIES);
     let medium_pair_map = large_pair_map(512);
     let medium_stop_map = large_stop_map(256);
+    let medium_speed_map = transition_speed_map(512);
     let legacy_metadata = cp1252_metadata(ENTRIES);
     let valid_tech = "BR+ FS- 24ths XO+ SKT- 32nds DS++ JA- WA+ BXF- ".repeat(64);
     let invalid_tech = "BR+garbage Hard unknown ".repeat(64);
@@ -643,10 +666,10 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     cleanup.finish();
 
     let mut timing_build = c.benchmark_group("cycles/timing_build_ssc");
-    timing_build.throughput(Throughput::Elements(768));
+    timing_build.throughput(Throughput::Elements(1_280));
     timing_build.sample_size(100);
     timing_build.measurement_time(Duration::from_secs(2));
-    timing_build.bench_function("bpm_512_stops_256", |b| {
+    timing_build.bench_function("bpm_512_stops_256_speeds_512", |b| {
         b.iter(|| {
             black_box(rssp::timing::timing_data_from_chart_data(
                 0.0,
@@ -660,7 +683,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
                 None,
                 "",
                 None,
-                "",
+                black_box(&medium_speed_map),
                 None,
                 "",
                 None,

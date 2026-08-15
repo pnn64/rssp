@@ -1618,9 +1618,10 @@ fn run_course_analyze_alloc(iterations: usize) {
     );
 }
 
-fn timing_build_fixture() -> (String, String) {
+fn timing_build_fixture() -> (String, String, String) {
     let mut bpms = String::with_capacity(512 * 16);
     let mut stops = String::with_capacity(256 * 16);
+    let mut speeds = String::with_capacity(512 * 16);
     for index in 0..512 {
         if index != 0 {
             bpms.push(',');
@@ -1634,11 +1635,36 @@ fn timing_build_fixture() -> (String, String) {
         }
         write!(&mut stops, "{}=0.125", index * 8 + 2).expect("writing to a String should succeed");
     }
-    (bpms, stops)
+    for index in 0..512 {
+        if index != 0 {
+            speeds.push(',');
+        }
+        write!(
+            &mut speeds,
+            "{}={}={}={}",
+            index * 4,
+            1 + index % 7,
+            1 + index % 4,
+            index & 1
+        )
+        .expect("writing to a String should succeed");
+    }
+    (bpms, stops, speeds)
+}
+
+fn timing_build_checksum(timing: &rssp::timing::TimingData) -> u64 {
+    let mut checksum = rssp::timing::get_time_for_beat(timing, 2_044.0).to_bits();
+    for index in 0..64 {
+        let beat = index as f64 * 32.0 + 1.5;
+        let time = rssp::timing::get_time_for_beat(timing, beat);
+        checksum = checksum.rotate_left(7)
+            ^ rssp::timing::get_speed_multiplier(timing, beat, time).to_bits();
+    }
+    checksum
 }
 
 fn run_timing_build_alloc(iterations: usize) {
-    let (bpms, stops) = timing_build_fixture();
+    let (bpms, stops, speeds) = timing_build_fixture();
     let build = || {
         rssp::timing::timing_data_from_chart_data(
             0.0,
@@ -1652,7 +1678,7 @@ fn run_timing_build_alloc(iterations: usize) {
             None,
             "",
             None,
-            "",
+            black_box(&speeds),
             None,
             "",
             None,
@@ -1661,7 +1687,7 @@ fn run_timing_build_alloc(iterations: usize) {
             true,
         )
     };
-    let expected = rssp::timing::get_time_for_beat(&build(), 2_044.0).to_bits();
+    let expected = timing_build_checksum(&build());
 
     reset_counters();
     let before = Counters::read();
@@ -1669,9 +1695,9 @@ fn run_timing_build_alloc(iterations: usize) {
     let mut checksum = 0u64;
     for _ in 0..iterations {
         let timing = build();
-        let time = rssp::timing::get_time_for_beat(black_box(&timing), black_box(2_044.0));
-        assert_eq!(time.to_bits(), expected);
-        checksum = checksum.wrapping_add(time.to_bits());
+        let actual = timing_build_checksum(black_box(&timing));
+        assert_eq!(actual, expected);
+        checksum = checksum.wrapping_add(actual);
         black_box(timing);
     }
     let elapsed = start.elapsed();
@@ -1688,7 +1714,7 @@ fn run_timing_build_alloc(iterations: usize) {
         iterations,
         black_box(checksum),
         elapsed.as_secs_f64(),
-        768.0 * divisor / elapsed.as_secs_f64(),
+        1_280.0 * divisor / elapsed.as_secs_f64(),
         (after.alloc_calls - before.alloc_calls) as f64 / divisor,
         (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
         (after.realloc_calls - before.realloc_calls) as f64 / divisor,
