@@ -36,6 +36,26 @@ fn inherited_timing_fixture(chart_count: usize, bpm_count: usize) -> String {
     fixture
 }
 
+fn timing_build_fixture() -> (String, String) {
+    use std::fmt::Write;
+
+    let mut bpms = String::with_capacity(512 * 16);
+    let mut stops = String::with_capacity(256 * 16);
+    for index in 0..512 {
+        if index != 0 {
+            bpms.push(',');
+        }
+        write!(&mut bpms, "{}={}", index * 4, 120 + index % 180).unwrap();
+    }
+    for index in 0..256 {
+        if index != 0 {
+            stops.push(',');
+        }
+        write!(&mut stops, "{}=0.125", index * 8 + 2).unwrap();
+    }
+    (bpms, stops)
+}
+
 #[derive(Clone)]
 struct DurationChartInput {
     chart_data: Vec<u8>,
@@ -460,11 +480,44 @@ fn bench_duration_timing(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_timing_build(c: &mut Criterion) {
+    let (bpms, stops) = timing_build_fixture();
+    let mut group = c.benchmark_group("timing_build_ssc");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("bpm_512_stops_256", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::timing_data_from_chart_data(
+                0.0,
+                0.0,
+                None,
+                black_box(&bpms),
+                None,
+                black_box(&stops),
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                rssp::timing::TimingFormat::Ssc,
+                true,
+            ));
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_duration_pipeline,
     bench_duration_inner,
     bench_duration_last_beat,
-    bench_duration_timing
+    bench_duration_timing,
+    bench_timing_build
 );
 criterion_main!(benches);

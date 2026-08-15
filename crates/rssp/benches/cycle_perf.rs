@@ -548,6 +548,30 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             ));
         });
     });
+    cleanup.bench_function("ordered_ssc_bpms_stops", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::timing_data_from_chart_data(
+                0.0,
+                0.0,
+                None,
+                black_box(&pair_map),
+                None,
+                black_box(&stop_map),
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                rssp::timing::TimingFormat::Ssc,
+                true,
+            ));
+        });
+    });
     cleanup.bench_function("ordered_segment_rows", |b| {
         b.iter(|| {
             black_box(rssp::timing::timing_data_from_segments(

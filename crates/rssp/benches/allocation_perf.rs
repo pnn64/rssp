@@ -1,4 +1,5 @@
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::fmt::Write as _;
 use std::fs;
 use std::hint::black_box;
 use std::path::PathBuf;
@@ -96,6 +97,7 @@ enum Mode {
     Annotations,
     Hashes,
     Durations,
+    TimingBuild,
     Nps,
     Minimize,
     Bpms,
@@ -190,6 +192,7 @@ fn parse_args() -> (Mode, usize) {
                     "annotations" => Mode::Annotations,
                     "hashes" => Mode::Hashes,
                     "durations" => Mode::Durations,
+                    "timing-build" => Mode::TimingBuild,
                     "nps" => Mode::Nps,
                     "minimize" => Mode::Minimize,
                     "bpms" => Mode::Bpms,
@@ -264,7 +267,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             compute_pattern_counts: false,
             ..rssp::AnalysisOptions::default()
         },
-        Mode::BpmStats => rssp::AnalysisOptions::default(),
+        Mode::BpmStats | Mode::TimingBuild => rssp::AnalysisOptions::default(),
         Mode::Full | Mode::AnalysisReuse => rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
@@ -605,6 +608,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Annotations => "annotations",
         Mode::Hashes => "hashes",
         Mode::Durations => "durations",
+        Mode::TimingBuild => "timing-build",
         Mode::Nps => "nps",
         Mode::Minimize => "minimize",
         Mode::Bpms => "bpms",
@@ -1614,6 +1618,87 @@ fn run_course_analyze_alloc(iterations: usize) {
     );
 }
 
+fn timing_build_fixture() -> (String, String) {
+    let mut bpms = String::with_capacity(512 * 16);
+    let mut stops = String::with_capacity(256 * 16);
+    for index in 0..512 {
+        if index != 0 {
+            bpms.push(',');
+        }
+        write!(&mut bpms, "{}={}", index * 4, 120 + index % 180)
+            .expect("writing to a String should succeed");
+    }
+    for index in 0..256 {
+        if index != 0 {
+            stops.push(',');
+        }
+        write!(&mut stops, "{}=0.125", index * 8 + 2).expect("writing to a String should succeed");
+    }
+    (bpms, stops)
+}
+
+fn run_timing_build_alloc(iterations: usize) {
+    let (bpms, stops) = timing_build_fixture();
+    let build = || {
+        rssp::timing::timing_data_from_chart_data(
+            0.0,
+            0.0,
+            None,
+            black_box(&bpms),
+            None,
+            black_box(&stops),
+            None,
+            "",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "",
+            rssp::timing::TimingFormat::Ssc,
+            true,
+        )
+    };
+    let expected = rssp::timing::get_time_for_beat(&build(), 2_044.0).to_bits();
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0u64;
+    for _ in 0..iterations {
+        let timing = build();
+        let time = rssp::timing::get_time_for_beat(black_box(&timing), black_box(2_044.0));
+        assert_eq!(time.to_bits(), expected);
+        checksum = checksum.wrapping_add(time.to_bits());
+        black_box(timing);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=timing-build iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_segments_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        768.0 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
 fn run_stepstype_phase(phase: &str, iterations: usize, compare: impl Fn(&str, &str) -> bool) {
     const CASES: [(&str, &str); 8] = [
         ("dance-single", "dance-single"),
@@ -2377,6 +2462,10 @@ fn main() {
         }
         Mode::CourseAnalyze => {
             run_course_analyze_alloc(iterations);
+            return;
+        }
+        Mode::TimingBuild => {
+            run_timing_build_alloc(iterations);
             return;
         }
         Mode::CourseStepType => {

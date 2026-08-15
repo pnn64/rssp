@@ -624,7 +624,7 @@ pub fn compute_timing_segments(
 
     let raw_stops = parse_optional_timing(chart_stops, global_stops, parse_segments, cleaned);
     let (mut parsed_bpms, stops, extra_warps, beat0_offset_adjust) =
-        process_bpms_and_stops(format, &parsed_bpms, &raw_stops);
+        process_bpms_and_stops(format, parsed_bpms, raw_stops);
     let stops = tidy_row_segments(stops);
     if parsed_bpms.is_empty() {
         parsed_bpms.push((0.0, DEFAULT_BPM));
@@ -815,11 +815,11 @@ fn count_measure_rows(measure: &[u8]) -> usize {
 // --- BPM/Stop processing ---
 fn process_bpms_and_stops(
     format: TimingFormat,
-    bpms: &[(f64, f64)],
-    stops: &[Segment],
+    bpms: Vec<(f64, f64)>,
+    stops: Vec<Segment>,
 ) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
     match format {
-        TimingFormat::Sm => process_bpms_and_stops_sm(bpms, stops),
+        TimingFormat::Sm => process_bpms_and_stops_sm(&bpms, &stops),
         TimingFormat::Ssc => process_bpms_and_stops_ssc(bpms, stops),
     }
 }
@@ -867,25 +867,25 @@ fn tidy_bpms(mut bpms: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
 }
 
 fn process_bpms_and_stops_ssc(
-    bpms: &[(f64, f64)],
-    stops: &[Segment],
+    mut bpms: Vec<(f64, f64)>,
+    mut stops: Vec<Segment>,
 ) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
-    let bpm_changes: Vec<_> = bpms
-        .iter()
-        .filter(|(b, v)| b.is_finite() && v.is_finite() && *b >= 0.0 && *v > 0.0)
-        .map(|(b, v)| (quantize_beat(*b), *v))
-        .collect();
+    bpms.retain(|(beat, bpm)| beat.is_finite() && bpm.is_finite() && *beat >= 0.0 && *bpm > 0.0);
+    for (beat, _) in &mut bpms {
+        *beat = quantize_beat(*beat);
+    }
 
-    let out_stops: Vec<_> = stops
-        .iter()
-        .filter(|s| s.beat.is_finite() && s.value.is_finite() && s.beat >= 0.0 && s.value > 0.0)
-        .map(|s| Segment {
-            beat: quantize_beat(s.beat),
-            value: s.value,
-        })
-        .collect();
+    stops.retain(|segment| {
+        segment.beat.is_finite()
+            && segment.value.is_finite()
+            && segment.beat >= 0.0
+            && segment.value > 0.0
+    });
+    for segment in &mut stops {
+        segment.beat = quantize_beat(segment.beat);
+    }
 
-    (tidy_bpms(bpm_changes), out_stops, Vec::new(), 0.0)
+    (tidy_bpms(bpms), stops, Vec::new(), 0.0)
 }
 
 fn sort_changes_by_beat(changes: &mut [(f32, f32)]) {
@@ -1321,8 +1321,7 @@ pub fn timing_data_from_chart_data(
     }
 
     let raw_stops = parse_optional_timing(chart_stops, global_stops, parse_segments, cleaned);
-    let (mut bpms, stops, extra_warps, beat0_adj) =
-        process_bpms_and_stops(format, &bpms, &raw_stops);
+    let (mut bpms, stops, extra_warps, beat0_adj) = process_bpms_and_stops(format, bpms, raw_stops);
     let stops = tidy_row_segments(stops);
     if bpms.is_empty() {
         bpms.push((0.0, DEFAULT_BPM));
