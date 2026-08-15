@@ -339,6 +339,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let pair_map = large_pair_map(ENTRIES);
     let speed_map = large_speed_map(ENTRIES);
     let stop_map = large_stop_map(ENTRIES);
+    let medium_pair_map = large_pair_map(512);
+    let medium_stop_map = large_stop_map(256);
     let legacy_metadata = cp1252_metadata(ENTRIES);
     let valid_tech = "BR+ FS- 24ths XO+ SKT- 32nds DS++ JA- WA+ BXF- ".repeat(64);
     let invalid_tech = "BR+garbage Hard unknown ".repeat(64);
@@ -639,6 +641,36 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     cleanup.finish();
+
+    let mut timing_build = c.benchmark_group("cycles/timing_build_ssc");
+    timing_build.throughput(Throughput::Elements(768));
+    timing_build.sample_size(100);
+    timing_build.measurement_time(Duration::from_secs(2));
+    timing_build.bench_function("bpm_512_stops_256", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::timing_data_from_chart_data(
+                0.0,
+                0.0,
+                None,
+                black_box(&medium_pair_map),
+                None,
+                black_box(&medium_stop_map),
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
+                rssp::timing::TimingFormat::Ssc,
+                true,
+            ));
+        });
+    });
+    timing_build.finish();
 
     let stream_densities: Vec<_> = (0..16_384)
         .map(|idx| match idx % 23 {

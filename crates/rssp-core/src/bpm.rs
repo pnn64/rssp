@@ -575,11 +575,11 @@ pub fn chart_bpm_snapshots(data: &[u8], ext: &str) -> Result<Vec<ChartBpmSnapsho
 // BPM parsing - consolidated
 #[must_use]
 pub fn parse_bpm_map(s: &str) -> Vec<(f64, f64)> {
-    const ESTIMATED_COMPONENT_BYTES: usize = 9;
-    let mut v = Vec::with_capacity(s.len().div_ceil(ESTIMATED_COMPONENT_BYTES));
+    const ESTIMATED_COMPONENT_BYTES: usize = 8;
+    let capacity = s.len().div_ceil(ESTIMATED_COMPONENT_BYTES);
+    let mut v = Vec::with_capacity(capacity);
     let (mut previous_beat, mut ordered) = (f64::NEG_INFINITY, true);
     for component in s.split(',') {
-        let component = component.trim();
         let Some((left, right)) = component.split_once('=') else {
             continue;
         };
