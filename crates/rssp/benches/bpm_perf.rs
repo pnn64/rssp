@@ -21,6 +21,22 @@ fn control_pair_map(entries: usize) -> (String, String) {
     (raw, expected)
 }
 
+fn control_normalize_map(entries: usize) -> (String, String) {
+    let mut raw = String::with_capacity(entries * 20);
+    let mut expected = String::with_capacity(entries * 24);
+    for idx in 0..entries {
+        if idx != 0 {
+            raw.push(',');
+            expected.push(',');
+        }
+        write!(&mut raw, "+\u{000b}{}=+\u{000b}{}", idx * 4, 60 + idx % 300)
+            .expect("writing to a String cannot fail");
+        write!(&mut expected, "{}.000={}.000", idx * 4, 60 + idx % 300)
+            .expect("writing to a String cannot fail");
+    }
+    (raw, expected)
+}
+
 fn inherited_timing_fixture(chart_count: usize, bpm_count: usize) -> String {
     use std::fmt::Write;
 
@@ -355,6 +371,34 @@ fn bench_clean_timing_map(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_control_normalize(c: &mut Criterion) {
+    const CASES: [(&str, &str); 4] = [
+        ("+\u{000b}0=+\u{000b}120", "0.000=120.000"),
+        ("+\u{000b}0=+\t\u{000b}120", "0.000=120.000"),
+        ("0=1\t20", ""),
+        ("+\u{000b}0=+\u{0085}\u{000b}120", "0.000=120.000"),
+    ];
+    for (raw, expected) in CASES {
+        assert_eq!(rssp::bpm::normalize_float_digits(raw), expected);
+    }
+    let long = format!("+\u{000b}{}=120", "0".repeat(80));
+    assert_eq!(rssp::bpm::normalize_float_digits(&long), "0.000=120.000");
+
+    let (raw, expected) = control_normalize_map(512);
+    assert_eq!(rssp::bpm::normalize_float_digits(&raw), expected);
+
+    let mut group = c.benchmark_group("control_normalize");
+    group.throughput(criterion::Throughput::Bytes(raw.len() as u64));
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("pair_512", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::normalize_float_digits(black_box(&raw)));
+        });
+    });
+    group.finish();
+}
+
 fn bench_display_bpm(c: &mut Criterion) {
     const CASES: [(Option<&str>, f64, f64, f64); 4] = [
         (None, 120.0, 180.0, 1.0),
@@ -610,6 +654,7 @@ criterion_group!(
     bench_bpm_inner,
     bench_bpm_format,
     bench_clean_timing_map,
+    bench_control_normalize,
     bench_display_bpm,
     bench_bpm_stats,
     bench_mines_nonfake,

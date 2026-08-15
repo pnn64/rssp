@@ -12,6 +12,7 @@ use crate::timing::{
 };
 
 const GIMMICK_BPM_THRESHOLD: f64 = 10000.0;
+const DECIMAL_STACK_BYTES: usize = 64;
 
 #[inline]
 pub(crate) fn is_display_bpm(bpm: f64) -> bool {
@@ -38,12 +39,31 @@ fn strip_control(s: &str) -> Cow<'_, str> {
 }
 
 fn normalize_decimal(s: &str) -> Option<String> {
-    let value: f64 = strip_control(s).trim().parse().ok()?;
+    let value = parse_normalized_decimal(s)?;
     Some(fmt_dec3_half_up(value))
 }
 
 fn parse_normalized_decimal(s: &str) -> Option<f64> {
-    strip_control(s).trim().parse().ok()
+    if !has_control(s) {
+        return s.trim().parse().ok();
+    }
+
+    let mut buf = [0u8; DECIMAL_STACK_BYTES];
+    let mut len = 0usize;
+    for ch in s.chars() {
+        if ch.is_control() {
+            continue;
+        }
+        if ch.len_utf8() > buf.len() - len {
+            return strip_control(s).trim().parse().ok();
+        }
+        len += ch.encode_utf8(&mut buf[len..]).len();
+    }
+    std::str::from_utf8(&buf[..len])
+        .expect("encoded chars are valid UTF-8")
+        .trim()
+        .parse()
+        .ok()
 }
 
 pub(crate) fn parse_beat_or_row(raw: &str) -> Option<f64> {
