@@ -1896,7 +1896,11 @@ fn get_beat_internal(t: &TimingData, elapsed: f64, start_time: f64) -> BeatInfo 
 
 fn get_elapsed_time(t: &TimingData, state: &mut GetBeatState, target_beat: f64) -> f64 {
     let find_marker = target_beat < f64::MAX;
-    let mut bps = get_bpm_for_beat(t, note_row_to_beat(state.last_row)) / 60.0;
+    let mut bps = if state.bpm_idx == 0 {
+        get_bpm_for_beat(t, note_row_to_beat(state.last_row))
+    } else {
+        t.beat_to_time[state.bpm_idx - 1].bpm
+    } / 60.0;
 
     loop {
         let (event_row, event_type) = find_next_event(t, state, target_beat, find_marker);
