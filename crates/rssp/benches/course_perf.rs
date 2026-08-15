@@ -124,6 +124,26 @@ fn bench_course_parse(c: &mut Criterion) {
             rssp::course::StepsSpec::Unknown { raw: String::new() },
         ]
     );
+    let fields = rssp::course::parse_crs(
+        b"#COURSE:Fields;\n#SONG:Group/Song:Hard:mod\\:value:ignored;\n#SONG:Solo;",
+    )
+    .expect("fixed song fields should parse");
+    assert_eq!(fields.entries[0].modifiers, "mod\\:value");
+    assert_eq!(
+        fields.entries[0].steps,
+        rssp::course::StepsSpec::Difficulty(rssp::course::Difficulty::Hard)
+    );
+    assert_eq!(
+        fields.entries[1].song,
+        rssp::course::CourseSong::Fixed {
+            group: None,
+            song: "Solo".to_string(),
+        }
+    );
+    assert_eq!(
+        fields.entries[1].steps,
+        rssp::course::StepsSpec::Unknown { raw: String::new() }
+    );
 
     let mut group = c.benchmark_group("course_parse");
     group.sample_size(100);

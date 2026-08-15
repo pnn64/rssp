@@ -228,6 +228,32 @@ fn split_unescaped(block: &[u8], delim: u8) -> Vec<&[u8]> {
     out
 }
 
+fn split_entry_fields(block: &[u8]) -> [&[u8]; 3] {
+    let mut fields = [&[][..]; 3];
+    if block.is_empty() {
+        return fields;
+    }
+
+    let (mut field, mut start, mut bs) = (0usize, 0usize, 0usize);
+    for (i, &byte) in block.iter().enumerate() {
+        if byte == b'\\' {
+            bs += 1;
+            continue;
+        }
+        if byte == b':' && bs & 1 == 0 {
+            fields[field] = &block[start..i];
+            if field == fields.len() - 1 {
+                return fields;
+            }
+            field += 1;
+            start = i + 1;
+        }
+        bs = 0;
+    }
+    fields[field] = &block[start..];
+    fields
+}
+
 #[inline(always)]
 const fn trim_ascii(mut s: &[u8]) -> &[u8] {
     while let Some((&b, rest)) = s.split_first() {
@@ -418,11 +444,8 @@ fn apply_song_mods(mut secret: bool, mods_raw: &str) -> (bool, bool, i32, String
     (secret, no_difficult, gain_lives, out_mods.join(","))
 }
 
-fn parse_song_entry(params: &[&[u8]]) -> CourseEntry {
-    let song_raw = params.first().copied().unwrap_or_default();
-    let diff_raw = params.get(1).copied().unwrap_or_default();
-    let mods_raw = params.get(2).copied().unwrap_or_default();
-
+fn parse_song_entry(value: &[u8]) -> CourseEntry {
+    let [song_raw, diff_raw, mods_raw] = split_entry_fields(value);
     let song_text = decode_trimmed(song_raw);
     let diff_text = decode_trimmed(diff_raw);
     let mods_text = decode_trimmed(mods_raw);
@@ -717,8 +740,7 @@ pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
             continue;
         }
         if name_bytes.eq_ignore_ascii_case(b"SONG") {
-            let params = split_unescaped(value, b':');
-            entries.push(parse_song_entry(&params));
+            entries.push(parse_song_entry(value));
             continue;
         }
         if name_bytes.eq_ignore_ascii_case(b"SONGSELECT") {
