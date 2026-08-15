@@ -97,6 +97,40 @@ impl std::fmt::Debug for AnalysisScratch {
     }
 }
 
+/// Analysis options with reusable custom-pattern automata.
+///
+/// Construct this once for a batch of simfiles. Unlike [`AnalysisOptions`],
+/// the custom pattern list is compiled during construction rather than once
+/// per call to [`analyze`].
+#[derive(Debug)]
+pub struct PreparedAnalysis {
+    options: AnalysisOptions,
+    custom_patterns: CompiledCustomPatterns,
+}
+
+impl PreparedAnalysis {
+    /// Compiles reusable data for `options`.
+    #[must_use]
+    pub fn new(options: AnalysisOptions) -> Self {
+        let custom_patterns =
+            if options.compute_pattern_counts && !options.custom_patterns.is_empty() {
+                compile_custom_patterns(&options.custom_patterns)
+            } else {
+                compiled_custom_empty()
+            };
+        Self {
+            options,
+            custom_patterns,
+        }
+    }
+
+    /// Returns the options represented by this prepared analysis.
+    #[must_use]
+    pub const fn options(&self) -> &AnalysisOptions {
+        &self.options
+    }
+}
+
 #[derive(Debug)]
 pub struct ChartHashInfo {
     pub step_type: String,
@@ -1044,7 +1078,28 @@ pub fn analyze_with_scratch(
     options: &AnalysisOptions,
     scratch: &mut AnalysisScratch,
 ) -> Result<SimfileSummary, String> {
-    analyze_with_scratch_impl::<true>(simfile_data, extension, options, scratch)
+    analyze_with_scratch_impl::<true>(simfile_data, extension, options, scratch, None)
+}
+
+/// Analyzes a simfile with precompiled options and reusable storage.
+///
+/// # Errors
+///
+/// Returns an error when the extension is unsupported, parsing fails, or no
+/// supported chart is present.
+pub fn analyze_prepared_in(
+    simfile_data: &[u8],
+    extension: &str,
+    prepared: &PreparedAnalysis,
+    scratch: &mut AnalysisScratch,
+) -> Result<SimfileSummary, String> {
+    analyze_with_scratch_impl::<true>(
+        simfile_data,
+        extension,
+        &prepared.options,
+        scratch,
+        Some(&prepared.custom_patterns),
+    )
 }
 
 #[cfg(feature = "profile")]
@@ -1054,7 +1109,7 @@ pub(crate) fn profile_analyze_with_allocating_bpms(
     options: &AnalysisOptions,
     scratch: &mut AnalysisScratch,
 ) -> Result<SimfileSummary, String> {
-    analyze_with_scratch_impl::<false>(simfile_data, extension, options, scratch)
+    analyze_with_scratch_impl::<false>(simfile_data, extension, options, scratch, None)
 }
 
 fn analyze_with_scratch_impl<const REUSE_BPMS: bool>(
@@ -1062,6 +1117,7 @@ fn analyze_with_scratch_impl<const REUSE_BPMS: bool>(
     extension: &str,
     options: &AnalysisOptions,
     scratch: &mut AnalysisScratch,
+    prepared_patterns: Option<&CompiledCustomPatterns>,
 ) -> Result<SimfileSummary, String> {
     let total_start_time = Instant::now();
 
@@ -1277,12 +1333,17 @@ fn analyze_with_scratch_impl<const REUSE_BPMS: bool>(
         .and_then(|n| if n <= 0.0 { None } else { Some(n) });
 
     let allow_steps_timing = steps_timing_allowed(ssc_version, timing_format);
-    let compiled_custom_patterns =
-        if options.compute_pattern_counts && !options.custom_patterns.is_empty() {
+    let owned_patterns;
+    let compiled_custom_patterns = if let Some(compiled) = prepared_patterns {
+        compiled
+    } else {
+        owned_patterns = if options.compute_pattern_counts && !options.custom_patterns.is_empty() {
             compile_custom_patterns(&options.custom_patterns)
         } else {
             compiled_custom_empty()
         };
+        &owned_patterns
+    };
     let global_timing_segments = Arc::new(compute_timing_segments(
         None,
         &cleaned_global_bpms,
@@ -1329,7 +1390,7 @@ fn analyze_with_scratch_impl<const REUSE_BPMS: bool>(
     let mut total_length = 0i32;
     let mut global_timing = None;
     let options_ref = &options;
-    let compiled_custom_patterns_ref = &compiled_custom_patterns;
+    let compiled_custom_patterns_ref = compiled_custom_patterns;
     for entry in entries {
         if let Some((summary, chart_length)) = build_chart_summary::<REUSE_BPMS>(
             &entry,
@@ -1493,9 +1554,9 @@ pub fn compute_all_hashes(
 #[cfg(test)]
 mod tests {
     use super::{
-        AnalysisOptions, AnalysisScratch, ChartMetadataStrings, analyze, analyze_with_scratch,
-        analyze_with_scratch_impl, chart_metadata_strings, compute_all_hashes, decode_trim_owned,
-        decode_unescape_owned,
+        AnalysisOptions, AnalysisScratch, ChartMetadataStrings, PreparedAnalysis, analyze,
+        analyze_prepared_in, analyze_with_scratch, analyze_with_scratch_impl,
+        chart_metadata_strings, compute_all_hashes, decode_trim_owned, decode_unescape_owned,
     };
     use crate::parse::{
         decode_bytes, normalize_chart_desc, normalize_chart_name, unescape_tag, unescape_trim,
@@ -1521,7 +1582,7 @@ mod tests {
         };
         let mut legacy_scratch = AnalysisScratch::default();
         let expected =
-            analyze_with_scratch_impl::<false>(FIXTURE, "ssc", &options, &mut legacy_scratch)
+            analyze_with_scratch_impl::<false>(FIXTURE, "ssc", &options, &mut legacy_scratch, None)
                 .expect("legacy analysis should succeed");
         let mut scratch = AnalysisScratch::default();
 
@@ -1554,9 +1615,14 @@ mod tests {
             "#BPMS:0=150,4=200;\n#NOTES:\n1000\n0100\n0010\n0001\n;\n"
         )
         .as_bytes();
-        let expected =
-            analyze_with_scratch_impl::<false>(LOCAL_TIMING, "ssc", &options, &mut legacy_scratch)
-                .expect("legacy local timing analysis should succeed");
+        let expected = analyze_with_scratch_impl::<false>(
+            LOCAL_TIMING,
+            "ssc",
+            &options,
+            &mut legacy_scratch,
+            None,
+        )
+        .expect("legacy local timing analysis should succeed");
         let first = analyze_with_scratch(LOCAL_TIMING, "ssc", &options, &mut scratch)
             .expect("local timing analysis should succeed");
         let chart_capacity = scratch.chart_bpm_map.capacity();
@@ -1566,6 +1632,26 @@ mod tests {
         assert_eq!(json(&second), json(&expected));
         assert!(chart_capacity > 0);
         assert_eq!(scratch.chart_bpm_map.capacity(), chart_capacity);
+    }
+
+    #[test]
+    fn prepared_analysis_preserves_custom_pattern_output() {
+        let options = AnalysisOptions {
+            custom_patterns: vec!["LDR".to_string(), "RDL".to_string()],
+            compute_tech_counts: false,
+            ..AnalysisOptions::default()
+        };
+        let expected = analyze(FIXTURE, "ssc", &options).expect("analysis should succeed");
+        let prepared = PreparedAnalysis::new(options.clone());
+        let mut scratch = AnalysisScratch::default();
+        let first = analyze_prepared_in(FIXTURE, "ssc", &prepared, &mut scratch)
+            .expect("prepared analysis should succeed");
+        let second = analyze_prepared_in(FIXTURE, "ssc", &prepared, &mut scratch)
+            .expect("repeated prepared analysis should succeed");
+
+        assert_eq!(prepared.options().custom_patterns, options.custom_patterns);
+        assert_eq!(json(&first), json(&expected));
+        assert_eq!(json(&second), json(&expected));
     }
 
     #[test]

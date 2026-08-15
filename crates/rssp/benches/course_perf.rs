@@ -105,5 +105,58 @@ fn bench_stepstype_match(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_course_analysis, bench_stepstype_match);
+fn course_patterns(count: usize) -> Vec<rssp::patterns::CustomPatternSummary> {
+    const DIRECTIONS: [u8; 4] = *b"LDUR";
+    (0..count)
+        .map(|mut value| {
+            let mut bytes = [b'L'; 8];
+            for byte in &mut bytes {
+                *byte = DIRECTIONS[value & 3];
+                value >>= 2;
+            }
+            rssp::patterns::CustomPatternSummary {
+                pattern: String::from_utf8(bytes.to_vec()).expect("directions are valid UTF-8"),
+                count: 1,
+            }
+        })
+        .collect()
+}
+
+fn bench_pattern_merge(c: &mut Criterion) {
+    const CHARTS: usize = 64;
+    let chart = course_patterns(256);
+    let mut group = c.benchmark_group("course_pattern_merge");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(2));
+    group.throughput(Throughput::Elements((chart.len() * CHARTS) as u64));
+    group.bench_function("linear_find_sort", |b| {
+        b.iter(|| {
+            let mut total = Vec::new();
+            for _ in 0..CHARTS {
+                rssp::profile::merge_course_patterns_legacy(
+                    black_box(&mut total),
+                    black_box(&chart),
+                );
+            }
+            black_box(total);
+        });
+    });
+    group.bench_function("binary_insert", |b| {
+        b.iter(|| {
+            let mut total = Vec::new();
+            for _ in 0..CHARTS {
+                rssp::profile::merge_course_patterns(black_box(&mut total), black_box(&chart));
+            }
+            black_box(total);
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_course_analysis,
+    bench_stepstype_match,
+    bench_pattern_merge
+);
 criterion_main!(benches);

@@ -3,6 +3,9 @@ use std::hint::black_box;
 use std::time::Duration;
 
 const FIXTURE: &str = include_str!("fixtures/camellia_mix.ssc");
+const BATCH_FIXTURE: &[u8] = b"#VERSION:0.83;#TITLE:Batch;#BPMS:0=120;\
+#NOTEDATA:;#STEPSTYPE:dance-single;#DIFFICULTY:Challenge;#METER:10;\
+#NOTES:\n1000\n0100\n0010\n0001\n;";
 const MONO_THRESHOLD: usize = 6;
 
 fn step_type_lanes(step_type: &str) -> usize {
@@ -171,6 +174,39 @@ fn bench_custom_patterns(c: &mut Criterion) {
         });
     });
     compile_group.finish();
+
+    let options = rssp::AnalysisOptions {
+        custom_patterns: patterns,
+        compute_tech_counts: false,
+        ..rssp::AnalysisOptions::default()
+    };
+    let prepared = rssp::PreparedAnalysis::new(options.clone());
+    let mut rebuilding_scratch = rssp::AnalysisScratch::default();
+    let mut prepared_scratch = rssp::AnalysisScratch::default();
+    let mut batch_group = c.benchmark_group("custom_patterns_batch");
+    batch_group.sample_size(100);
+    batch_group.measurement_time(Duration::from_secs(2));
+    batch_group.bench_function("rebuild_each_file", |b| {
+        b.iter(|| {
+            black_box(rssp::analyze_with_scratch(
+                black_box(BATCH_FIXTURE),
+                "ssc",
+                black_box(&options),
+                black_box(&mut rebuilding_scratch),
+            ))
+        });
+    });
+    batch_group.bench_function("prepared", |b| {
+        b.iter(|| {
+            black_box(rssp::analyze_prepared_in(
+                black_box(BATCH_FIXTURE),
+                "ssc",
+                black_box(&prepared),
+                black_box(&mut prepared_scratch),
+            ))
+        });
+    });
+    batch_group.finish();
 }
 
 criterion_group!(benches, bench_mono_counts, bench_custom_patterns);

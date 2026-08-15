@@ -600,6 +600,24 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let mut bpm_stats_values = Vec::with_capacity(bpm_stats_map.len());
     let mut nps_scratch = Vec::new();
     let custom_patterns = custom_pattern_input(256);
+    let course_chart_patterns: Vec<_> = custom_patterns
+        .chunks_exact(3)
+        .map(|patterns| rssp::patterns::CustomPatternSummary {
+            pattern: patterns[0].clone(),
+            count: 1,
+        })
+        .collect();
+    const BATCH_FIXTURE: &[u8] = b"#VERSION:0.83;#TITLE:Batch;#BPMS:0=120;\
+#NOTEDATA:;#STEPSTYPE:dance-single;#DIFFICULTY:Challenge;#METER:10;\
+#NOTES:\n1000\n0100\n0010\n0001\n;";
+    let batch_options = rssp::AnalysisOptions {
+        custom_patterns: custom_patterns.clone(),
+        compute_tech_counts: false,
+        ..rssp::AnalysisOptions::default()
+    };
+    let prepared_batch = rssp::PreparedAnalysis::new(batch_options.clone());
+    let mut batch_scratch = rssp::AnalysisScratch::default();
+    let mut prepared_scratch = rssp::AnalysisScratch::default();
     let analysis_fixture = include_bytes!("fixtures/camellia_mix.ssc");
     let nps_fixture = include_bytes!("fixtures/watch_yo_step.ssc");
     let minimize_parsed = rssp::parse::extract_sections(nps_fixture, "ssc")
@@ -788,6 +806,61 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             black_box(rssp::patterns::compile_custom_patterns(black_box(
                 &custom_patterns,
             )));
+        });
+    });
+    optimizations.throughput(Throughput::Elements(1));
+    optimizations.bench_function("custom_patterns_rebuild_file", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::analyze_with_scratch(
+                    black_box(BATCH_FIXTURE),
+                    "ssc",
+                    black_box(&batch_options),
+                    black_box(&mut batch_scratch),
+                )
+                .expect("batch fixture should analyze"),
+            );
+        });
+    });
+    optimizations.bench_function("custom_patterns_prepared_file", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::analyze_prepared_in(
+                    black_box(BATCH_FIXTURE),
+                    "ssc",
+                    black_box(&prepared_batch),
+                    black_box(&mut prepared_scratch),
+                )
+                .expect("batch fixture should analyze"),
+            );
+        });
+    });
+    const COURSE_CHARTS: usize = 64;
+    optimizations.throughput(Throughput::Elements(
+        (course_chart_patterns.len() * COURSE_CHARTS) as u64,
+    ));
+    optimizations.bench_function("course_patterns_linear_find_sort", |b| {
+        b.iter(|| {
+            let mut total = Vec::new();
+            for _ in 0..COURSE_CHARTS {
+                rssp::profile::merge_course_patterns_legacy(
+                    black_box(&mut total),
+                    black_box(&course_chart_patterns),
+                );
+            }
+            black_box(total);
+        });
+    });
+    optimizations.bench_function("course_patterns_binary_insert", |b| {
+        b.iter(|| {
+            let mut total = Vec::new();
+            for _ in 0..COURSE_CHARTS {
+                rssp::profile::merge_course_patterns(
+                    black_box(&mut total),
+                    black_box(&course_chart_patterns),
+                );
+            }
+            black_box(total);
         });
     });
     optimizations.throughput(Throughput::Bytes(nps_fixture.len() as u64));
@@ -1426,6 +1499,10 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         rssp::step_parity::timing_rows_scratch::<4>().expect("dance-single parity layout");
     let mut double_scratch =
         rssp::step_parity::timing_rows_scratch::<8>().expect("dance-double parity layout");
+    let mut legacy_single =
+        rssp::step_parity::legacy_timing_rows_scratch::<4>().expect("dance-single parity layout");
+    let mut legacy_double =
+        rssp::step_parity::legacy_timing_rows_scratch::<8>().expect("dance-double parity layout");
 
     let mut parity = c.benchmark_group("cycles/step_parity");
     parity.sample_size(50);
@@ -1433,7 +1510,18 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     parity.throughput(Throughput::Elements(
         step_parity_bench::SINGLE_ROW_COUNT as u64,
     ));
-    parity.bench_function("dense_single", |b| {
+    parity.bench_function("dense_single_legacy", |b| {
+        b.iter(|| {
+            black_box(rssp::step_parity::analyze_timing_rows_legacy_for_bench(
+                black_box(&single_rows),
+                black_box(&single_beats),
+                black_box(&parity_timing),
+                false,
+                black_box(&mut legacy_single),
+            ));
+        });
+    });
+    parity.bench_function("dense_single_compact", |b| {
         b.iter(|| {
             black_box(rssp::step_parity::analyze_timing_rows_known_holds(
                 black_box(&single_rows),
@@ -1457,7 +1545,18 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             ));
         });
     });
-    parity.bench_function("dense_single_holds", |b| {
+    parity.bench_function("dense_single_holds_legacy", |b| {
+        b.iter(|| {
+            black_box(rssp::step_parity::analyze_timing_rows_legacy_for_bench(
+                black_box(&single_hold_rows),
+                black_box(&single_beats),
+                black_box(&parity_timing),
+                true,
+                black_box(&mut legacy_single),
+            ));
+        });
+    });
+    parity.bench_function("dense_single_holds_compact", |b| {
         b.iter(|| {
             black_box(rssp::step_parity::analyze_timing_rows_known_holds(
                 black_box(&single_hold_rows),
@@ -1471,7 +1570,18 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     parity.throughput(Throughput::Elements(
         step_parity_bench::DOUBLE_ROW_COUNT as u64,
     ));
-    parity.bench_function("dense_double", |b| {
+    parity.bench_function("dense_double_legacy", |b| {
+        b.iter(|| {
+            black_box(rssp::step_parity::analyze_timing_rows_legacy_for_bench(
+                black_box(&double_rows),
+                black_box(&double_beats),
+                black_box(&parity_timing),
+                false,
+                black_box(&mut legacy_double),
+            ));
+        });
+    });
+    parity.bench_function("dense_double_compact", |b| {
         b.iter(|| {
             black_box(rssp::step_parity::analyze_timing_rows_known_holds(
                 black_box(&double_rows),
@@ -1482,7 +1592,18 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             ));
         });
     });
-    parity.bench_function("dense_double_holds", |b| {
+    parity.bench_function("dense_double_holds_legacy", |b| {
+        b.iter(|| {
+            black_box(rssp::step_parity::analyze_timing_rows_legacy_for_bench(
+                black_box(&double_hold_rows),
+                black_box(&double_beats),
+                black_box(&parity_timing),
+                true,
+                black_box(&mut legacy_double),
+            ));
+        });
+    });
+    parity.bench_function("dense_double_holds_compact", |b| {
         b.iter(|| {
             black_box(rssp::step_parity::analyze_timing_rows_known_holds(
                 black_box(&double_hold_rows),

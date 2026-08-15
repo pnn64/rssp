@@ -688,8 +688,48 @@ fn run_parity_alloc<const LANES: usize>(
     let beats = step_parity_bench::beats(row_count);
     let timing = step_parity_bench::timing();
 
-    // Initialize the immutable layout/permutation cache outside both samples.
+    // Initialize the immutable layout/permutation cache outside all samples.
     drop(rssp::step_parity::timing_rows_scratch::<LANES>());
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut legacy =
+        rssp::step_parity::legacy_timing_rows_scratch::<LANES>().expect("supported parity layout");
+    black_box(rssp::step_parity::analyze_timing_rows_legacy_for_bench(
+        black_box(&rows),
+        black_box(&beats),
+        black_box(&timing),
+        has_holds,
+        black_box(&mut legacy),
+    ));
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    print_parity_alloc(mode, "legacy-cold", 1, row_count, elapsed, before, after);
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    for _ in 0..iterations {
+        black_box(rssp::step_parity::analyze_timing_rows_legacy_for_bench(
+            black_box(&rows),
+            black_box(&beats),
+            black_box(&timing),
+            has_holds,
+            black_box(&mut legacy),
+        ));
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    print_parity_alloc(
+        mode,
+        "legacy-reused",
+        iterations,
+        row_count,
+        elapsed,
+        before,
+        after,
+    );
 
     reset_counters();
     let before = Counters::read();
@@ -705,7 +745,7 @@ fn run_parity_alloc<const LANES: usize>(
     ));
     let elapsed = start.elapsed();
     let after = Counters::read();
-    print_parity_alloc(mode, "cold", 1, row_count, elapsed, before, after);
+    print_parity_alloc(mode, "compact-cold", 1, row_count, elapsed, before, after);
 
     reset_counters();
     let before = Counters::read();
@@ -722,7 +762,13 @@ fn run_parity_alloc<const LANES: usize>(
     let elapsed = start.elapsed();
     let after = Counters::read();
     print_parity_alloc(
-        mode, "reused", iterations, row_count, elapsed, before, after,
+        mode,
+        "compact-reused",
+        iterations,
+        row_count,
+        elapsed,
+        before,
+        after,
     );
 }
 
@@ -796,6 +842,143 @@ fn run_custom_pattern_alloc(iterations: usize) {
     run_custom_pattern_alloc_phase("open-addressed", iterations, &patterns, |patterns| {
         rssp::patterns::compile_custom_patterns(patterns)
     });
+    run_prepared_analysis_alloc(iterations, patterns);
+}
+
+fn run_prepared_phase(
+    phase: &str,
+    iterations: usize,
+    mut analyze: impl FnMut() -> Result<rssp::SimfileSummary, String>,
+) {
+    black_box(analyze().expect("batch fixture should analyze"));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let summary = analyze().expect("batch fixture should analyze");
+        checksum = checksum.wrapping_add(
+            summary
+                .charts
+                .iter()
+                .map(|chart| chart.custom_patterns.len())
+                .sum::<usize>(),
+        );
+        black_box(summary);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=prepared-analysis phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_files_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_prepared_analysis_alloc(iterations: usize, patterns: Vec<String>) {
+    const FIXTURE: &[u8] = b"#VERSION:0.83;#TITLE:Batch;#BPMS:0=120;\
+#NOTEDATA:;#STEPSTYPE:dance-single;#DIFFICULTY:Challenge;#METER:10;\
+#NOTES:\n1000\n0100\n0010\n0001\n;";
+    let options = rssp::AnalysisOptions {
+        custom_patterns: patterns,
+        compute_tech_counts: false,
+        ..rssp::AnalysisOptions::default()
+    };
+    let prepared = rssp::PreparedAnalysis::new(options.clone());
+    let mut rebuilding_scratch = rssp::AnalysisScratch::default();
+    run_prepared_phase("rebuild-each-file", iterations, || {
+        rssp::analyze_with_scratch(FIXTURE, "ssc", &options, &mut rebuilding_scratch)
+    });
+    let mut prepared_scratch = rssp::AnalysisScratch::default();
+    run_prepared_phase("prepared", iterations, || {
+        rssp::analyze_prepared_in(FIXTURE, "ssc", &prepared, &mut prepared_scratch)
+    });
+
+    let chart: Vec<_> = options
+        .custom_patterns
+        .iter()
+        .map(|pattern| rssp::patterns::CustomPatternSummary {
+            pattern: pattern.clone(),
+            count: 1,
+        })
+        .collect();
+    run_course_pattern_phase(
+        "linear-find-sort",
+        iterations,
+        &chart,
+        rssp::profile::merge_course_patterns_legacy,
+    );
+    run_course_pattern_phase(
+        "binary-insert",
+        iterations,
+        &chart,
+        rssp::profile::merge_course_patterns,
+    );
+}
+
+fn run_course_pattern_phase(
+    phase: &str,
+    iterations: usize,
+    chart: &[rssp::patterns::CustomPatternSummary],
+    merge: fn(
+        &mut Vec<rssp::patterns::CustomPatternSummary>,
+        &[rssp::patterns::CustomPatternSummary],
+    ),
+) {
+    const CHARTS: usize = 64;
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let mut total = Vec::new();
+        for _ in 0..CHARTS {
+            merge(black_box(&mut total), black_box(chart));
+        }
+        checksum = checksum.wrapping_add(total.iter().map(|pattern| pattern.count as usize).sum());
+        black_box(total);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=course-patterns phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_patterns_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        chart.len() as f64 * CHARTS as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
 }
 
 fn run_stream_outputs_alloc_phase(

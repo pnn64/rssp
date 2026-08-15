@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 #[cfg(target_arch = "wasm32")]
 use web_time::{Duration, Instant};
 
-use crate::analysis::{AnalysisOptions, AnalysisScratch};
+use crate::analysis::{AnalysisOptions, AnalysisScratch, PreparedAnalysis, analyze_prepared_in};
 use crate::assets;
 use crate::math::{round_dp, round_sig_figs_6};
 use crate::normalize_difficulty_label;
@@ -796,6 +796,45 @@ fn empty_course_chart(step_type: &str, course_difficulty: Difficulty, meter: i32
     }
 }
 
+fn merge_custom_patterns(
+    total: &mut Vec<crate::patterns::CustomPatternSummary>,
+    chart: &[crate::patterns::CustomPatternSummary],
+) {
+    // `total` starts empty and this function preserves its sorted invariant.
+    for custom in chart {
+        match total.binary_search_by(|entry| entry.pattern.cmp(&custom.pattern)) {
+            Ok(index) => total[index].count += custom.count,
+            Err(index) => total.insert(index, custom.clone()),
+        }
+    }
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_merge_custom_patterns_legacy(
+    total: &mut Vec<crate::patterns::CustomPatternSummary>,
+    chart: &[crate::patterns::CustomPatternSummary],
+) {
+    for custom in chart {
+        if let Some(existing) = total
+            .iter_mut()
+            .find(|entry| entry.pattern == custom.pattern)
+        {
+            existing.count += custom.count;
+        } else {
+            total.push(custom.clone());
+        }
+    }
+    total.sort_by(|left, right| left.pattern.cmp(&right.pattern));
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_merge_custom_patterns(
+    total: &mut Vec<crate::patterns::CustomPatternSummary>,
+    chart: &[crate::patterns::CustomPatternSummary],
+) {
+    merge_custom_patterns(total, chart);
+}
+
 fn add_course_chart(total: &mut ChartSummary, chart: &ChartSummary) {
     total.stats.total_arrows += chart.stats.total_arrows;
     total.stats.left += chart.stats.left;
@@ -846,27 +885,7 @@ fn add_course_chart(total: &mut ChartSummary, chart: &ChartSummary) {
         total.detected_patterns[i] += chart.detected_patterns[i];
     }
 
-    if !chart.custom_patterns.is_empty() {
-        for custom in &chart.custom_patterns {
-            if let Some(existing) = total
-                .custom_patterns
-                .iter_mut()
-                .find(|x| x.pattern == custom.pattern)
-            {
-                existing.count += custom.count;
-            } else {
-                total
-                    .custom_patterns
-                    .push(crate::patterns::CustomPatternSummary {
-                        pattern: custom.pattern.clone(),
-                        count: custom.count,
-                    });
-            }
-        }
-        total
-            .custom_patterns
-            .sort_by(|a, b| a.pattern.cmp(&b.pattern));
-    }
+    merge_custom_patterns(&mut total.custom_patterns, &chart.custom_patterns);
 }
 
 fn course_title_from_simfile(sim: &SimfileSummary) -> String {
@@ -1043,11 +1062,11 @@ fn dedup_push(vec: &mut Vec<String>, seen: &mut HashSet<CourseHashKey>, value: &
 
 fn analyze_course_song(
     path: &Path,
-    options: &AnalysisOptions,
+    prepared: &PreparedAnalysis,
     scratch: &mut AnalysisScratch,
 ) -> Result<SimfileSummary, String> {
     let opened = simfile::open(path).map_err(|e| e.to_string())?;
-    crate::analysis::analyze_with_scratch(&opened.data, opened.extension, options, scratch)
+    analyze_prepared_in(&opened.data, opened.extension, prepared, scratch)
 }
 
 pub fn analyze_crs_path(
@@ -1062,7 +1081,7 @@ pub fn analyze_crs_path(
         songs_dir,
         target_step_type,
         course_difficulty,
-        &options,
+        options,
         false,
     )
 }
@@ -1081,7 +1100,7 @@ pub fn analyze_crs_path_cache_all_for_bench(
         songs_dir,
         target_step_type,
         course_difficulty,
-        &options,
+        options,
         true,
     )
 }
@@ -1091,7 +1110,7 @@ fn analyze_crs_path_impl(
     songs_dir: Option<&Path>,
     target_step_type: &str,
     course_difficulty: &str,
-    options: &AnalysisOptions,
+    options: AnalysisOptions,
     cache_all: bool,
 ) -> Result<CourseSummary, String> {
     let start = Instant::now();
@@ -1106,6 +1125,8 @@ fn analyze_crs_path_impl(
     let course_diff = parse_course_difficulty(course_difficulty)
         .ok_or_else(|| format!("Invalid course difficulty: {course_difficulty}"))?;
     let step_type = normalize_stepstype(target_step_type);
+    let prepared = PreparedAnalysis::new(options);
+    let options = prepared.options();
 
     let entry_count = course.entries.len();
     let mut song_uses: HashMap<(Option<&str>, &str), usize> = HashMap::new();
@@ -1175,17 +1196,18 @@ fn analyze_crs_path_impl(
             match sim_cache.entry(scan.simfile) {
                 Entry::Occupied(entry) => entry.into_mut(),
                 Entry::Vacant(entry) if cache_has_room => {
-                    let summary = analyze_course_song(entry.key(), options, &mut analysis_scratch)?;
+                    let summary =
+                        analyze_course_song(entry.key(), &prepared, &mut analysis_scratch)?;
                     entry.insert(summary)
                 }
                 Entry::Vacant(entry) => {
                     let path = entry.into_key();
-                    uncached_sim = analyze_course_song(&path, options, &mut analysis_scratch)?;
+                    uncached_sim = analyze_course_song(&path, &prepared, &mut analysis_scratch)?;
                     &uncached_sim
                 }
             }
         } else {
-            uncached_sim = analyze_course_song(&scan.simfile, options, &mut analysis_scratch)?;
+            uncached_sim = analyze_course_song(&scan.simfile, &prepared, &mut analysis_scratch)?;
             &uncached_sim
         };
 
@@ -1275,10 +1297,54 @@ fn analyze_crs_path_impl(
 mod tests {
     use super::{
         CourseHashKey, CourseSong, Difficulty, SongSort, analyze_crs_path, analyze_crs_path_impl,
-        dedup_push, normalize_stepstype, parse_crs, stepstype_eq,
+        dedup_push, merge_custom_patterns, normalize_stepstype, parse_crs, stepstype_eq,
     };
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn custom_pattern_merge_is_sorted_and_accumulates() {
+        let mut total = vec![
+            crate::patterns::CustomPatternSummary {
+                pattern: "LDR".to_string(),
+                count: 2,
+            },
+            crate::patterns::CustomPatternSummary {
+                pattern: "RDL".to_string(),
+                count: 3,
+            },
+        ];
+        let chart = [
+            crate::patterns::CustomPatternSummary {
+                pattern: "RDL".to_string(),
+                count: 5,
+            },
+            crate::patterns::CustomPatternSummary {
+                pattern: "DLR".to_string(),
+                count: 7,
+            },
+        ];
+
+        merge_custom_patterns(&mut total, &chart);
+
+        assert_eq!(
+            total,
+            [
+                crate::patterns::CustomPatternSummary {
+                    pattern: "DLR".to_string(),
+                    count: 7,
+                },
+                crate::patterns::CustomPatternSummary {
+                    pattern: "LDR".to_string(),
+                    count: 2,
+                },
+                crate::patterns::CustomPatternSummary {
+                    pattern: "RDL".to_string(),
+                    count: 8,
+                },
+            ]
+        );
+    }
     use std::sync::atomic::{AtomicU64, Ordering};
 
     const SIMFILE: &[u8] = include_bytes!("../benches/fixtures/hash_fixture.ssc");
@@ -1447,7 +1513,7 @@ mod tests {
             Some(&songs_dir),
             "dance-single",
             "Medium",
-            &options,
+            options.clone(),
             true,
         )
         .expect("legacy cache policy should analyze");

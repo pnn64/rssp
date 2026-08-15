@@ -58,6 +58,20 @@ pub mod profile {
         crate::assets::name_eq_ci(actual, expected)
     }
 
+    pub fn merge_course_patterns_legacy(
+        total: &mut Vec<crate::patterns::CustomPatternSummary>,
+        chart: &[crate::patterns::CustomPatternSummary],
+    ) {
+        crate::course::profile_merge_custom_patterns_legacy(total, chart);
+    }
+
+    pub fn merge_course_patterns(
+        total: &mut Vec<crate::patterns::CustomPatternSummary>,
+        chart: &[crate::patterns::CustomPatternSummary],
+    ) {
+        crate::course::profile_merge_custom_patterns(total, chart);
+    }
+
     pub fn pack_root(
         dir: &Path,
         opt: ScanOpt,
@@ -244,8 +258,8 @@ pub mod rounding {
 pub const RSSP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub use analysis::{
-    AnalysisOptions, AnalysisScratch, ChartHashInfo, analyze, analyze_with_scratch,
-    compute_all_hashes, display_metadata,
+    AnalysisOptions, AnalysisScratch, ChartHashInfo, PreparedAnalysis, analyze,
+    analyze_prepared_in, analyze_with_scratch, compute_all_hashes, display_metadata,
 };
 pub(crate) use rssp_core::chart_timing_tag_raw;
 

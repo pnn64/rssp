@@ -548,6 +548,11 @@ const NO_PERMS: [FootPlacement; 1] = [[Foot::None; MAX_COLUMNS]];
 struct StepParityNode {
     state_key: u32,
     pred: u32,
+}
+
+#[derive(Clone, Copy)]
+struct LayerLink {
+    pred: u32,
     cost: f32,
 }
 
@@ -1008,9 +1013,37 @@ struct StepParityGenerator {
     nodes: Vec<StepParityNode>,
     rows: Vec<Row>,
     result_columns: Vec<FootPlacement>,
+    prev_links: Vec<LayerLink>,
+    next_links: Vec<LayerLink>,
+    state_map: RowStateMap,
+}
+
+#[cfg(feature = "bench-support")]
+#[derive(Clone, Copy)]
+struct LegacyNode {
+    state_key: u32,
+    pred: u32,
+    cost: f32,
+}
+
+#[cfg(feature = "bench-support")]
+struct LegacyDp {
+    nodes: Vec<LegacyNode>,
     prev_ids: Vec<usize>,
     next_ids: Vec<usize>,
     state_map: RowStateMap,
+}
+
+#[cfg(feature = "bench-support")]
+impl Default for LegacyDp {
+    fn default() -> Self {
+        Self {
+            nodes: Vec::new(),
+            prev_ids: Vec::new(),
+            next_ids: Vec::new(),
+            state_map: row_map_new(),
+        }
+    }
 }
 
 fn parity_gen(cache: &'static LayoutCache) -> StepParityGenerator {
@@ -1021,8 +1054,8 @@ fn parity_gen(cache: &'static LayoutCache) -> StepParityGenerator {
         nodes: Vec::new(),
         rows: Vec::new(),
         result_columns: Vec::new(),
-        prev_ids: Vec::new(),
-        next_ids: Vec::new(),
+        prev_links: Vec::new(),
+        next_links: Vec::new(),
         state_map: row_map_new(),
     }
 }
@@ -1544,7 +1577,6 @@ fn parity_add_node(g: &mut StepParityGenerator, state_key: u32) -> usize {
     g.nodes.push(StepParityNode {
         state_key,
         pred: u32::MAX,
-        cost: f32::MAX,
     });
     idx
 }
@@ -1568,11 +1600,13 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
 
     debug_assert_eq!(g.column_count, COLS);
     let start_id = parity_add_node(g, 0);
-    g.nodes[start_id].cost = 0.0;
-
-    g.prev_ids.clear();
-    g.prev_ids.push(start_id);
-    g.next_ids.clear();
+    let mut prev_start = start_id;
+    g.prev_links.clear();
+    g.prev_links.push(LayerLink {
+        pred: u32::MAX,
+        cost: 0.0,
+    });
+    g.next_links.clear();
 
     let mut prev_second = g.rows.first().map_or(-1.0, |r| r.second - 1.0);
 
@@ -1585,16 +1619,18 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
         let prev_row_has_live_hold = i > 0 && row_has_live_hold(&g.rows[i - 1]);
 
         let perms = parity_perms_for_row(g, i);
-        let estimate = g.prev_ids.len().saturating_mul(perms.len());
-        g.next_ids.clear();
+        let estimate = g.prev_links.len().saturating_mul(perms.len());
+        let next_start = g.nodes.len();
+        g.next_links.clear();
         row_map_reset(&mut g.state_map, estimate);
-        g.next_ids.reserve(estimate);
+        g.next_links.reserve(estimate);
         let row = g.rows[i];
         let row_ctx = row_cost_ctx(&row, g.layout);
+        let layout = g.layout;
         let active_mask = row_ctx.active_mask;
 
-        for j in 0..g.prev_ids.len() {
-            let init_id = g.prev_ids[j];
+        for j in 0..g.prev_links.len() {
+            let init_id = prev_start + j;
             // ITGmania zero-initializes the synthetic starting state's foot
             // positions. A legitimate solved state may also have key zero, so
             // the node identity—not the key—must distinguish the two.
@@ -1603,7 +1639,7 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
             } else {
                 state_from_key::<COLS>(g.nodes[init_id].state_key)
             };
-            let init_cost = g.nodes[init_id].cost;
+            let init_cost = g.prev_links[j].cost;
             let left_moved_not_holding = foot_moved_not_holding(&init_state, &LEFT_PAIR);
             let right_moved_not_holding = foot_moved_not_holding(&init_state, &RIGHT_PAIR);
             for perm in perms {
@@ -1612,20 +1648,159 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                 } else {
                     parity_result_state::<COLS>(&init_state, perm, hold_mask, active_mask)
                 };
-                let res_id = match row_map_probe::<COLS>(&g.state_map, key) {
-                    RowMapProbe::Found(id) => id,
+                let cost_idx = match row_map_probe::<COLS>(&g.state_map, key) {
+                    RowMapProbe::Found(index) => index,
                     RowMapProbe::Vacant(slot) => {
                         let id = parity_add_node(g, key);
-                        g.next_ids.push(id);
-                        row_map_insert_at(&mut g.state_map, slot, key, id);
+                        let index = g.next_links.len();
+                        debug_assert_eq!(id, next_start + index);
+                        g.next_links.push(LayerLink {
+                            pred: u32::MAX,
+                            cost: f32::MAX,
+                        });
+                        row_map_insert_at(&mut g.state_map, slot, key, index);
+                        index
+                    }
+                };
+                let calc_cost = || {
+                    init_cost
+                        + calc_action_cost(
+                            layout,
+                            &init_state,
+                            &result,
+                            perm,
+                            hit,
+                            &row,
+                            row_ctx,
+                            elapsed,
+                            left_moved_not_holding,
+                            right_moved_not_holding,
+                            prev_row_has_live_hold,
+                        )
+                };
+                // Single charts have enough competing transitions that keeping the hot
+                // cost/pred pair borrowed together wins. Double charts have smaller layers,
+                // so releasing the cost borrow across calculation is measurably cheaper.
+                if COLS == 4 {
+                    let link = &mut g.next_links[cost_idx];
+                    // With nonnegative elapsed time, action costs cannot lower the path cost.
+                    if costs_nonnegative && init_cost >= link.cost {
+                        continue;
+                    }
+                    let nc = calc_cost();
+                    if nc < link.cost {
+                        link.cost = nc;
+                        link.pred = init_id as u32;
+                    }
+                    continue;
+                }
+
+                let best_cost = g.next_links[cost_idx].cost;
+                if costs_nonnegative && init_cost >= best_cost {
+                    continue;
+                }
+                let nc = calc_cost();
+                if nc < best_cost {
+                    g.next_links[cost_idx].cost = nc;
+                    g.nodes[next_start + cost_idx].pred = init_id as u32;
+                }
+            }
+        }
+
+        if COLS == 4 {
+            debug_assert_eq!(g.nodes.len() - next_start, g.next_links.len());
+            for (node, link) in g.nodes[next_start..].iter_mut().zip(&g.next_links) {
+                node.pred = link.pred;
+            }
+        }
+        prev_start = next_start;
+        std::mem::swap(&mut g.prev_links, &mut g.next_links);
+
+        if i + 1 == RESERVE_SAMPLE_ROWS && g.rows.len() > RESERVE_SAMPLE_ROWS {
+            let states_per_row = g.nodes.len().div_ceil(RESERVE_SAMPLE_ROWS);
+            let expected = states_per_row.saturating_mul(g.rows.len());
+            g.nodes.reserve(expected.saturating_sub(g.nodes.len()));
+        }
+    }
+
+    g.prev_links
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| a.cost.total_cmp(&b.cost))
+        .map(|(index, _)| prev_start + index)
+}
+
+#[cfg(feature = "bench-support")]
+fn legacy_add_node(dp: &mut LegacyDp, state_key: u32) -> usize {
+    let id = dp.nodes.len();
+    dp.nodes.push(LegacyNode {
+        state_key,
+        pred: u32::MAX,
+        cost: f32::MAX,
+    });
+    id
+}
+
+#[cfg(feature = "bench-support")]
+fn legacy_dp_rows<const COLS: usize>(
+    g: &mut StepParityGenerator,
+    dp: &mut LegacyDp,
+) -> Option<usize> {
+    const RESERVE_SAMPLE_ROWS: usize = 64;
+
+    dp.nodes.clear();
+    let start_id = legacy_add_node(dp, 0);
+    dp.nodes[start_id].cost = 0.0;
+    dp.prev_ids.clear();
+    dp.prev_ids.push(start_id);
+    dp.next_ids.clear();
+
+    let mut prev_second = g.rows.first().map_or(-1.0, |row| row.second - 1.0);
+    for i in 0..g.rows.len() {
+        let row_second = g.rows[i].second;
+        let hold_mask = g.rows[i].hold_mask;
+        let elapsed = row_second - prev_second;
+        prev_second = row_second;
+        let costs_nonnegative = elapsed >= 0.0;
+        let prev_row_has_live_hold = i > 0 && row_has_live_hold(&g.rows[i - 1]);
+        let perms = parity_perms_for_row(g, i);
+        let estimate = dp.prev_ids.len().saturating_mul(perms.len());
+        dp.next_ids.clear();
+        row_map_reset(&mut dp.state_map, estimate);
+        dp.next_ids.reserve(estimate);
+        let row = g.rows[i];
+        let row_ctx = row_cost_ctx(&row, g.layout);
+        let active_mask = row_ctx.active_mask;
+
+        for j in 0..dp.prev_ids.len() {
+            let init_id = dp.prev_ids[j];
+            let init_state = if init_id == start_id {
+                state_new()
+            } else {
+                state_from_key::<COLS>(dp.nodes[init_id].state_key)
+            };
+            let init_cost = dp.nodes[init_id].cost;
+            let left_moved_not_holding = foot_moved_not_holding(&init_state, &LEFT_PAIR);
+            let right_moved_not_holding = foot_moved_not_holding(&init_state, &RIGHT_PAIR);
+            for perm in perms {
+                let (result, hit, key) = if hold_mask == 0 {
+                    parity_result_state_no_holds::<COLS>(&init_state, perm, active_mask)
+                } else {
+                    parity_result_state::<COLS>(&init_state, perm, hold_mask, active_mask)
+                };
+                let res_id = match row_map_probe::<COLS>(&dp.state_map, key) {
+                    RowMapProbe::Found(id) => id,
+                    RowMapProbe::Vacant(slot) => {
+                        let id = legacy_add_node(dp, key);
+                        dp.next_ids.push(id);
+                        row_map_insert_at(&mut dp.state_map, slot, key, id);
                         id
                     }
                 };
-                // With nonnegative elapsed time, action costs cannot lower the path cost.
-                if costs_nonnegative && init_cost >= g.nodes[res_id].cost {
+                if costs_nonnegative && init_cost >= dp.nodes[res_id].cost {
                     continue;
                 }
-                let nc = init_cost
+                let cost = init_cost
                     + calc_action_cost(
                         g.layout,
                         &init_state,
@@ -1639,27 +1814,66 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                         right_moved_not_holding,
                         prev_row_has_live_hold,
                     );
-                let node = &mut g.nodes[res_id];
-                if nc < node.cost {
-                    node.cost = nc;
-                    node.pred = init_id as u32;
+                if cost < dp.nodes[res_id].cost {
+                    dp.nodes[res_id].cost = cost;
+                    dp.nodes[res_id].pred = init_id as u32;
                 }
             }
         }
 
-        std::mem::swap(&mut g.prev_ids, &mut g.next_ids);
-
+        std::mem::swap(&mut dp.prev_ids, &mut dp.next_ids);
         if i + 1 == RESERVE_SAMPLE_ROWS && g.rows.len() > RESERVE_SAMPLE_ROWS {
-            let states_per_row = g.nodes.len().div_ceil(RESERVE_SAMPLE_ROWS);
+            let states_per_row = dp.nodes.len().div_ceil(RESERVE_SAMPLE_ROWS);
             let expected = states_per_row.saturating_mul(g.rows.len());
-            g.nodes.reserve(expected.saturating_sub(g.nodes.len()));
+            dp.nodes.reserve(expected.saturating_sub(dp.nodes.len()));
         }
     }
 
-    g.prev_ids
+    dp.prev_ids
         .iter()
         .copied()
-        .min_by(|&a, &b| g.nodes[a].cost.total_cmp(&g.nodes[b].cost))
+        .min_by(|&a, &b| dp.nodes[a].cost.total_cmp(&dp.nodes[b].cost))
+}
+
+#[cfg(feature = "bench-support")]
+fn legacy_backtrack<const COLS: usize>(
+    g: &mut StepParityGenerator,
+    dp: &LegacyDp,
+    mut cur: usize,
+) -> bool {
+    let rows = g.rows.len();
+    g.result_columns.resize(rows, [Foot::None; MAX_COLUMNS]);
+    for write in (0..rows).rev() {
+        g.result_columns[write] = state_from_key::<COLS>(dp.nodes[cur].state_key).combined_columns;
+        let pred = dp.nodes[cur].pred;
+        if pred == u32::MAX {
+            g.result_columns.clear();
+            return false;
+        }
+        cur = pred as usize;
+    }
+    let ok = cur == 0;
+    if !ok {
+        g.result_columns.clear();
+    }
+    ok
+}
+
+#[cfg(feature = "bench-support")]
+fn legacy_finish(g: &mut StepParityGenerator, dp: &mut LegacyDp) -> bool {
+    if g.rows.is_empty() {
+        return false;
+    }
+    let best = match g.column_count {
+        4 => legacy_dp_rows::<4>(g, dp),
+        8 => legacy_dp_rows::<8>(g, dp),
+        _ => None,
+    };
+    match (g.column_count, best) {
+        (4, Some(best)) => legacy_backtrack::<4>(g, dp, best),
+        (8, Some(best)) => legacy_backtrack::<8>(g, dp, best),
+        _ => false,
+    }
 }
 
 fn parity_result_state<const COLS: usize>(
@@ -2762,12 +2976,62 @@ pub struct TimingRowsScratch<const LANES: usize> {
     hold_heads: Vec<[f32; MAX_COLUMNS]>,
 }
 
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub struct LegacyTimingRowsScratch<const LANES: usize> {
+    generator: StepParityGenerator,
+    hold_heads: Vec<[f32; MAX_COLUMNS]>,
+    dp: LegacyDp,
+}
+
 pub fn timing_rows_scratch<const LANES: usize>() -> Option<TimingRowsScratch<LANES>> {
     let cache = layout_for_lanes(LANES)?;
     Some(TimingRowsScratch {
         generator: parity_gen(cache),
         hold_heads: Vec::new(),
     })
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn legacy_timing_rows_scratch<const LANES: usize>() -> Option<LegacyTimingRowsScratch<LANES>> {
+    let cache = layout_for_lanes(LANES)?;
+    Some(LegacyTimingRowsScratch {
+        generator: parity_gen(cache),
+        hold_heads: Vec::new(),
+        dp: LegacyDp::default(),
+    })
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn analyze_timing_rows_legacy_for_bench<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    has_holds: bool,
+    scratch: &mut LegacyTimingRowsScratch<LANES>,
+) -> TechCounts {
+    let cols = layout_cols(scratch.generator.layout);
+    parity_reset(&mut scratch.generator, cols);
+    scratch.generator.rows.reserve(rows.len());
+    parity_create_rows_from_arrays(
+        &mut scratch.generator,
+        &mut scratch.hold_heads,
+        rows,
+        row_to_beat,
+        timing,
+        cols,
+        has_holds,
+    );
+    if !legacy_finish(&mut scratch.generator, &mut scratch.dp) {
+        return TechCounts::default();
+    }
+    calculate_tech_counts(
+        &scratch.generator.rows,
+        &scratch.generator.result_columns,
+        scratch.generator.layout,
+    )
 }
 
 pub fn analyze_timing_rows<const LANES: usize>(
@@ -2999,6 +3263,28 @@ mod tests {
 1000
 ;",
             true,
+        );
+    }
+
+    #[cfg(feature = "bench-support")]
+    #[test]
+    fn compact_arena_matches_legacy_solver() {
+        let rows = [
+            [b'1', b'0', b'0', b'0'],
+            [b'0', b'1', b'0', b'0'],
+            [b'0', b'0', b'1', b'0'],
+            [b'0', b'0', b'0', b'1'],
+            [b'1', b'1', b'0', b'0'],
+            [b'0', b'0', b'1', b'1'],
+        ];
+        let beats = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25];
+        let timing = basic_timing();
+        let mut compact = timing_rows_scratch::<4>().expect("dance-single layout exists");
+        let mut legacy = legacy_timing_rows_scratch::<4>().expect("dance-single layout exists");
+
+        assert_eq!(
+            analyze_timing_rows_known_holds(&rows, &beats, &timing, false, &mut compact),
+            analyze_timing_rows_legacy_for_bench(&rows, &beats, &timing, false, &mut legacy),
         );
     }
 
