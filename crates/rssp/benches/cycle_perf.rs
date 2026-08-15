@@ -1247,6 +1247,19 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     });
     course_mods.finish();
 
+    let mut select_mods = c.benchmark_group("cycles/course_select_mods");
+    select_mods.sample_size(100);
+    select_mods.measurement_time(Duration::from_secs(3));
+    select_mods.throughput(Throughput::Elements(course_bench::SELECT_MOD_COUNT));
+    select_mods.bench_function("apply", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_select_mods(black_box(
+                course_bench::SELECT_MODS,
+            )));
+        });
+    });
+    select_mods.finish();
+
     let mut course = c.benchmark_group("cycles/course_cache");
     course.sample_size(20);
     course.measurement_time(Duration::from_secs(3));

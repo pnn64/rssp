@@ -144,6 +144,18 @@ fn bench_course_parse(c: &mut Criterion) {
         fields.entries[1].steps,
         rssp::course::StepsSpec::Unknown { raw: String::new() }
     );
+    let selected = rssp::course::parse_crs(
+        b"#COURSE:Select;\n#SONGSELECT:TITLE=thank u\\, next:GROUP=A,B:MODS=2x,noshowcourse,nodifficult;",
+    )
+    .expect("song selection should parse");
+    let rssp::course::CourseSong::Select(selection) = &selected.entries[0].song else {
+        panic!("benchmark selection entry should retain criteria");
+    };
+    assert_eq!(selection.titles, ["thank u, next"]);
+    assert_eq!(selection.groups, ["A", "B"]);
+    assert_eq!(selected.entries[0].modifiers, "2x");
+    assert!(selected.entries[0].secret);
+    assert!(selected.entries[0].no_difficult);
 
     let mut group = c.benchmark_group("course_parse");
     group.sample_size(100);
@@ -184,6 +196,38 @@ fn bench_song_mods(c: &mut Criterion) {
                 black_box(true),
                 black_box(course_bench::MODS),
             ));
+        });
+    });
+    group.finish();
+}
+
+fn bench_select_mods(c: &mut Criterion) {
+    assert_eq!(
+        rssp::course::profile_select_mods(course_bench::SELECT_MODS),
+        (
+            true,
+            true,
+            "1.5x,reverse,mirror,noholds,nomines,sudden".to_string(),
+        )
+    );
+    assert_eq!(
+        rssp::course::profile_select_mods(b"reverse\\,invert,showcourse"),
+        (false, false, "reverse,invert".to_string())
+    );
+    assert_eq!(
+        rssp::course::profile_select_mods(b"noshowcourse,nodifficult"),
+        (true, true, String::new())
+    );
+
+    let mut group = c.benchmark_group("course_select_mods");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(course_bench::SELECT_MOD_COUNT));
+    group.bench_function("apply", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_select_mods(black_box(
+                course_bench::SELECT_MODS,
+            )));
         });
     });
     group.finish();
@@ -281,6 +325,7 @@ criterion_group!(
     bench_course_analysis,
     bench_course_parse,
     bench_song_mods,
+    bench_select_mods,
     bench_stepstype_match,
     bench_pattern_merge
 );

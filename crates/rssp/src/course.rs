@@ -12,7 +12,7 @@ use crate::assets;
 use crate::math::{round_dp, round_sig_figs_6};
 use crate::nps::get_nps_stats;
 use crate::pack;
-use crate::parse::{clean_tag, decode_bytes, extract_sections, unescape_tag};
+use crate::parse::{clean_tag, decode_bytes, decode_unescape_trim, extract_sections, unescape_tag};
 use crate::patterns::PATTERN_COUNT;
 use crate::report::{ChartSummary, CourseEntrySummary, CourseSummary, SimfileSummary};
 use crate::simfile;
@@ -206,12 +206,10 @@ fn scan_term(slice: &[u8]) -> Option<(usize, usize)> {
     None
 }
 
-#[inline(always)]
-fn split_unescaped(block: &[u8], delim: u8) -> Vec<&[u8]> {
+fn visit_unescaped<'a>(block: &'a [u8], delim: u8, mut visit: impl FnMut(&'a [u8])) {
     if block.is_empty() {
-        return Vec::new();
+        return;
     }
-    let mut out = Vec::new();
     let (mut start, mut bs) = (0usize, 0usize);
     for (i, &b) in block.iter().enumerate() {
         if b == b'\\' {
@@ -219,12 +217,18 @@ fn split_unescaped(block: &[u8], delim: u8) -> Vec<&[u8]> {
             continue;
         }
         if b == delim && bs & 1 == 0 {
-            out.push(block.get(start..i).unwrap_or(&[]));
+            visit(&block[start..i]);
             start = i + 1;
         }
         bs = 0;
     }
-    out.push(block.get(start..).unwrap_or(&[]));
+    visit(&block[start..]);
+}
+
+#[inline(always)]
+fn split_unescaped(block: &[u8], delim: u8) -> Vec<&[u8]> {
+    let mut out = Vec::new();
+    visit_unescaped(block, delim, |item| out.push(item));
     out
 }
 
@@ -286,11 +290,6 @@ fn decode_trimmed(bytes: &[u8]) -> Cow<'_, str> {
             Cow::Owned(value)
         }
     }
-}
-
-fn decode_unescape_trim(bytes: &[u8]) -> String {
-    let decoded = decode_bytes(trim_ascii(bytes));
-    unescape_tag(decoded.as_ref()).trim().to_string()
 }
 
 fn parse_repeat(s: &str) -> bool {
@@ -476,11 +475,12 @@ fn parse_song_entry(value: &[u8]) -> CourseEntry {
 }
 
 fn parse_select_list(raw: &[u8], out: &mut Vec<String>) -> bool {
-    let items = split_unescaped(raw, b',');
-    if items.is_empty() {
+    if raw.is_empty() {
         return false;
     }
-    out.extend(items.into_iter().map(decode_unescape_trim));
+    visit_unescaped(raw, b',', |item| {
+        out.push(decode_unescape_trim(item).into_owned());
+    });
     true
 }
 
@@ -517,8 +517,8 @@ fn parse_select_sort(raw: &[u8]) -> Option<(Option<SongSort>, i32)> {
 }
 
 fn apply_select_mods(entry: &mut CourseEntry, raw: &[u8]) {
-    let mut modifiers = Vec::new();
-    for item in split_unescaped(raw, b',') {
+    let mut modifiers = String::new();
+    visit_unescaped(raw, b',', |item| {
         let value = decode_unescape_trim(item);
         if value.eq_ignore_ascii_case("showcourse") {
             entry.secret = false;
@@ -527,10 +527,31 @@ fn apply_select_mods(entry: &mut CourseEntry, raw: &[u8]) {
         } else if value.eq_ignore_ascii_case("nodifficult") {
             entry.no_difficult = true;
         } else if !value.is_empty() {
-            modifiers.push(value);
+            if modifiers.is_empty() {
+                modifiers.reserve(raw.len());
+            } else {
+                modifiers.push(',');
+            }
+            modifiers.push_str(&value);
         }
-    }
-    entry.modifiers = modifiers.join(",");
+    });
+    entry.modifiers = modifiers;
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+pub fn profile_select_mods(raw: &[u8]) -> (bool, bool, String) {
+    let mut entry = CourseEntry {
+        song: CourseSong::RandomAny,
+        steps: StepsSpec::Unknown { raw: String::new() },
+        modifiers: String::new(),
+        secret: false,
+        no_difficult: false,
+        gain_seconds: 0.0,
+        gain_lives: -1,
+    };
+    apply_select_mods(&mut entry, raw);
+    (entry.secret, entry.no_difficult, entry.modifiers)
 }
 
 fn parse_song_select(params: &[&[u8]]) -> Option<CourseEntry> {

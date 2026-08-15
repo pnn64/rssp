@@ -6,6 +6,9 @@ pub const SONG_COUNT: usize = 64;
 pub const MOD_COUNT: u64 = 9;
 pub const MODS: &str =
     " 1.5x, reverse, mirror, noholds, nomines, sudden, showcourse, nodifficult, award2 ";
+pub const SELECT_MOD_COUNT: u64 = 8;
+pub const SELECT_MODS: &[u8] =
+    b" 1.5x, reverse, mirror, noholds, nomines, sudden, noshowcourse, nodifficult ";
 
 pub struct CourseFixture {
     root: PathBuf,
