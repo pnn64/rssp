@@ -315,11 +315,20 @@ mod batch_tests {
 
 #[must_use]
 pub fn compute_measure_nps_vec(densities: &[usize], bpms: &[(f64, f64)]) -> Vec<f64> {
-    compute_nps_iter(densities, |i| {
-        let beat = i as f64 * 4.0;
-        let idx = bpms.partition_point(|&(b, _)| b <= beat).saturating_sub(1);
-        bpms.get(idx).map_or(0.0, |&(_, b)| b)
-    })
+    let mut out = Vec::with_capacity(densities.len());
+    if bpms.is_empty() {
+        out.resize(densities.len(), 0.0);
+        return out;
+    }
+    crate::bpm::for_each_measure_bpm(densities.len(), bpms, 4.0, |i, bpm| {
+        let density = densities[i];
+        out.push(if density == 0 || !is_display_bpm(bpm) {
+            0.0
+        } else {
+            density as f64 * bpm / 240.0
+        });
+    });
+    out
 }
 
 #[must_use]
@@ -399,21 +408,6 @@ fn fixed_measure_time(parts: crate::timing::FixedTimingParts, measure: usize) ->
     let beat = measure as f64 * 4.0;
     let row = lrint_f32(beat as f32 * ROWS_PER_BEAT as f32);
     f64::from(start + (row as f32 / ROWS_PER_BEAT as f32) / bps) - global_offset
-}
-
-fn compute_nps_iter<F: Fn(usize) -> f64>(densities: &[usize], get_bpm: F) -> Vec<f64> {
-    densities
-        .iter()
-        .enumerate()
-        .map(|(i, &d)| {
-            let bpm = get_bpm(i);
-            if d == 0 || !is_display_bpm(bpm) {
-                0.0
-            } else {
-                d as f64 * bpm / 240.0
-            }
-        })
-        .collect()
 }
 
 fn median_with_scratch(arr: &[f64], scratch: &mut Vec<f64>) -> f64 {

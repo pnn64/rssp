@@ -5,6 +5,53 @@ use std::time::Duration;
 const FIXTURE: &str = include_str!("fixtures/watch_yo_step.ssc");
 const EXTENSION: &str = "ssc";
 
+fn large_pair_map(entries: usize) -> String {
+    use std::fmt::Write;
+
+    let mut map = String::with_capacity(entries * 20);
+    for idx in 0..entries {
+        if idx != 0 {
+            map.push(',');
+        }
+        write!(&mut map, "{}={}", idx * 4, 60 + idx % 300).unwrap();
+    }
+    map
+}
+
+fn large_stop_map(entries: usize) -> String {
+    use std::fmt::Write;
+
+    let mut map = String::with_capacity(entries * 16);
+    for idx in 0..entries {
+        if idx != 0 {
+            map.push(',');
+        }
+        write!(&mut map, "{}=0.125", idx * 8).unwrap();
+    }
+    map
+}
+
+fn nps_checksum(values: &[f64]) -> u64 {
+    values.iter().fold(0u64, |sum, value| {
+        sum.rotate_left(7) ^ value.to_bits().wrapping_mul(0x9e37_79b9_7f4a_7c15)
+    })
+}
+
+fn assert_nps_bpm_edges() {
+    assert_eq!(
+        rssp::bpm::compute_measure_nps_vec(&[16, 20], &[]),
+        [0.0, 0.0]
+    );
+    assert_eq!(
+        rssp::bpm::compute_measure_nps_vec(&[16, 16], &[(8.0, 120.0)]),
+        [8.0, 8.0]
+    );
+    assert_eq!(
+        rssp::bpm::compute_measure_nps_vec(&[16, 16], &[(0.0, 120.0), (4.0, 150.0), (4.0, 180.0)]),
+        [8.0, 12.0]
+    );
+}
+
 fn inherited_timing_fixture(chart_count: usize, bpm_count: usize) -> String {
     use std::fmt::Write;
 
@@ -489,11 +536,85 @@ fn bench_equally_spaced(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_nps_timing_cursor(c: &mut Criterion) {
+    let bpms = large_pair_map(512);
+    let stops = large_stop_map(256);
+    let timing = rssp::timing::timing_data_from_chart_data(
+        0.0,
+        0.0,
+        None,
+        &bpms,
+        None,
+        &stops,
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        rssp::timing::TimingFormat::Ssc,
+        true,
+    );
+    let densities: Vec<_> = (0..512)
+        .map(|idx| [0, 16, 20, 24, 32][(idx * 7) % 5])
+        .collect();
+    let checksum = nps_checksum(&rssp::bpm::compute_measure_nps_vec_with_timing(
+        &densities, &timing,
+    ));
+    assert_eq!(checksum, 5_059_034_228_849_603_396);
+
+    let mut group = c.benchmark_group("nps_timing_cursor");
+    group.throughput(Throughput::Elements(densities.len() as u64));
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("measure_512", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::compute_measure_nps_vec_with_timing(
+                black_box(&densities),
+                black_box(&timing),
+            ));
+        });
+    });
+    group.finish();
+}
+
+fn bench_nps_bpm_cursor(c: &mut Criterion) {
+    assert_nps_bpm_edges();
+    let bpms: Vec<_> = (0..4_096)
+        .map(|idx| (idx as f64 * 4.0, 60.0 + ((idx * 37) % 300) as f64))
+        .collect();
+    let densities: Vec<_> = (0..4_096)
+        .map(|idx| [0, 16, 20, 24, 32][(idx * 7) % 5])
+        .collect();
+    let checksum = nps_checksum(&rssp::bpm::compute_measure_nps_vec(&densities, &bpms));
+    assert_eq!(checksum, 8_159_583_529_960_956_954);
+
+    let mut group = c.benchmark_group("nps_bpm_cursor");
+    group.throughput(Throughput::Elements(densities.len() as u64));
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("measure_4096", |b| {
+        b.iter(|| {
+            black_box(rssp::bpm::compute_measure_nps_vec(
+                black_box(&densities),
+                black_box(&bpms),
+            ));
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_nps_pipeline,
     bench_nps_inner,
     bench_nps_stats,
+    bench_nps_timing_cursor,
+    bench_nps_bpm_cursor,
     bench_equally_spaced
 );
 criterion_main!(benches);
