@@ -371,6 +371,41 @@ fn bench_stepstype_match(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_stepstype_normalize(c: &mut Criterion) {
+    course_bench::assert_step_norm_behavior();
+    let mut group = c.benchmark_group("course_stepstype_normalize");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(2));
+    group.throughput(Throughput::Elements(
+        (course_bench::STEP_NORM_CASES.len() * course_bench::STEP_NORM_BATCH) as u64,
+    ));
+    group.bench_function("two_owned_passes", |b| {
+        b.iter(|| {
+            for _ in 0..course_bench::STEP_NORM_BATCH {
+                for raw in course_bench::STEP_NORM_CASES {
+                    black_box(rssp::course::profile_normalize_stepstype(
+                        black_box(raw),
+                        true,
+                    ));
+                }
+            }
+        });
+    });
+    group.bench_function("borrow_or_one_pass", |b| {
+        b.iter(|| {
+            for _ in 0..course_bench::STEP_NORM_BATCH {
+                for raw in course_bench::STEP_NORM_CASES {
+                    black_box(rssp::course::profile_normalize_stepstype(
+                        black_box(raw),
+                        false,
+                    ));
+                }
+            }
+        });
+    });
+    group.finish();
+}
+
 fn course_patterns(count: usize) -> Vec<rssp::patterns::CustomPatternSummary> {
     const DIRECTIONS: [u8; 4] = *b"LDUR";
     (0..count)
@@ -499,6 +534,7 @@ criterion_group!(
     bench_select_mods,
     bench_select_parse,
     bench_stepstype_match,
+    bench_stepstype_normalize,
     bench_pattern_merge,
     bench_course_banner,
     bench_song_resolve

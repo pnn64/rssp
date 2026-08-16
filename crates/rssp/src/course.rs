@@ -161,7 +161,29 @@ fn parse_course_difficulty(raw: &str) -> Option<Difficulty> {
     }
 }
 
-fn normalize_stepstype(raw: &str) -> String {
+fn normalize_stepstype(raw: &str) -> Cow<'_, str> {
+    let raw = raw.trim();
+    if !raw
+        .as_bytes()
+        .iter()
+        .any(|byte| *byte == b'_' || byte.is_ascii_uppercase())
+    {
+        return Cow::Borrowed(raw);
+    }
+
+    let mut normalized = String::with_capacity(raw.len());
+    for character in raw.chars() {
+        normalized.push(if character == '_' {
+            '-'
+        } else {
+            character.to_ascii_lowercase()
+        });
+    }
+    Cow::Owned(normalized)
+}
+
+#[cfg(feature = "profile")]
+fn normalize_stepstype_legacy(raw: &str) -> String {
     raw.trim().to_ascii_lowercase().replace('_', "-")
 }
 
@@ -186,7 +208,7 @@ fn stepstype_eq(raw: &str, normalized: &str) -> bool {
 #[doc(hidden)]
 #[must_use]
 pub fn profile_stepstype_eq_legacy(raw: &str, normalized: &str) -> bool {
-    normalize_stepstype(raw) == normalized
+    normalize_stepstype_legacy(raw) == normalized
 }
 
 #[cfg(feature = "profile")]
@@ -194,6 +216,17 @@ pub fn profile_stepstype_eq_legacy(raw: &str, normalized: &str) -> bool {
 #[must_use]
 pub fn profile_stepstype_eq(raw: &str, normalized: &str) -> bool {
     stepstype_eq(raw, normalized)
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+#[must_use]
+pub fn profile_normalize_stepstype(raw: &str, legacy: bool) -> Cow<'_, str> {
+    if legacy {
+        Cow::Owned(normalize_stepstype_legacy(raw))
+    } else {
+        normalize_stepstype(raw)
+    }
 }
 
 const fn diff_from_idx(idx: i32) -> Difficulty {
@@ -1681,7 +1714,7 @@ fn analyze_crs_path_impl(
     Ok(CourseSummary {
         course: course.name,
         course_difficulty: difficulty_label(course_diff).to_string(),
-        step_type,
+        step_type: step_type.into_owned(),
         total_length,
         entries,
         chart: total,

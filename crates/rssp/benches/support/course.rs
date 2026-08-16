@@ -17,6 +17,36 @@ pub const RESOLVE_FILE_COUNT: usize = 256;
 pub const RESOLVE_ENTRY_COUNT: usize = RESOLVE_GROUP_COUNT + RESOLVE_FILE_COUNT;
 pub const RESOLVE_SONG: &str = "Target Song";
 pub const RESOLVE_TITLE: &str = "RSSP Hash Perf Fixture Benchmark";
+pub const STEP_NORM_BATCH: usize = 512;
+pub const STEP_NORM_CASES: [&str; 8] = [
+    "dance-single",
+    " dance-single ",
+    "pump-double",
+    "lights-cabinet",
+    "DANCE_SINGLE",
+    "pump_Double",
+    "DANCE-SOLO",
+    "非ASCII-single",
+];
+
+pub fn assert_step_norm_behavior() {
+    for raw in STEP_NORM_CASES {
+        let legacy = rssp::course::profile_normalize_stepstype(raw, true);
+        let current = rssp::course::profile_normalize_stepstype(raw, false);
+        assert_eq!(
+            current, legacy,
+            "step type normalization changed for {raw:?}"
+        );
+    }
+    assert!(matches!(
+        rssp::course::profile_normalize_stepstype(" dance-single ", false),
+        std::borrow::Cow::Borrowed("dance-single")
+    ));
+    assert!(matches!(
+        rssp::course::profile_normalize_stepstype("DANCE_SINGLE", false),
+        std::borrow::Cow::Owned(_)
+    ));
+}
 
 pub fn select_input() -> Vec<u8> {
     let mut course = String::with_capacity(64 + SELECT_COUNT * 256);

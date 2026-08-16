@@ -2755,12 +2755,57 @@ fn run_stepstype_phase(phase: &str, iterations: usize, compare: impl Fn(&str, &s
 }
 
 fn run_stepstype_alloc(iterations: usize) {
+    course_bench::assert_step_norm_behavior();
+    run_step_norm_phase("normalize-two-owned-passes", iterations, true);
+    run_step_norm_phase("normalize-borrow-or-one-pass", iterations, false);
     run_stepstype_phase("allocating", iterations, |raw, normalized| {
         rssp::course::profile_stepstype_eq_legacy(raw, normalized)
     });
     run_stepstype_phase("bytes", iterations, |raw, normalized| {
         rssp::course::profile_stepstype_eq(raw, normalized)
     });
+}
+
+fn run_step_norm_phase(phase: &str, iterations: usize, legacy: bool) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        for _ in 0..course_bench::STEP_NORM_BATCH {
+            for raw in course_bench::STEP_NORM_CASES {
+                let normalized = rssp::course::profile_normalize_stepstype(black_box(raw), legacy);
+                checksum = checksum.wrapping_add(normalized.len());
+                black_box(normalized);
+            }
+        }
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    let normalizations =
+        (course_bench::STEP_NORM_CASES.len() * course_bench::STEP_NORM_BATCH) as f64 * divisor;
+    println!(
+        concat!(
+            "mode=course-stepstype phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_normalizations_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        normalizations / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
 }
 
 fn run_course_banner_phase<F>(

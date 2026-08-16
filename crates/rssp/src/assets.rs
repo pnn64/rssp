@@ -286,6 +286,7 @@ fn is_movie_ext(path: &Path) -> bool {
         .is_some_and(|ext| MOVIE_EXTS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
 }
 
+#[cfg(any(test, feature = "profile"))]
 pub(crate) fn cmp_name_ci(left: &Path, right: &Path) -> Ordering {
     let left = left
         .file_name()

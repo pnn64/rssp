@@ -975,6 +975,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let resolve_fixture = course_bench::ResolveFixture::new();
     banner_fixture.assert_behavior();
     resolve_fixture.assert_behavior();
+    course_bench::assert_step_norm_behavior();
     let course_input =
         std::fs::read(course_fixture.course_path()).expect("benchmark course should be readable");
     let legacy_course = rssp::course::profile_parse_crs(&course_input, true)
@@ -1119,6 +1120,33 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
                     black_box(rssp::course::profile_stepstype_eq(
                         black_box(raw),
                         black_box(normalized),
+                    ));
+                }
+            }
+        });
+    });
+    optimizations.throughput(Throughput::Elements(
+        (course_bench::STEP_NORM_CASES.len() * course_bench::STEP_NORM_BATCH) as u64,
+    ));
+    optimizations.bench_function("stepstype_normalize_two_owned", |b| {
+        b.iter(|| {
+            for _ in 0..course_bench::STEP_NORM_BATCH {
+                for raw in course_bench::STEP_NORM_CASES {
+                    black_box(rssp::course::profile_normalize_stepstype(
+                        black_box(raw),
+                        true,
+                    ));
+                }
+            }
+        });
+    });
+    optimizations.bench_function("stepstype_normalize_borrowed", |b| {
+        b.iter(|| {
+            for _ in 0..course_bench::STEP_NORM_BATCH {
+                for raw in course_bench::STEP_NORM_CASES {
+                    black_box(rssp::course::profile_normalize_stepstype(
+                        black_box(raw),
+                        false,
                     ));
                 }
             }
