@@ -1,4 +1,4 @@
-use crate::bpm::clean_timing_map;
+use crate::bpm::{chart_map_mode, clean_map_mode};
 use crate::math::round_sig_figs_itg;
 use crate::parse::{
     decode_unescape_trim, extract_sections, normalize_chart_desc_ref, parse_offset_seconds,
@@ -71,6 +71,24 @@ pub fn compute_chart_durations(
     extension: &str,
     offsets: TimingOffsets,
 ) -> Result<Vec<ChartDuration>, String> {
+    compute_chart_durations_impl::<true>(simfile_data, extension, offsets)
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn chart_durations_owned(
+    simfile_data: &[u8],
+    extension: &str,
+    offsets: TimingOffsets,
+) -> Result<Vec<ChartDuration>, String> {
+    compute_chart_durations_impl::<false>(simfile_data, extension, offsets)
+}
+
+fn compute_chart_durations_impl<const BORROW: bool>(
+    simfile_data: &[u8],
+    extension: &str,
+    offsets: TimingOffsets,
+) -> Result<Vec<ChartDuration>, String> {
     let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
 
     let timing_format = timing_format_from_ext(extension);
@@ -79,22 +97,22 @@ pub fn compute_chart_durations(
     let song_offset = parse_offset_seconds(parsed_data.offset);
 
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"")).unwrap_or("");
-    let cleaned_global_bpms = clean_timing_map(global_bpms_raw);
+    let cleaned_global_bpms = clean_map_mode::<BORROW>(global_bpms_raw);
     let global_stops_raw = parsed_data
         .stops
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let cleaned_global_stops = clean_timing_map(global_stops_raw);
+    let cleaned_global_stops = clean_map_mode::<BORROW>(global_stops_raw);
     let global_delays_raw = parsed_data
         .delays
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let cleaned_global_delays = clean_timing_map(global_delays_raw);
+    let cleaned_global_delays = clean_map_mode::<BORROW>(global_delays_raw);
     let global_warps_raw = parsed_data
         .warps
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let cleaned_global_warps = clean_timing_map(global_warps_raw);
+    let cleaned_global_warps = clean_map_mode::<BORROW>(global_warps_raw);
 
     let entries = parsed_data.notes_list;
     let mut results = Vec::with_capacity(entries.len());
@@ -140,32 +158,32 @@ pub fn compute_chart_durations(
             entry.chart_labels.as_deref(),
             entry.chart_tickcounts.as_deref(),
             entry.chart_combos.as_deref(),
-            cleaned_global_bpms.as_str(),
-            cleaned_global_stops.as_str(),
-            cleaned_global_delays.as_str(),
-            cleaned_global_warps.as_str(),
+            cleaned_global_bpms.as_ref(),
+            cleaned_global_stops.as_ref(),
+            cleaned_global_delays.as_ref(),
+            cleaned_global_warps.as_ref(),
             "",
             "",
             "",
         );
         let chart_offset = timing_src.chart_offset_seconds;
         let chart_bpms = if allow_steps_timing {
-            crate::chart_timing_tag_raw(entry.chart_bpms.as_deref())
+            chart_map_mode::<BORROW>(entry.chart_bpms.as_deref())
         } else {
             None
         };
         let chart_stops = if allow_steps_timing {
-            crate::chart_timing_tag_raw(entry.chart_stops.as_deref())
+            chart_map_mode::<BORROW>(entry.chart_stops.as_deref())
         } else {
             None
         };
         let chart_delays = if allow_steps_timing {
-            crate::chart_timing_tag_raw(entry.chart_delays.as_deref())
+            chart_map_mode::<BORROW>(entry.chart_delays.as_deref())
         } else {
             None
         };
         let chart_warps = if allow_steps_timing {
-            crate::chart_timing_tag_raw(entry.chart_warps.as_deref())
+            chart_map_mode::<BORROW>(entry.chart_warps.as_deref())
         } else {
             None
         };
@@ -214,7 +232,7 @@ pub fn compute_chart_durations(
 
 #[cfg(test)]
 mod tests {
-    use super::{TimingOffsets, compute_chart_durations};
+    use super::{TimingOffsets, compute_chart_durations, compute_chart_durations_impl};
     use crate::timing::{
         TimingFormat, compute_timing_segments, get_time_for_beat_f32, resolve_chart_timing,
         timing_data_from_segments,
@@ -228,6 +246,18 @@ mod tests {
         let charts =
             compute_chart_durations(INHERITED_TIMING_FIXTURE, "ssc", TimingOffsets::default())
                 .expect("fixture should parse");
+        let owned = compute_chart_durations_impl::<false>(
+            INHERITED_TIMING_FIXTURE,
+            "ssc",
+            TimingOffsets::default(),
+        )
+        .expect("owned timing fixture should parse");
+        assert_eq!(charts.len(), owned.len());
+        for (actual, expected) in charts.iter().zip(&owned) {
+            assert_eq!(actual.step_type, expected.step_type);
+            assert_eq!(actual.difficulty, expected.difficulty);
+            assert_eq!(actual.duration_seconds, expected.duration_seconds);
+        }
         let difficulties: Vec<_> = charts
             .iter()
             .map(|chart| chart.difficulty.as_str())

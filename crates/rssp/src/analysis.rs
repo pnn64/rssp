@@ -11,10 +11,10 @@ use crate::stats;
 use crate::step_parity;
 
 use crate::bpm::{
-    clean_and_normalize_float_digits, clean_and_normalize_speeds_float_digits,
-    clean_timing_map_cow, compute_bpm_range_and_stats, compute_bpm_range_and_stats_with_scratch,
-    compute_measure_nps_vec_with_timing, compute_tier_bpm, get_nps_stats_with_scratch,
-    normalize_float_digits,
+    clean_and_normalize_float_digits, clean_and_normalize_speeds_float_digits, clean_norm_map_cow,
+    clean_norm_speeds_cow, clean_timing_map_cow, compute_bpm_range_and_stats,
+    compute_bpm_range_and_stats_with_scratch, compute_measure_nps_vec_with_timing,
+    compute_tier_bpm, get_nps_stats_with_scratch, normalize_float_digits,
 };
 use crate::hash::compute_chart_hash_pair;
 use crate::math::{round_dp, round_sig_figs_6};
@@ -189,6 +189,24 @@ fn chart_timing_tag_pair(tag: Option<&[u8]>) -> (Option<String>, Option<String>)
     let raw = if raw.is_empty() { None } else { Some(raw) };
     let norm = if norm.is_empty() { None } else { Some(norm) };
     (raw, norm)
+}
+
+fn clean_norm_map<const BORROW: bool>(param: &str) -> (Cow<'_, str>, String) {
+    if BORROW {
+        clean_norm_map_cow(param)
+    } else {
+        let (cleaned, normalized) = clean_and_normalize_float_digits(param);
+        (Cow::Owned(cleaned), normalized)
+    }
+}
+
+fn clean_norm_speeds<const BORROW: bool>(param: &str) -> (Cow<'_, str>, String) {
+    if BORROW {
+        clean_norm_speeds_cow(param)
+    } else {
+        let (cleaned, normalized) = clean_and_normalize_speeds_float_digits(param);
+        (Cow::Owned(cleaned), normalized)
+    }
 }
 
 fn chart_display_bpm_tag(tag: Option<&[u8]>) -> Option<String> {
@@ -1085,7 +1103,7 @@ pub fn analyze_with_scratch(
     options: &AnalysisOptions,
     scratch: &mut AnalysisScratch,
 ) -> Result<SimfileSummary, String> {
-    analyze_with_scratch_impl::<true>(simfile_data, extension, options, scratch, None)
+    analyze_with_scratch_impl::<true, true>(simfile_data, extension, options, scratch, None)
 }
 
 /// Analyzes a simfile with precompiled options and reusable storage.
@@ -1100,7 +1118,7 @@ pub fn analyze_prepared_in(
     prepared: &PreparedAnalysis,
     scratch: &mut AnalysisScratch,
 ) -> Result<SimfileSummary, String> {
-    analyze_with_scratch_impl::<true>(
+    analyze_with_scratch_impl::<true, true>(
         simfile_data,
         extension,
         &prepared.options,
@@ -1116,10 +1134,20 @@ pub(crate) fn profile_analyze_with_allocating_bpms(
     options: &AnalysisOptions,
     scratch: &mut AnalysisScratch,
 ) -> Result<SimfileSummary, String> {
-    analyze_with_scratch_impl::<false>(simfile_data, extension, options, scratch, None)
+    analyze_with_scratch_impl::<false, true>(simfile_data, extension, options, scratch, None)
 }
 
-fn analyze_with_scratch_impl<const REUSE_BPMS: bool>(
+#[cfg(feature = "profile")]
+pub(crate) fn profile_analyze_owned(
+    simfile_data: &[u8],
+    extension: &str,
+    options: &AnalysisOptions,
+    scratch: &mut AnalysisScratch,
+) -> Result<SimfileSummary, String> {
+    analyze_with_scratch_impl::<true, false>(simfile_data, extension, options, scratch, None)
+}
+
+fn analyze_with_scratch_impl<const REUSE_BPMS: bool, const BORROW_TIMING: bool>(
     simfile_data: &[u8],
     extension: &str,
     options: &AnalysisOptions,
@@ -1252,43 +1280,43 @@ fn analyze_with_scratch_impl<const REUSE_BPMS: bool>(
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"<invalid-bpms>"))
         .unwrap_or("<invalid-bpms>");
     let (cleaned_global_bpms, normalized_global_bpms) =
-        clean_and_normalize_float_digits(global_bpms_raw);
+        clean_norm_map::<BORROW_TIMING>(global_bpms_raw);
     let global_stops_raw = parsed_data
         .stops
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
     let (cleaned_global_stops, normalized_global_stops) =
-        clean_and_normalize_float_digits(global_stops_raw);
+        clean_norm_map::<BORROW_TIMING>(global_stops_raw);
     let global_delays_raw = parsed_data
         .delays
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
     let (cleaned_global_delays, normalized_global_delays) =
-        clean_and_normalize_float_digits(global_delays_raw);
+        clean_norm_map::<BORROW_TIMING>(global_delays_raw);
     let global_warps_raw = parsed_data
         .warps
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
     let (cleaned_global_warps, normalized_global_warps) =
-        clean_and_normalize_float_digits(global_warps_raw);
+        clean_norm_map::<BORROW_TIMING>(global_warps_raw);
     let global_speeds_raw = parsed_data
         .speeds
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
     let (cleaned_global_speeds, normalized_global_speeds) =
-        clean_and_normalize_speeds_float_digits(global_speeds_raw);
+        clean_norm_speeds::<BORROW_TIMING>(global_speeds_raw);
     let global_scrolls_raw = parsed_data
         .scrolls
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
     let (cleaned_global_scrolls, normalized_global_scrolls) =
-        clean_and_normalize_float_digits(global_scrolls_raw);
+        clean_norm_map::<BORROW_TIMING>(global_scrolls_raw);
     let global_fakes_raw = parsed_data
         .fakes
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
     let (cleaned_global_fakes, normalized_global_fakes) =
-        clean_and_normalize_float_digits(global_fakes_raw);
+        clean_norm_map::<BORROW_TIMING>(global_fakes_raw);
     let normalized_global_time_signatures = parsed_data
         .time_signatures
         .and_then(|b| std::str::from_utf8(b).ok())
@@ -1590,9 +1618,14 @@ mod tests {
             ..AnalysisOptions::default()
         };
         let mut legacy_scratch = AnalysisScratch::default();
-        let expected =
-            analyze_with_scratch_impl::<false>(FIXTURE, "ssc", &options, &mut legacy_scratch, None)
-                .expect("legacy analysis should succeed");
+        let expected = analyze_with_scratch_impl::<false, false>(
+            FIXTURE,
+            "ssc",
+            &options,
+            &mut legacy_scratch,
+            None,
+        )
+        .expect("legacy analysis should succeed");
         let mut scratch = AnalysisScratch::default();
 
         let first = analyze_with_scratch(FIXTURE, "ssc", &options, &mut scratch)
@@ -1629,7 +1662,7 @@ mod tests {
             "#BPMS:0=150,4=200;\n#NOTES:\n1000\n0100\n0010\n0001\n;\n"
         )
         .as_bytes();
-        let expected = analyze_with_scratch_impl::<false>(
+        let expected = analyze_with_scratch_impl::<false, false>(
             LOCAL_TIMING,
             "ssc",
             &options,

@@ -35,6 +35,8 @@ mod serialize_bench;
 mod sm_timing_bench;
 #[path = "support/step_parity.rs"]
 mod step_parity_bench;
+#[path = "support/timing_borrow.rs"]
+mod timing_borrow_bench;
 #[path = "support/timing_merge.rs"]
 mod timing_merge_bench;
 #[path = "support/translate.rs"]
@@ -1333,6 +1335,32 @@ fn run_analysis_reuse_alloc(
                 .expect("fixture should analyze"),
         );
     }
+    if let Some(sim) = corpus.first() {
+        let (mut expected_scratch, mut actual_scratch) = (
+            rssp::AnalysisScratch::default(),
+            rssp::AnalysisScratch::default(),
+        );
+        let expected = rssp::profile::analyze_owned_timing(
+            &sim.raw,
+            sim.extension,
+            options,
+            &mut expected_scratch,
+        )
+        .expect("owned timing analysis should succeed");
+        let actual =
+            rssp::analyze_with_scratch(&sim.raw, sim.extension, options, &mut actual_scratch)
+                .expect("borrowed timing analysis should succeed");
+        let (mut expected_json, mut actual_json) = (Vec::new(), Vec::new());
+        rssp::report::write_reports(
+            &expected,
+            rssp::report::OutputMode::JSON,
+            &mut expected_json,
+        )
+        .expect("owned timing summary should serialize");
+        rssp::report::write_reports(&actual, rssp::report::OutputMode::JSON, &mut actual_json)
+            .expect("borrowed timing summary should serialize");
+        assert_eq!(actual_json, expected_json);
+    }
     let base_live_bytes = LIVE_BYTES.load(Ordering::Relaxed);
     run_analysis_alloc_phase(
         "fresh",
@@ -1363,6 +1391,24 @@ fn run_analysis_reuse_alloc(
         },
     );
     drop(allocating_scratch);
+    let mut owned_timing_scratch = rssp::AnalysisScratch::default();
+    run_analysis_alloc_phase(
+        "reused-bpm-owned-timing",
+        iterations,
+        corpus,
+        options,
+        base_live_bytes,
+        |sim| {
+            rssp::profile::analyze_owned_timing(
+                sim.raw.as_slice(),
+                sim.extension,
+                options,
+                &mut owned_timing_scratch,
+            )
+            .expect("fixture should analyze")
+        },
+    );
+    drop(owned_timing_scratch);
     let mut scratch = rssp::AnalysisScratch::default();
     run_analysis_alloc_phase(
         "reused-bpm-buffers",
@@ -1542,6 +1588,53 @@ fn run_clean_map_alloc(iterations: usize) {
         after.live_bytes as isize - before.live_bytes as isize,
         after.peak_live_bytes.saturating_sub(before.live_bytes),
     );
+
+    let maps = timing_borrow_bench::TimingMaps::new();
+    timing_borrow_bench::assert_behavior(&maps);
+    run_timing_borrow_phase("owned-cleaned-maps", iterations, &maps, |maps| maps.owned());
+    run_timing_borrow_phase("borrowed-clean-maps", iterations, &maps, |maps| {
+        maps.borrowed()
+    });
+}
+
+fn run_timing_borrow_phase(
+    phase: &str,
+    iterations: usize,
+    maps: &timing_borrow_bench::TimingMaps,
+    process: impl Fn(&timing_borrow_bench::TimingMaps) -> usize,
+) {
+    black_box(process(maps));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        checksum = checksum.wrapping_add(process(black_box(maps)));
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=timing-borrow phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_mib_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        maps.bytes() as f64 * divisor / elapsed.as_secs_f64() / (1024.0 * 1024.0),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
 }
 
 fn run_normalize_map_alloc(iterations: usize) {
@@ -1653,11 +1746,12 @@ fn run_fused_map_alloc(iterations: usize) {
     );
 }
 
-fn run_nps_alloc_phase(
+fn run_chart_alloc_phase<T>(
+    mode: &str,
     phase: &str,
     iterations: usize,
     corpus: &[SimInput],
-    compute: impl Fn(&SimInput) -> Vec<rssp::ChartNpsInfo>,
+    compute: impl Fn(&SimInput) -> Vec<T>,
 ) {
     for sim in corpus {
         black_box(compute(sim));
@@ -1679,12 +1773,13 @@ fn run_nps_alloc_phase(
     let bytes = corpus.iter().map(|sim| sim.raw.len()).sum::<usize>() as f64 * divisor;
     println!(
         concat!(
-            "mode=nps phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "mode={} phase={} iters={} checksum={} elapsed_s={:.6} ",
             "throughput_mib_s={:.3} alloc_calls_per_iter={:.1} ",
             "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
             "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
             "live_growth_bytes={} peak_live_growth_bytes={}"
         ),
+        mode,
         phase,
         iterations,
         black_box(checksum),
@@ -1701,12 +1796,31 @@ fn run_nps_alloc_phase(
 }
 
 fn run_nps_alloc(iterations: usize, corpus: &[SimInput]) {
-    run_nps_alloc_phase("materialized", iterations, corpus, |sim| {
+    run_chart_alloc_phase("nps", "materialized", iterations, corpus, |sim| {
         rssp::nps::compute_chart_peak_nps_legacy_for_bench(&sim.raw, sim.extension)
             .expect("fixture NPS should compute")
     });
-    run_nps_alloc_phase("reused", iterations, corpus, |sim| {
+    run_chart_alloc_phase("nps", "reused-owned-timing", iterations, corpus, |sim| {
+        rssp::nps::chart_peak_nps_owned(&sim.raw, sim.extension)
+            .expect("fixture NPS should compute")
+    });
+    run_chart_alloc_phase("nps", "reused-borrowed-timing", iterations, corpus, |sim| {
         rssp::compute_chart_peak_nps(&sim.raw, sim.extension).expect("fixture NPS should compute")
+    });
+}
+
+fn run_duration_alloc(iterations: usize, corpus: &[SimInput]) {
+    run_chart_alloc_phase("durations", "owned-timing", iterations, corpus, |sim| {
+        rssp::duration::chart_durations_owned(
+            &sim.raw,
+            sim.extension,
+            rssp::TimingOffsets::default(),
+        )
+        .expect("fixture durations should compute")
+    });
+    run_chart_alloc_phase("durations", "borrowed-timing", iterations, corpus, |sim| {
+        rssp::compute_chart_durations(&sim.raw, sim.extension, rssp::TimingOffsets::default())
+            .expect("fixture durations should compute")
     });
 }
 
@@ -4481,6 +4595,10 @@ fn main() {
     let corpus = load_corpus();
     if matches!(mode, Mode::Nps) {
         run_nps_alloc(iterations, &corpus);
+        return;
+    }
+    if matches!(mode, Mode::Durations) {
+        run_duration_alloc(iterations, &corpus);
         return;
     }
     if matches!(mode, Mode::Minimize) {

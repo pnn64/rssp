@@ -51,6 +51,9 @@ mod sm_timing_bench;
 #[path = "support/step_parity.rs"]
 mod step_parity_bench;
 #[cfg(windows)]
+#[path = "support/timing_borrow.rs"]
+mod timing_borrow_bench;
+#[cfg(windows)]
 #[path = "support/timing_merge.rs"]
 mod timing_merge_bench;
 #[cfg(windows)]
@@ -420,6 +423,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let medium_pair_map = large_pair_map(512);
     let medium_stop_map = large_stop_map(256);
     let medium_speed_map = transition_speed_map(512);
+    let timing_maps = timing_borrow_bench::TimingMaps::new();
+    timing_borrow_bench::assert_behavior(&timing_maps);
     let legacy_metadata = cp1252_metadata(ENTRIES);
     let valid_tech = "BR+ FS- 24ths XO+ SKT- 32nds DS++ JA- WA+ BXF- ".repeat(64);
     let invalid_tech = "BR+garbage Hard unknown ".repeat(64);
@@ -576,6 +581,13 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
                 black_box(&speed_map),
             ));
         });
+    });
+    normalization.throughput(Throughput::Bytes(timing_maps.bytes()));
+    normalization.bench_function("timing_maps_owned", |b| {
+        b.iter(|| black_box(timing_maps.owned()));
+    });
+    normalization.bench_function("timing_maps_borrowed", |b| {
+        b.iter(|| black_box(timing_maps.borrowed()));
     });
     normalization.throughput(Throughput::Elements(bpm_stats_map.len() as u64));
     normalization.bench_function("bpm_stats_values", |b| {
@@ -956,6 +968,28 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let mut prepared_scratch = rssp::AnalysisScratch::default();
     let analysis_fixture = include_bytes!("fixtures/camellia_mix.ssc");
     let nps_fixture = include_bytes!("fixtures/watch_yo_step.ssc");
+    let duration_owned =
+        rssp::duration::chart_durations_owned(nps_fixture, "ssc", rssp::TimingOffsets::default())
+            .expect("owned duration fixture should analyze");
+    let duration_borrowed =
+        rssp::compute_chart_durations(nps_fixture, "ssc", rssp::TimingOffsets::default())
+            .expect("borrowed duration fixture should analyze");
+    assert_eq!(duration_borrowed.len(), duration_owned.len());
+    for (actual, expected) in duration_borrowed.iter().zip(&duration_owned) {
+        assert_eq!(actual.step_type, expected.step_type);
+        assert_eq!(actual.difficulty, expected.difficulty);
+        assert_eq!(actual.duration_seconds, expected.duration_seconds);
+    }
+    let nps_owned = rssp::nps::chart_peak_nps_owned(nps_fixture, "ssc")
+        .expect("owned NPS fixture should analyze");
+    let nps_borrowed =
+        rssp::compute_chart_peak_nps(nps_fixture, "ssc").expect("NPS fixture should analyze");
+    assert_eq!(nps_borrowed.len(), nps_owned.len());
+    for (actual, expected) in nps_borrowed.iter().zip(&nps_owned) {
+        assert_eq!(actual.step_type, expected.step_type);
+        assert_eq!(actual.difficulty, expected.difficulty);
+        assert_eq!(actual.peak_nps, expected.peak_nps);
+    }
     let minimize_parsed = rssp::parse::extract_sections(nps_fixture, "ssc")
         .expect("minimizer cycle fixture should parse");
     let minimize_chart = minimize_parsed
@@ -980,7 +1014,34 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     rssp::stats::minimize_rows_typed_in::<4>(minimize_typed_chart, &mut typed_rows);
     let analysis_options = rssp::AnalysisOptions::default();
     let mut allocating_analysis_scratch = rssp::AnalysisScratch::default();
+    let mut owned_timing_scratch = rssp::AnalysisScratch::default();
     let mut analysis_scratch = rssp::AnalysisScratch::default();
+    {
+        let expected = rssp::profile::analyze_owned_timing(
+            analysis_fixture,
+            "ssc",
+            &analysis_options,
+            &mut owned_timing_scratch,
+        )
+        .expect("owned timing analysis should succeed");
+        let actual = rssp::analyze_with_scratch(
+            analysis_fixture,
+            "ssc",
+            &analysis_options,
+            &mut analysis_scratch,
+        )
+        .expect("borrowed timing analysis should succeed");
+        let (mut expected_json, mut actual_json) = (Vec::new(), Vec::new());
+        rssp::report::write_reports(
+            &expected,
+            rssp::report::OutputMode::JSON,
+            &mut expected_json,
+        )
+        .expect("owned timing summary should serialize");
+        rssp::report::write_reports(&actual, rssp::report::OutputMode::JSON, &mut actual_json)
+            .expect("borrowed timing summary should serialize");
+        assert_eq!(actual_json, expected_json);
+    }
     let mut stream_tokens = Vec::new();
     let course_fixture = course_bench::CourseFixture::new();
     let banner_fixture = course_bench::BannerFixture::new();
@@ -2524,6 +2585,19 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             );
         });
     });
+    analysis.bench_function("reused_bpm_owned_timing", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::profile::analyze_owned_timing(
+                    black_box(analysis_fixture),
+                    black_box("ssc"),
+                    black_box(&analysis_options),
+                    black_box(&mut owned_timing_scratch),
+                )
+                .expect("fixture should analyze"),
+            );
+        });
+    });
     analysis.bench_function("reused_bpm_buffers", |b| {
         b.iter(|| {
             black_box(
@@ -2538,6 +2612,52 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     analysis.finish();
+
+    let mut timing_pipelines = c.benchmark_group("cycles/timing_map_pipelines");
+    timing_pipelines.sample_size(20);
+    timing_pipelines.measurement_time(Duration::from_secs(3));
+    timing_pipelines.throughput(Throughput::Bytes(nps_fixture.len() as u64));
+    timing_pipelines.bench_function("duration_owned", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::duration::chart_durations_owned(
+                    black_box(nps_fixture),
+                    black_box("ssc"),
+                    rssp::TimingOffsets::default(),
+                )
+                .expect("fixture should analyze"),
+            );
+        });
+    });
+    timing_pipelines.bench_function("duration_borrowed", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::compute_chart_durations(
+                    black_box(nps_fixture),
+                    black_box("ssc"),
+                    rssp::TimingOffsets::default(),
+                )
+                .expect("fixture should analyze"),
+            );
+        });
+    });
+    timing_pipelines.bench_function("nps_owned", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::nps::chart_peak_nps_owned(black_box(nps_fixture), black_box("ssc"))
+                    .expect("fixture should analyze"),
+            );
+        });
+    });
+    timing_pipelines.bench_function("nps_borrowed", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::compute_chart_peak_nps(black_box(nps_fixture), black_box("ssc"))
+                    .expect("fixture should analyze"),
+            );
+        });
+    });
+    timing_pipelines.finish();
 
     let parity_timing = step_parity_bench::timing();
     let single_rows = step_parity_bench::rows::<4>(

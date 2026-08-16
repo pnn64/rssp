@@ -148,21 +148,19 @@ pub fn clean_and_normalize_float_digits(param: &str) -> (String, String) {
         let Some(start) = push_clean_entry(&mut cleaned, entry) else {
             continue;
         };
-        let entry = &cleaned[start..];
-
-        if let Some((beat, value)) = entry.split_once('=')
-            && let (Ok(beat), Ok(value)) = (beat.trim().parse::<f64>(), value.trim().parse::<f64>())
-        {
-            if !normalized.is_empty() {
-                normalized.push(',');
-            }
-            push_dec3_half_up(&mut normalized, beat);
-            normalized.push('=');
-            push_dec3_half_up(&mut normalized, value);
-        }
+        push_norm_pair(&mut normalized, &cleaned[start..]);
     }
 
     (cleaned, normalized)
+}
+
+#[must_use]
+pub fn clean_norm_map_cow(param: &str) -> (Cow<'_, str>, String) {
+    if let Some(normalized) = normalize_clean_pairs(param) {
+        return (Cow::Borrowed(param), normalized);
+    }
+    let (cleaned, normalized) = clean_and_normalize_float_digits(param);
+    (Cow::Owned(cleaned), normalized)
 }
 
 #[must_use]
@@ -174,31 +172,101 @@ pub fn clean_and_normalize_speeds_float_digits(param: &str) -> (String, String) 
         let Some(start) = push_clean_entry(&mut cleaned, entry) else {
             continue;
         };
-        let entry = &cleaned[start..];
-
-        let mut split = entry.split('=');
-        if let (Some(beat), Some(ratio), Some(delay), Some(unit)) =
-            (split.next(), split.next(), split.next(), split.next())
-            && let (Ok(beat), Ok(ratio), Ok(delay)) = (
-                beat.trim().parse::<f64>(),
-                ratio.trim().parse::<f64>(),
-                delay.trim().parse::<f64>(),
-            )
-        {
-            if !normalized.is_empty() {
-                normalized.push(',');
-            }
-            push_dec3_half_up(&mut normalized, beat);
-            normalized.push('=');
-            push_dec3_half_up(&mut normalized, ratio);
-            normalized.push('=');
-            push_dec3_half_up(&mut normalized, delay);
-            normalized.push('=');
-            normalized.push_str(unit);
-        }
+        push_norm_speed(&mut normalized, &cleaned[start..]);
     }
 
     (cleaned, normalized)
+}
+
+#[must_use]
+pub fn clean_norm_speeds_cow(param: &str) -> (Cow<'_, str>, String) {
+    if let Some(normalized) = normalize_clean_speeds(param) {
+        return (Cow::Borrowed(param), normalized);
+    }
+    let (cleaned, normalized) = clean_and_normalize_speeds_float_digits(param);
+    (Cow::Owned(cleaned), normalized)
+}
+
+fn normalize_clean_pairs(param: &str) -> Option<String> {
+    let mut normalized = String::with_capacity(param.len());
+    for entry in param.split(',') {
+        if entry.is_empty() {
+            if param.is_empty() {
+                continue;
+            }
+            return None;
+        }
+        if !entry_is_trimmed(entry) {
+            return None;
+        }
+        let start = normalized.len();
+        push_norm_pair(&mut normalized, entry);
+        if normalized.len() == start && has_control(entry) {
+            return None;
+        }
+    }
+    Some(normalized)
+}
+
+fn normalize_clean_speeds(param: &str) -> Option<String> {
+    let mut normalized = String::with_capacity(param.len());
+    for entry in param.split(',') {
+        if entry.is_empty() {
+            if param.is_empty() {
+                continue;
+            }
+            return None;
+        }
+        if !entry_is_trimmed(entry) || has_control(entry) {
+            return None;
+        }
+        push_norm_speed(&mut normalized, entry);
+    }
+    Some(normalized)
+}
+
+fn entry_is_trimmed(entry: &str) -> bool {
+    entry.chars().next().is_some_and(|ch| !ch.is_whitespace())
+        && entry
+            .chars()
+            .next_back()
+            .is_some_and(|ch| !ch.is_whitespace())
+}
+
+fn push_norm_pair(out: &mut String, entry: &str) {
+    if let Some((beat, value)) = entry.split_once('=')
+        && let (Ok(beat), Ok(value)) = (beat.trim().parse::<f64>(), value.trim().parse::<f64>())
+    {
+        if !out.is_empty() {
+            out.push(',');
+        }
+        push_dec3_half_up(out, beat);
+        out.push('=');
+        push_dec3_half_up(out, value);
+    }
+}
+
+fn push_norm_speed(out: &mut String, entry: &str) {
+    let mut split = entry.split('=');
+    if let (Some(beat), Some(ratio), Some(delay), Some(unit)) =
+        (split.next(), split.next(), split.next(), split.next())
+        && let (Ok(beat), Ok(ratio), Ok(delay)) = (
+            beat.trim().parse::<f64>(),
+            ratio.trim().parse::<f64>(),
+            delay.trim().parse::<f64>(),
+        )
+    {
+        if !out.is_empty() {
+            out.push(',');
+        }
+        push_dec3_half_up(out, beat);
+        out.push('=');
+        push_dec3_half_up(out, ratio);
+        out.push('=');
+        push_dec3_half_up(out, delay);
+        out.push('=');
+        out.push_str(unit);
+    }
 }
 
 #[must_use]
@@ -252,18 +320,45 @@ pub fn chart_timing_tag_raw(tag: Option<&[u8]>) -> Option<String> {
     }
 }
 
+pub fn chart_timing_tag_cow(tag: Option<&[u8]>) -> Option<Cow<'_, str>> {
+    let text = std::str::from_utf8(tag?).ok()?;
+    let cleaned = clean_timing_map_cow(text);
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+pub(crate) fn clean_map_mode<const BORROW: bool>(raw: &str) -> Cow<'_, str> {
+    if BORROW {
+        clean_timing_map_cow(raw)
+    } else {
+        Cow::Owned(clean_timing_map(raw))
+    }
+}
+
+pub(crate) fn chart_map_mode<const BORROW: bool>(tag: Option<&[u8]>) -> Option<Cow<'_, str>> {
+    if BORROW {
+        chart_timing_tag_cow(tag)
+    } else {
+        chart_timing_tag_raw(tag).map(Cow::Owned)
+    }
+}
+
+fn timing_map_is_clean(param: &str) -> bool {
+    param.is_empty()
+        || !param
+            .split(',')
+            .any(|entry| entry.is_empty() || entry.trim() != entry || has_control(entry))
+}
+
 #[must_use]
 pub fn clean_timing_map_cow(param: &str) -> Cow<'_, str> {
-    if param.is_empty() {
-        return Cow::Borrowed("");
-    }
-    let dirty = param
-        .split(',')
-        .any(|e| e.is_empty() || e.trim() != e || has_control(e));
-    if dirty {
-        Cow::Owned(clean_timing_map(param))
-    } else {
+    if timing_map_is_clean(param) {
         Cow::Borrowed(param)
+    } else {
+        Cow::Owned(clean_timing_map(param))
     }
 }
 
@@ -1261,6 +1356,30 @@ pub fn normalize_and_tidy_bpms(param: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn borrowed_clean_maps_match_owned() {
+        for raw in [
+            "",
+            "0=120",
+            "0=120,4=180",
+            ",0=120,,4=180,",
+            " \u{b}0=120\u{b} ",
+        ] {
+            let expected = clean_and_normalize_float_digits(raw);
+            let actual = clean_norm_map_cow(raw);
+            assert_eq!(actual.0.as_ref(), expected.0);
+            assert_eq!(actual.1, expected.1);
+        }
+        for raw in ["", "0=1=0=0", "0=1=0=0,4=2=1=1", ",0=1=0=0,,"] {
+            let expected = clean_and_normalize_speeds_float_digits(raw);
+            let actual = clean_norm_speeds_cow(raw);
+            assert_eq!(actual.0.as_ref(), expected.0);
+            assert_eq!(actual.1, expected.1);
+        }
+        assert!(matches!(clean_norm_map_cow("0=120"), (Cow::Borrowed(_), _)));
+        assert!(matches!(clean_norm_map_cow(",0=120,"), (Cow::Owned(_), _)));
+    }
 
     fn mines_nonfake_reference(
         data: &[u8],

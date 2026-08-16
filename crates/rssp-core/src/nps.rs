@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use crate::bpm::{clean_timing_map, is_display_bpm};
+use crate::bpm::{chart_map_mode, clean_map_mode, is_display_bpm};
 use crate::math::lrint_f32;
 use crate::parse::{
     decode_unescape_trim, extract_sections, normalize_chart_desc_ref, parse_offset_seconds,
@@ -30,7 +30,7 @@ pub fn compute_chart_peak_nps(
     simfile_data: &[u8],
     extension: &str,
 ) -> Result<Vec<ChartNpsInfo>, String> {
-    compute_chart_peak_nps_with(
+    compute_chart_peak_nps_with::<true>(
         simfile_data,
         extension,
         true,
@@ -47,13 +47,35 @@ pub fn compute_chart_peak_nps_legacy_for_bench(
     simfile_data: &[u8],
     extension: &str,
 ) -> Result<Vec<ChartNpsInfo>, String> {
-    compute_chart_peak_nps_with(simfile_data, extension, false, |chart, lanes, timing, _| {
-        let densities = crate::stats::measure_densities(chart, lanes);
-        compute_peak_nps_with_timing(&densities, timing)
-    })
+    compute_chart_peak_nps_with::<true>(
+        simfile_data,
+        extension,
+        false,
+        |chart, lanes, timing, _| {
+            let densities = crate::stats::measure_densities(chart, lanes);
+            compute_peak_nps_with_timing(&densities, timing)
+        },
+    )
 }
 
-fn compute_chart_peak_nps_with(
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn chart_peak_nps_owned(
+    simfile_data: &[u8],
+    extension: &str,
+) -> Result<Vec<ChartNpsInfo>, String> {
+    compute_chart_peak_nps_with::<false>(
+        simfile_data,
+        extension,
+        true,
+        |chart, lanes, timing, scratch| {
+            let densities = crate::stats::measure_densities_with_scratch(chart, lanes, scratch);
+            compute_peak_nps_with_timing(densities, timing)
+        },
+    )
+}
+
+fn compute_chart_peak_nps_with<const BORROW: bool>(
     simfile_data: &[u8],
     extension: &str,
     reuse_densities: bool,
@@ -67,37 +89,37 @@ fn compute_chart_peak_nps_with(
     let song_offset = parse_offset_seconds(parsed_data.offset);
 
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"")).unwrap_or("");
-    let cleaned_global_bpms = clean_timing_map(global_bpms_raw);
+    let cleaned_global_bpms = clean_map_mode::<BORROW>(global_bpms_raw);
     let global_stops_raw = parsed_data
         .stops
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let cleaned_global_stops = clean_timing_map(global_stops_raw);
+    let cleaned_global_stops = clean_map_mode::<BORROW>(global_stops_raw);
     let global_delays_raw = parsed_data
         .delays
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let cleaned_global_delays = clean_timing_map(global_delays_raw);
+    let cleaned_global_delays = clean_map_mode::<BORROW>(global_delays_raw);
     let global_warps_raw = parsed_data
         .warps
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let cleaned_global_warps = clean_timing_map(global_warps_raw);
+    let cleaned_global_warps = clean_map_mode::<BORROW>(global_warps_raw);
     let global_speeds_raw = parsed_data
         .speeds
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let cleaned_global_speeds = clean_timing_map(global_speeds_raw);
+    let cleaned_global_speeds = clean_map_mode::<BORROW>(global_speeds_raw);
     let global_scrolls_raw = parsed_data
         .scrolls
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let cleaned_global_scrolls = clean_timing_map(global_scrolls_raw);
+    let cleaned_global_scrolls = clean_map_mode::<BORROW>(global_scrolls_raw);
     let global_fakes_raw = parsed_data
         .fakes
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let cleaned_global_fakes = clean_timing_map(global_fakes_raw);
+    let cleaned_global_fakes = clean_map_mode::<BORROW>(global_fakes_raw);
 
     let entries = parsed_data.notes_list;
     let density_capacity = if reuse_densities {
@@ -158,47 +180,47 @@ fn compute_chart_peak_nps_with(
             entry.chart_labels.as_deref(),
             entry.chart_tickcounts.as_deref(),
             entry.chart_combos.as_deref(),
-            cleaned_global_bpms.as_str(),
-            cleaned_global_stops.as_str(),
-            cleaned_global_delays.as_str(),
-            cleaned_global_warps.as_str(),
-            cleaned_global_speeds.as_str(),
-            cleaned_global_scrolls.as_str(),
-            cleaned_global_fakes.as_str(),
+            cleaned_global_bpms.as_ref(),
+            cleaned_global_stops.as_ref(),
+            cleaned_global_delays.as_ref(),
+            cleaned_global_warps.as_ref(),
+            cleaned_global_speeds.as_ref(),
+            cleaned_global_scrolls.as_ref(),
+            cleaned_global_fakes.as_ref(),
         );
         let chart_offset = timing_src.chart_offset_seconds;
         let chart_bpms = if allow_steps_timing {
-            crate::chart_timing_tag_raw(entry.chart_bpms.as_deref())
+            chart_map_mode::<BORROW>(entry.chart_bpms.as_deref())
         } else {
             None
         };
         let chart_stops = if allow_steps_timing {
-            crate::chart_timing_tag_raw(entry.chart_stops.as_deref())
+            chart_map_mode::<BORROW>(entry.chart_stops.as_deref())
         } else {
             None
         };
         let chart_delays = if allow_steps_timing {
-            crate::chart_timing_tag_raw(entry.chart_delays.as_deref())
+            chart_map_mode::<BORROW>(entry.chart_delays.as_deref())
         } else {
             None
         };
         let chart_warps = if allow_steps_timing {
-            crate::chart_timing_tag_raw(entry.chart_warps.as_deref())
+            chart_map_mode::<BORROW>(entry.chart_warps.as_deref())
         } else {
             None
         };
         let chart_speeds = if allow_steps_timing {
-            crate::chart_timing_tag_raw(entry.chart_speeds.as_deref())
+            chart_map_mode::<BORROW>(entry.chart_speeds.as_deref())
         } else {
             None
         };
         let chart_scrolls = if allow_steps_timing {
-            crate::chart_timing_tag_raw(entry.chart_scrolls.as_deref())
+            chart_map_mode::<BORROW>(entry.chart_scrolls.as_deref())
         } else {
             None
         };
         let chart_fakes = if allow_steps_timing {
-            crate::chart_timing_tag_raw(entry.chart_fakes.as_deref())
+            chart_map_mode::<BORROW>(entry.chart_fakes.as_deref())
         } else {
             None
         };
@@ -291,7 +313,7 @@ mod batch_tests {
 
     #[test]
     fn reused_batch_matches_materialized_densities() {
-        let expected = compute_chart_peak_nps_with(
+        let expected = compute_chart_peak_nps_with::<true>(
             INHERITED_TIMING_FIXTURE,
             "ssc",
             false,
@@ -303,12 +325,26 @@ mod batch_tests {
         .expect("materialized analysis should succeed");
         let actual = compute_chart_peak_nps(INHERITED_TIMING_FIXTURE, "ssc")
             .expect("reused-buffer analysis should succeed");
+        let owned = compute_chart_peak_nps_with::<false>(
+            INHERITED_TIMING_FIXTURE,
+            "ssc",
+            true,
+            |chart, lanes, timing, scratch| {
+                let densities = crate::stats::measure_densities_with_scratch(chart, lanes, scratch);
+                compute_peak_nps_with_timing(densities, timing)
+            },
+        )
+        .expect("owned timing analysis should succeed");
 
         assert_eq!(actual.len(), expected.len());
-        for (actual, expected) in actual.iter().zip(expected) {
+        assert_eq!(actual.len(), owned.len());
+        for ((actual, expected), owned) in actual.iter().zip(expected).zip(owned) {
             assert_eq!(actual.step_type, expected.step_type);
             assert_eq!(actual.difficulty, expected.difficulty);
             assert_eq!(actual.peak_nps, expected.peak_nps);
+            assert_eq!(actual.step_type, owned.step_type);
+            assert_eq!(actual.difficulty, owned.difficulty);
+            assert_eq!(actual.peak_nps, owned.peak_nps);
         }
     }
 }

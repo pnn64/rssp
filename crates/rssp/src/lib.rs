@@ -186,6 +186,15 @@ pub mod profile {
         )
     }
 
+    pub fn analyze_owned_timing(
+        simfile_data: &[u8],
+        extension: &str,
+        options: &crate::AnalysisOptions,
+        scratch: &mut crate::AnalysisScratch,
+    ) -> Result<crate::SimfileSummary, String> {
+        crate::analysis::profile_analyze_owned(simfile_data, extension, options, scratch)
+    }
+
     #[must_use]
     #[inline]
     pub fn bg_delimiter(rem: &str) -> Option<usize> {

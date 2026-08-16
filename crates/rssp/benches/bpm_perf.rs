@@ -5,6 +5,8 @@ use std::time::Duration;
 
 #[path = "support/elapsed.rs"]
 mod elapsed_bench;
+#[path = "support/timing_borrow.rs"]
+mod timing_borrow_bench;
 #[path = "support/timing_merge.rs"]
 mod timing_merge_bench;
 
@@ -431,6 +433,22 @@ fn bench_control_fused(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_timing_borrow(c: &mut Criterion) {
+    let maps = timing_borrow_bench::TimingMaps::new();
+    timing_borrow_bench::assert_behavior(&maps);
+    let mut group = c.benchmark_group("clean_normalize_timing_maps");
+    group.throughput(criterion::Throughput::Bytes(maps.bytes()));
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.bench_function("owned_cleaned_maps", |b| {
+        b.iter(|| black_box(maps.owned()));
+    });
+    group.bench_function("borrowed_clean_maps", |b| {
+        b.iter(|| black_box(maps.borrowed()));
+    });
+    group.finish();
+}
+
 fn bench_display_bpm(c: &mut Criterion) {
     const CASES: [(Option<&str>, f64, f64, f64); 4] = [
         (None, 120.0, 180.0, 1.0),
@@ -744,6 +762,7 @@ criterion_group!(
     bench_clean_timing_map,
     bench_control_normalize,
     bench_control_fused,
+    bench_timing_borrow,
     bench_display_bpm,
     bench_bpm_stats,
     bench_mines_nonfake,
