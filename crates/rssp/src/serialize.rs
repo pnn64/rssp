@@ -46,22 +46,60 @@ fn sm_escape(out: &mut dyn io::Write, bytes: &[u8]) -> io::Result<usize> {
     Ok(written_bytes)
 }
 
-#[must_use]
-#[inline(always)]
-fn format_version(ssc_version: f32) -> String {
-    format!("{:.2}", ssc_version)
+struct CountingWriter<'a> {
+    inner: &'a mut dyn io::Write,
+    written: usize,
 }
 
-#[must_use]
-#[inline(always)]
-fn format_dot6_f64(value: f64) -> String {
-    format!("{:.6}", value)
+impl io::Write for CountingWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(buf)?;
+        self.written += written;
+        Ok(written)
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+        self.inner.write_all(buf)?;
+        self.written += buf.len();
+        Ok(())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
 }
 
-#[must_use]
-#[inline(always)]
-fn format_dot6_f32(value: f32) -> String {
-    format!("{:.6}", value)
+fn write_fmt_count(out: &mut dyn io::Write, args: std::fmt::Arguments<'_>) -> io::Result<usize> {
+    let mut counted = CountingWriter {
+        inner: out,
+        written: 0,
+    };
+    io::Write::write_fmt(&mut counted, args)?;
+    Ok(counted.written)
+}
+
+fn write_version<const LEGACY: bool>(out: &mut dyn io::Write, value: f32) -> io::Result<usize> {
+    if LEGACY {
+        write_all!(out, format!("{value:.2}").as_bytes())
+    } else {
+        write_fmt_count(out, format_args!("{value:.2}"))
+    }
+}
+
+fn write_dot6_f64<const LEGACY: bool>(out: &mut dyn io::Write, value: f64) -> io::Result<usize> {
+    if LEGACY {
+        write_all!(out, format!("{value:.6}").as_bytes())
+    } else {
+        write_fmt_count(out, format_args!("{value:.6}"))
+    }
+}
+
+fn write_dot6_f32<const LEGACY: bool>(out: &mut dyn io::Write, value: f32) -> io::Result<usize> {
+    if LEGACY {
+        write_all!(out, format!("{value:.6}").as_bytes())
+    } else {
+        write_fmt_count(out, format_args!("{value:.6}"))
+    }
 }
 
 #[derive(Default)]
@@ -84,22 +122,22 @@ enum PropValue<'a> {
 
 impl<'a> PropValue<'a> {
     #[must_use]
-    fn serialize(&self, out: &mut dyn io::Write) -> io::Result<usize> {
+    fn serialize<const LEGACY: bool>(&self, out: &mut dyn io::Write) -> io::Result<usize> {
         match self {
             PropValue::Empty => Ok(0),
             PropValue::Str(s) => sm_escape(out, s.as_bytes()),
             PropValue::StrNoEscape(s) => write_all!(out, s.as_bytes()),
             PropValue::StrNoEscapeOpt(opt) => match opt {
                 None => Ok(0),
-                Some(s) => PropValue::StrNoEscape(*s).serialize(out),
+                Some(s) => PropValue::StrNoEscape(*s).serialize::<LEGACY>(out),
             },
             PropValue::Bytes(b) => write_all!(out, b),
             PropValue::NoteData(b) => Ok(write_all!(out, b"\n")? + write_all!(out, b)?),
-            PropValue::Version(v) => write_all!(out, format_version(*v).as_bytes()),
-            PropValue::Number(n) => write_all!(out, format_dot6_f64(*n).as_bytes()),
+            PropValue::Version(v) => write_version::<LEGACY>(out, *v),
+            PropValue::Number(n) => write_dot6_f64::<LEGACY>(out, *n),
             PropValue::NumberOpt(opt) => match opt {
                 None => Ok(0),
-                Some(n) => PropValue::Number(*n).serialize(out),
+                Some(n) => PropValue::Number(*n).serialize::<LEGACY>(out),
             },
             PropValue::Bool(b) => {
                 if *b {
@@ -119,7 +157,7 @@ impl<'a> PropValue<'a> {
                             if !first_item {
                                 written_bytes += write_all!(out, b",")?;
                             }
-                            written_bytes += write_all!(out, format_dot6_f32(*value).as_bytes())?;
+                            written_bytes += write_dot6_f32::<LEGACY>(out, *value)?;
                             first_item = false;
                         }
                     }
@@ -136,9 +174,9 @@ impl<'a> PropValue<'a> {
                     if !first_item {
                         written_bytes += write_all!(out, b",\n")?;
                     }
-                    written_bytes += write_all!(out, format_dot6_f32(*beat).as_bytes())?;
+                    written_bytes += write_dot6_f32::<LEGACY>(out, *beat)?;
                     written_bytes += write_all!(out, b"=")?;
-                    written_bytes += write_all!(out, format_dot6_f32(*value).as_bytes())?;
+                    written_bytes += write_dot6_f32::<LEGACY>(out, *value)?;
                     first_item = false;
                 }
 
@@ -152,11 +190,11 @@ impl<'a> PropValue<'a> {
                     if !first_item {
                         written_bytes += write_all!(out, b",\n")?;
                     }
-                    written_bytes += write_all!(out, format_dot6_f32(*beat).as_bytes())?;
+                    written_bytes += write_dot6_f32::<LEGACY>(out, *beat)?;
                     written_bytes += write_all!(out, b"=")?;
-                    written_bytes += write_all!(out, format_dot6_f32(*ratio).as_bytes())?;
+                    written_bytes += write_dot6_f32::<LEGACY>(out, *ratio)?;
                     written_bytes += write_all!(out, b"=")?;
-                    written_bytes += write_all!(out, format_dot6_f32(*delay).as_bytes())?;
+                    written_bytes += write_dot6_f32::<LEGACY>(out, *delay)?;
                     written_bytes += write_all!(out, b"=")?;
                     written_bytes += write_all!(
                         out,
@@ -283,7 +321,12 @@ impl<'a> Prop<'a> {
     }
 
     #[must_use]
-    fn serialize(self, ssc: bool, own_timing: bool, out: &mut dyn io::Write) -> io::Result<usize> {
+    fn serialize<const LEGACY: bool>(
+        self,
+        ssc: bool,
+        own_timing: bool,
+        out: &mut dyn io::Write,
+    ) -> io::Result<usize> {
         if self.ssc_only && !ssc {
             Ok(0)
         } else if self.nonempty_value_only && self.value.is_empty() {
@@ -297,7 +340,7 @@ impl<'a> Prop<'a> {
             };
             let mut written_bytes = 0;
             written_bytes += Prop::start_prop(out, self.key)?;
-            written_bytes += value.serialize(out)?;
+            written_bytes += value.serialize::<LEGACY>(out)?;
             written_bytes += Prop::end_prop(out)?;
             Ok(written_bytes)
         }
@@ -306,6 +349,14 @@ impl<'a> Prop<'a> {
 
 #[must_use]
 pub fn serialize_simfile(
+    summary: &crate::SimfileSummary,
+    extension: &str,
+    out: &mut dyn io::Write,
+) -> io::Result<usize> {
+    serialize_simfile_with::<false>(summary, extension, out)
+}
+
+fn serialize_simfile_with<const LEGACY: bool>(
     summary: &crate::SimfileSummary,
     extension: &str,
     out: &mut dyn io::Write,
@@ -380,7 +431,7 @@ pub fn serialize_simfile(
     ];
 
     for prop in props {
-        written_bytes += prop.serialize(ssc, false, out)?;
+        written_bytes += prop.serialize::<LEGACY>(ssc, false, out)?;
     }
 
     written_bytes += write_all!(out, b"\n")?;
@@ -388,14 +439,29 @@ pub fn serialize_simfile(
     for chart in &summary.charts {
         written_bytes += write_chart_comment_prefix(out, chart)?;
         written_bytes += if ssc {
-            serialize_ssc_chart(out, chart)
+            serialize_ssc_chart::<LEGACY>(out, chart)
         } else {
-            serialize_sm_chart(out, chart)
+            serialize_sm_chart::<LEGACY>(out, chart)
         }?;
         written_bytes += write_all!(out, b"\n")?;
     }
 
     Ok(written_bytes)
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+pub fn profile_serialize_simfile(
+    summary: &crate::SimfileSummary,
+    extension: &str,
+    out: &mut dyn io::Write,
+    legacy: bool,
+) -> io::Result<usize> {
+    if legacy {
+        serialize_simfile_with::<true>(summary, extension, out)
+    } else {
+        serialize_simfile_with::<false>(summary, extension, out)
+    }
 }
 
 #[must_use]
@@ -428,7 +494,10 @@ fn write_chart_comment_prefix(
 }
 
 #[must_use]
-fn serialize_sm_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> io::Result<usize> {
+fn serialize_sm_chart<const LEGACY: bool>(
+    out: &mut dyn io::Write,
+    chart: &crate::ChartSummary,
+) -> io::Result<usize> {
     let mut written_bytes = 0;
     written_bytes += write_all!(out, b"#NOTES:\n")?;
 
@@ -449,7 +518,7 @@ fn serialize_sm_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> i
             _ => prop.value,
         };
         written_bytes += write_all!(out, b"     ")?;
-        written_bytes += value.serialize(out)?;
+        written_bytes += value.serialize::<LEGACY>(out)?;
         written_bytes += write_all!(out, b":\n")?;
     }
 
@@ -459,7 +528,10 @@ fn serialize_sm_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> i
 }
 
 #[must_use]
-fn serialize_ssc_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> io::Result<usize> {
+fn serialize_ssc_chart<const LEGACY: bool>(
+    out: &mut dyn io::Write,
+    chart: &crate::ChartSummary,
+) -> io::Result<usize> {
     let mut written_bytes = 0;
 
     #[rustfmt::skip]
@@ -493,7 +565,7 @@ fn serialize_ssc_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> 
     ];
 
     for prop in props {
-        written_bytes += prop.serialize(true, chart.chart_has_own_timing, out)?;
+        written_bytes += prop.serialize::<LEGACY>(true, chart.chart_has_own_timing, out)?;
     }
 
     Ok(written_bytes)

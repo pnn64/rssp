@@ -33,6 +33,9 @@ mod report_patterns_bench;
 #[path = "support/report_timing.rs"]
 mod report_timing_bench;
 #[cfg(windows)]
+#[path = "support/serialize.rs"]
+mod serialize_bench;
+#[cfg(windows)]
 #[path = "support/sm_timing.rs"]
 mod sm_timing_bench;
 #[cfg(windows)]
@@ -1021,6 +1024,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         rssp::profile::timing_text(time_signatures, labels, tickcounts, combos, true),
         "timing text edge behavior must not change"
     );
+    let serialize_fixture = serialize_bench::SerializeFixture::new();
+    serialize_bench::assert_behavior(&serialize_fixture);
     let report_fixture = report_timing_bench::fixture();
     let report_summary = rssp::analyze(
         report_fixture.as_bytes(),
@@ -1799,6 +1804,36 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     timing_text.finish();
+
+    let mut serialize = c.benchmark_group("cycles/serialize_ssc_3584_timing_segments");
+    serialize.sample_size(50);
+    serialize.measurement_time(Duration::from_secs(3));
+    serialize.throughput(Throughput::Bytes(serialize_fixture.output_len as u64));
+    serialize.bench_function("temporary_strings", |b| {
+        let mut output = Vec::with_capacity(serialize_fixture.output_len);
+        b.iter(|| {
+            output.clear();
+            black_box(serialize_bench::write(
+                black_box(&serialize_fixture.summary),
+                black_box(&mut output),
+                true,
+            ));
+            black_box(&output);
+        });
+    });
+    serialize.bench_function("direct_writer", |b| {
+        let mut output = Vec::with_capacity(serialize_fixture.output_len);
+        b.iter(|| {
+            output.clear();
+            black_box(serialize_bench::write(
+                black_box(&serialize_fixture.summary),
+                black_box(&mut output),
+                false,
+            ));
+            black_box(&output);
+        });
+    });
+    serialize.finish();
 
     let mut timing_arrays = c.benchmark_group("cycles/report_json_timing_arrays");
     timing_arrays.sample_size(20);

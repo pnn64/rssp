@@ -165,6 +165,11 @@ harness = false
 required-features = ["profile"]
 
 [[bench]]
+name = "serialize_perf"
+harness = false
+required-features = ["profile"]
+
+[[bench]]
 name = "report_perf"
 harness = false
 

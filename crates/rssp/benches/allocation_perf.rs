@@ -23,6 +23,8 @@ mod report_nps_bench;
 mod report_patterns_bench;
 #[path = "support/report_timing.rs"]
 mod report_timing_bench;
+#[path = "support/serialize.rs"]
+mod serialize_bench;
 #[path = "support/sm_timing.rs"]
 mod sm_timing_bench;
 #[path = "support/step_parity.rs"]
@@ -107,6 +109,7 @@ enum Mode {
     SmTiming,
     TimingMerge,
     TimingText,
+    Serialize,
     Nps,
     NpsStats,
     NpsCursor,
@@ -216,6 +219,7 @@ fn parse_args() -> (Mode, usize) {
                     "sm-timing" => Mode::SmTiming,
                     "timing-merge" => Mode::TimingMerge,
                     "timing-text" => Mode::TimingText,
+                    "serialize" => Mode::Serialize,
                     "nps" => Mode::Nps,
                     "nps-stats" => Mode::NpsStats,
                     "nps-cursor" => Mode::NpsCursor,
@@ -310,6 +314,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         | Mode::SmTiming
         | Mode::TimingMerge
         | Mode::TimingText
+        | Mode::Serialize
         | Mode::NpsStats
         | Mode::NpsCursor => rssp::AnalysisOptions::default(),
         Mode::Full | Mode::AnalysisReuse => rssp::AnalysisOptions {
@@ -426,6 +431,7 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             Mode::Matrix
             | Mode::AnalysisReuse
             | Mode::StreamOutputs
+            | Mode::Serialize
             | Mode::NpsStats
             | Mode::NpsCursor => {
                 unreachable!("mode uses its dedicated allocation runner")
@@ -683,6 +689,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::SmTiming => "sm-timing",
         Mode::TimingMerge => "timing-merge",
         Mode::TimingText => "timing-text",
+        Mode::Serialize => "serialize",
         Mode::Nps => "nps",
         Mode::NpsStats => "nps-stats",
         Mode::NpsCursor => "nps-cursor",
@@ -2430,6 +2437,59 @@ fn run_timing_text_alloc(iterations: usize) {
     run_timing_text_phase(&fixture, "streamed-presized", iterations, false);
 }
 
+fn run_serialize_phase(
+    fixture: &serialize_bench::SerializeFixture,
+    phase: &str,
+    iterations: usize,
+    legacy: bool,
+) {
+    let mut output = Vec::with_capacity(fixture.output_len);
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        output.clear();
+        checksum = checksum.wrapping_add(serialize_bench::write(
+            black_box(&fixture.summary),
+            black_box(&mut output),
+            legacy,
+        ));
+        black_box(&output);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=serialize phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_mib_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        fixture.output_len as f64 * divisor / elapsed.as_secs_f64() / (1024.0 * 1024.0),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_serialize_alloc(iterations: usize) {
+    let fixture = serialize_bench::SerializeFixture::new();
+    serialize_bench::assert_behavior(&fixture);
+    run_serialize_phase(&fixture, "temporary-strings", iterations, true);
+    run_serialize_phase(&fixture, "direct-writer", iterations, false);
+}
+
 fn run_nps_vec_alloc(
     phase: &str,
     measures: usize,
@@ -3436,6 +3496,10 @@ fn main() {
         }
         Mode::TimingText => {
             run_timing_text_alloc(iterations);
+            return;
+        }
+        Mode::Serialize => {
+            run_serialize_alloc(iterations);
             return;
         }
         Mode::NpsStats => {
