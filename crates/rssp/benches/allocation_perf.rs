@@ -3938,40 +3938,34 @@ fn run_song_assets_alloc(iterations: usize) {
     run_song_assets_phase(&fixture, "candidate-names", iterations, false);
 }
 
-fn run_translate_markers_alloc(iterations: usize) {
-    let unknown_input = translate_bench::unknown_input();
-    let alias_input = translate_bench::alias_input();
-    let mut unknown = unknown_input.clone();
-    let mut aliases = String::with_capacity(alias_input.len());
-
+fn run_translate_markers_phase(input: &str, phase: &str, iterations: usize, legacy: bool) {
+    let mut text = String::with_capacity(input.len());
     reset_counters();
     let before = Counters::read();
     let start = Instant::now();
     let mut checksum = 0usize;
     for _ in 0..iterations {
-        rssp::translate::replace_markers_in_place(black_box(&mut unknown));
-        aliases.clear();
-        aliases.push_str(&alias_input);
-        rssp::translate::replace_markers_in_place(black_box(&mut aliases));
-        checksum = checksum
-            .wrapping_add(unknown.len())
-            .wrapping_add(aliases.len());
+        text.clear();
+        text.push_str(input);
+        rssp::translate::profile_replace_markers(black_box(&mut text), legacy);
+        checksum = checksum.wrapping_add(text.len());
     }
     let elapsed = start.elapsed();
     let after = Counters::read();
     let divisor = iterations as f64;
     println!(
         concat!(
-            "mode=translate-markers iters={} checksum={} elapsed_s={:.6} ",
+            "mode=translate-markers phase={} iters={} checksum={} elapsed_s={:.6} ",
             "markers_s={:.3} alloc_calls_per_iter={:.1} ",
             "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
             "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
             "live_growth_bytes={} peak_live_growth_bytes={}"
         ),
+        phase,
         iterations,
         black_box(checksum),
         elapsed.as_secs_f64(),
-        2.0 * translate_bench::MARKER_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        translate_bench::MARKER_COUNT as f64 * divisor / elapsed.as_secs_f64(),
         (after.alloc_calls - before.alloc_calls) as f64 / divisor,
         (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
         (after.realloc_calls - before.realloc_calls) as f64 / divisor,
@@ -3980,6 +3974,13 @@ fn run_translate_markers_alloc(iterations: usize) {
         after.live_bytes as isize - before.live_bytes as isize,
         after.peak_live_bytes.saturating_sub(before.live_bytes),
     );
+}
+
+fn run_translate_markers_alloc(iterations: usize) {
+    translate_bench::assert_behavior();
+    let input = translate_bench::alias_input();
+    run_translate_markers_phase(&input, "allocating", iterations, true);
+    run_translate_markers_phase(&input, "compact", iterations, false);
 }
 
 struct MatrixAllocInput {

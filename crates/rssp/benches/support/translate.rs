@@ -28,3 +28,26 @@ pub fn alias_input() -> String {
     }
     input
 }
+
+pub fn assert_behavior() {
+    let generated_aliases = alias_input();
+    let generated_unknown = unknown_input();
+    for input in [
+        "",
+        "plain UTF-8 å‹•ç”»",
+        "prefix&unknown;suffix",
+        "&bad&hka;tail",
+        "&hka;&KRO;&#9733;&#x266F;",
+        "unterminated&hka",
+        "malformed&#xZZ;marker",
+        "invalid&#999999999999999999999999;codepoint",
+        generated_aliases.as_str(),
+        generated_unknown.as_str(),
+    ] {
+        let mut legacy = input.to_owned();
+        let mut compact = input.to_owned();
+        rssp::translate::profile_replace_markers(&mut legacy, true);
+        rssp::translate::profile_replace_markers(&mut compact, false);
+        assert_eq!(compact, legacy, "marker translation changed for {input:?}");
+    }
+}

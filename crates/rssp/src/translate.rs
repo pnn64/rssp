@@ -430,7 +430,72 @@ fn parse_numeric_marker(element: &str, invalid: char) -> Option<char> {
 }
 
 /// Replace &alias; markers and unicode markers in place, matching `ITGmania` behavior.
+// Keep the scan/copy state machine inline so its cursors cannot diverge across buffer helpers.
 pub fn replace_markers_in_place(text: &mut String) {
+    if !text.contains('&') {
+        return;
+    }
+    let mut bytes = std::mem::take(text).into_bytes();
+    let len = bytes.len();
+    let invalid = char::REPLACEMENT_CHARACTER;
+    let mut output_len = None;
+    let mut scan = 0usize;
+    let mut copy_from = 0usize;
+
+    while scan < len {
+        let Some(start) = memchr::memchr(b'&', &bytes[scan..len]).map(|pos| scan + pos) else {
+            break;
+        };
+        let after_amp = start + 1;
+        if after_amp >= len {
+            break;
+        }
+        let Some(end_idx) = marker_end(&bytes[after_amp..len]).map(|end| after_amp + end) else {
+            scan = after_amp;
+            continue;
+        };
+        // SAFETY: `bytes` came from a valid `String`, and ASCII marker delimiters
+        // can only occur at UTF-8 code-point boundaries.
+        let element = unsafe { std::str::from_utf8_unchecked(&bytes[after_amp..end_idx]) };
+        let replacement = match element.as_bytes().first() {
+            Some(b'#' | b'x' | b'X') => parse_numeric_marker(element, invalid),
+            _ => alias_lookup(element),
+        };
+        let Some(replacement) = replacement else {
+            scan = end_idx + 1;
+            continue;
+        };
+
+        let write = output_len.get_or_insert(start);
+        if copy_from != 0 {
+            let pending = start - copy_from;
+            bytes.copy_within(copy_from..start, *write);
+            *write += pending;
+        }
+        let mut encoded = [0; 4];
+        let replacement = replacement.encode_utf8(&mut encoded).as_bytes();
+        debug_assert!(
+            replacement.len() <= end_idx + 1 - start,
+            "marker replacement cannot exceed its encoded marker"
+        );
+        bytes[*write..*write + replacement.len()].copy_from_slice(replacement);
+        *write += replacement.len();
+        copy_from = end_idx + 1;
+        scan = copy_from;
+    }
+
+    if let Some(mut output_len) = output_len {
+        bytes.copy_within(copy_from..len, output_len);
+        output_len += len - copy_from;
+        bytes.truncate(output_len);
+    }
+    // SAFETY: compaction copies slices from the original valid `String` and
+    // inserts only bytes produced by `char::encode_utf8`.
+    *text = unsafe { String::from_utf8_unchecked(bytes) };
+}
+
+#[cfg(any(test, feature = "profile"))]
+fn replace_markers_allocating(text: &mut String) {
     if !text.contains('&') {
         return;
     }
@@ -482,6 +547,16 @@ pub fn replace_markers_in_place(text: &mut String) {
     if let Some(mut out) = out {
         out.push_str(&input[copy_from..]);
         *text = out;
+    }
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+pub fn profile_replace_markers(text: &mut String, legacy: bool) {
+    if legacy {
+        replace_markers_allocating(text);
+    } else {
+        replace_markers_in_place(text);
     }
 }
 

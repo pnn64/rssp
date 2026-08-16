@@ -290,6 +290,7 @@ fn bench_chart_metadata_strings(c: &mut Criterion) {
 }
 
 fn bench_marker_translation(c: &mut Criterion) {
+    translate_bench::assert_behavior();
     let unknown = translate_bench::unknown_input();
     let aliases = translate_bench::alias_input();
 
@@ -297,26 +298,36 @@ fn bench_marker_translation(c: &mut Criterion) {
     group.sample_size(100);
     group.measurement_time(Duration::from_secs(3));
     group.throughput(Throughput::Elements(translate_bench::MARKER_COUNT as u64));
-    group.bench_function("unknown_512", |b| {
-        b.iter_batched(
-            || unknown.clone(),
-            |mut input| {
-                rssp::translate::replace_markers_in_place(black_box(&mut input));
-                black_box(input);
-            },
-            BatchSize::SmallInput,
-        );
-    });
-    group.bench_function("aliases_512", |b| {
-        b.iter_batched(
-            || aliases.clone(),
-            |mut input| {
-                rssp::translate::replace_markers_in_place(black_box(&mut input));
-                black_box(input);
-            },
-            BatchSize::SmallInput,
-        );
-    });
+    for (name, legacy) in [
+        ("unknown_allocating_512", true),
+        ("unknown_compact_512", false),
+    ] {
+        group.bench_function(name, |b| {
+            b.iter_batched(
+                || unknown.clone(),
+                |mut input| {
+                    rssp::translate::profile_replace_markers(black_box(&mut input), legacy);
+                    black_box(input);
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    for (name, legacy) in [
+        ("aliases_allocating_512", true),
+        ("aliases_compact_512", false),
+    ] {
+        group.bench_function(name, |b| {
+            b.iter_batched(
+                || aliases.clone(),
+                |mut input| {
+                    rssp::translate::profile_replace_markers(black_box(&mut input), legacy);
+                    black_box(input);
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
     group.finish();
 }
 

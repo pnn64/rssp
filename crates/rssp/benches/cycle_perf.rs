@@ -47,6 +47,9 @@ mod step_parity_bench;
 #[cfg(windows)]
 #[path = "support/timing_merge.rs"]
 mod timing_merge_bench;
+#[cfg(windows)]
+#[path = "support/translate.rs"]
+mod translate_bench;
 
 #[cfg(windows)]
 #[derive(Clone, Copy)]
@@ -1196,6 +1199,24 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
                     ));
                 }
             });
+        });
+    }
+    translate_bench::assert_behavior();
+    let marker_input = translate_bench::alias_input();
+    optimizations.throughput(Throughput::Elements(translate_bench::MARKER_COUNT as u64));
+    for (name, legacy) in [
+        ("marker_translate_allocating", true),
+        ("marker_translate_compact", false),
+    ] {
+        optimizations.bench_function(name, |b| {
+            b.iter_batched(
+                || marker_input.clone(),
+                |mut input| {
+                    rssp::translate::profile_replace_markers(black_box(&mut input), legacy);
+                    black_box(input);
+                },
+                BatchSize::SmallInput,
+            );
         });
     }
     optimizations.throughput(Throughput::Elements(stream_densities.len() as u64));
