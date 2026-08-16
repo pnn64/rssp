@@ -11,6 +11,8 @@ use std::time::Instant;
 mod assets_bench;
 #[path = "support/course.rs"]
 mod course_bench;
+#[path = "support/elapsed.rs"]
+mod elapsed_bench;
 #[path = "support/metadata.rs"]
 mod metadata_bench;
 #[path = "support/nps_stats.rs"]
@@ -120,6 +122,7 @@ enum Mode {
     FusedMap,
     DisplayBpm,
     BpmStats,
+    ElapsedEvents,
     Tech,
     Snapshot,
     Csv,
@@ -232,6 +235,7 @@ fn parse_args() -> (Mode, usize) {
                     "fused-map" => Mode::FusedMap,
                     "display-bpm" => Mode::DisplayBpm,
                     "bpm-stats" => Mode::BpmStats,
+                    "elapsed-events" => Mode::ElapsedEvents,
                     "tech" => Mode::Tech,
                     "snapshot" => Mode::Snapshot,
                     "csv" => Mode::Csv,
@@ -314,6 +318,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         | Mode::NormalizeMap
         | Mode::FusedMap
         | Mode::DisplayBpm
+        | Mode::ElapsedEvents
         | Mode::TimingBuild
         | Mode::SmTiming
         | Mode::TimingMerge
@@ -511,6 +516,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::CourseStepType => {
                 unreachable!("course step-type mode uses its dedicated allocation runner")
+            }
+            Mode::ElapsedEvents => {
+                unreachable!("elapsed event mode uses its dedicated allocation runner")
             }
             Mode::CourseTitleMatch => {
                 unreachable!("course title mode uses its dedicated allocation runner")
@@ -713,6 +721,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::FusedMap => "fused-map",
         Mode::DisplayBpm => "display-bpm",
         Mode::BpmStats => "bpm-stats",
+        Mode::ElapsedEvents => "elapsed-events",
         Mode::Tech => "tech",
         Mode::Snapshot => "snapshot",
         Mode::Csv => "csv",
@@ -4044,11 +4053,70 @@ fn run_matrix_alloc(iterations: usize) {
     });
 }
 
+fn run_elapsed_phase(
+    fixture: &elapsed_bench::ElapsedFixture,
+    phase: &str,
+    iterations: usize,
+    legacy: bool,
+) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0u64;
+    for _ in 0..iterations {
+        let elapsed = rssp::bpm::get_elapsed_time_for_bench(
+            black_box(fixture.target),
+            black_box(&fixture.bpms),
+            black_box(&fixture.stops),
+            black_box(&fixture.delays),
+            black_box(&fixture.warps),
+            legacy,
+        );
+        checksum = checksum.wrapping_add(elapsed.to_bits());
+        black_box(elapsed);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=elapsed-events phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_events_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        elapsed_bench::EVENT_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_elapsed_alloc(iterations: usize) {
+    let fixture = elapsed_bench::ElapsedFixture::new();
+    elapsed_bench::assert_behavior(&fixture);
+    run_elapsed_phase(&fixture, "collect-sort", iterations, true);
+    run_elapsed_phase(&fixture, "stable-merge", iterations, false);
+}
+
 fn main() {
     let (mode, iterations) = parse_args();
     match mode {
         Mode::BpmStats => {
             run_bpm_stats_alloc(iterations);
+            return;
+        }
+        Mode::ElapsedEvents => {
+            run_elapsed_alloc(iterations);
             return;
         }
         Mode::CleanMap => {

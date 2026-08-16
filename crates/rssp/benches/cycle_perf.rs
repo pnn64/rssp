@@ -18,6 +18,9 @@ mod assets_bench;
 #[path = "support/course.rs"]
 mod course_bench;
 #[cfg(windows)]
+#[path = "support/elapsed.rs"]
+mod elapsed_bench;
+#[cfg(windows)]
 #[path = "support/nps_stats.rs"]
 mod nps_stats_bench;
 #[cfg(windows)]
@@ -1414,6 +1417,28 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     bpm_stats.finish();
+
+    let elapsed_fixture = elapsed_bench::ElapsedFixture::new();
+    elapsed_bench::assert_behavior(&elapsed_fixture);
+    let mut elapsed_events = c.benchmark_group("cycles/elapsed_events_512");
+    elapsed_events.sample_size(100);
+    elapsed_events.measurement_time(Duration::from_secs(3));
+    elapsed_events.throughput(Throughput::Elements(elapsed_bench::EVENT_COUNT));
+    for (name, legacy) in [("collect_sort", true), ("stable_merge", false)] {
+        elapsed_events.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(rssp::bpm::get_elapsed_time_for_bench(
+                    black_box(elapsed_fixture.target),
+                    black_box(&elapsed_fixture.bpms),
+                    black_box(&elapsed_fixture.stops),
+                    black_box(&elapsed_fixture.delays),
+                    black_box(&elapsed_fixture.warps),
+                    legacy,
+                ));
+            });
+        });
+    }
+    elapsed_events.finish();
 
     let mut course_parse = c.benchmark_group("cycles/course_parse");
     course_parse.sample_size(50);

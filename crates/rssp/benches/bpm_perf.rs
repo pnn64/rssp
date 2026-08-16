@@ -3,6 +3,8 @@ use std::fmt::Write as _;
 use std::hint::black_box;
 use std::time::Duration;
 
+#[path = "support/elapsed.rs"]
+mod elapsed_bench;
 #[path = "support/timing_merge.rs"]
 mod timing_merge_bench;
 
@@ -710,6 +712,30 @@ fn bench_sm_stop_merge(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_elapsed_events(c: &mut Criterion) {
+    let fixture = elapsed_bench::ElapsedFixture::new();
+    elapsed_bench::assert_behavior(&fixture);
+    let mut group = c.benchmark_group("elapsed_events_512");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(criterion::Throughput::Elements(elapsed_bench::EVENT_COUNT));
+    for (name, legacy) in [("collect_sort", true), ("stable_merge", false)] {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(rssp::bpm::get_elapsed_time_for_bench(
+                    black_box(fixture.target),
+                    black_box(&fixture.bpms),
+                    black_box(&fixture.stops),
+                    black_box(&fixture.delays),
+                    black_box(&fixture.warps),
+                    legacy,
+                ));
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_bpm_pipeline,
@@ -723,6 +749,7 @@ criterion_group!(
     bench_mines_nonfake,
     bench_parse_bpm_map,
     bench_timing_segment_cleanup,
-    bench_sm_stop_merge
+    bench_sm_stop_merge,
+    bench_elapsed_events
 );
 criterion_main!(benches);

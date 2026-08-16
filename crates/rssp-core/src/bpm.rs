@@ -743,7 +743,115 @@ fn elapsed_bpm_only(target: f64, bpms: &[(f64, f64)]) -> f64 {
     time
 }
 
+// Keep the timing state machine inline so event ordering and floating-point operations stay exact.
 fn elapsed_with_events(
+    target: f64,
+    bpms: &[(f64, f64)],
+    stops: &[(f64, f64)],
+    delays: &[(f64, f64)],
+    warps: &[(f64, f64)],
+) -> f64 {
+    let maps = [bpms, stops, delays, warps];
+    let mut heads = [f64::INFINITY; 4];
+    for (head, map) in heads.iter_mut().zip(maps) {
+        if let Some(&(beat, _)) = map.first() {
+            if !beat.is_finite() {
+                return elapsed_with_events_sorted(target, bpms, stops, delays, warps);
+            }
+            *head = beat;
+        }
+    }
+    let mut indices = [0; 4];
+    let mut winners = [
+        usize::from(heads[1] < heads[0]),
+        2 + usize::from(heads[3] < heads[2]),
+    ];
+    let (mut time, mut beat, mut bpm, mut warp_end) = (
+        0.0,
+        0.0,
+        if !bpms.is_empty() && bpms[0].0 <= 0.0 {
+            bpms[0].1
+        } else {
+            60.0
+        },
+        0.0,
+    );
+
+    while let Some((eb, pri, val, sorted)) =
+        next_timing_event(&maps, &mut indices, &mut heads, &mut winners)
+    {
+        if !sorted {
+            return elapsed_with_events_sorted(target, bpms, stops, delays, warps);
+        }
+        if eb > target && warp_end <= target {
+            if !timing_maps_sorted(&maps) {
+                return elapsed_with_events_sorted(target, bpms, stops, delays, warps);
+            }
+            break;
+        }
+        if eb > beat {
+            let eff = beat.max(warp_end);
+            if eb > eff && bpm > 0.0 {
+                time += (eb - eff) * 60.0 / bpm;
+            }
+            beat = eb;
+        }
+        match pri {
+            0 => bpm = val,
+            1 => time += val,
+            2 => warp_end = warp_end.max(eb + val),
+            _ => {}
+        }
+    }
+    let eff = beat.max(warp_end);
+    if target > eff && bpm > 0.0 {
+        time += (target - eff) * 60.0 / bpm;
+    }
+    time
+}
+
+fn timing_maps_sorted(maps: &[&[(f64, f64)]; 4]) -> bool {
+    maps.iter().all(|map| {
+        map.iter().all(|event| event.0.is_finite())
+            && map.windows(2).all(|pair| pair[0].0 <= pair[1].0)
+    })
+}
+
+fn next_timing_event(
+    maps: &[&[(f64, f64)]; 4],
+    indices: &mut [usize; 4],
+    heads: &mut [f64; 4],
+    winners: &mut [usize; 2],
+) -> Option<(f64, u8, f64, bool)> {
+    let source = if heads[winners[1]] < heads[winners[0]] {
+        winners[1]
+    } else {
+        winners[0]
+    };
+    let event_beat = heads[source];
+    if !event_beat.is_finite() {
+        return None;
+    }
+    let value = maps[source][indices[source]].1;
+    indices[source] += 1;
+    let next_event = maps[source].get(indices[source]);
+    let next = next_event.map_or(f64::INFINITY, |event| event.0);
+    heads[source] = next;
+    winners[source / 2] = if heads[source | 1] < heads[source & !1] {
+        source | 1
+    } else {
+        source & !1
+    };
+    let priority = [0, 1, 1, 2][source];
+    Some((
+        event_beat,
+        priority,
+        value,
+        next_event.is_none_or(|_| next.is_finite() && next >= event_beat),
+    ))
+}
+
+fn elapsed_with_events_sorted(
     target: f64,
     bpms: &[(f64, f64)],
     stops: &[(f64, f64)],
@@ -796,6 +904,27 @@ fn elapsed_with_events(
         time += (target - eff) * 60.0 / bpm;
     }
     time
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn get_elapsed_time_for_bench(
+    target: f64,
+    bpms: &[(f64, f64)],
+    stops: &[(f64, f64)],
+    delays: &[(f64, f64)],
+    warps: &[(f64, f64)],
+    legacy: bool,
+) -> f64 {
+    if !legacy {
+        return get_elapsed_time(target, bpms, stops, delays, warps);
+    }
+    if stops.is_empty() && delays.is_empty() && warps.is_empty() {
+        elapsed_bpm_only(target, bpms)
+    } else {
+        elapsed_with_events_sorted(target, bpms, stops, delays, warps)
+    }
 }
 
 #[must_use]
