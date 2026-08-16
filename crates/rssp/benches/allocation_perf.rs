@@ -2509,6 +2509,27 @@ fn run_serialize_alloc(iterations: usize) {
         serialize_bench::write,
     );
 
+    let buffer = serialize_bench::BufferFixture::new();
+    serialize_bench::assert_buffer_behavior(&buffer);
+    run_serialize_phase(
+        "serialize-buffer",
+        &buffer.summary,
+        buffer.output_len,
+        "unbuffered",
+        iterations,
+        true,
+        serialize_bench::write_buffered,
+    );
+    run_serialize_phase(
+        "serialize-buffer",
+        &buffer.summary,
+        buffer.output_len,
+        "stack-buffered",
+        iterations,
+        false,
+        serialize_bench::write_buffered,
+    );
+
     let escape = serialize_bench::EscapeFixture::new();
     serialize_bench::assert_escape_behavior(&escape);
     run_serialize_phase(

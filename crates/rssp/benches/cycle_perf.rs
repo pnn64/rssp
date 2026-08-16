@@ -1026,6 +1026,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     );
     let serialize_fixture = serialize_bench::SerializeFixture::new();
     serialize_bench::assert_behavior(&serialize_fixture);
+    let serialize_buffer_fixture = serialize_bench::BufferFixture::new();
+    serialize_bench::assert_buffer_behavior(&serialize_buffer_fixture);
     let serialize_escape_fixture = serialize_bench::EscapeFixture::new();
     serialize_bench::assert_escape_behavior(&serialize_escape_fixture);
     let report_fixture = report_timing_bench::fixture();
@@ -1836,6 +1838,38 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     serialize.finish();
+
+    let mut serialize_buffer = c.benchmark_group("cycles/serialize_stack_buffer");
+    serialize_buffer.sample_size(50);
+    serialize_buffer.measurement_time(Duration::from_secs(3));
+    serialize_buffer.throughput(Throughput::Bytes(
+        serialize_buffer_fixture.output_len as u64,
+    ));
+    serialize_buffer.bench_function("unbuffered", |b| {
+        let mut output = Vec::with_capacity(serialize_buffer_fixture.output_len);
+        b.iter(|| {
+            output.clear();
+            black_box(serialize_bench::write_buffered(
+                black_box(&serialize_buffer_fixture.summary),
+                black_box(&mut output),
+                true,
+            ));
+            black_box(&output);
+        });
+    });
+    serialize_buffer.bench_function("stack_buffered", |b| {
+        let mut output = Vec::with_capacity(serialize_buffer_fixture.output_len);
+        b.iter(|| {
+            output.clear();
+            black_box(serialize_bench::write_buffered(
+                black_box(&serialize_buffer_fixture.summary),
+                black_box(&mut output),
+                false,
+            ));
+            black_box(&output);
+        });
+    });
+    serialize_buffer.finish();
 
     let mut serialize_escape = c.benchmark_group("cycles/serialize_escape_metadata");
     serialize_escape.sample_size(50);

@@ -41,6 +41,38 @@ fn bench_serialize(c: &mut Criterion) {
     });
     group.finish();
 
+    let buffer = serialize_bench::BufferFixture::new();
+    serialize_bench::assert_buffer_behavior(&buffer);
+    let mut group = c.benchmark_group("serialize_stack_buffer");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Bytes(buffer.output_len as u64));
+    group.bench_function("unbuffered", |b| {
+        let mut output = Vec::with_capacity(buffer.output_len);
+        b.iter(|| {
+            output.clear();
+            black_box(serialize_bench::write_buffered(
+                black_box(&buffer.summary),
+                black_box(&mut output),
+                true,
+            ));
+            black_box(&output);
+        });
+    });
+    group.bench_function("stack_buffered", |b| {
+        let mut output = Vec::with_capacity(buffer.output_len);
+        b.iter(|| {
+            output.clear();
+            black_box(serialize_bench::write_buffered(
+                black_box(&buffer.summary),
+                black_box(&mut output),
+                false,
+            ));
+            black_box(&output);
+        });
+    });
+    group.finish();
+
     let escape = serialize_bench::EscapeFixture::new();
     serialize_bench::assert_escape_behavior(&escape);
     let mut group = c.benchmark_group("serialize_escape_metadata");

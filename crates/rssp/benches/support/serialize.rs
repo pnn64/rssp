@@ -15,6 +15,13 @@ pub struct EscapeFixture {
     pub current_calls: usize,
 }
 
+pub struct BufferFixture {
+    pub summary: rssp::SimfileSummary,
+    pub output_len: usize,
+    pub legacy_calls: usize,
+    pub current_calls: usize,
+}
+
 #[derive(Default)]
 struct WriteCounter {
     bytes: usize,
@@ -52,6 +59,11 @@ pub fn write_escape(summary: &rssp::SimfileSummary, output: &mut Vec<u8>, legacy
 pub fn write_escape_field(bytes: &[u8], output: &mut Vec<u8>, legacy: bool) -> usize {
     rssp::serialize::profile_sm_escape(bytes, output, legacy)
         .expect("escape benchmark field should serialize")
+}
+
+pub fn write_buffered(summary: &rssp::SimfileSummary, output: &mut Vec<u8>, legacy: bool) -> usize {
+    rssp::serialize::profile_serialize_simfile_buffered(summary, "ssc", output, legacy)
+        .expect("buffer benchmark summary should serialize")
 }
 
 fn assert_same(summary: &rssp::SimfileSummary, extension: &str) -> usize {
@@ -96,11 +108,45 @@ fn assert_escape_same(summary: &rssp::SimfileSummary, extension: &str) -> usize 
     current_len
 }
 
+fn assert_buffer_same(summary: &rssp::SimfileSummary, extension: &str) -> usize {
+    let mut legacy = Vec::new();
+    let legacy_len =
+        rssp::serialize::profile_serialize_simfile_buffered(summary, extension, &mut legacy, true)
+            .expect("unbuffered benchmark summary should serialize");
+    let mut current = Vec::new();
+    let current_len = rssp::serialize::profile_serialize_simfile_buffered(
+        summary,
+        extension,
+        &mut current,
+        false,
+    )
+    .expect("stack-buffered benchmark summary should serialize");
+    assert_eq!(current_len, legacy_len);
+    assert_eq!(current_len, current.len());
+    assert_eq!(current, legacy);
+
+    let mut public = Vec::new();
+    let public_len = rssp::serialize::serialize_simfile(summary, extension, &mut public)
+        .expect("public serializer should succeed");
+    assert_eq!(public_len, current_len);
+    assert_eq!(public, current);
+    current_len
+}
+
 fn write_calls(summary: &rssp::SimfileSummary, legacy: bool) -> (usize, usize) {
     let mut counter = WriteCounter::default();
     let written =
         rssp::serialize::profile_serialize_simfile_escape(summary, "ssc", &mut counter, legacy)
             .expect("escape benchmark summary should serialize");
+    assert_eq!(written, counter.bytes);
+    (counter.calls, counter.bytes)
+}
+
+fn buffer_write_calls(summary: &rssp::SimfileSummary, legacy: bool) -> (usize, usize) {
+    let mut counter = WriteCounter::default();
+    let written =
+        rssp::serialize::profile_serialize_simfile_buffered(summary, "ssc", &mut counter, legacy)
+            .expect("buffer benchmark summary should serialize");
     assert_eq!(written, counter.bytes);
     (counter.calls, counter.bytes)
 }
@@ -140,6 +186,24 @@ impl EscapeFixture {
         let output_len = assert_escape_same(&summary, "ssc");
         let (legacy_calls, legacy_bytes) = write_calls(&summary, true);
         let (current_calls, current_bytes) = write_calls(&summary, false);
+        assert_eq!(legacy_bytes, output_len);
+        assert_eq!(current_bytes, output_len);
+        assert!(current_calls < legacy_calls);
+        Self {
+            summary,
+            output_len,
+            legacy_calls,
+            current_calls,
+        }
+    }
+}
+
+impl BufferFixture {
+    pub fn new() -> Self {
+        let summary = SerializeFixture::new().summary;
+        let output_len = assert_buffer_same(&summary, "ssc");
+        let (legacy_calls, legacy_bytes) = buffer_write_calls(&summary, true);
+        let (current_calls, current_bytes) = buffer_write_calls(&summary, false);
         assert_eq!(legacy_bytes, output_len);
         assert_eq!(current_bytes, output_len);
         assert!(current_calls < legacy_calls);
@@ -212,6 +276,25 @@ pub fn assert_escape_behavior(fixture: &EscapeFixture) {
 
     println!(
         "serialize escape writer calls: byte-at-a-time={} batched-spans={} output_bytes={}",
+        fixture.legacy_calls, fixture.current_calls, fixture.output_len
+    );
+}
+
+pub fn assert_buffer_behavior(fixture: &BufferFixture) {
+    assert_buffer_same(&fixture.summary, "ssc");
+    assert_buffer_same(&fixture.summary, "sm");
+
+    let mut edge = fixture.summary.clone();
+    edge.title_str = "UTF-8 Café 二 // : ; \\".repeat(1024);
+    edge.offset = -0.0;
+    edge.sample_start = f64::NAN;
+    edge.sample_length = f64::INFINITY;
+    edge.last_second_hint = Some(f64::NEG_INFINITY);
+    assert_buffer_same(&edge, "ssc");
+    assert_buffer_same(&edge, "sm");
+
+    println!(
+        "serialize buffer writer calls: unbuffered={} stack-buffered={} output_bytes={}",
         fixture.legacy_calls, fixture.current_calls, fixture.output_len
     );
 }

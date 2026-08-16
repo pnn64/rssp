@@ -26,6 +26,70 @@ macro_rules! write_all {
     };
 }
 
+// Coalesce small timing and property fragments without introducing a heap allocation.
+const SERIALIZE_BUF_SIZE: usize = 8 * 1024;
+
+struct StackWriter<'a> {
+    inner: &'a mut dyn io::Write,
+    buf: [u8; SERIALIZE_BUF_SIZE],
+    len: usize,
+}
+
+impl<'a> StackWriter<'a> {
+    fn new(inner: &'a mut dyn io::Write) -> Self {
+        Self {
+            inner,
+            buf: [0; SERIALIZE_BUF_SIZE],
+            len: 0,
+        }
+    }
+
+    fn flush_buf(&mut self) -> io::Result<()> {
+        if self.len != 0 {
+            self.inner.write_all(&self.buf[..self.len])?;
+            self.len = 0;
+        }
+        Ok(())
+    }
+
+    fn finish(mut self) -> io::Result<()> {
+        self.flush_buf()
+    }
+}
+
+impl io::Write for StackWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self.len == SERIALIZE_BUF_SIZE {
+            self.flush_buf()?;
+        }
+        if self.len == 0 && bytes.len() >= SERIALIZE_BUF_SIZE {
+            return self.inner.write(bytes);
+        }
+        let written = bytes.len().min(SERIALIZE_BUF_SIZE - self.len);
+        self.buf[self.len..self.len + written].copy_from_slice(&bytes[..written]);
+        self.len += written;
+        Ok(written)
+    }
+
+    fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if bytes.len() >= SERIALIZE_BUF_SIZE {
+            self.flush_buf()?;
+            return self.inner.write_all(bytes);
+        }
+        if bytes.len() > SERIALIZE_BUF_SIZE - self.len {
+            self.flush_buf()?;
+        }
+        self.buf[self.len..self.len + bytes.len()].copy_from_slice(bytes);
+        self.len += bytes.len();
+        Ok(())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.flush_buf()?;
+        self.inner.flush()
+    }
+}
+
 #[must_use]
 fn sm_escape<const LEGACY: bool>(out: &mut dyn io::Write, bytes: &[u8]) -> io::Result<usize> {
     if LEGACY {
@@ -382,7 +446,19 @@ pub fn serialize_simfile(
     extension: &str,
     out: &mut dyn io::Write,
 ) -> io::Result<usize> {
-    serialize_simfile_with::<false, false>(summary, extension, out)
+    serialize_simfile_buffered::<false, false>(summary, extension, out)
+}
+
+fn serialize_simfile_buffered<const LEGACY_NUM: bool, const LEGACY_ESCAPE: bool>(
+    summary: &crate::SimfileSummary,
+    extension: &str,
+    out: &mut dyn io::Write,
+) -> io::Result<usize> {
+    let mut buffered = StackWriter::new(out);
+    let written =
+        serialize_simfile_with::<LEGACY_NUM, LEGACY_ESCAPE>(summary, extension, &mut buffered)?;
+    buffered.finish()?;
+    Ok(written)
 }
 
 fn serialize_simfile_with<const LEGACY_NUM: bool, const LEGACY_ESCAPE: bool>(
@@ -505,6 +581,21 @@ pub fn profile_serialize_simfile_escape(
         serialize_simfile_with::<false, true>(summary, extension, out)
     } else {
         serialize_simfile_with::<false, false>(summary, extension, out)
+    }
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+pub fn profile_serialize_simfile_buffered(
+    summary: &crate::SimfileSummary,
+    extension: &str,
+    out: &mut dyn io::Write,
+    legacy: bool,
+) -> io::Result<usize> {
+    if legacy {
+        serialize_simfile_with::<false, false>(summary, extension, out)
+    } else {
+        serialize_simfile_buffered::<false, false>(summary, extension, out)
     }
 }
 
