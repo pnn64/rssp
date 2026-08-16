@@ -907,7 +907,115 @@ pub(crate) fn chart_last_beat(data: &[u8], lanes: usize) -> f64 {
     dispatch_lanes!(lanes, chart_last_beat_impl(data))
 }
 
+// Parser state machine: common measures stay bounded on the stack and only
+// charts with more than 64 rows in one measure spill to retained heap storage.
 fn chart_last_beat_impl<const L: usize>(data: &[u8]) -> f64 {
+    const STACK_ROWS: usize = 64;
+
+    let mut stack = [[0u8; L]; STACK_ROWS];
+    let mut stack_len = 0usize;
+    let mut overflow = Vec::new();
+    let mut overflowing = false;
+    let mut object_depths = [0u32; L];
+    let (mut last_m, mut last_r, mut last_rows) = (None, 0usize, 0usize);
+    let (mut midx, mut done) = (0usize, false);
+
+    let mut line_off = 0usize;
+    while let Some(raw) = next_line(data, &mut line_off) {
+        let line = skip_ws(raw);
+        if line.is_empty() || line[0] == b'/' {
+            continue;
+        }
+
+        match line[0] {
+            b',' | b';' => {
+                let measure = if overflowing {
+                    overflow.as_mut_slice()
+                } else {
+                    &mut stack[..stack_len]
+                };
+                scan_last_rows(
+                    measure,
+                    midx,
+                    &mut object_depths,
+                    &mut last_m,
+                    &mut last_r,
+                    &mut last_rows,
+                );
+                overflow.clear();
+                overflowing = false;
+                stack_len = 0;
+                if line[0] == b';' {
+                    done = true;
+                    break;
+                }
+                midx += 1;
+            }
+            _ if line.len() >= L => {
+                let mut row = [0u8; L];
+                row.copy_from_slice(&line[..L]);
+                if overflowing {
+                    overflow.push(row);
+                } else if stack_len < STACK_ROWS {
+                    stack[stack_len] = row;
+                    stack_len += 1;
+                } else {
+                    overflow.extend_from_slice(&stack);
+                    overflow.push(row);
+                    overflowing = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if !done {
+        let measure = if overflowing {
+            overflow.as_mut_slice()
+        } else {
+            &mut stack[..stack_len]
+        };
+        scan_last_rows(
+            measure,
+            midx,
+            &mut object_depths,
+            &mut last_m,
+            &mut last_r,
+            &mut last_rows,
+        );
+    }
+
+    calc_last_beat(last_m, last_r, last_rows)
+}
+
+fn scan_last_rows<const L: usize>(
+    measure: &mut [[u8; L]],
+    midx: usize,
+    object_depths: &mut [u32; L],
+    last_m: &mut Option<usize>,
+    last_r: &mut usize,
+    last_rows: &mut usize,
+) {
+    if measure.is_empty() {
+        return;
+    }
+    let shift = measure_reduce_shift(measure);
+    let rows = measure.len() >> shift;
+    if shift != 0 {
+        let step = 1usize << shift;
+        for index in 1..rows {
+            measure[index] = measure[index * step];
+        }
+    }
+    for (ridx, line) in measure[..rows].iter().enumerate() {
+        if row_has_object(line, object_depths) {
+            (*last_m, *last_r, *last_rows) = (Some(midx), ridx, rows);
+        }
+    }
+}
+
+#[cfg(feature = "bench-support")]
+fn chart_last_beat_allocating<const L: usize>(data: &[u8]) -> f64 {
     let mut measure = Vec::with_capacity(64);
     let mut object_depths = [0u32; L];
     let (mut last_m, mut last_r, mut last_rows) = (None, 0usize, 0usize);
@@ -967,6 +1075,18 @@ fn chart_last_beat_impl<const L: usize>(data: &[u8]) -> f64 {
     calc_last_beat(last_m, last_r, last_rows)
 }
 
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn chart_last_beat_for_bench(data: &[u8], lanes: usize, legacy: bool) -> f64 {
+    if legacy {
+        dispatch_lanes!(lanes, chart_last_beat_allocating(data))
+    } else {
+        chart_last_beat(data, lanes)
+    }
+}
+
+#[cfg(feature = "bench-support")]
 fn scan_last_measure<const L: usize>(
     measure: &mut Vec<[u8; L]>,
     midx: usize,
@@ -1983,6 +2103,10 @@ mod tests {
 
     #[test]
     fn chart_last_beat_matches_full_minimize() {
+        let check = |data: &[u8], lanes| {
+            let (_, _, _, _, expected) = minimize_chart_count_rows(data, lanes);
+            assert_eq!(chart_last_beat(data, lanes), expected);
+        };
         let cases: [(&[u8], usize); 4] = [
             (
                 b"1000
@@ -2016,9 +2140,19 @@ mod tests {
         ];
 
         for (data, lanes) in cases {
-            let (_, _, _, _, expected) = minimize_chart_count_rows(data, lanes);
-            assert_eq!(chart_last_beat(data, lanes), expected);
+            check(data, lanes);
         }
+        check(&generated_chart::<4>(), 4);
+        check(&generated_chart::<5>(), 5);
+        check(&generated_chart::<8>(), 8);
+        check(&generated_chart::<10>(), 10);
+
+        let mut dense = Vec::with_capacity(96 * 5 + 2);
+        for row in 0..96 {
+            dense.extend_from_slice(if row == 95 { b"0001\n" } else { b"0000\n" });
+        }
+        dense.extend_from_slice(b";\n");
+        check(&dense, 4);
     }
 
     #[test]

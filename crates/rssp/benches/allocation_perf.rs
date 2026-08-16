@@ -13,6 +13,8 @@ mod assets_bench;
 mod course_bench;
 #[path = "support/elapsed.rs"]
 mod elapsed_bench;
+#[path = "support/last_beat.rs"]
+mod last_beat_bench;
 #[path = "support/metadata.rs"]
 mod metadata_bench;
 #[path = "support/nps_stats.rs"]
@@ -107,6 +109,7 @@ enum Mode {
     Annotations,
     Hashes,
     Durations,
+    LastBeat,
     TimingBuild,
     SmTiming,
     TimingMerge,
@@ -221,6 +224,7 @@ fn parse_args() -> (Mode, usize) {
                     "annotations" => Mode::Annotations,
                     "hashes" => Mode::Hashes,
                     "durations" => Mode::Durations,
+                    "last-beat" => Mode::LastBeat,
                     "timing-build" => Mode::TimingBuild,
                     "sm-timing" => Mode::SmTiming,
                     "timing-merge" => Mode::TimingMerge,
@@ -315,7 +319,8 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             compute_pattern_counts: false,
             ..rssp::AnalysisOptions::default()
         },
-        Mode::BpmStats
+        Mode::LastBeat
+        | Mode::BpmStats
         | Mode::CleanMap
         | Mode::NormalizeMap
         | Mode::FusedMap
@@ -712,6 +717,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Annotations => "annotations",
         Mode::Hashes => "hashes",
         Mode::Durations => "durations",
+        Mode::LastBeat => "last-beat",
         Mode::TimingBuild => "timing-build",
         Mode::SmTiming => "sm-timing",
         Mode::TimingMerge => "timing-merge",
@@ -3983,6 +3989,54 @@ fn run_translate_markers_alloc(iterations: usize) {
     run_translate_markers_phase(&input, "compact", iterations, false);
 }
 
+fn run_last_beat_phase(chart: &[u8], phase: &str, iterations: usize, legacy: bool) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0u64;
+    for _ in 0..iterations {
+        for _ in 0..last_beat_bench::LAST_BEAT_BATCH {
+            let beat =
+                rssp::stats::chart_last_beat_for_bench(black_box(chart), black_box(4), legacy);
+            checksum = checksum.wrapping_add(beat.to_bits());
+            black_box(beat);
+        }
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=last-beat phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_mib_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        chart.len() as f64 * last_beat_bench::LAST_BEAT_BATCH as f64 * divisor
+            / elapsed.as_secs_f64()
+            / (1024.0 * 1024.0),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_last_beat_alloc(iterations: usize) {
+    last_beat_bench::assert_behavior();
+    let chart = last_beat_bench::chart(last_beat_bench::MEASURE_COUNT, last_beat_bench::ROW_COUNT);
+    run_last_beat_phase(&chart, "heap-measure", iterations, true);
+    run_last_beat_phase(&chart, "stack-measure", iterations, false);
+}
+
 struct MatrixAllocInput {
     densities: Vec<usize>,
     bpm_map: Vec<(f64, f64)>,
@@ -4292,6 +4346,10 @@ fn main() {
         }
         Mode::TranslateMarkers => {
             run_translate_markers_alloc(iterations);
+            return;
+        }
+        Mode::LastBeat => {
+            run_last_beat_alloc(iterations);
             return;
         }
         Mode::MetadataAnalyze => {

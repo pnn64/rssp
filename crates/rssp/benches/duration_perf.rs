@@ -2,6 +2,9 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
+#[path = "support/last_beat.rs"]
+mod last_beat_bench;
+
 const FIXTURE: &str = include_str!("fixtures/watch_yo_step.ssc");
 const EXTENSION: &str = "ssc";
 
@@ -386,24 +389,27 @@ fn bench_duration_inner(c: &mut Criterion) {
 }
 
 fn bench_duration_last_beat(c: &mut Criterion) {
-    let (charts, _globals) = build_duration_inputs();
-    let minimized = build_minimized_inputs(&charts);
+    last_beat_bench::assert_behavior();
+    let chart = last_beat_bench::chart(last_beat_bench::MEASURE_COUNT, last_beat_bench::ROW_COUNT);
     let mut group = c.benchmark_group("duration_last_beat");
     group.sample_size(200);
     group.measurement_time(Duration::from_secs(2));
-    group.bench_function("compute_last_beat", |b| {
-        b.iter(|| {
-            let mut beats = Vec::with_capacity(minimized.len());
-            for entry in &minimized {
-                let beat = rssp::bpm::compute_last_beat(
-                    black_box(&entry.minimized_chart),
-                    black_box(entry.lanes),
-                );
-                beats.push(beat);
-            }
-            black_box(beats);
+    group.throughput(criterion::Throughput::Bytes(
+        (chart.len() * last_beat_bench::LAST_BEAT_BATCH) as u64,
+    ));
+    for (name, legacy) in [("heap_measure", true), ("stack_measure", false)] {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                for _ in 0..last_beat_bench::LAST_BEAT_BATCH {
+                    black_box(rssp::stats::chart_last_beat_for_bench(
+                        black_box(&chart),
+                        black_box(4),
+                        legacy,
+                    ));
+                }
+            });
         });
-    });
+    }
     group.finish();
 }
 

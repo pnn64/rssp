@@ -21,6 +21,9 @@ mod course_bench;
 #[path = "support/elapsed.rs"]
 mod elapsed_bench;
 #[cfg(windows)]
+#[path = "support/last_beat.rs"]
+mod last_beat_bench;
+#[cfg(windows)]
 #[path = "support/nps_stats.rs"]
 mod nps_stats_bench;
 #[cfg(windows)]
@@ -1217,6 +1220,28 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
                 },
                 BatchSize::SmallInput,
             );
+        });
+    }
+    last_beat_bench::assert_behavior();
+    let last_beat_chart =
+        last_beat_bench::chart(last_beat_bench::MEASURE_COUNT, last_beat_bench::ROW_COUNT);
+    optimizations.throughput(Throughput::Bytes(
+        (last_beat_chart.len() * last_beat_bench::LAST_BEAT_BATCH) as u64,
+    ));
+    for (name, legacy) in [
+        ("last_beat_heap_measure", true),
+        ("last_beat_stack_measure", false),
+    ] {
+        optimizations.bench_function(name, |b| {
+            b.iter(|| {
+                for _ in 0..last_beat_bench::LAST_BEAT_BATCH {
+                    black_box(rssp::stats::chart_last_beat_for_bench(
+                        black_box(&last_beat_chart),
+                        black_box(4),
+                        legacy,
+                    ));
+                }
+            });
         });
     }
     optimizations.throughput(Throughput::Elements(stream_densities.len() as u64));
