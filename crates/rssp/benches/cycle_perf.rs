@@ -1001,6 +1001,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let pack_fixture = pack_bench::PackFixture::new();
     pack_fixture.assert_root_behavior();
     pack_fixture.assert_song_behavior();
+    pack_fixture.assert_tree_behavior();
     let asset_fixture = assets_bench::AssetFixture::with_movies(1);
     asset_fixture.assert_song_assets_behavior();
     asset_fixture.assert_music_behavior();
@@ -1558,6 +1559,28 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     song_scan.finish();
+
+    let mut simfile_tree = c.benchmark_group("cycles/simfile_tree_discovery");
+    simfile_tree.sample_size(20);
+    simfile_tree.measurement_time(Duration::from_secs(3));
+    simfile_tree.throughput(Throughput::Elements(pack_bench::TREE_ENTRY_COUNT as u64));
+    simfile_tree.bench_function("rescan_subdirs", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::find_simfiles_legacy(
+                black_box(pack_fixture.tree_root()),
+                black_box(rssp::pack::ScanOpt::default()),
+            ))
+        });
+    });
+    simfile_tree.bench_function("one_snapshot", |b| {
+        b.iter(|| {
+            black_box(rssp::pack::find_simfiles(
+                black_box(pack_fixture.tree_root()),
+                black_box(rssp::pack::ScanOpt::default()),
+            ))
+        });
+    });
+    simfile_tree.finish();
 
     let mut background = c.benchmark_group("cycles/background_changes");
     background.sample_size(20);

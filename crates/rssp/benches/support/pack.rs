@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 pub const SONG_COUNT: usize = 64;
 pub const SONG_ENTRY_COUNT: usize = 5;
 pub const ROOT_ENTRY_COUNT: usize = 1 + 128 + SONG_COUNT;
+pub const TREE_ENTRY_COUNT: usize = 1 + ROOT_ENTRY_COUNT + SONG_COUNT * SONG_ENTRY_COUNT;
 pub const BANNER_HINT: &str = "missing*.png";
 pub const BACKGROUND_HINT: &str = "background*.jpg";
 
@@ -67,6 +68,10 @@ impl PackFixture {
         &self.pack_dir
     }
 
+    pub fn tree_root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn song_dir(&self) -> &Path {
         &self.song_dir
     }
@@ -81,6 +86,19 @@ impl PackFixture {
             let old = rssp::profile::scan_song_dir_full_paths(&self.song_dir, opt);
             let new = rssp::pack::scan_song_dir(&self.song_dir, opt);
             assert_song_result(new, old);
+        }
+    }
+
+    pub fn assert_tree_behavior(&self) {
+        for opt in [
+            rssp::pack::ScanOpt::default(),
+            rssp::pack::ScanOpt {
+                dup: rssp::pack::DupPolicy::Error,
+            },
+        ] {
+            let old = rssp::profile::find_simfiles_legacy(&self.root, opt);
+            let new = rssp::pack::find_simfiles(&self.root, opt);
+            assert_eq!(new, old, "recursive simfile discovery changed");
         }
     }
 

@@ -2885,6 +2885,19 @@ fn run_pack_root_alloc(iterations: usize) {
 fn run_pack_scan_alloc(iterations: usize) {
     let fixture = pack_bench::PackFixture::new();
     fixture.assert_song_behavior();
+    fixture.assert_tree_behavior();
+    run_simfile_tree_phase(
+        &fixture,
+        "rescan-subdirs",
+        iterations,
+        rssp::profile::find_simfiles_legacy,
+    );
+    run_simfile_tree_phase(
+        &fixture,
+        "one-snapshot",
+        iterations,
+        rssp::pack::find_simfiles,
+    );
     run_song_scan_phase(
         &fixture,
         "full-paths",
@@ -2928,6 +2941,53 @@ fn run_pack_scan_alloc(iterations: usize) {
         black_box(checksum),
         elapsed.as_secs_f64(),
         pack_bench::SONG_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_simfile_tree_phase<F>(
+    fixture: &pack_bench::PackFixture,
+    phase: &str,
+    iterations: usize,
+    find: F,
+) where
+    F: Fn(&Path, rssp::pack::ScanOpt) -> Vec<PathBuf>,
+{
+    black_box(find(fixture.tree_root(), rssp::pack::ScanOpt::default()));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let paths = find(
+            black_box(fixture.tree_root()),
+            black_box(rssp::pack::ScanOpt::default()),
+        );
+        checksum = checksum.wrapping_add(paths.len());
+        black_box(paths);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=simfile-tree phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "entries_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        pack_bench::TREE_ENTRY_COUNT as f64 * divisor / elapsed.as_secs_f64(),
         (after.alloc_calls - before.alloc_calls) as f64 / divisor,
         (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
         (after.realloc_calls - before.realloc_calls) as f64 / divisor,

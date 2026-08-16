@@ -95,6 +95,15 @@ fn keep_first_name(first: &mut Option<OsString>, candidate: &OsStr) {
     }
 }
 
+fn keep_first_owned(first: &mut Option<OsString>, candidate: OsString) {
+    if first
+        .as_ref()
+        .is_none_or(|current| assets::cmp_os_ci(&candidate, current).is_lt())
+    {
+        *first = Some(candidate);
+    }
+}
+
 fn pack_ini_path(pack_dir: &Path) -> PathBuf {
     pack_dir.join("Pack.ini")
 }
@@ -348,6 +357,16 @@ fn song_scan(dir: &Path, simfile: PathBuf, extension: &'static str) -> SongScan 
     }
 }
 
+fn first_song_scan(
+    dir: &Path,
+    first_sm: Option<OsString>,
+    first_ssc: Option<OsString>,
+) -> Option<SongScan> {
+    first_ssc
+        .map(|name| song_scan(dir, dir.join(name), "ssc"))
+        .or_else(|| first_sm.map(|name| song_scan(dir, dir.join(name), "sm")))
+}
+
 fn scan_song_dir_first(dir: &Path) -> Result<Option<SongScan>, ScanError> {
     let mut first_sm: Option<OsString> = None;
     let mut first_ssc: Option<OsString> = None;
@@ -357,17 +376,10 @@ fn scan_song_dir_first(dir: &Path) -> Result<Option<SongScan>, ScanError> {
         } else {
             &mut first_sm
         };
-        if first
-            .as_ref()
-            .is_none_or(|current| assets::cmp_os_ci(&name, current).is_lt())
-        {
-            *first = Some(name);
-        }
+        keep_first_owned(first, name);
     }
 
-    Ok(first_ssc
-        .map(|name| song_scan(dir, dir.join(name), "ssc"))
-        .or_else(|| first_sm.map(|name| song_scan(dir, dir.join(name), "sm"))))
+    Ok(first_song_scan(dir, first_sm, first_ssc))
 }
 
 #[cfg(feature = "profile")]
@@ -400,6 +412,14 @@ fn scan_song_dir_duplicates(
             sms.push(path);
         }
     }
+    select_duplicate_scan(dir, sms, sscs)
+}
+
+fn select_duplicate_scan(
+    dir: &Path,
+    mut sms: Vec<PathBuf>,
+    mut sscs: Vec<PathBuf>,
+) -> Result<Option<SongScan>, ScanError> {
     sort_paths_ci(&mut sms);
     sort_paths_ci(&mut sscs);
 
@@ -425,6 +445,57 @@ fn scan_song_dir_duplicates(
         });
     }
     Ok(Some(song_scan(dir, simfile, "sm")))
+}
+
+fn scan_tree_dir(dir: &Path, opt: ScanOpt) -> Result<(Option<SongScan>, Vec<OsString>), ScanError> {
+    let mut first_sm = None;
+    let mut first_ssc = None;
+    let mut sms = Vec::new();
+    let mut sscs = Vec::new();
+    let mut subdirs = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let name = entry.file_name();
+        let name_path = Path::new(&name);
+        if assets::is_mac_resource_fork(name_path) {
+            continue;
+        }
+        if assets::entry_is_dir(&entry) {
+            subdirs.push(name);
+            continue;
+        }
+        let Some(extension) = simfile_ext(name_path) else {
+            continue;
+        };
+        if !assets::entry_is_file(&entry) {
+            continue;
+        }
+        match opt.dup {
+            DupPolicy::First => {
+                let first = if extension == "ssc" {
+                    &mut first_ssc
+                } else {
+                    &mut first_sm
+                };
+                keep_first_owned(first, name);
+            }
+            DupPolicy::Error => {
+                let paths = if extension == "ssc" {
+                    &mut sscs
+                } else {
+                    &mut sms
+                };
+                paths.push(dir.join(name));
+            }
+        }
+    }
+    let song = match opt.dup {
+        DupPolicy::First => first_song_scan(dir, first_sm, first_ssc),
+        DupPolicy::Error => select_duplicate_scan(dir, sms, sscs)?,
+    };
+    Ok((song, subdirs))
 }
 
 pub fn scan_song_dir(dir: &Path, opt: ScanOpt) -> Result<Option<SongScan>, ScanError> {
@@ -810,6 +881,32 @@ pub fn find_simfiles(root: &Path, opt: ScanOpt) -> Vec<PathBuf> {
         if assets::is_mac_resource_fork(&dir) {
             continue;
         }
+        let Ok((song, mut subdirs)) = scan_tree_dir(&dir, opt) else {
+            continue;
+        };
+        if let Some(song) = song {
+            out.push(song.simfile);
+            continue;
+        }
+
+        subdirs.sort_by(|left, right| assets::cmp_os_ci(left, right));
+        for name in subdirs.into_iter().rev() {
+            stack.push(dir.join(name));
+        }
+    }
+
+    out
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_find_simfiles_legacy(root: &Path, opt: ScanOpt) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        if assets::is_mac_resource_fork(&dir) {
+            continue;
+        }
         let Ok(song) = scan_song_dir(&dir, opt) else {
             continue;
         };
@@ -823,8 +920,8 @@ pub fn find_simfiles(root: &Path, opt: ScanOpt) -> Vec<PathBuf> {
         };
         let mut subdirs: Vec<PathBuf> = entries
             .flatten()
-            .map(|e| e.path())
-            .filter(|p| !assets::is_mac_resource_fork(p) && p.is_dir())
+            .map(|entry| entry.path())
+            .filter(|path| !assets::is_mac_resource_fork(path) && path.is_dir())
             .collect();
         sort_paths_ci(&mut subdirs);
         for subdir in subdirs.into_iter().rev() {

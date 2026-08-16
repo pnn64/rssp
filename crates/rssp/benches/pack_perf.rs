@@ -62,6 +62,34 @@ fn bench_song_scan(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_simfile_tree(c: &mut Criterion) {
+    let fixture = pack_bench::PackFixture::new();
+    fixture.assert_tree_behavior();
+    let opt = rssp::pack::ScanOpt::default();
+
+    let mut group = c.benchmark_group("simfile_tree_discovery");
+    group.sample_size(20);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(pack_bench::TREE_ENTRY_COUNT as u64));
+    group.bench_function("rescan_subdirs", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::find_simfiles_legacy(
+                black_box(fixture.tree_root()),
+                black_box(opt),
+            ))
+        });
+    });
+    group.bench_function("one_snapshot", |b| {
+        b.iter(|| {
+            black_box(rssp::pack::find_simfiles(
+                black_box(fixture.tree_root()),
+                black_box(opt),
+            ))
+        });
+    });
+    group.finish();
+}
+
 fn bench_pack_root(c: &mut Criterion) {
     let fixture = pack_bench::PackFixture::new();
     fixture.assert_root_behavior();
@@ -409,6 +437,7 @@ criterion_group!(
     benches,
     bench_pack_scan,
     bench_song_scan,
+    bench_simfile_tree,
     bench_pack_root,
     bench_background_changes,
     bench_delimiter_scan,

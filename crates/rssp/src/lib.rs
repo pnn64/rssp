@@ -121,6 +121,11 @@ pub mod profile {
     }
 
     #[must_use]
+    pub fn find_simfiles_legacy(root: &Path, opt: ScanOpt) -> Vec<PathBuf> {
+        crate::pack::profile_find_simfiles_legacy(root, opt)
+    }
+
+    #[must_use]
     pub fn background_changes_legacy(
         song_dir: &Path,
         simfile_data: &[u8],
