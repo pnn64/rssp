@@ -464,6 +464,11 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     bpm_display_bench::assert_behavior(&bpm_display_fixture);
     let parse_dispatch_fixture = parse_dispatch_bench::fixture();
     parse_dispatch_bench::assert_behavior(&parse_dispatch_fixture);
+    parse_dispatch_bench::assert_reserve_behavior();
+    let parse_reserve_typical =
+        parse_dispatch_bench::fixture_with_charts(parse_dispatch_bench::TYPICAL_CHART_COUNT);
+    let parse_reserve_sm =
+        parse_dispatch_bench::sm_fixture(parse_dispatch_bench::TYPICAL_CHART_COUNT);
 
     let mut parsing = c.benchmark_group("cycles/parsing");
     parsing.throughput(Throughput::Elements(ENTRIES as u64));
@@ -511,6 +516,41 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     }
     real_parse.finish();
+
+    for (name, data, ext) in [
+        (
+            "cycles/parse_reserve_ssc_10_charts",
+            parse_reserve_typical.as_slice(),
+            "ssc",
+        ),
+        (
+            "cycles/parse_reserve_ssc_128_charts",
+            parse_dispatch_fixture.as_slice(),
+            "ssc",
+        ),
+        (
+            "cycles/parse_reserve_sm_10_charts",
+            parse_reserve_sm.as_slice(),
+            "sm",
+        ),
+    ] {
+        let mut group = c.benchmark_group(name);
+        group.throughput(Throughput::Bytes(data.len() as u64));
+        group.sample_size(100);
+        group.measurement_time(Duration::from_secs(3));
+        for (phase, legacy) in [("growing_vec", true), ("presized_vec", false)] {
+            group.bench_function(phase, |b| {
+                b.iter(|| {
+                    black_box(parse_dispatch_bench::parse_reserved(
+                        black_box(data),
+                        ext,
+                        legacy,
+                    ));
+                });
+            });
+        }
+        group.finish();
+    }
 
     const DISPLAY_CASES: [(Option<&str>, f64, f64, f64); 4] = [
         (None, 120.0, 180.0, 1.0),

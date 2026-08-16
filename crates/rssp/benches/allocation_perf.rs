@@ -110,6 +110,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
 enum Mode {
     Parse,
     ParseDispatch,
+    ParseReserve,
     Fast,
     Full,
     AnalysisReuse,
@@ -230,6 +231,7 @@ fn parse_args() -> (Mode, usize) {
                 mode = match args[i + 1].as_str() {
                     "parse" => Mode::Parse,
                     "parse-dispatch" => Mode::ParseDispatch,
+                    "parse-reserve" => Mode::ParseReserve,
                     "fast" => Mode::Fast,
                     "analysis-reuse" => Mode::AnalysisReuse,
                     "stream-outputs" => Mode::StreamOutputs,
@@ -398,7 +400,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         | Mode::ParityDouble
         | Mode::ParitySingleHolds
         | Mode::ParityDoubleHolds => rssp::AnalysisOptions::default(),
-        Mode::ParseDispatch => rssp::AnalysisOptions::default(),
+        Mode::ParseDispatch | Mode::ParseReserve => rssp::AnalysisOptions::default(),
     }
 }
 
@@ -459,7 +461,7 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             | Mode::BpmDisplayTags => {
                 unreachable!("mode uses its dedicated allocation runner")
             }
-            Mode::ParseDispatch => {
+            Mode::ParseDispatch | Mode::ParseReserve => {
                 unreachable!("mode uses its dedicated allocation runner")
             }
             Mode::Tech => {
@@ -734,6 +736,7 @@ fn mode_name(mode: Mode) -> &'static str {
     match mode {
         Mode::Parse => "parse",
         Mode::ParseDispatch => "parse-dispatch",
+        Mode::ParseReserve => "parse-reserve",
         Mode::Fast => "fast",
         Mode::Full => "full",
         Mode::AnalysisReuse => "analysis-reuse",
@@ -1650,6 +1653,76 @@ fn run_parse_dispatch_alloc(iterations: usize) {
     parse_dispatch_bench::assert_behavior(&fixture);
     run_parse_dispatch_phase(&fixture, "sequential-tags", iterations, true);
     run_parse_dispatch_phase(&fixture, "indexed-tags", iterations, false);
+}
+
+fn run_parse_reserve_phase(
+    data: &[u8],
+    ext: &str,
+    chart_count: usize,
+    phase: &str,
+    iterations: usize,
+    legacy: bool,
+) {
+    black_box(parse_dispatch_bench::parse_reserved(data, ext, legacy));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let parsed = parse_dispatch_bench::parse_reserved(black_box(data), ext, legacy);
+        checksum = checksum.wrapping_add(parsed.notes_list.len());
+        black_box(parsed);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=parse-reserve ext={} charts={} phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_mib_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        ext,
+        chart_count,
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        data.len() as f64 * divisor / elapsed.as_secs_f64() / (1024.0 * 1024.0),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_parse_reserve_alloc(iterations: usize) {
+    parse_dispatch_bench::assert_reserve_behavior();
+    let typical =
+        parse_dispatch_bench::fixture_with_charts(parse_dispatch_bench::TYPICAL_CHART_COUNT);
+    let large = parse_dispatch_bench::fixture();
+    let sm = parse_dispatch_bench::sm_fixture(parse_dispatch_bench::TYPICAL_CHART_COUNT);
+    for (data, ext, chart_count) in [
+        (
+            typical.as_slice(),
+            "ssc",
+            parse_dispatch_bench::TYPICAL_CHART_COUNT,
+        ),
+        (large.as_slice(), "ssc", parse_dispatch_bench::CHART_COUNT),
+        (
+            sm.as_slice(),
+            "sm",
+            parse_dispatch_bench::TYPICAL_CHART_COUNT,
+        ),
+    ] {
+        run_parse_reserve_phase(data, ext, chart_count, "growing-vec", iterations, true);
+        run_parse_reserve_phase(data, ext, chart_count, "presized-vec", iterations, false);
+    }
 }
 
 fn run_clean_map_alloc(iterations: usize) {
@@ -4550,6 +4623,10 @@ fn main() {
     match mode {
         Mode::ParseDispatch => {
             run_parse_dispatch_alloc(iterations);
+            return;
+        }
+        Mode::ParseReserve => {
+            run_parse_reserve_alloc(iterations);
             return;
         }
         Mode::BpmStats => {

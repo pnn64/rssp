@@ -360,6 +360,36 @@ fn bench_parse_dispatch(c: &mut Criterion) {
     }
 }
 
+fn bench_parse_reserve(c: &mut Criterion) {
+    parse_dispatch_bench::assert_reserve_behavior();
+    let typical =
+        parse_dispatch_bench::fixture_with_charts(parse_dispatch_bench::TYPICAL_CHART_COUNT);
+    let large = parse_dispatch_bench::fixture();
+    let sm = parse_dispatch_bench::sm_fixture(parse_dispatch_bench::TYPICAL_CHART_COUNT);
+    for (name, data, ext) in [
+        ("parse_reserve_ssc_10_charts", typical.as_slice(), "ssc"),
+        ("parse_reserve_ssc_128_charts", large.as_slice(), "ssc"),
+        ("parse_reserve_sm_10_charts", sm.as_slice(), "sm"),
+    ] {
+        let mut group = c.benchmark_group(name);
+        group.sample_size(100);
+        group.measurement_time(Duration::from_secs(3));
+        group.throughput(Throughput::Bytes(data.len() as u64));
+        for (phase, legacy) in [("growing_vec", true), ("presized_vec", false)] {
+            group.bench_function(phase, |b| {
+                b.iter(|| {
+                    black_box(parse_dispatch_bench::parse_reserved(
+                        black_box(data),
+                        ext,
+                        legacy,
+                    ));
+                });
+            });
+        }
+        group.finish();
+    }
+}
+
 criterion_group!(
     benches,
     bench_metadata_pipeline,
@@ -367,5 +397,6 @@ criterion_group!(
     bench_chart_metadata_strings,
     bench_marker_translation,
     bench_parse_dispatch,
+    bench_parse_reserve,
 );
 criterion_main!(benches);

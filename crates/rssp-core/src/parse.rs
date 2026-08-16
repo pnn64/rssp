@@ -942,8 +942,18 @@ fn finalize_notedata_entry(f: NotedataFields<'_>) -> Option<ParsedChartEntry<'_>
     (f.notes.is_some() || f.notes2.is_some()).then(|| build_chart_entry(f))
 }
 
+const MAX_CHART_RESERVE: usize = 32;
+
+fn chart_reserve_len(data_len: usize, start: usize, next: usize) -> usize {
+    let block_len = next.saturating_sub(start).max(1);
+    data_len
+        .saturating_sub(start)
+        .div_ceil(block_len)
+        .clamp(1, MAX_CHART_RESERVE)
+}
+
 pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfileData<'a>> {
-    extract_sections_impl::<true>(data, ext)
+    extract_sections_impl::<true, true>(data, ext)
 }
 
 #[cfg(feature = "bench-support")]
@@ -954,13 +964,27 @@ pub fn extract_sections_for_bench<'a>(
     legacy_dispatch: bool,
 ) -> io::Result<ParsedSimfileData<'a>> {
     if legacy_dispatch {
-        extract_sections_impl::<false>(data, ext)
+        extract_sections_impl::<false, true>(data, ext)
     } else {
-        extract_sections_impl::<true>(data, ext)
+        extract_sections_impl::<true, true>(data, ext)
     }
 }
 
-fn extract_sections_impl<'a, const DISPATCH: bool>(
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn extract_sections_reserve_for_bench<'a>(
+    data: &'a [u8],
+    ext: &str,
+    legacy_growth: bool,
+) -> io::Result<ParsedSimfileData<'a>> {
+    if legacy_growth {
+        extract_sections_impl::<true, false>(data, ext)
+    } else {
+        extract_sections_impl::<true, true>(data, ext)
+    }
+}
+
+fn extract_sections_impl<'a, const DISPATCH: bool, const RESERVE_CHARTS: bool>(
     data: &'a [u8],
     ext: &str,
 ) -> io::Result<ParsedSimfileData<'a>> {
@@ -980,6 +1004,10 @@ fn extract_sections_impl<'a, const DISPATCH: bool>(
         if ssc && starts_with_ci(s, b"#NOTEDATA:") {
             let (entry, next) = parse_notedata_entry::<DISPATCH>(data, i);
             if let Some(entry) = entry {
+                if RESERVE_CHARTS && r.notes_list.capacity() == 0 {
+                    r.notes_list
+                        .reserve_exact(chart_reserve_len(data.len(), i, next));
+                }
                 r.notes_list.push(entry);
             }
             i = next;
@@ -999,6 +1027,10 @@ fn extract_sections_impl<'a, const DISPATCH: bool>(
                 let start = i + tag_len;
                 let (field_count, fields, note_data, next) = split_sm_notes(data, start);
                 if field_count == 5 {
+                    if RESERVE_CHARTS && r.notes_list.capacity() == 0 {
+                        r.notes_list
+                            .reserve_exact(chart_reserve_len(data.len(), i, next));
+                    }
                     r.notes_list.push(ParsedChartEntry {
                         field_count,
                         fields,
@@ -1302,7 +1334,7 @@ mod tests {
         .as_bytes();
         let current = extract_sections(data, "ssc").expect("fixture should parse");
         let legacy =
-            extract_sections_impl::<false>(data, "ssc").expect("legacy fixture should parse");
+            extract_sections_impl::<false, true>(data, "ssc").expect("legacy fixture should parse");
 
         assert_eq!(current.title, Some(&b"Mixed Case"[..]));
         assert_eq!(current.attacks.as_deref(), Some(&b"first:second"[..]));

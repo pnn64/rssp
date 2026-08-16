@@ -1,9 +1,14 @@
 use std::fmt::Write as _;
 
 pub const CHART_COUNT: usize = 128;
+pub const TYPICAL_CHART_COUNT: usize = 10;
 
 pub fn fixture() -> Vec<u8> {
-    let mut data = String::with_capacity(CHART_COUNT * 700);
+    fixture_with_charts(CHART_COUNT)
+}
+
+pub fn fixture_with_charts(chart_count: usize) -> Vec<u8> {
+    let mut data = String::with_capacity(chart_count * 700);
     data.push_str(concat!(
         "#TITLE:Dispatch fixture;\n",
         "#SUBTITLE:All tags;\n",
@@ -48,7 +53,7 @@ pub fn fixture() -> Vec<u8> {
         "#LASTSECONDHINT:240;\n",
         "#UNKNOWNHEADER:ignored;\n",
     ));
-    for index in 0..CHART_COUNT {
+    for index in 0..chart_count {
         write!(
             &mut data,
             concat!(
@@ -88,9 +93,40 @@ pub fn fixture() -> Vec<u8> {
     data.into_bytes()
 }
 
+pub fn sm_fixture(chart_count: usize) -> Vec<u8> {
+    let mut data = String::with_capacity(chart_count * 120);
+    data.push_str("#TITLE:SM reserve fixture;\n#ARTIST:Parser;\n#BPMS:0=120;\n");
+    for index in 0..chart_count {
+        write!(
+            &mut data,
+            concat!(
+                "#NOTES:\n",
+                "dance-single:\n",
+                "chart-{index}:\n",
+                "Challenge:\n",
+                "12:\n",
+                "1,2,3,4,5:\n",
+                "1000\n0100\n0010\n0001\n;\n",
+            ),
+            index = index,
+        )
+        .expect("writing to a String cannot fail");
+    }
+    data.into_bytes()
+}
+
 pub fn parse<'a>(data: &'a [u8], ext: &str, legacy: bool) -> rssp::parse::ParsedSimfileData<'a> {
     rssp::parse::extract_sections_for_bench(data, ext, legacy)
         .expect("dispatch fixture should parse")
+}
+
+pub fn parse_reserved<'a>(
+    data: &'a [u8],
+    ext: &str,
+    legacy: bool,
+) -> rssp::parse::ParsedSimfileData<'a> {
+    rssp::parse::extract_sections_reserve_for_bench(data, ext, legacy)
+        .expect("chart reserve fixture should parse")
 }
 
 fn global_fields<'a>(parsed: &'a rssp::parse::ParsedSimfileData<'a>) -> [Option<&'a [u8]>; 40] {
@@ -162,9 +198,10 @@ fn chart_fields<'a>(entry: &'a rssp::parse::ParsedChartEntry<'a>) -> [Option<&'a
     ]
 }
 
-fn assert_same(data: &[u8], ext: &str) {
-    let legacy = parse(data, ext, true);
-    let current = parse(data, ext, false);
+fn assert_parsed_eq(
+    current: &rssp::parse::ParsedSimfileData<'_>,
+    legacy: &rssp::parse::ParsedSimfileData<'_>,
+) {
     assert_eq!(global_fields(&current), global_fields(&legacy));
     assert_eq!(current.notes_list.len(), legacy.notes_list.len());
     for (current, legacy) in current.notes_list.iter().zip(&legacy.notes_list) {
@@ -174,9 +211,38 @@ fn assert_same(data: &[u8], ext: &str) {
     }
 }
 
+fn assert_same(data: &[u8], ext: &str) {
+    let legacy = parse(data, ext, true);
+    let current = parse(data, ext, false);
+    assert_parsed_eq(&current, &legacy);
+}
+
 #[allow(dead_code)]
 pub fn assert_pair(data: &[u8], ext: &str) {
     assert_same(data, ext);
+}
+
+pub fn assert_reserve_pair(data: &[u8], ext: &str) {
+    let legacy = parse_reserved(data, ext, true);
+    let current = parse_reserved(data, ext, false);
+    assert_parsed_eq(&current, &legacy);
+}
+
+pub fn assert_reserve_behavior() {
+    for chart_count in [1, TYPICAL_CHART_COUNT, CHART_COUNT] {
+        let data = fixture_with_charts(chart_count);
+        assert_reserve_pair(&data, "ssc");
+        assert_eq!(
+            parse_reserved(&data, "ssc", false).notes_list.len(),
+            chart_count
+        );
+    }
+    let sm = sm_fixture(TYPICAL_CHART_COUNT);
+    assert_reserve_pair(&sm, "sm");
+    assert_eq!(
+        parse_reserved(&sm, "sm", false).notes_list.len(),
+        TYPICAL_CHART_COUNT
+    );
 }
 
 pub fn assert_behavior(data: &[u8]) {
