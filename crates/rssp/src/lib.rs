@@ -113,6 +113,13 @@ pub mod profile {
         crate::pack::profile_pack_root_full_paths(dir, opt, banner, background)
     }
 
+    pub fn scan_song_dir_full_paths(
+        dir: &Path,
+        opt: ScanOpt,
+    ) -> Result<Option<SongScan>, ScanError> {
+        crate::pack::profile_scan_song_dir_full_paths(dir, opt)
+    }
+
     #[must_use]
     pub fn background_changes_legacy(
         song_dir: &Path,

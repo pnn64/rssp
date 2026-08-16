@@ -2,6 +2,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 pub const SONG_COUNT: usize = 64;
+pub const SONG_ENTRY_COUNT: usize = 5;
 pub const ROOT_ENTRY_COUNT: usize = 1 + 128 + SONG_COUNT;
 pub const BANNER_HINT: &str = "missing*.png";
 pub const BACKGROUND_HINT: &str = "background*.jpg";
@@ -9,6 +10,7 @@ pub const BACKGROUND_HINT: &str = "background*.jpg";
 pub struct PackFixture {
     root: PathBuf,
     pack_dir: PathBuf,
+    song_dir: PathBuf,
 }
 
 impl PackFixture {
@@ -53,11 +55,33 @@ impl PackFixture {
             }
         }
 
-        Self { root, pack_dir }
+        let song_dir = pack_dir.join("Song000");
+        Self {
+            root,
+            pack_dir,
+            song_dir,
+        }
     }
 
     pub fn pack_dir(&self) -> &Path {
         &self.pack_dir
+    }
+
+    pub fn song_dir(&self) -> &Path {
+        &self.song_dir
+    }
+
+    pub fn assert_song_behavior(&self) {
+        for opt in [
+            rssp::pack::ScanOpt::default(),
+            rssp::pack::ScanOpt {
+                dup: rssp::pack::DupPolicy::Error,
+            },
+        ] {
+            let old = rssp::profile::scan_song_dir_full_paths(&self.song_dir, opt);
+            let new = rssp::pack::scan_song_dir(&self.song_dir, opt);
+            assert_song_result(new, old);
+        }
     }
 
     pub fn assert_root_behavior(&self) {
@@ -89,6 +113,34 @@ impl PackFixture {
                 assert_eq!(new_song.extension, old_song.extension);
             }
         }
+    }
+}
+
+fn assert_song_result(
+    new: Result<Option<rssp::pack::SongScan>, rssp::pack::ScanError>,
+    old: Result<Option<rssp::pack::SongScan>, rssp::pack::ScanError>,
+) {
+    match (new, old) {
+        (Ok(Some(new)), Ok(Some(old))) => {
+            assert_eq!(new.dir, old.dir);
+            assert_eq!(new.simfile, old.simfile);
+            assert_eq!(new.extension, old.extension);
+        }
+        (Ok(None), Ok(None)) => {}
+        (
+            Err(rssp::pack::ScanError::DuplicateSimfile {
+                ext: new_ext,
+                paths: new_paths,
+            }),
+            Err(rssp::pack::ScanError::DuplicateSimfile {
+                ext: old_ext,
+                paths: old_paths,
+            }),
+        ) => {
+            assert_eq!(new_ext, old_ext);
+            assert_eq!(new_paths, old_paths);
+        }
+        (new, old) => panic!("song scan changed: new={new:?} old={old:?}"),
     }
 }
 

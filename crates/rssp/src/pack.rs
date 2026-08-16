@@ -293,7 +293,38 @@ fn pick_ini_img(
     })
 }
 
-fn simfile_paths(dir: &Path) -> io::Result<impl Iterator<Item = (&'static str, PathBuf)>> {
+fn simfile_ext(path: &Path) -> Option<&'static str> {
+    let extension = path.extension()?.to_str()?;
+    if extension.eq_ignore_ascii_case("ssc") {
+        Some("ssc")
+    } else if extension.eq_ignore_ascii_case("sm") {
+        Some("sm")
+    } else {
+        None
+    }
+}
+
+fn simfile_names(dir: &Path) -> io::Result<impl Iterator<Item = (&'static str, OsString)>> {
+    Ok(fs::read_dir(dir)?.filter_map(|entry| {
+        let entry = entry.ok()?;
+        let name = entry.file_name();
+        let name_path = Path::new(&name);
+        if assets::is_mac_resource_fork(name_path) {
+            return None;
+        }
+        let extension = simfile_ext(name_path)?;
+        assets::entry_is_file(&entry).then_some((extension, name))
+    }))
+}
+
+fn simfile_paths(dir: &Path) -> io::Result<impl Iterator<Item = (&'static str, PathBuf)> + '_> {
+    Ok(simfile_names(dir)?.map(move |(extension, name)| (extension, dir.join(name))))
+}
+
+#[cfg(feature = "profile")]
+fn simfile_paths_full_paths(
+    dir: &Path,
+) -> io::Result<impl Iterator<Item = (&'static str, PathBuf)>> {
     Ok(fs::read_dir(dir)?.filter_map(|entry| {
         let Ok(entry) = entry else {
             return None;
@@ -305,14 +336,7 @@ fn simfile_paths(dir: &Path) -> io::Result<impl Iterator<Item = (&'static str, P
         if !path.is_file() {
             return None;
         }
-        let ext = path.extension().and_then(|s| s.to_str())?;
-        if ext.eq_ignore_ascii_case("ssc") {
-            Some(("ssc", path))
-        } else if ext.eq_ignore_ascii_case("sm") {
-            Some(("sm", path))
-        } else {
-            None
-        }
+        simfile_ext(&path).map(|extension| (extension, path))
     }))
 }
 
@@ -325,9 +349,32 @@ fn song_scan(dir: &Path, simfile: PathBuf, extension: &'static str) -> SongScan 
 }
 
 fn scan_song_dir_first(dir: &Path) -> Result<Option<SongScan>, ScanError> {
+    let mut first_sm: Option<OsString> = None;
+    let mut first_ssc: Option<OsString> = None;
+    for (extension, name) in simfile_names(dir)? {
+        let first = if extension == "ssc" {
+            &mut first_ssc
+        } else {
+            &mut first_sm
+        };
+        if first
+            .as_ref()
+            .is_none_or(|current| assets::cmp_os_ci(&name, current).is_lt())
+        {
+            *first = Some(name);
+        }
+    }
+
+    Ok(first_ssc
+        .map(|name| song_scan(dir, dir.join(name), "ssc"))
+        .or_else(|| first_sm.map(|name| song_scan(dir, dir.join(name), "sm"))))
+}
+
+#[cfg(feature = "profile")]
+fn scan_song_dir_first_full_paths(dir: &Path) -> Result<Option<SongScan>, ScanError> {
     let mut first_sm = None;
     let mut first_ssc = None;
-    for (extension, path) in simfile_paths(dir)? {
+    for (extension, path) in simfile_paths_full_paths(dir)? {
         if extension == "ssc" {
             keep_first_path(&mut first_ssc, path);
         } else {
@@ -340,10 +387,13 @@ fn scan_song_dir_first(dir: &Path) -> Result<Option<SongScan>, ScanError> {
         .or_else(|| first_sm.map(|path| song_scan(dir, path, "sm"))))
 }
 
-fn scan_song_dir_duplicates(dir: &Path) -> Result<Option<SongScan>, ScanError> {
+fn scan_song_dir_duplicates(
+    dir: &Path,
+    paths: impl Iterator<Item = (&'static str, PathBuf)>,
+) -> Result<Option<SongScan>, ScanError> {
     let mut sms = Vec::new();
     let mut sscs = Vec::new();
-    for (extension, path) in simfile_paths(dir)? {
+    for (extension, path) in paths {
         if extension == "ssc" {
             sscs.push(path);
         } else {
@@ -384,7 +434,22 @@ pub fn scan_song_dir(dir: &Path, opt: ScanOpt) -> Result<Option<SongScan>, ScanE
 
     match opt.dup {
         DupPolicy::First => scan_song_dir_first(dir),
-        DupPolicy::Error => scan_song_dir_duplicates(dir),
+        DupPolicy::Error => scan_song_dir_duplicates(dir, simfile_paths(dir)?),
+    }
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_scan_song_dir_full_paths(
+    dir: &Path,
+    opt: ScanOpt,
+) -> Result<Option<SongScan>, ScanError> {
+    if assets::is_mac_resource_fork(dir) {
+        return Ok(None);
+    }
+
+    match opt.dup {
+        DupPolicy::First => scan_song_dir_first_full_paths(dir),
+        DupPolicy::Error => scan_song_dir_duplicates(dir, simfile_paths_full_paths(dir)?),
     }
 }
 

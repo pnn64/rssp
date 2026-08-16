@@ -11,6 +11,7 @@ mod pack_bench;
 
 fn bench_pack_scan(c: &mut Criterion) {
     let fixture = pack_bench::PackFixture::new();
+    fixture.assert_song_behavior();
 
     let mut group = c.benchmark_group("pack_scan");
     group.sample_size(20);
@@ -25,6 +26,37 @@ fn bench_pack_scan(c: &mut Criterion) {
             .expect("benchmark pack should scan")
             .expect("benchmark pack should contain songs");
             black_box(scan);
+        });
+    });
+    group.finish();
+}
+
+fn bench_song_scan(c: &mut Criterion) {
+    let fixture = pack_bench::PackFixture::new();
+    fixture.assert_song_behavior();
+    let opt = rssp::pack::ScanOpt::default();
+
+    let mut group = c.benchmark_group("song_simfile_discovery");
+    group.sample_size(30);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(pack_bench::SONG_ENTRY_COUNT as u64));
+    group.bench_function("full_paths", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::profile::scan_song_dir_full_paths(
+                    black_box(fixture.song_dir()),
+                    black_box(opt),
+                )
+                .expect("benchmark song should scan"),
+            )
+        });
+    });
+    group.bench_function("candidate_names", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::pack::scan_song_dir(black_box(fixture.song_dir()), black_box(opt))
+                    .expect("benchmark song should scan"),
+            )
         });
     });
     group.finish();
@@ -376,6 +408,7 @@ fn bench_selection_algorithms(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_pack_scan,
+    bench_song_scan,
     bench_pack_root,
     bench_background_changes,
     bench_delimiter_scan,
