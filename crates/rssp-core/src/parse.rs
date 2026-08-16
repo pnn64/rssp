@@ -615,18 +615,214 @@ fn try_tag_append<'a>(
 }
 
 macro_rules! try_tags {
-    ($s:expr, $i:expr, $o:expr, [ $( ($tag:expr, $field:ident, $nl:expr) ),* $(,)? ]) => {
+    ($s:expr, $i:expr, $o:expr, [ $( ($tag:expr, $field:ident, $nl:expr) ),* $(,)? ]) => {{
         $( if let Some(a) = try_tag_adv($s, $tag, $nl, &mut $o.$field) { $i += a; continue; } )*
-    };
+    }};
 }
 
 macro_rules! try_header_tags {
-    ($s:expr, $i:expr, $o:expr, [ $( ($tag:expr, $field:ident, $on:expr) ),* $(,)? ]) => {
+    ($s:expr, $i:expr, $o:expr, [ $( ($tag:expr, $field:ident, $on:expr) ),* $(,)? ]) => {{
         $( if let Some(a) = try_tag_step($s, $tag, &mut $o.$field, $on) { $i += a; continue; } )*
-    };
+    }};
 }
 
-fn parse_notedata_entry(data: &[u8], start: usize) -> (Option<ParsedChartEntry<'_>>, usize) {
+macro_rules! return_tags {
+    ($s:expr, $o:expr, [ $( ($tag:expr, $field:ident, $nl:expr) ),* $(,)? ]) => {{
+        $( if let Some(advance) = try_tag_adv($s, $tag, $nl, &mut $o.$field) {
+            return Some(advance);
+        } )*
+    }};
+}
+
+macro_rules! return_header_tags {
+    ($s:expr, $o:expr, [ $( ($tag:expr, $field:ident, $on:expr) ),* $(,)? ]) => {{
+        $( if let Some(advance) = try_tag_step($s, $tag, &mut $o.$field, $on) {
+            return Some(advance);
+        } )*
+    }};
+}
+
+#[inline(never)]
+fn dispatch_notedata_tag<'a>(s: &'a [u8], out: &mut NotedataFields<'a>) -> Option<usize> {
+    match s.get(1).map_or(0, u8::to_ascii_uppercase) {
+        b'A' => {
+            if let Some(advance) = try_tag_append(s, b"#ATTACKS:", true, &mut out.chart_attacks) {
+                return Some(advance);
+            }
+        }
+        b'B' => return_tags!(s, out, [(b"#BPMS:", chart_bpms, true)]),
+        b'C' => return_tags!(
+            s,
+            out,
+            [
+                (b"#CHARTNAME:", chart_name, false),
+                (b"#CHARTSTYLE:", chart_style, false),
+                (b"#CREDIT:", credit, false),
+                (b"#COMBOS:", chart_combos, true),
+            ]
+        ),
+        b'D' => return_tags!(
+            s,
+            out,
+            [
+                (b"#DESCRIPTION:", description, false),
+                (b"#DIFFICULTY:", difficulty, false),
+                (b"#DELAYS:", chart_delays, true),
+                (b"#DISPLAYBPM:", chart_display_bpm, true),
+            ]
+        ),
+        b'F' => return_tags!(
+            s,
+            out,
+            [
+                (b"#FREEZES:", chart_freezes, true),
+                (b"#FAKES:", chart_fakes, true),
+            ]
+        ),
+        b'L' => return_tags!(s, out, [(b"#LABELS:", chart_labels, true)]),
+        b'M' => return_tags!(
+            s,
+            out,
+            [(b"#METER:", meter, false), (b"#MUSIC:", chart_music, true),]
+        ),
+        b'O' => return_tags!(s, out, [(b"#OFFSET:", chart_offset, true)]),
+        b'R' => return_tags!(s, out, [(b"#RADARVALUES:", chart_radar_values, true)]),
+        b'S' => return_tags!(
+            s,
+            out,
+            [
+                (b"#STEPSTYPE:", step_type, false),
+                (b"#STOPS:", chart_stops, true),
+                (b"#SPEEDS:", chart_speeds, true),
+                (b"#SCROLLS:", chart_scrolls, true),
+            ]
+        ),
+        b'T' => return_tags!(
+            s,
+            out,
+            [
+                (b"#TIMESIGNATURES:", chart_time_signatures, true),
+                (b"#TICKCOUNTS:", chart_tickcounts, true),
+            ]
+        ),
+        b'W' => return_tags!(s, out, [(b"#WARPS:", chart_warps, true)]),
+        _ => {}
+    }
+    None
+}
+
+#[inline(never)]
+fn dispatch_header_tag<'a>(
+    s: &'a [u8],
+    ssc: bool,
+    out: &mut ParsedSimfileData<'a>,
+) -> Option<usize> {
+    match s.get(1).map_or(0, u8::to_ascii_uppercase) {
+        b'A' => {
+            if let Some(advance) = try_tag_append(s, b"#ATTACKS:", true, &mut out.attacks) {
+                return Some(advance);
+            }
+            return_header_tags!(
+                s,
+                out,
+                [
+                    (b"#ARTIST:", artist, true),
+                    (b"#ARTISTTRANSLIT:", artist_translit, true),
+                ]
+            );
+        }
+        b'B' => return_header_tags!(
+            s,
+            out,
+            [
+                (b"#BPMS:", bpms, true),
+                (b"#BANNER:", banner, true),
+                (b"#BACKGROUND:", background, true),
+                (b"#BGCHANGES:", bgchanges, true),
+            ]
+        ),
+        b'C' => return_header_tags!(
+            s,
+            out,
+            [
+                (b"#CREDIT:", credit, true),
+                (b"#CDTITLE:", cdtitle, true),
+                (b"#CDIMAGE:", cdimage, ssc),
+                (b"#COMBOS:", combos, ssc),
+            ]
+        ),
+        b'D' => return_header_tags!(
+            s,
+            out,
+            [
+                (b"#DELAYS:", delays, true),
+                (b"#DISPLAYBPM:", display_bpm, true),
+                (b"#DISCIMAGE:", discimage, ssc),
+            ]
+        ),
+        b'F' => return_header_tags!(
+            s,
+            out,
+            [
+                (b"#FREEZES:", stops, true),
+                (b"#FGCHANGES:", fgchanges, true),
+                (b"#FAKES:", fakes, ssc),
+            ]
+        ),
+        b'G' => return_header_tags!(s, out, [(b"#GENRE:", genre, true)]),
+        b'J' => return_header_tags!(s, out, [(b"#JACKET:", jacket, true)]),
+        b'K' => return_header_tags!(s, out, [(b"#KEYSOUNDS:", keysounds, true)]),
+        b'L' => return_header_tags!(
+            s,
+            out,
+            [
+                (b"#LYRICSPATH:", lyricspath, true),
+                (b"#LABELS:", labels, ssc),
+                (b"#LASTSECONDHINT:", last_second_hint, ssc),
+            ]
+        ),
+        b'M' => return_header_tags!(s, out, [(b"#MUSIC:", music, true)]),
+        b'O' => return_header_tags!(
+            s,
+            out,
+            [(b"#OFFSET:", offset, true), (b"#ORIGIN:", origin, ssc)]
+        ),
+        b'P' => return_header_tags!(s, out, [(b"#PREVIEWVID:", previewvid, ssc)]),
+        b'S' => return_header_tags!(
+            s,
+            out,
+            [
+                (b"#SUBTITLE:", subtitle, true),
+                (b"#SUBTITLETRANSLIT:", subtitle_translit, true),
+                (b"#STOPS:", stops, true),
+                (b"#SPEEDS:", speeds, ssc),
+                (b"#SCROLLS:", scrolls, ssc),
+                (b"#SAMPLESTART:", sample_start, true),
+                (b"#SAMPLELENGTH:", sample_length, true),
+                (b"#SELECTABLE:", selectable, true),
+            ]
+        ),
+        b'T' => return_header_tags!(
+            s,
+            out,
+            [
+                (b"#TITLE:", title, true),
+                (b"#TITLETRANSLIT:", title_translit, true),
+                (b"#TIMESIGNATURES:", time_signatures, true),
+                (b"#TICKCOUNTS:", tickcounts, true),
+            ]
+        ),
+        b'V' => return_header_tags!(s, out, [(b"#VERSION:", version, true)]),
+        b'W' => return_header_tags!(s, out, [(b"#WARPS:", warps, ssc)]),
+        _ => {}
+    }
+    None
+}
+
+fn parse_notedata_entry<const DISPATCH: bool>(
+    data: &[u8],
+    start: usize,
+) -> (Option<ParsedChartEntry<'_>>, usize) {
     let mut out = NotedataFields::default();
     let mut i = start;
 
@@ -649,43 +845,60 @@ fn parse_notedata_entry(data: &[u8], start: usize) -> (Option<ParsedChartEntry<'
             continue;
         }
 
-        if let Some(adv) = try_tag_append(s, b"#ATTACKS:", true, &mut out.chart_attacks) {
-            i += adv;
-            continue;
+        if DISPATCH
+            && s.get(1)
+                .is_some_and(|byte| byte.eq_ignore_ascii_case(&b'N'))
+        {
+            try_tags!(
+                s,
+                i,
+                out,
+                [(b"#NOTES:", notes, true), (b"#NOTES2:", notes2, true)]
+            );
         }
-
-        try_tags!(
-            s,
-            i,
-            out,
-            [
-                (b"#STEPSTYPE:", step_type, false),
-                (b"#CHARTNAME:", chart_name, false),
-                (b"#CHARTSTYLE:", chart_style, false),
-                (b"#DESCRIPTION:", description, false),
-                (b"#CREDIT:", credit, false),
-                (b"#DIFFICULTY:", difficulty, false),
-                (b"#METER:", meter, false),
-                (b"#NOTES:", notes, true),
-                (b"#NOTES2:", notes2, true),
-                (b"#MUSIC:", chart_music, true),
-                (b"#BPMS:", chart_bpms, true),
-                (b"#STOPS:", chart_stops, true),
-                (b"#FREEZES:", chart_freezes, true),
-                (b"#DELAYS:", chart_delays, true),
-                (b"#WARPS:", chart_warps, true),
-                (b"#SPEEDS:", chart_speeds, true),
-                (b"#SCROLLS:", chart_scrolls, true),
-                (b"#FAKES:", chart_fakes, true),
-                (b"#OFFSET:", chart_offset, true),
-                (b"#DISPLAYBPM:", chart_display_bpm, true),
-                (b"#TIMESIGNATURES:", chart_time_signatures, true),
-                (b"#LABELS:", chart_labels, true),
-                (b"#TICKCOUNTS:", chart_tickcounts, true),
-                (b"#COMBOS:", chart_combos, true),
-                (b"#RADARVALUES:", chart_radar_values, true),
-            ]
-        );
+        if DISPATCH {
+            if let Some(advance) = dispatch_notedata_tag(s, &mut out) {
+                i += advance;
+                continue;
+            }
+        } else {
+            if let Some(adv) = try_tag_append(s, b"#ATTACKS:", true, &mut out.chart_attacks) {
+                i += adv;
+                continue;
+            }
+            try_tags!(
+                s,
+                i,
+                out,
+                [
+                    (b"#STEPSTYPE:", step_type, false),
+                    (b"#CHARTNAME:", chart_name, false),
+                    (b"#CHARTSTYLE:", chart_style, false),
+                    (b"#DESCRIPTION:", description, false),
+                    (b"#CREDIT:", credit, false),
+                    (b"#DIFFICULTY:", difficulty, false),
+                    (b"#METER:", meter, false),
+                    (b"#NOTES:", notes, true),
+                    (b"#NOTES2:", notes2, true),
+                    (b"#MUSIC:", chart_music, true),
+                    (b"#BPMS:", chart_bpms, true),
+                    (b"#STOPS:", chart_stops, true),
+                    (b"#FREEZES:", chart_freezes, true),
+                    (b"#DELAYS:", chart_delays, true),
+                    (b"#WARPS:", chart_warps, true),
+                    (b"#SPEEDS:", chart_speeds, true),
+                    (b"#SCROLLS:", chart_scrolls, true),
+                    (b"#FAKES:", chart_fakes, true),
+                    (b"#OFFSET:", chart_offset, true),
+                    (b"#DISPLAYBPM:", chart_display_bpm, true),
+                    (b"#TIMESIGNATURES:", chart_time_signatures, true),
+                    (b"#LABELS:", chart_labels, true),
+                    (b"#TICKCOUNTS:", chart_tickcounts, true),
+                    (b"#COMBOS:", chart_combos, true),
+                    (b"#RADARVALUES:", chart_radar_values, true),
+                ]
+            );
+        }
         i += 1;
     }
 
@@ -730,6 +943,27 @@ fn finalize_notedata_entry(f: NotedataFields<'_>) -> Option<ParsedChartEntry<'_>
 }
 
 pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfileData<'a>> {
+    extract_sections_impl::<true>(data, ext)
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn extract_sections_for_bench<'a>(
+    data: &'a [u8],
+    ext: &str,
+    legacy_dispatch: bool,
+) -> io::Result<ParsedSimfileData<'a>> {
+    if legacy_dispatch {
+        extract_sections_impl::<false>(data, ext)
+    } else {
+        extract_sections_impl::<true>(data, ext)
+    }
+}
+
+fn extract_sections_impl<'a, const DISPATCH: bool>(
+    data: &'a [u8],
+    ext: &str,
+) -> io::Result<ParsedSimfileData<'a>> {
     let ssc = extension_is_ssc(ext)?;
 
     let mut r = ParsedSimfileData::default();
@@ -744,7 +978,7 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
 
         // SSC notedata block
         if ssc && starts_with_ci(s, b"#NOTEDATA:") {
-            let (entry, next) = parse_notedata_entry(data, i);
+            let (entry, next) = parse_notedata_entry::<DISPATCH>(data, i);
             if let Some(entry) = entry {
                 r.notes_list.push(entry);
             }
@@ -777,58 +1011,64 @@ pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfi
             }
         }
 
-        if let Some(adv) = try_tag_append(s, b"#ATTACKS:", true, &mut r.attacks) {
-            i += adv;
-            continue;
+        if DISPATCH {
+            if let Some(advance) = dispatch_header_tag(s, ssc, &mut r) {
+                i += advance;
+                continue;
+            }
+        } else {
+            if let Some(adv) = try_tag_append(s, b"#ATTACKS:", true, &mut r.attacks) {
+                i += adv;
+                continue;
+            }
+            try_header_tags!(
+                s,
+                i,
+                r,
+                [
+                    (b"#TITLE:", title, true),
+                    (b"#SUBTITLE:", subtitle, true),
+                    (b"#ARTIST:", artist, true),
+                    (b"#GENRE:", genre, true),
+                    (b"#TITLETRANSLIT:", title_translit, true),
+                    (b"#SUBTITLETRANSLIT:", subtitle_translit, true),
+                    (b"#ARTISTTRANSLIT:", artist_translit, true),
+                    (b"#VERSION:", version, true),
+                    (b"#OFFSET:", offset, true),
+                    (b"#BPMS:", bpms, true),
+                    (b"#STOPS:", stops, true),
+                    (b"#FREEZES:", stops, true),
+                    (b"#DELAYS:", delays, true),
+                    (b"#TIMESIGNATURES:", time_signatures, true),
+                    (b"#TICKCOUNTS:", tickcounts, true),
+                    (b"#BANNER:", banner, true),
+                    (b"#BACKGROUND:", background, true),
+                    (b"#CDTITLE:", cdtitle, true),
+                    (b"#JACKET:", jacket, true),
+                    (b"#MUSIC:", music, true),
+                    (b"#SAMPLESTART:", sample_start, true),
+                    (b"#SAMPLELENGTH:", sample_length, true),
+                    (b"#DISPLAYBPM:", display_bpm, true),
+                    (b"#SELECTABLE:", selectable, true),
+                    (b"#LYRICSPATH:", lyricspath, true),
+                    (b"#CREDIT:", credit, true),
+                    (b"#BGCHANGES:", bgchanges, true),
+                    (b"#FGCHANGES:", fgchanges, true),
+                    (b"#KEYSOUNDS:", keysounds, true),
+                    (b"#ORIGIN:", origin, ssc),
+                    (b"#PREVIEWVID:", previewvid, ssc),
+                    (b"#CDIMAGE:", cdimage, ssc),
+                    (b"#DISCIMAGE:", discimage, ssc),
+                    (b"#FAKES:", fakes, ssc),
+                    (b"#WARPS:", warps, ssc),
+                    (b"#SPEEDS:", speeds, ssc),
+                    (b"#SCROLLS:", scrolls, ssc),
+                    (b"#LABELS:", labels, ssc),
+                    (b"#COMBOS:", combos, ssc),
+                    (b"#LASTSECONDHINT:", last_second_hint, ssc),
+                ]
+            );
         }
-
-        try_header_tags!(
-            s,
-            i,
-            r,
-            [
-                (b"#TITLE:", title, true),
-                (b"#SUBTITLE:", subtitle, true),
-                (b"#ARTIST:", artist, true),
-                (b"#GENRE:", genre, true),
-                (b"#TITLETRANSLIT:", title_translit, true),
-                (b"#SUBTITLETRANSLIT:", subtitle_translit, true),
-                (b"#ARTISTTRANSLIT:", artist_translit, true),
-                (b"#VERSION:", version, true),
-                (b"#OFFSET:", offset, true),
-                (b"#BPMS:", bpms, true),
-                (b"#STOPS:", stops, true),
-                (b"#FREEZES:", stops, true),
-                (b"#DELAYS:", delays, true),
-                (b"#TIMESIGNATURES:", time_signatures, true),
-                (b"#TICKCOUNTS:", tickcounts, true),
-                (b"#BANNER:", banner, true),
-                (b"#BACKGROUND:", background, true),
-                (b"#CDTITLE:", cdtitle, true),
-                (b"#JACKET:", jacket, true),
-                (b"#MUSIC:", music, true),
-                (b"#SAMPLESTART:", sample_start, true),
-                (b"#SAMPLELENGTH:", sample_length, true),
-                (b"#DISPLAYBPM:", display_bpm, true),
-                (b"#SELECTABLE:", selectable, true),
-                (b"#LYRICSPATH:", lyricspath, true),
-                (b"#CREDIT:", credit, true),
-                (b"#BGCHANGES:", bgchanges, true),
-                (b"#FGCHANGES:", fgchanges, true),
-                (b"#KEYSOUNDS:", keysounds, true),
-                (b"#ORIGIN:", origin, ssc),
-                (b"#PREVIEWVID:", previewvid, ssc),
-                (b"#CDIMAGE:", cdimage, ssc),
-                (b"#DISCIMAGE:", discimage, ssc),
-                (b"#FAKES:", fakes, ssc),
-                (b"#WARPS:", warps, ssc),
-                (b"#SPEEDS:", speeds, ssc),
-                (b"#SCROLLS:", scrolls, ssc),
-                (b"#LABELS:", labels, ssc),
-                (b"#COMBOS:", combos, ssc),
-                (b"#LASTSECONDHINT:", last_second_hint, ssc),
-            ]
-        );
         i += 1;
     }
     Ok(r)
@@ -1038,9 +1278,51 @@ mod tests {
     use std::borrow::Cow;
 
     use super::{
-        decode_cp1252, decode_unescape_trim, extract_sections, parse_version, unescape_trim_cow,
+        decode_cp1252, decode_unescape_trim, extract_sections, extract_sections_impl,
+        parse_version, unescape_trim_cow,
     };
     use crate::timing::{STEPFILE_VERSION_NUMBER, TimingFormat};
+
+    #[test]
+    fn indexed_tag_dispatch_preserves_mixed_case_tags() {
+        let data = concat!(
+            "#tItLe:Mixed Case;\n",
+            "#aTtAcKs:first;\n",
+            "#AtTaCkS:second;\n",
+            "#unknown:ignored;\n",
+            "#nOtEdAtA:;\n",
+            "#sTePsTyPe:dance-single;\n",
+            "#dEsCrIpTiOn:dispatch;\n",
+            "#dIfFiCuLtY:Challenge;\n",
+            "#mEtEr:12;\n",
+            "#cReDiT:Author;\n",
+            "#dIsPlAyBpM:120:180;\n",
+            "#nOtEs:\n1000\n0100\n0010\n0001\n;\n",
+        )
+        .as_bytes();
+        let current = extract_sections(data, "ssc").expect("fixture should parse");
+        let legacy =
+            extract_sections_impl::<false>(data, "ssc").expect("legacy fixture should parse");
+
+        assert_eq!(current.title, Some(&b"Mixed Case"[..]));
+        assert_eq!(current.attacks.as_deref(), Some(&b"first:second"[..]));
+        assert_eq!(current.notes_list.len(), 1);
+        assert_eq!(current.notes_list[0].fields, legacy.notes_list[0].fields);
+        assert_eq!(
+            current.notes_list[0].chart_display_bpm.as_deref(),
+            Some(&b"120:180"[..])
+        );
+        assert_eq!(current.title, legacy.title);
+        assert_eq!(current.attacks, legacy.attacks);
+        assert_eq!(
+            current.notes_list[0].chart_display_bpm,
+            legacy.notes_list[0].chart_display_bpm
+        );
+        assert_eq!(
+            current.notes_list[0].note_data,
+            legacy.notes_list[0].note_data
+        );
+    }
 
     #[test]
     fn version_parses_itg_numeric_prefix() {

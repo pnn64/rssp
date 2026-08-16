@@ -7,6 +7,8 @@ const EXTENSION: &str = "ssc";
 
 #[path = "support/metadata.rs"]
 mod metadata_bench;
+#[path = "support/parse_dispatch.rs"]
+mod parse_dispatch_bench;
 #[path = "support/translate.rs"]
 mod translate_bench;
 
@@ -331,11 +333,39 @@ fn bench_marker_translation(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_parse_dispatch(c: &mut Criterion) {
+    let fixture = parse_dispatch_bench::fixture();
+    parse_dispatch_bench::assert_behavior(&fixture);
+    parse_dispatch_bench::assert_pair(FIXTURE.as_bytes(), EXTENSION);
+    for (name, data) in [
+        ("parse_dispatch_128_charts", fixture.as_slice()),
+        ("parse_dispatch_real_ssc", FIXTURE.as_bytes()),
+    ] {
+        let mut group = c.benchmark_group(name);
+        group.sample_size(100);
+        group.measurement_time(Duration::from_secs(3));
+        group.throughput(Throughput::Bytes(data.len() as u64));
+        for (phase, legacy) in [("indexed_tags", false), ("sequential_tags", true)] {
+            group.bench_function(phase, |b| {
+                b.iter(|| {
+                    black_box(parse_dispatch_bench::parse(
+                        black_box(data),
+                        EXTENSION,
+                        legacy,
+                    ));
+                });
+            });
+        }
+        group.finish();
+    }
+}
+
 criterion_group!(
     benches,
     bench_metadata_pipeline,
     bench_chart_metadata_analysis,
     bench_chart_metadata_strings,
-    bench_marker_translation
+    bench_marker_translation,
+    bench_parse_dispatch,
 );
 criterion_main!(benches);

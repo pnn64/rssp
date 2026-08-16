@@ -33,6 +33,9 @@ mod nps_stats_bench;
 #[path = "support/pack.rs"]
 mod pack_bench;
 #[cfg(windows)]
+#[path = "support/parse_dispatch.rs"]
+mod parse_dispatch_bench;
+#[cfg(windows)]
 #[path = "support/path_sort.rs"]
 mod path_sort_bench;
 #[cfg(windows)]
@@ -459,6 +462,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let bpm_stats_values: Vec<_> = bpm_stats_map.iter().map(|&(_, bpm)| bpm).collect();
     let bpm_display_fixture = bpm_display_bench::fixture();
     bpm_display_bench::assert_behavior(&bpm_display_fixture);
+    let parse_dispatch_fixture = parse_dispatch_bench::fixture();
+    parse_dispatch_bench::assert_behavior(&parse_dispatch_fixture);
 
     let mut parsing = c.benchmark_group("cycles/parsing");
     parsing.throughput(Throughput::Elements(ENTRIES as u64));
@@ -470,6 +475,42 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     parsing.finish();
+
+    let mut parse_dispatch = c.benchmark_group("cycles/parse_dispatch_128_charts");
+    parse_dispatch.throughput(Throughput::Bytes(parse_dispatch_fixture.len() as u64));
+    parse_dispatch.sample_size(100);
+    parse_dispatch.measurement_time(Duration::from_secs(3));
+    for (name, legacy) in [("sequential_tags", true), ("indexed_tags", false)] {
+        parse_dispatch.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(parse_dispatch_bench::parse(
+                    black_box(&parse_dispatch_fixture),
+                    "ssc",
+                    legacy,
+                ));
+            });
+        });
+    }
+    parse_dispatch.finish();
+
+    let real_parse_fixture = include_bytes!("fixtures/camellia_mix.ssc");
+    parse_dispatch_bench::assert_pair(real_parse_fixture, "ssc");
+    let mut real_parse = c.benchmark_group("cycles/parse_dispatch_real_ssc");
+    real_parse.throughput(Throughput::Bytes(real_parse_fixture.len() as u64));
+    real_parse.sample_size(100);
+    real_parse.measurement_time(Duration::from_secs(3));
+    for (name, legacy) in [("indexed_tags", false), ("sequential_tags", true)] {
+        real_parse.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(parse_dispatch_bench::parse(
+                    black_box(real_parse_fixture),
+                    "ssc",
+                    legacy,
+                ));
+            });
+        });
+    }
+    real_parse.finish();
 
     const DISPLAY_CASES: [(Option<&str>, f64, f64, f64); 4] = [
         (None, 120.0, 180.0, 1.0),
