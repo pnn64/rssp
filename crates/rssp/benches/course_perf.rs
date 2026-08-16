@@ -406,6 +406,39 @@ fn bench_stepstype_normalize(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_title_match(c: &mut Criterion) {
+    course_bench::assert_title_match_behavior();
+    let mut group = c.benchmark_group("course_title_match");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(2));
+    group.throughput(Throughput::Elements(course_bench::TITLE_MATCH_BATCH as u64));
+    group.bench_function("owned_full_title", |b| {
+        b.iter(|| {
+            for _ in 0..course_bench::TITLE_MATCH_BATCH {
+                black_box(rssp::course::profile_simfile_title_eq(
+                    black_box(course_bench::TITLE_MATCH_INPUT),
+                    black_box("ssc"),
+                    black_box(course_bench::TITLE_MATCH_EXPECTED),
+                    true,
+                ));
+            }
+        });
+    });
+    group.bench_function("borrowed_parts", |b| {
+        b.iter(|| {
+            for _ in 0..course_bench::TITLE_MATCH_BATCH {
+                black_box(rssp::course::profile_simfile_title_eq(
+                    black_box(course_bench::TITLE_MATCH_INPUT),
+                    black_box("ssc"),
+                    black_box(course_bench::TITLE_MATCH_EXPECTED),
+                    false,
+                ));
+            }
+        });
+    });
+    group.finish();
+}
+
 fn course_patterns(count: usize) -> Vec<rssp::patterns::CustomPatternSummary> {
     const DIRECTIONS: [u8; 4] = *b"LDUR";
     (0..count)
@@ -535,6 +568,7 @@ criterion_group!(
     bench_select_parse,
     bench_stepstype_match,
     bench_stepstype_normalize,
+    bench_title_match,
     bench_pattern_merge,
     bench_course_banner,
     bench_song_resolve

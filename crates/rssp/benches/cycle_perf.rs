@@ -976,6 +976,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     banner_fixture.assert_behavior();
     resolve_fixture.assert_behavior();
     course_bench::assert_step_norm_behavior();
+    course_bench::assert_title_match_behavior();
     let course_input =
         std::fs::read(course_fixture.course_path()).expect("benchmark course should be readable");
     let legacy_course = rssp::course::profile_parse_crs(&course_input, true)
@@ -1149,6 +1150,31 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
                         false,
                     ));
                 }
+            }
+        });
+    });
+    optimizations.throughput(Throughput::Elements(course_bench::TITLE_MATCH_BATCH as u64));
+    optimizations.bench_function("title_match_owned", |b| {
+        b.iter(|| {
+            for _ in 0..course_bench::TITLE_MATCH_BATCH {
+                black_box(rssp::course::profile_simfile_title_eq(
+                    black_box(course_bench::TITLE_MATCH_INPUT),
+                    black_box("ssc"),
+                    black_box(course_bench::TITLE_MATCH_EXPECTED),
+                    true,
+                ));
+            }
+        });
+    });
+    optimizations.bench_function("title_match_borrowed", |b| {
+        b.iter(|| {
+            for _ in 0..course_bench::TITLE_MATCH_BATCH {
+                black_box(rssp::course::profile_simfile_title_eq(
+                    black_box(course_bench::TITLE_MATCH_INPUT),
+                    black_box("ssc"),
+                    black_box(course_bench::TITLE_MATCH_EXPECTED),
+                    false,
+                ));
             }
         });
     });

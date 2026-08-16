@@ -28,6 +28,10 @@ pub const STEP_NORM_CASES: [&str; 8] = [
     "DANCE-SOLO",
     "非ASCII-single",
 ];
+pub const TITLE_MATCH_BATCH: usize = 1_024;
+pub const TITLE_MATCH_INPUT: &[u8] =
+    b"#TITLE:Performance Song;#SUBTITLE:Benchmark Mix;#ARTIST:RSSP;";
+pub const TITLE_MATCH_EXPECTED: &str = "Performance Song Benchmark Mix";
 
 pub fn assert_step_norm_behavior() {
     for raw in STEP_NORM_CASES {
@@ -46,6 +50,43 @@ pub fn assert_step_norm_behavior() {
         rssp::course::profile_normalize_stepstype("DANCE_SINGLE", false),
         std::borrow::Cow::Owned(_)
     ));
+}
+
+pub fn assert_title_match_behavior() {
+    const CASES: [(&[u8], &str, &str); 10] = [
+        (b"#TITLE:Song;", "ssc", "song"),
+        (b"#TITLE:Song;#SUBTITLE:Mix;", "sm", "SONG MIX"),
+        (
+            b"#TITLE:Native;#TITLETRANSLIT:Latin;#SUBTITLE:Sub;#SUBTITLETRANSLIT:Alt;",
+            "ssc",
+            "latin alt",
+        ),
+        (b"#TITLE:  Spaced  ;#SUBTITLE: Mix ;", "ssc", "Spaced Mix"),
+        (b"#ARTIST:None;", "ssc", ""),
+        (
+            b"#TITLE:Colon\\:Song;#SUBTITLE:Mix;",
+            "ssc",
+            "Colon:Song Mix",
+        ),
+        (b"#TITLE:Caf\xe9;", "sm", "Café"),
+        (b"#TITLE:Line\nBreak;", "ssc", "LineBreak"),
+        (b"#TITLE:Song;", "ssc", "Other"),
+        (b"#TITLE:Song;", "invalid", "Song"),
+    ];
+    for (data, ext, expected) in CASES {
+        let legacy = rssp::course::profile_simfile_title_eq(data, ext, expected, true);
+        let current = rssp::course::profile_simfile_title_eq(data, ext, expected, false);
+        assert_eq!(current, legacy, "title matching changed for {expected:?}");
+    }
+    assert_eq!(
+        rssp::course::profile_simfile_title_eq(
+            TITLE_MATCH_INPUT,
+            "ssc",
+            TITLE_MATCH_EXPECTED,
+            false,
+        ),
+        Some(true)
+    );
 }
 
 pub fn select_input() -> Vec<u8> {

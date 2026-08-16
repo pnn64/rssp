@@ -1264,6 +1264,7 @@ fn course_title_from_simfile(sim: &SimfileSummary) -> String {
     }
 }
 
+#[cfg(feature = "profile")]
 fn simfile_translit_full_title(data: &[u8], ext: &str) -> Option<String> {
     let parsed = extract_sections(data, ext).ok()?;
     let title = parsed
@@ -1287,6 +1288,57 @@ fn simfile_translit_full_title(data: &[u8], ext: &str) -> Option<String> {
         Some(title.to_string())
     } else {
         Some(format!("{title} {subtitle}"))
+    }
+}
+
+fn title_parts_eq(title: &str, subtitle: &str, expected: &str) -> bool {
+    if subtitle.is_empty() {
+        return title.eq_ignore_ascii_case(expected);
+    }
+    let expected = expected.as_bytes();
+    expected
+        .get(..title.len())
+        .is_some_and(|value| value.eq_ignore_ascii_case(title.as_bytes()))
+        && expected.get(title.len()) == Some(&b' ')
+        && expected
+            .get(title.len() + 1..)
+            .is_some_and(|value| value.eq_ignore_ascii_case(subtitle.as_bytes()))
+}
+
+fn simfile_translit_title_eq(data: &[u8], ext: &str, expected: &str) -> Option<bool> {
+    let parsed = extract_sections(data, ext).ok()?;
+    let title_bytes = parsed.title_translit.or(parsed.title).unwrap_or_default();
+    let title_decoded = decode_bytes(title_bytes);
+    let title_unescaped = unescape_tag(title_decoded.as_ref());
+    let title_cleaned = clean_tag(title_unescaped.as_ref());
+
+    let subtitle_bytes = parsed
+        .subtitle_translit
+        .or(parsed.subtitle)
+        .unwrap_or_default();
+    let subtitle_decoded = decode_bytes(subtitle_bytes);
+    let subtitle_unescaped = unescape_tag(subtitle_decoded.as_ref());
+
+    Some(title_parts_eq(
+        title_cleaned.trim(),
+        subtitle_unescaped.trim(),
+        expected,
+    ))
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+#[must_use]
+pub fn profile_simfile_title_eq(
+    data: &[u8],
+    ext: &str,
+    expected: &str,
+    legacy: bool,
+) -> Option<bool> {
+    if legacy {
+        simfile_translit_full_title(data, ext).map(|title| title.eq_ignore_ascii_case(expected))
+    } else {
+        simfile_translit_title_eq(data, ext, expected)
     }
 }
 
@@ -1332,8 +1384,7 @@ fn resolve_song_dir(songs_dir: &Path, group: Option<&str>, song: &str) -> Option
             let dir = group_dir.join(name);
             let scan = pack::scan_song_dir(&dir, pack::ScanOpt::default()).ok()??;
             let sim = simfile::open(&scan.simfile).ok()?;
-            let title = simfile_translit_full_title(&sim.data, sim.extension)?;
-            if title.eq_ignore_ascii_case(song) {
+            if simfile_translit_title_eq(&sim.data, sim.extension, song)? {
                 return Some(dir);
             }
         }
