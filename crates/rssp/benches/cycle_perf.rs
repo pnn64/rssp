@@ -973,14 +973,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let course_fixture = course_bench::CourseFixture::new();
     let banner_fixture = course_bench::BannerFixture::new();
     let resolve_fixture = course_bench::ResolveFixture::new();
-    let legacy_banner = rssp::course::profile_course_banner(banner_fixture.course_path(), "", true);
-    let current_banner =
-        rssp::course::profile_course_banner(banner_fixture.course_path(), "", false);
-    assert_eq!(
-        current_banner, legacy_banner,
-        "course banner selection must not change"
-    );
-    assert_eq!(current_banner, Some(banner_fixture.expected_banner()));
+    banner_fixture.assert_behavior();
     resolve_fixture.assert_behavior();
     let course_input =
         std::fs::read(course_fixture.course_path()).expect("benchmark course should be readable");
@@ -1482,7 +1475,15 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             ))
         });
     });
-    course_banner.bench_function("one_scan_ranked", |b| {
+    course_banner.bench_function("one_scan_full_path_stats", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_course_banner_full_paths(
+                black_box(banner_fixture.course_path()),
+                black_box(""),
+            ))
+        });
+    });
+    course_banner.bench_function("one_scan_entry_types", |b| {
         b.iter(|| {
             black_box(rssp::course::profile_course_banner(
                 black_box(banner_fixture.course_path()),

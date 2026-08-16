@@ -2763,13 +2763,14 @@ fn run_stepstype_alloc(iterations: usize) {
     });
 }
 
-fn run_course_banner_phase(
+fn run_course_banner_phase<F>(
     fixture: &course_bench::BannerFixture,
     phase: &str,
     iterations: usize,
-    legacy: bool,
-) {
-    let resolve = || rssp::course::profile_course_banner(fixture.course_path(), "", legacy);
+    resolve: F,
+) where
+    F: Fn() -> Option<PathBuf>,
+{
     assert_eq!(resolve(), Some(fixture.expected_banner()));
 
     reset_counters();
@@ -2809,11 +2810,16 @@ fn run_course_banner_phase(
 
 fn run_course_banner_alloc(iterations: usize) {
     let fixture = course_bench::BannerFixture::new();
-    let legacy = rssp::course::profile_course_banner(fixture.course_path(), "", true);
-    let current = rssp::course::profile_course_banner(fixture.course_path(), "", false);
-    assert_eq!(current, legacy, "course banner selection must not change");
-    run_course_banner_phase(&fixture, "legacy-five-scans", iterations, true);
-    run_course_banner_phase(&fixture, "one-scan-ranked", iterations, false);
+    fixture.assert_behavior();
+    run_course_banner_phase(&fixture, "legacy-five-scans", iterations, || {
+        rssp::course::profile_course_banner(fixture.course_path(), "", true)
+    });
+    run_course_banner_phase(&fixture, "one-scan-full-path-stats", iterations, || {
+        rssp::course::profile_course_banner_full_paths(fixture.course_path(), "")
+    });
+    run_course_banner_phase(&fixture, "one-scan-entry-types", iterations, || {
+        rssp::course::profile_course_banner(fixture.course_path(), "", false)
+    });
 }
 
 fn run_course_resolve_phase(

@@ -421,10 +421,7 @@ fn bench_pattern_merge(c: &mut Criterion) {
 
 fn bench_course_banner(c: &mut Criterion) {
     let fixture = course_bench::BannerFixture::new();
-    let legacy = rssp::course::profile_course_banner(fixture.course_path(), "", true);
-    let current = rssp::course::profile_course_banner(fixture.course_path(), "", false);
-    assert_eq!(current, legacy, "course banner selection must not change");
-    assert_eq!(current, Some(fixture.expected_banner()));
+    fixture.assert_behavior();
 
     let mut group = c.benchmark_group("course_banner_258");
     group.sample_size(20);
@@ -441,7 +438,15 @@ fn bench_course_banner(c: &mut Criterion) {
             ))
         });
     });
-    group.bench_function("one_scan_ranked", |b| {
+    group.bench_function("one_scan_full_path_stats", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_course_banner_full_paths(
+                black_box(fixture.course_path()),
+                black_box(""),
+            ))
+        });
+    });
+    group.bench_function("one_scan_entry_types", |b| {
         b.iter(|| {
             black_box(rssp::course::profile_course_banner(
                 black_box(fixture.course_path()),

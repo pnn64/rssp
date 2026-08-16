@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, hash_map::Entry};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
@@ -766,10 +766,21 @@ fn starts_ascii_ci(actual: &str, expected: &str) -> bool {
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case(expected.as_bytes()))
 }
 
+#[cfg(feature = "profile")]
 fn banner_rank(path: &Path, course_stem: &str) -> Option<usize> {
     if !path.is_file() {
         return None;
     }
+    let path_ext = path.extension()?.to_str()?;
+    let rank = COURSE_BANNER_EXTS
+        .iter()
+        .position(|ext| path_ext.eq_ignore_ascii_case(ext))?;
+    let file_stem = path.file_stem()?.to_str()?;
+    starts_ascii_ci(file_stem, course_stem).then_some(rank)
+}
+
+fn banner_name_rank(name: &OsStr, course_stem: &str) -> Option<usize> {
+    let path = Path::new(name);
     let path_ext = path.extension()?.to_str()?;
     let rank = COURSE_BANNER_EXTS
         .iter()
@@ -807,8 +818,8 @@ fn resolve_banner_old(course_path: &Path, banner_tag: &str) -> Option<PathBuf> {
     possible.into_iter().next()
 }
 
-#[must_use]
-pub fn resolve_course_banner_path(course_path: &Path, banner_tag: &str) -> Option<PathBuf> {
+#[cfg(feature = "profile")]
+fn resolve_banner_full_paths(course_path: &Path, banner_tag: &str) -> Option<PathBuf> {
     let banner_tag = banner_tag.trim();
     if !banner_tag.is_empty() {
         let tag_path = Path::new(banner_tag);
@@ -843,6 +854,49 @@ pub fn resolve_course_banner_path(course_path: &Path, banner_tag: &str) -> Optio
     possible.into_iter().flatten().next()
 }
 
+#[must_use]
+pub fn resolve_course_banner_path(course_path: &Path, banner_tag: &str) -> Option<PathBuf> {
+    let banner_tag = banner_tag.trim();
+    if !banner_tag.is_empty() {
+        let tag_path = Path::new(banner_tag);
+        if tag_path.is_absolute() {
+            return tag_path.is_file().then_some(tag_path.to_path_buf());
+        }
+        let parent = course_path.parent().unwrap_or_else(|| Path::new(""));
+        let joined = parent.join(tag_path);
+        return joined.is_file().then_some(joined);
+    }
+
+    let parent = course_path.parent().unwrap_or_else(|| Path::new(""));
+    let course_stem = course_path.file_stem()?.to_string_lossy();
+    if course_stem.is_empty() {
+        return None;
+    }
+
+    let entries = std::fs::read_dir(parent).ok()?;
+    let mut possible: [Option<OsString>; COURSE_BANNER_EXTS.len()] = Default::default();
+    for entry in entries.flatten() {
+        if !assets::entry_is_file(&entry) {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(rank) = banner_name_rank(&name, &course_stem) else {
+            continue;
+        };
+        if possible[rank]
+            .as_deref()
+            .is_none_or(|current| assets::cmp_os_ci(&name, current).is_lt())
+        {
+            possible[rank] = Some(name);
+        }
+    }
+    possible
+        .into_iter()
+        .flatten()
+        .next()
+        .map(|name| parent.join(name))
+}
+
 #[cfg(feature = "profile")]
 #[doc(hidden)]
 #[must_use]
@@ -856,6 +910,13 @@ pub fn profile_course_banner(
     } else {
         resolve_course_banner_path(course_path, banner_tag)
     }
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+#[must_use]
+pub fn profile_course_banner_full_paths(course_path: &Path, banner_tag: &str) -> Option<PathBuf> {
+    resolve_banner_full_paths(course_path, banner_tag)
 }
 
 fn parse_crs_with<const LEGACY: bool>(data: &[u8]) -> Result<CourseFile, String> {

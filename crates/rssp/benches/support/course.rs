@@ -212,6 +212,25 @@ impl BannerFixture {
     pub fn expected_banner(&self) -> PathBuf {
         self.root.join("pERFORMANCE mIX-000.PNG")
     }
+
+    pub fn assert_behavior(&self) {
+        let assert_same = |tag: &str| {
+            let legacy = rssp::course::profile_course_banner(&self.course_path, tag, true);
+            let full_paths = rssp::course::profile_course_banner_full_paths(&self.course_path, tag);
+            let current = rssp::course::profile_course_banner(&self.course_path, tag, false);
+            assert_eq!(full_paths, legacy, "one-scan banner result changed");
+            assert_eq!(current, full_paths, "filename banner result changed");
+        };
+        for tag in ["", " pERFORMANCE mIX-001.jpg ", "Missing.png"] {
+            assert_same(tag);
+        }
+        let expected = self.expected_banner();
+        assert_same(&expected.to_string_lossy());
+        assert_eq!(
+            rssp::course::profile_course_banner(&self.course_path, "", false),
+            Some(expected)
+        );
+    }
 }
 
 impl Drop for BannerFixture {
