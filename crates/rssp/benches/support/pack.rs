@@ -15,6 +15,28 @@ pub const HINT_IMAGE_COUNT: usize = 256;
 pub const HINT_OTHER_COUNT: usize = 256;
 pub const HINT_ENTRY_COUNT: usize = HINT_IMAGE_COUNT + HINT_OTHER_COUNT;
 pub const SUBDIR_HINT: &str = "Images/banner*.png";
+pub const HINT_NORM_BATCH: usize = 4_096;
+pub const HINT_NORM_INPUT: &str = "  Images/banner*.png  ";
+
+pub fn assert_hint_norm_behavior() {
+    for hint in [
+        "",
+        "   ",
+        "banner*.png",
+        " Images/banner*.png ",
+        r"Images\banner*.png",
+        r"Images\\nested\banner*.png",
+        "å›¾åƒ/banner*.png",
+    ] {
+        let legacy = rssp::pack::profile_normalized_img_hint(hint, true);
+        let borrowed = rssp::pack::profile_normalized_img_hint(hint, false);
+        assert_eq!(borrowed.as_deref(), legacy.as_deref());
+    }
+    assert!(matches!(
+        rssp::pack::profile_normalized_img_hint(HINT_NORM_INPUT, false),
+        Some(std::borrow::Cow::Borrowed("Images/banner*.png"))
+    ));
+}
 
 pub struct PackFixture {
     root: PathBuf,

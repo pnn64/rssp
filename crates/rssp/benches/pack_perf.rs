@@ -522,6 +522,27 @@ fn bench_selection_algorithms(c: &mut Criterion) {
     masks.finish();
 }
 
+fn bench_hint_normalize(c: &mut Criterion) {
+    pack_bench::assert_hint_norm_behavior();
+    let mut group = c.benchmark_group("pack_hint_normalize");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(2));
+    group.throughput(Throughput::Elements(pack_bench::HINT_NORM_BATCH as u64));
+    for (name, legacy) in [("owned", true), ("borrowed", false)] {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                for _ in 0..pack_bench::HINT_NORM_BATCH {
+                    black_box(rssp::pack::profile_normalized_img_hint(
+                        black_box(pack_bench::HINT_NORM_INPUT),
+                        legacy,
+                    ));
+                }
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_pack_scan,
@@ -535,6 +556,7 @@ criterion_group!(
     bench_delimiter_scan,
     bench_asset_fallbacks,
     bench_song_assets,
-    bench_selection_algorithms
+    bench_selection_algorithms,
+    bench_hint_normalize
 );
 criterion_main!(benches);

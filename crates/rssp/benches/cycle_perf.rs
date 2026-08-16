@@ -1181,6 +1181,23 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             }
         });
     });
+    pack_bench::assert_hint_norm_behavior();
+    optimizations.throughput(Throughput::Elements(pack_bench::HINT_NORM_BATCH as u64));
+    for (name, legacy) in [
+        ("pack_hint_normalize_owned", true),
+        ("pack_hint_normalize_borrowed", false),
+    ] {
+        optimizations.bench_function(name, |b| {
+            b.iter(|| {
+                for _ in 0..pack_bench::HINT_NORM_BATCH {
+                    black_box(rssp::pack::profile_normalized_img_hint(
+                        black_box(pack_bench::HINT_NORM_INPUT),
+                        legacy,
+                    ));
+                }
+            });
+        });
+    }
     optimizations.throughput(Throughput::Elements(stream_densities.len() as u64));
     optimizations.bench_function("stream_outputs", |b| {
         b.iter(|| {

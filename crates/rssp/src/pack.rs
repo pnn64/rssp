@@ -335,7 +335,7 @@ fn pick_ini_img_legacy(pack_dir: &Path, hint: &str) -> Option<PathBuf> {
     if hint.is_empty() {
         return None;
     }
-    let hint = assets::to_slash(hint);
+    let hint = assets::to_slash_legacy(hint);
     let (subdir, mask) = hint.rsplit_once('/').unwrap_or(("", hint.as_str()));
     let dir = if subdir.is_empty() {
         pack_dir.to_path_buf()
@@ -349,9 +349,20 @@ fn pick_ini_img_legacy(pack_dir: &Path, hint: &str) -> Option<PathBuf> {
     })
 }
 
-fn normalized_img_hint(hint: &str) -> Option<String> {
+fn normalized_img_hint(hint: &str) -> Option<std::borrow::Cow<'_, str>> {
     let hint = hint.trim();
     (!hint.is_empty()).then(|| assets::to_slash(hint))
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+#[must_use]
+pub fn profile_normalized_img_hint(hint: &str, legacy: bool) -> Option<std::borrow::Cow<'_, str>> {
+    if !legacy {
+        return normalized_img_hint(hint);
+    }
+    let hint = hint.trim();
+    (!hint.is_empty()).then(|| std::borrow::Cow::Owned(assets::to_slash_legacy(hint)))
 }
 
 fn split_img_hint(hint: &str) -> (&str, &str) {

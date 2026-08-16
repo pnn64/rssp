@@ -145,6 +145,7 @@ enum Mode {
     CourseTitleMatch,
     CourseBanner,
     CourseResolve,
+    PackHintNormalize,
     PackRoot,
     PackScan,
     BackgroundChanges,
@@ -258,6 +259,7 @@ fn parse_args() -> (Mode, usize) {
                     "course-title" => Mode::CourseTitleMatch,
                     "course-banner" => Mode::CourseBanner,
                     "course-resolve" => Mode::CourseResolve,
+                    "pack-hint" => Mode::PackHintNormalize,
                     "pack-root" => Mode::PackRoot,
                     "pack-scan" => Mode::PackScan,
                     "background-changes" => Mode::BackgroundChanges,
@@ -344,6 +346,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         | Mode::CourseTitleMatch
         | Mode::CourseBanner
         | Mode::CourseResolve => rssp::AnalysisOptions::default(),
+        Mode::PackHintNormalize => rssp::AnalysisOptions::default(),
         Mode::PackRoot => rssp::AnalysisOptions::default(),
         Mode::PackScan => rssp::AnalysisOptions::default(),
         Mode::BackgroundChanges => rssp::AnalysisOptions::default(),
@@ -528,6 +531,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::CourseResolve => {
                 unreachable!("course resolve mode uses its dedicated allocation runner")
+            }
+            Mode::PackHintNormalize => {
+                unreachable!("pack hint mode uses its dedicated allocation runner")
             }
             Mode::PackRoot => {
                 unreachable!("pack root mode uses its dedicated allocation runner")
@@ -744,6 +750,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::CourseTitleMatch => "course-title",
         Mode::CourseBanner => "course-banner",
         Mode::CourseResolve => "course-resolve",
+        Mode::PackHintNormalize => "pack-hint",
         Mode::PackRoot => "pack-root",
         Mode::PackScan => "pack-scan",
         Mode::BackgroundChanges => "background-changes",
@@ -2991,6 +2998,53 @@ fn run_course_resolve_alloc(iterations: usize) {
     run_course_resolve_phase(&fixture, "entry-types-names", iterations, false);
 }
 
+fn run_pack_hint_phase(phase: &str, iterations: usize, legacy: bool) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        for _ in 0..pack_bench::HINT_NORM_BATCH {
+            let hint = rssp::pack::profile_normalized_img_hint(
+                black_box(pack_bench::HINT_NORM_INPUT),
+                legacy,
+            );
+            checksum = checksum.wrapping_add(hint.as_deref().map_or(0, str::len));
+            black_box(hint);
+        }
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=pack-hint phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_hints_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        pack_bench::HINT_NORM_BATCH as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_pack_hint_alloc(iterations: usize) {
+    pack_bench::assert_hint_norm_behavior();
+    run_pack_hint_phase("owned", iterations, true);
+    run_pack_hint_phase("borrowed", iterations, false);
+}
+
 fn run_pack_root_phase<F>(phase: &str, iterations: usize, scan: F)
 where
     F: Fn(
@@ -4209,6 +4263,10 @@ fn main() {
         }
         Mode::CourseResolve => {
             run_course_resolve_alloc(iterations);
+            return;
+        }
+        Mode::PackHintNormalize => {
+            run_pack_hint_alloc(iterations);
             return;
         }
         Mode::PackRoot => {

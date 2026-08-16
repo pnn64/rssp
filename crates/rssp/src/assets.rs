@@ -57,7 +57,16 @@ pub(crate) const fn img_rank(ext: &str) -> Option<u8> {
     }
 }
 
-pub(crate) fn to_slash(s: &str) -> String {
+pub(crate) fn to_slash(s: &str) -> Cow<'_, str> {
+    if s.contains('\\') {
+        Cow::Owned(s.replace('\\', "/"))
+    } else {
+        Cow::Borrowed(s)
+    }
+}
+
+#[cfg(any(test, feature = "profile"))]
+pub(crate) fn to_slash_legacy(s: &str) -> String {
     s.chars().map(|c| if c == '\\' { '/' } else { c }).collect()
 }
 
@@ -739,7 +748,7 @@ fn list_song_dir_rel_files<const TRACK_MOVIE: bool>(
             let Ok(rel) = path.strip_prefix(song_dir) else {
                 continue;
             };
-            files.push(to_slash(&rel.to_string_lossy()));
+            files.push(to_slash(&rel.to_string_lossy()).into_owned());
             if TRACK_MOVIE
                 && is_root
                 && !movies_ambiguous
