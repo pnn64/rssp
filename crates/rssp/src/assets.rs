@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
 use std::io::Read;
@@ -127,6 +127,7 @@ pub(crate) fn match_mask_ci(name: &str, mask: &str) -> bool {
             .any(|window| window.eq_ignore_ascii_case(b.as_bytes()))
 }
 
+#[cfg(any(test, feature = "profile"))]
 fn list_image_candidates(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
@@ -150,6 +151,55 @@ fn list_image_candidates(dir: &Path) -> Vec<PathBuf> {
         candidates.push(path);
     }
     candidates.sort_by(|left, right| cmp_name_ci(left, right));
+    candidates
+}
+
+fn cmp_ascii_ci(left: &[u8], right: &[u8]) -> Ordering {
+    for index in 0..left.len().min(right.len()) {
+        let ordering = left[index]
+            .to_ascii_lowercase()
+            .cmp(&right[index].to_ascii_lowercase());
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+    left.len().cmp(&right.len())
+}
+
+fn cmp_os_ci(left: &OsStr, right: &OsStr) -> Ordering {
+    let left = left.to_string_lossy();
+    let right = right.to_string_lossy();
+    cmp_ascii_ci(left.as_bytes(), right.as_bytes())
+}
+
+fn list_image_names(dir: &Path) -> Vec<OsString> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::with_capacity(32);
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(extension) = Path::new(&name)
+            .extension()
+            .and_then(|extension| extension.to_str())
+        else {
+            continue;
+        };
+        if name.to_string_lossy().starts_with("._") || img_rank(extension).is_none() {
+            continue;
+        }
+        let is_file = match entry.file_type() {
+            Ok(file_type) => {
+                file_type.is_file() || (file_type.is_symlink() && entry.path().is_file())
+            }
+            Err(_) => entry.path().is_file(),
+        };
+        if !is_file {
+            continue;
+        }
+        candidates.push(name);
+    }
+    candidates.sort_by(|left, right| cmp_os_ci(left, right));
     candidates
 }
 
@@ -235,17 +285,7 @@ pub(crate) fn cmp_name_ci(left: &Path, right: &Path) -> Ordering {
     let right = right
         .file_name()
         .map_or_else(Cow::default, |name| name.to_string_lossy());
-    let left = left.as_bytes();
-    let right = right.as_bytes();
-    for index in 0..left.len().min(right.len()) {
-        let ordering = left[index]
-            .to_ascii_lowercase()
-            .cmp(&right[index].to_ascii_lowercase());
-        if ordering != Ordering::Equal {
-            return ordering;
-        }
-    }
-    left.len().cmp(&right.len())
+    cmp_ascii_ci(left.as_bytes(), right.as_bytes())
 }
 
 #[inline(always)]
@@ -435,14 +475,15 @@ pub fn resolve_song_assets(
         return (banner, background);
     }
 
-    let images = list_image_candidates(song_dir);
+    let images = list_image_names(song_dir);
     if banner.is_none() || background.is_none() {
-        for image in &images {
+        for name in &images {
+            let image = Path::new(name);
             if banner.is_none() && image_hint_matches(image, b"banner", b"bn") {
-                banner = Some(image.clone());
+                banner = Some(song_dir.join(name));
             }
             if background.is_none() && image_hint_matches(image, b"background", b"bg") {
-                background = Some(image.clone());
+                background = Some(song_dir.join(name));
             }
             if banner.is_some() && background.is_some() {
                 break;
@@ -454,14 +495,79 @@ pub fn resolve_song_assets(
         return (banner, background);
     }
 
+    for name in &images {
+        if banner.is_some() && background.is_some() {
+            break;
+        }
+        if background
+            .as_deref()
+            .is_some_and(|path| root_asset_eq(path, song_dir, name))
+        {
+            continue;
+        }
+        if banner
+            .as_deref()
+            .is_some_and(|path| root_asset_eq(path, song_dir, name))
+        {
+            continue;
+        }
+        let image = song_dir.join(name);
+        let Some((w, h)) = img_dims(&image) else {
+            continue;
+        };
+        if background.is_none() && w >= 320 && h >= 240 {
+            background = Some(image);
+            continue;
+        }
+        if banner.is_none() && (100..=320).contains(&w) && (50..=240).contains(&h) {
+            banner = Some(image);
+            continue;
+        }
+        if banner.is_none() && w > 200 && h > 0 && (w as f32 / h as f32) > 2.0 {
+            banner = Some(image);
+        }
+    }
+
+    (banner, background)
+}
+
+fn root_asset_eq(path: &Path, song_dir: &Path, name: &OsStr) -> bool {
+    path.parent() == Some(song_dir) && path.file_name() == Some(name)
+}
+
+#[cfg(feature = "profile")]
+#[must_use]
+pub(crate) fn profile_resolve_song_assets_legacy(
+    song_dir: &Path,
+    banner_tag: &str,
+    background_tag: &str,
+) -> (Option<PathBuf>, Option<PathBuf>) {
+    let mut banner = resolve_asset(song_dir, banner_tag);
+    let mut background = resolve_asset(song_dir, background_tag);
+    if banner.is_some() && background.is_some() {
+        return (banner, background);
+    }
+
+    let images = list_image_candidates(song_dir);
+    for image in &images {
+        if banner.is_none() && image_hint_matches(image, b"banner", b"bn") {
+            banner = Some(image.clone());
+        }
+        if background.is_none() && image_hint_matches(image, b"background", b"bg") {
+            background = Some(image.clone());
+        }
+        if banner.is_some() && background.is_some() {
+            return (banner, background);
+        }
+    }
+
     for image in &images {
         if banner.is_some() && background.is_some() {
             break;
         }
-        if background.as_ref().is_some_and(|path| path == image) {
-            continue;
-        }
-        if banner.as_ref().is_some_and(|path| path == image) {
+        if background.as_ref().is_some_and(|path| path == image)
+            || banner.as_ref().is_some_and(|path| path == image)
+        {
             continue;
         }
         let Some((w, h)) = img_dims(image) else {
@@ -479,7 +585,6 @@ pub fn resolve_song_assets(
             banner = Some(image.clone());
         }
     }
-
     (banner, background)
 }
 

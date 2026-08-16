@@ -3271,24 +3271,30 @@ fn run_asset_fallbacks_alloc(iterations: usize) {
     );
 }
 
-fn run_song_assets_alloc(iterations: usize) {
-    let fixture = assets_bench::AssetFixture::new();
-    black_box(rssp::assets::resolve_song_assets(
-        fixture.image_dir(),
-        "",
-        "",
-    ));
-
+fn run_song_assets_phase(
+    fixture: &assets_bench::AssetFixture,
+    phase: &str,
+    iterations: usize,
+    legacy: bool,
+) {
     reset_counters();
     let before = Counters::read();
     let start = Instant::now();
     let mut checksum = 0usize;
     for _ in 0..iterations {
-        let (banner, background) = rssp::assets::resolve_song_assets(
-            black_box(fixture.image_dir()),
-            black_box(""),
-            black_box(""),
-        );
+        let (banner, background) = if legacy {
+            rssp::profile::song_assets_legacy(
+                black_box(fixture.image_dir()),
+                black_box(""),
+                black_box(""),
+            )
+        } else {
+            rssp::assets::resolve_song_assets(
+                black_box(fixture.image_dir()),
+                black_box(""),
+                black_box(""),
+            )
+        };
         checksum = checksum
             .wrapping_add(usize::from(banner.is_some()))
             .wrapping_add(usize::from(background.is_some()));
@@ -3299,12 +3305,13 @@ fn run_song_assets_alloc(iterations: usize) {
     let divisor = iterations as f64;
     println!(
         concat!(
-            "mode=song-assets iters={} checksum={} elapsed_s={:.6} ",
+            "mode=song-assets phase={} iters={} checksum={} elapsed_s={:.6} ",
             "entries_s={:.3} alloc_calls_per_iter={:.1} ",
             "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
             "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
             "live_growth_bytes={} peak_live_growth_bytes={}"
         ),
+        phase,
         iterations,
         black_box(checksum),
         elapsed.as_secs_f64(),
@@ -3318,6 +3325,13 @@ fn run_song_assets_alloc(iterations: usize) {
         after.live_bytes as isize - before.live_bytes as isize,
         after.peak_live_bytes.saturating_sub(before.live_bytes),
     );
+}
+
+fn run_song_assets_alloc(iterations: usize) {
+    let fixture = assets_bench::AssetFixture::new();
+    fixture.assert_song_assets_behavior();
+    run_song_assets_phase(&fixture, "full-candidate-paths", iterations, true);
+    run_song_assets_phase(&fixture, "candidate-names", iterations, false);
 }
 
 fn run_translate_markers_alloc(iterations: usize) {

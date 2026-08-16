@@ -124,6 +124,19 @@ impl AssetFixture {
     pub fn lookup_name() -> &'static str {
         "asset-255.DAT"
     }
+
+    pub fn assert_song_assets_behavior(&self) {
+        for (banner, background) in [
+            ("", ""),
+            ("Candidate-001.png", ""),
+            ("missing.png", "Candidate-002.png"),
+            ("candidate-003.PNG", "CANDIDATE-004.png"),
+        ] {
+            let legacy = rssp::profile::song_assets_legacy(&self.image_dir, banner, background);
+            let current = rssp::assets::resolve_song_assets(&self.image_dir, banner, background);
+            assert_eq!(current, legacy);
+        }
+    }
 }
 
 fn png_header(width: u32, height: u32) -> [u8; 24] {

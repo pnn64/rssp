@@ -1000,6 +1000,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let course_options = course_bench::fast_options();
     let pack_fixture = pack_bench::PackFixture::new();
     let asset_fixture = assets_bench::AssetFixture::with_movies(1);
+    asset_fixture.assert_song_assets_behavior();
     let delimiter_fields = assets_bench::delimiter_fields();
     let delimiter_bytes = delimiter_fields.iter().map(String::len).sum::<usize>();
     let timing_text_fixture = report_timing_bench::timing_text();
@@ -1543,6 +1544,32 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     background.finish();
+
+    let mut song_assets = c.benchmark_group("cycles/song_assets");
+    song_assets.sample_size(20);
+    song_assets.measurement_time(Duration::from_secs(3));
+    song_assets.throughput(Throughput::Elements(
+        (assets_bench::IMAGE_COUNT + assets_bench::NON_IMAGE_COUNT) as u64,
+    ));
+    song_assets.bench_function("full_candidate_paths", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::song_assets_legacy(
+                black_box(asset_fixture.image_dir()),
+                black_box(""),
+                black_box(""),
+            ))
+        });
+    });
+    song_assets.bench_function("candidate_names", |b| {
+        b.iter(|| {
+            black_box(rssp::assets::resolve_song_assets(
+                black_box(asset_fixture.image_dir()),
+                black_box(""),
+                black_box(""),
+            ))
+        });
+    });
+    song_assets.finish();
 
     let mut delimiter = c.benchmark_group("cycles/background_delimiter_scan");
     delimiter.throughput(Throughput::Bytes(delimiter_bytes as u64));

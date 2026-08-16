@@ -54,6 +54,15 @@ pub mod profile {
     }
 
     #[must_use]
+    pub fn song_assets_legacy(
+        song_dir: &Path,
+        banner: &str,
+        background: &str,
+    ) -> (Option<PathBuf>, Option<PathBuf>) {
+        crate::assets::profile_resolve_song_assets_legacy(song_dir, banner, background)
+    }
+
+    #[must_use]
     pub fn name_eq_ci(actual: &OsStr, expected: &str) -> bool {
         crate::assets::name_eq_ci(actual, expected)
     }
