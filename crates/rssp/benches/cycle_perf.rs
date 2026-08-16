@@ -1001,6 +1001,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let pack_fixture = pack_bench::PackFixture::new();
     let asset_fixture = assets_bench::AssetFixture::with_movies(1);
     asset_fixture.assert_song_assets_behavior();
+    asset_fixture.assert_music_behavior();
     let delimiter_fields = assets_bench::delimiter_fields();
     let delimiter_bytes = delimiter_fields.iter().map(String::len).sum::<usize>();
     let timing_text_fixture = report_timing_bench::timing_text();
@@ -1544,6 +1545,28 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     background.finish();
+
+    let mut music = c.benchmark_group("cycles/music_fallback");
+    music.sample_size(20);
+    music.measurement_time(Duration::from_secs(3));
+    music.throughput(Throughput::Elements(assets_bench::SOUND_COUNT as u64));
+    music.bench_function("full_paths", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::music_path_legacy(
+                black_box(asset_fixture.song_dir()),
+                black_box(""),
+            ))
+        });
+    });
+    music.bench_function("candidate_names", |b| {
+        b.iter(|| {
+            black_box(rssp::assets::resolve_music_path_like_itg(
+                black_box(asset_fixture.song_dir()),
+                black_box(""),
+            ))
+        });
+    });
+    music.finish();
 
     let mut song_assets = c.benchmark_group("cycles/song_assets");
     song_assets.sample_size(20);

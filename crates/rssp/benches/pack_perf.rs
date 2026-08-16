@@ -143,6 +143,7 @@ fn bench_delimiter_scan(c: &mut Criterion) {
 
 fn bench_asset_fallbacks(c: &mut Criterion) {
     let fixture = assets_bench::AssetFixture::new();
+    fixture.assert_music_behavior();
 
     let mut lookup = c.benchmark_group("asset_ci_lookup");
     lookup.sample_size(30);
@@ -164,7 +165,16 @@ fn bench_asset_fallbacks(c: &mut Criterion) {
     let mut fallbacks = c.benchmark_group("asset_fallbacks");
     fallbacks.sample_size(30);
     fallbacks.measurement_time(Duration::from_secs(3));
-    fallbacks.bench_function("music_129_sounds", |b| {
+    fallbacks.throughput(Throughput::Elements(assets_bench::SOUND_COUNT as u64));
+    fallbacks.bench_function("music_full_paths", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::profile::music_path_legacy(black_box(fixture.song_dir()), black_box(""))
+                    .expect("music fallback should resolve"),
+            )
+        });
+    });
+    fallbacks.bench_function("music_candidate_names", |b| {
         b.iter(|| {
             black_box(
                 rssp::assets::resolve_music_path_like_itg(
@@ -175,6 +185,7 @@ fn bench_asset_fallbacks(c: &mut Criterion) {
             )
         });
     });
+    fallbacks.throughput(Throughput::Elements(assets_bench::MOVIE_COUNT as u64));
     fallbacks.bench_function("movie_128_candidates", |b| {
         b.iter(|| {
             black_box(rssp::assets::resolve_background_changes_like_itg(

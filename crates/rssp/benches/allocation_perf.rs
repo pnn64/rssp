@@ -3224,6 +3224,9 @@ fn run_background_changes_alloc(iterations: usize) {
 
 fn run_asset_fallbacks_alloc(iterations: usize) {
     let fixture = assets_bench::AssetFixture::new();
+    fixture.assert_music_behavior();
+    run_music_fallback_phase(&fixture, "full-paths", iterations, true);
+    run_music_fallback_phase(&fixture, "candidate-names", iterations, false);
 
     reset_counters();
     let before = Counters::read();
@@ -3261,6 +3264,51 @@ fn run_asset_fallbacks_alloc(iterations: usize) {
         black_box(checksum),
         elapsed.as_secs_f64(),
         3.0 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_music_fallback_phase(
+    fixture: &assets_bench::AssetFixture,
+    phase: &str,
+    iterations: usize,
+    legacy: bool,
+) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let music = if legacy {
+            rssp::profile::music_path_legacy(black_box(fixture.song_dir()), black_box(""))
+        } else {
+            rssp::assets::resolve_music_path_like_itg(black_box(fixture.song_dir()), black_box(""))
+        };
+        checksum = checksum.wrapping_add(usize::from(music.is_some()));
+        black_box(music);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=music-fallback phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "entries_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        assets_bench::SOUND_COUNT as f64 * divisor / elapsed.as_secs_f64(),
         (after.alloc_calls - before.alloc_calls) as f64 / divisor,
         (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
         (after.realloc_calls - before.realloc_calls) as f64 / divisor,

@@ -137,6 +137,20 @@ impl AssetFixture {
             assert_eq!(current, legacy);
         }
     }
+
+    pub fn assert_music_behavior(&self) {
+        for tag in [
+            "",
+            "Track-127.ogg",
+            "track-126.OGG",
+            "missing.ogg",
+            "  Intro.ogg  ",
+        ] {
+            let legacy = rssp::profile::music_path_legacy(&self.root, tag);
+            let current = rssp::assets::resolve_music_path_like_itg(&self.root, tag);
+            assert_eq!(current, legacy, "music fallback changed for tag {tag:?}");
+        }
+    }
 }
 
 fn png_header(width: u32, height: u32) -> [u8; 24] {

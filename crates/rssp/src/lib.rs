@@ -63,6 +63,11 @@ pub mod profile {
     }
 
     #[must_use]
+    pub fn music_path_legacy(song_dir: &Path, music_tag: &str) -> Option<PathBuf> {
+        crate::assets::profile_resolve_music_path_legacy(song_dir, music_tag)
+    }
+
+    #[must_use]
     pub fn name_eq_ci(actual: &OsStr, expected: &str) -> bool {
         crate::assets::name_eq_ci(actual, expected)
     }

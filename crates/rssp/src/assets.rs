@@ -172,6 +172,13 @@ fn cmp_os_ci(left: &OsStr, right: &OsStr) -> Ordering {
     cmp_ascii_ci(left.as_bytes(), right.as_bytes())
 }
 
+fn entry_is_file(entry: &fs::DirEntry) -> bool {
+    match entry.file_type() {
+        Ok(file_type) => file_type.is_file() || (file_type.is_symlink() && entry.path().is_file()),
+        Err(_) => entry.path().is_file(),
+    }
+}
+
 fn list_image_names(dir: &Path) -> Vec<OsString> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
@@ -188,13 +195,7 @@ fn list_image_names(dir: &Path) -> Vec<OsString> {
         if name.to_string_lossy().starts_with("._") || img_rank(extension).is_none() {
             continue;
         }
-        let is_file = match entry.file_type() {
-            Ok(file_type) => {
-                file_type.is_file() || (file_type.is_symlink() && entry.path().is_file())
-            }
-            Err(_) => entry.path().is_file(),
-        };
-        if !is_file {
+        if !entry_is_file(&entry) {
             continue;
         }
         candidates.push(name);
@@ -293,6 +294,37 @@ fn first_two_sound_files(song_dir: &Path) -> (Option<PathBuf>, Option<PathBuf>) 
     let Ok(entries) = fs::read_dir(song_dir) else {
         return (None, None);
     };
+    let mut first: Option<OsString> = None;
+    let mut second: Option<OsString> = None;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let path = Path::new(&name);
+        if is_mac_resource_fork(path) || !is_sound_ext(path) || !entry_is_file(&entry) {
+            continue;
+        }
+        if first
+            .as_ref()
+            .is_none_or(|candidate| cmp_os_ci(&name, candidate) == Ordering::Less)
+        {
+            second = first.replace(name);
+        } else if second
+            .as_ref()
+            .is_none_or(|candidate| cmp_os_ci(&name, candidate) == Ordering::Less)
+        {
+            second = Some(name);
+        }
+    }
+    (
+        first.map(|name| song_dir.join(name)),
+        second.map(|name| song_dir.join(name)),
+    )
+}
+
+#[cfg(feature = "profile")]
+fn first_two_sound_files_legacy(song_dir: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
+    let Ok(entries) = fs::read_dir(song_dir) else {
+        return (None, None);
+    };
     let mut first: Option<PathBuf> = None;
     let mut second: Option<PathBuf> = None;
     for entry in entries.flatten() {
@@ -350,7 +382,10 @@ pub fn resolve_music_path_like_itg(song_dir: &Path, music_tag: &str) -> Option<P
         return Some(path);
     }
 
-    let (first, second) = first_two_sound_files(song_dir);
+    pick_music_fallback(first_two_sound_files(song_dir))
+}
+
+fn pick_music_fallback((first, second): (Option<PathBuf>, Option<PathBuf>)) -> Option<PathBuf> {
     let first = first?;
     if second.is_some()
         && first.file_name().is_some_and(|name| {
@@ -363,6 +398,20 @@ pub fn resolve_music_path_like_itg(song_dir: &Path, music_tag: &str) -> Option<P
         return second;
     }
     Some(first)
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_resolve_music_path_legacy(
+    song_dir: &Path,
+    music_tag: &str,
+) -> Option<PathBuf> {
+    let tag = music_tag.trim();
+    if !tag.is_empty()
+        && let Some(path) = resolve_asset(song_dir, tag)
+    {
+        return Some(path);
+    }
+    pick_music_fallback(first_two_sound_files_legacy(song_dir))
 }
 
 fn png_dims(mut f: fs::File) -> Option<(u32, u32)> {
