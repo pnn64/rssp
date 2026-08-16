@@ -21,6 +21,8 @@ mod report_nps_bench;
 mod report_patterns_bench;
 #[path = "support/report_timing.rs"]
 mod report_timing_bench;
+#[path = "support/sm_timing.rs"]
+mod sm_timing_bench;
 #[path = "support/step_parity.rs"]
 mod step_parity_bench;
 #[path = "support/timing_merge.rs"]
@@ -100,6 +102,7 @@ enum Mode {
     Hashes,
     Durations,
     TimingBuild,
+    SmTiming,
     TimingMerge,
     TimingText,
     Nps,
@@ -207,6 +210,7 @@ fn parse_args() -> (Mode, usize) {
                     "hashes" => Mode::Hashes,
                     "durations" => Mode::Durations,
                     "timing-build" => Mode::TimingBuild,
+                    "sm-timing" => Mode::SmTiming,
                     "timing-merge" => Mode::TimingMerge,
                     "timing-text" => Mode::TimingText,
                     "nps" => Mode::Nps,
@@ -299,6 +303,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         | Mode::FusedMap
         | Mode::DisplayBpm
         | Mode::TimingBuild
+        | Mode::SmTiming
         | Mode::TimingMerge
         | Mode::TimingText
         | Mode::NpsCursor => rssp::AnalysisOptions::default(),
@@ -666,6 +671,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Hashes => "hashes",
         Mode::Durations => "durations",
         Mode::TimingBuild => "timing-build",
+        Mode::SmTiming => "sm-timing",
         Mode::TimingMerge => "timing-merge",
         Mode::TimingText => "timing-text",
         Mode::Nps => "nps",
@@ -2203,6 +2209,62 @@ fn run_timing_build_alloc(iterations: usize) {
     );
 }
 
+fn run_sm_timing_phase(
+    fixture: &sm_timing_bench::SmTimingFixture,
+    phase: &str,
+    iterations: usize,
+    legacy: bool,
+) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let output = rssp::timing::process_sm_timing_for_bench(
+            black_box(&fixture.bpms),
+            black_box(&fixture.stops),
+            legacy,
+        );
+        checksum = checksum
+            .wrapping_add(output.0.len())
+            .wrapping_add(output.1.len())
+            .wrapping_add(output.2.len())
+            .wrapping_add(output.3.to_bits() as usize);
+        black_box(output);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=sm-timing phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_segments_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        sm_timing_bench::INPUT_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_sm_timing_alloc(iterations: usize) {
+    sm_timing_bench::assert_behavior();
+    let fixture = sm_timing_bench::SmTimingFixture::new();
+    run_sm_timing_phase(&fixture, "legacy-f32-then-f64", iterations, true);
+    run_sm_timing_phase(&fixture, "direct-f64", iterations, false);
+}
+
 type TimingMergeFn = for<'a> fn(
     &[(f32, f32)],
     &'a [(f32, f32)],
@@ -3302,6 +3364,10 @@ fn main() {
         }
         Mode::TimingBuild => {
             run_timing_build_alloc(iterations);
+            return;
+        }
+        Mode::SmTiming => {
+            run_sm_timing_alloc(iterations);
             return;
         }
         Mode::TimingMerge => {

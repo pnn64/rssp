@@ -30,6 +30,9 @@ mod report_patterns_bench;
 #[path = "support/report_timing.rs"]
 mod report_timing_bench;
 #[cfg(windows)]
+#[path = "support/sm_timing.rs"]
+mod sm_timing_bench;
+#[cfg(windows)]
 #[path = "support/step_parity.rs"]
 mod step_parity_bench;
 #[cfg(windows)]
@@ -776,6 +779,32 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     timing_build.finish();
+
+    sm_timing_bench::assert_behavior();
+    let sm_timing_fixture = sm_timing_bench::SmTimingFixture::new();
+    let mut sm_timing = c.benchmark_group("cycles/sm_timing_4096_bpms_2048_stops");
+    sm_timing.throughput(Throughput::Elements(sm_timing_bench::INPUT_COUNT));
+    sm_timing.sample_size(50);
+    sm_timing.measurement_time(Duration::from_secs(3));
+    sm_timing.bench_function("legacy_f32_then_f64", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::process_sm_timing_for_bench(
+                black_box(&sm_timing_fixture.bpms),
+                black_box(&sm_timing_fixture.stops),
+                true,
+            ));
+        });
+    });
+    sm_timing.bench_function("direct_f64", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::process_sm_timing_for_bench(
+                black_box(&sm_timing_fixture.bpms),
+                black_box(&sm_timing_fixture.stops),
+                false,
+            ));
+        });
+    });
+    sm_timing.finish();
 
     timing_merge_bench::assert_behavior();
     let timing_merge_fixture = timing_merge_bench::TimingMergeFixture::new();

@@ -819,7 +819,7 @@ fn process_bpms_and_stops(
     stops: Vec<Segment>,
 ) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
     match format {
-        TimingFormat::Sm => process_bpms_and_stops_sm(&bpms, &stops),
+        TimingFormat::Sm => process_bpms_and_stops_sm::<false>(&bpms, &stops),
         TimingFormat::Ssc => process_bpms_and_stops_ssc(bpms, stops),
     }
 }
@@ -912,7 +912,21 @@ fn sort_segments_by_beat(segments: &mut [Segment]) {
     }
 }
 
-fn process_bpms_and_stops_sm(
+fn push_sm_bpm<const LEGACY: bool>(
+    legacy: &mut Vec<(f32, f32)>,
+    final_bpms: &mut Vec<(f64, f64)>,
+    beat: f32,
+    bpm: f32,
+) {
+    let beat = quantize_beat_f32(beat);
+    if LEGACY {
+        legacy.push((beat, bpm));
+    } else {
+        final_bpms.push((f64::from(beat), f64::from(bpm)));
+    }
+}
+
+fn process_bpms_and_stops_sm<const LEGACY: bool>(
     bpms: &[(f64, f64)],
     stops: &[Segment],
 ) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
@@ -955,12 +969,14 @@ fn process_bpms_and_stops_sm(
         };
     }
 
-    let mut out_bpms = Vec::with_capacity(bpm_changes.len().max(1));
+    let bpm_capacity = bpm_changes.len().max(1);
+    let mut legacy_bpms = Vec::with_capacity(if LEGACY { bpm_capacity } else { 0 });
+    let mut out_bpms = Vec::with_capacity(if LEGACY { 0 } else { bpm_capacity });
     let mut out_stops = Vec::with_capacity(stop_changes.len().saturating_sub(stop_idx));
     let mut out_warps: Vec<Segment> = Vec::new();
 
     if bpm > 0.0 && bpm <= FAST_BPM_WARP_F32 {
-        out_bpms.push((quantize_beat_f32(0.0), bpm));
+        push_sm_bpm::<LEGACY>(&mut legacy_bpms, &mut out_bpms, 0.0, bpm);
     }
 
     let mut prev_beat = 0.0_f32;
@@ -991,7 +1007,7 @@ fn process_bpms_and_stops_sm(
                     });
                 }
                 if bpm != prewarp_bpm {
-                    out_bpms.push((quantize_beat_f32(start), bpm));
+                    push_sm_bpm::<LEGACY>(&mut legacy_bpms, &mut out_bpms, start, bpm);
                 }
                 warp_start = None;
             }
@@ -1004,7 +1020,7 @@ fn process_bpms_and_stops_sm(
                 prewarp_bpm = bpm;
                 time_offset = 0.0;
             } else if warp_start.is_none() {
-                out_bpms.push((quantize_beat_f32(change_beat), change_val));
+                push_sm_bpm::<LEGACY>(&mut legacy_bpms, &mut out_bpms, change_beat, change_val);
             }
             bpm = change_val;
             bpm_idx += 1;
@@ -1036,7 +1052,7 @@ fn process_bpms_and_stops_sm(
                     });
                     if (0.0..=FAST_BPM_WARP_F32).contains(&bpm) {
                         if bpm != prewarp_bpm {
-                            out_bpms.push((quantize_beat_f32(start), bpm));
+                            push_sm_bpm::<LEGACY>(&mut legacy_bpms, &mut out_bpms, start, bpm);
                         }
                         warp_start = None;
                     } else {
@@ -1062,20 +1078,38 @@ fn process_bpms_and_stops_sm(
             });
         }
         if bpm != prewarp_bpm {
-            out_bpms.push((quantize_beat_f32(start), bpm));
+            push_sm_bpm::<LEGACY>(&mut legacy_bpms, &mut out_bpms, start, bpm);
         }
     }
 
-    let out_bpms = tidy_bpms(
-        out_bpms
+    let out_bpms = if LEGACY {
+        legacy_bpms
             .into_iter()
             .map(|(b, v)| (f64::from(b), f64::from(v)))
-            .collect(),
-    );
+            .collect()
+    } else {
+        out_bpms
+    };
+    let out_bpms = tidy_bpms(out_bpms);
     sort_segments_by_beat(&mut out_stops);
     sort_segments_by_beat(&mut out_warps);
 
     (out_bpms, out_stops, out_warps, f64::from(beat0_offset))
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn process_sm_timing_for_bench(
+    bpms: &[(f64, f64)],
+    stops: &[Segment],
+    legacy: bool,
+) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
+    if legacy {
+        process_bpms_and_stops_sm::<true>(bpms, stops)
+    } else {
+        process_bpms_and_stops_sm::<false>(bpms, stops)
+    }
 }
 
 #[must_use]

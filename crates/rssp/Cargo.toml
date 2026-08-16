@@ -160,6 +160,11 @@ harness = false
 required-features = ["profile"]
 
 [[bench]]
+name = "timing_perf"
+harness = false
+required-features = ["profile"]
+
+[[bench]]
 name = "report_perf"
 harness = false
 
