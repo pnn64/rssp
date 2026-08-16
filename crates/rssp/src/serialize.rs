@@ -27,22 +27,48 @@ macro_rules! write_all {
 }
 
 #[must_use]
-fn sm_escape(out: &mut dyn io::Write, bytes: &[u8]) -> io::Result<usize> {
-    let mut written_bytes = 0;
-    let mut bytes_iter = bytes.iter().peekable();
-
-    while let Some(&byte) = bytes_iter.next() {
-        if byte == b'/' && bytes_iter.peek().is_some_and(|&b| *b == b'/') {
-            written_bytes += write_all!(out, b"\\/\\/")?;
-            bytes_iter.next();
-            continue;
+fn sm_escape<const LEGACY: bool>(out: &mut dyn io::Write, bytes: &[u8]) -> io::Result<usize> {
+    if LEGACY {
+        let mut written_bytes = 0;
+        let mut bytes_iter = bytes.iter().peekable();
+        while let Some(&byte) = bytes_iter.next() {
+            if byte == b'/' && bytes_iter.peek().is_some_and(|&b| *b == b'/') {
+                written_bytes += write_all!(out, b"\\/\\/")?;
+                bytes_iter.next();
+                continue;
+            }
+            if byte == b'\\' || byte == b':' || byte == b';' {
+                written_bytes += write_all!(out, b"\\")?;
+            }
+            written_bytes += write_all!(out, &[byte])?;
         }
-        if byte == b'\\' || byte == b':' || byte == b';' {
-            written_bytes += write_all!(out, b"\\")?;
-        }
-        written_bytes += write_all!(out, &[byte])?;
+        return Ok(written_bytes);
     }
 
+    let mut written_bytes = 0;
+    let mut span_start = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        let escaped_char = [b'\\', bytes[index]];
+        let (escaped, consumed): (&[u8], usize) =
+            if bytes[index] == b'/' && bytes.get(index + 1) == Some(&b'/') {
+                (b"\\/\\/", 2)
+            } else if matches!(bytes[index], b'\\' | b':' | b';') {
+                (&escaped_char, 1)
+            } else {
+                index += 1;
+                continue;
+            };
+        if span_start < index {
+            written_bytes += write_all!(out, &bytes[span_start..index])?;
+        }
+        written_bytes += write_all!(out, escaped)?;
+        index += consumed;
+        span_start = index;
+    }
+    if span_start < bytes.len() {
+        written_bytes += write_all!(out, &bytes[span_start..])?;
+    }
     Ok(written_bytes)
 }
 
@@ -122,22 +148,25 @@ enum PropValue<'a> {
 
 impl<'a> PropValue<'a> {
     #[must_use]
-    fn serialize<const LEGACY: bool>(&self, out: &mut dyn io::Write) -> io::Result<usize> {
+    fn serialize<const LEGACY_NUM: bool, const LEGACY_ESCAPE: bool>(
+        &self,
+        out: &mut dyn io::Write,
+    ) -> io::Result<usize> {
         match self {
             PropValue::Empty => Ok(0),
-            PropValue::Str(s) => sm_escape(out, s.as_bytes()),
+            PropValue::Str(s) => sm_escape::<LEGACY_ESCAPE>(out, s.as_bytes()),
             PropValue::StrNoEscape(s) => write_all!(out, s.as_bytes()),
             PropValue::StrNoEscapeOpt(opt) => match opt {
                 None => Ok(0),
-                Some(s) => PropValue::StrNoEscape(*s).serialize::<LEGACY>(out),
+                Some(s) => PropValue::StrNoEscape(*s).serialize::<LEGACY_NUM, LEGACY_ESCAPE>(out),
             },
             PropValue::Bytes(b) => write_all!(out, b),
             PropValue::NoteData(b) => Ok(write_all!(out, b"\n")? + write_all!(out, b)?),
-            PropValue::Version(v) => write_version::<LEGACY>(out, *v),
-            PropValue::Number(n) => write_dot6_f64::<LEGACY>(out, *n),
+            PropValue::Version(v) => write_version::<LEGACY_NUM>(out, *v),
+            PropValue::Number(n) => write_dot6_f64::<LEGACY_NUM>(out, *n),
             PropValue::NumberOpt(opt) => match opt {
                 None => Ok(0),
-                Some(n) => PropValue::Number(*n).serialize::<LEGACY>(out),
+                Some(n) => PropValue::Number(*n).serialize::<LEGACY_NUM, LEGACY_ESCAPE>(out),
             },
             PropValue::Bool(b) => {
                 if *b {
@@ -157,7 +186,7 @@ impl<'a> PropValue<'a> {
                             if !first_item {
                                 written_bytes += write_all!(out, b",")?;
                             }
-                            written_bytes += write_dot6_f32::<LEGACY>(out, *value)?;
+                            written_bytes += write_dot6_f32::<LEGACY_NUM>(out, *value)?;
                             first_item = false;
                         }
                     }
@@ -174,9 +203,9 @@ impl<'a> PropValue<'a> {
                     if !first_item {
                         written_bytes += write_all!(out, b",\n")?;
                     }
-                    written_bytes += write_dot6_f32::<LEGACY>(out, *beat)?;
+                    written_bytes += write_dot6_f32::<LEGACY_NUM>(out, *beat)?;
                     written_bytes += write_all!(out, b"=")?;
-                    written_bytes += write_dot6_f32::<LEGACY>(out, *value)?;
+                    written_bytes += write_dot6_f32::<LEGACY_NUM>(out, *value)?;
                     first_item = false;
                 }
 
@@ -190,11 +219,11 @@ impl<'a> PropValue<'a> {
                     if !first_item {
                         written_bytes += write_all!(out, b",\n")?;
                     }
-                    written_bytes += write_dot6_f32::<LEGACY>(out, *beat)?;
+                    written_bytes += write_dot6_f32::<LEGACY_NUM>(out, *beat)?;
                     written_bytes += write_all!(out, b"=")?;
-                    written_bytes += write_dot6_f32::<LEGACY>(out, *ratio)?;
+                    written_bytes += write_dot6_f32::<LEGACY_NUM>(out, *ratio)?;
                     written_bytes += write_all!(out, b"=")?;
-                    written_bytes += write_dot6_f32::<LEGACY>(out, *delay)?;
+                    written_bytes += write_dot6_f32::<LEGACY_NUM>(out, *delay)?;
                     written_bytes += write_all!(out, b"=")?;
                     written_bytes += write_all!(
                         out,
@@ -321,7 +350,7 @@ impl<'a> Prop<'a> {
     }
 
     #[must_use]
-    fn serialize<const LEGACY: bool>(
+    fn serialize<const LEGACY_NUM: bool, const LEGACY_ESCAPE: bool>(
         self,
         ssc: bool,
         own_timing: bool,
@@ -340,7 +369,7 @@ impl<'a> Prop<'a> {
             };
             let mut written_bytes = 0;
             written_bytes += Prop::start_prop(out, self.key)?;
-            written_bytes += value.serialize::<LEGACY>(out)?;
+            written_bytes += value.serialize::<LEGACY_NUM, LEGACY_ESCAPE>(out)?;
             written_bytes += Prop::end_prop(out)?;
             Ok(written_bytes)
         }
@@ -353,10 +382,10 @@ pub fn serialize_simfile(
     extension: &str,
     out: &mut dyn io::Write,
 ) -> io::Result<usize> {
-    serialize_simfile_with::<false>(summary, extension, out)
+    serialize_simfile_with::<false, false>(summary, extension, out)
 }
 
-fn serialize_simfile_with<const LEGACY: bool>(
+fn serialize_simfile_with<const LEGACY_NUM: bool, const LEGACY_ESCAPE: bool>(
     summary: &crate::SimfileSummary,
     extension: &str,
     out: &mut dyn io::Write,
@@ -431,7 +460,7 @@ fn serialize_simfile_with<const LEGACY: bool>(
     ];
 
     for prop in props {
-        written_bytes += prop.serialize::<LEGACY>(ssc, false, out)?;
+        written_bytes += prop.serialize::<LEGACY_NUM, LEGACY_ESCAPE>(ssc, false, out)?;
     }
 
     written_bytes += write_all!(out, b"\n")?;
@@ -439,9 +468,9 @@ fn serialize_simfile_with<const LEGACY: bool>(
     for chart in &summary.charts {
         written_bytes += write_chart_comment_prefix(out, chart)?;
         written_bytes += if ssc {
-            serialize_ssc_chart::<LEGACY>(out, chart)
+            serialize_ssc_chart::<LEGACY_NUM, LEGACY_ESCAPE>(out, chart)
         } else {
-            serialize_sm_chart::<LEGACY>(out, chart)
+            serialize_sm_chart::<LEGACY_NUM, LEGACY_ESCAPE>(out, chart)
         }?;
         written_bytes += write_all!(out, b"\n")?;
     }
@@ -458,9 +487,34 @@ pub fn profile_serialize_simfile(
     legacy: bool,
 ) -> io::Result<usize> {
     if legacy {
-        serialize_simfile_with::<true>(summary, extension, out)
+        serialize_simfile_with::<true, false>(summary, extension, out)
     } else {
-        serialize_simfile_with::<false>(summary, extension, out)
+        serialize_simfile_with::<false, false>(summary, extension, out)
+    }
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+pub fn profile_serialize_simfile_escape(
+    summary: &crate::SimfileSummary,
+    extension: &str,
+    out: &mut dyn io::Write,
+    legacy: bool,
+) -> io::Result<usize> {
+    if legacy {
+        serialize_simfile_with::<false, true>(summary, extension, out)
+    } else {
+        serialize_simfile_with::<false, false>(summary, extension, out)
+    }
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+pub fn profile_sm_escape(bytes: &[u8], out: &mut dyn io::Write, legacy: bool) -> io::Result<usize> {
+    if legacy {
+        sm_escape::<true>(out, bytes)
+    } else {
+        sm_escape::<false>(out, bytes)
     }
 }
 
@@ -494,7 +548,7 @@ fn write_chart_comment_prefix(
 }
 
 #[must_use]
-fn serialize_sm_chart<const LEGACY: bool>(
+fn serialize_sm_chart<const LEGACY_NUM: bool, const LEGACY_ESCAPE: bool>(
     out: &mut dyn io::Write,
     chart: &crate::ChartSummary,
 ) -> io::Result<usize> {
@@ -518,7 +572,7 @@ fn serialize_sm_chart<const LEGACY: bool>(
             _ => prop.value,
         };
         written_bytes += write_all!(out, b"     ")?;
-        written_bytes += value.serialize::<LEGACY>(out)?;
+        written_bytes += value.serialize::<LEGACY_NUM, LEGACY_ESCAPE>(out)?;
         written_bytes += write_all!(out, b":\n")?;
     }
 
@@ -528,7 +582,7 @@ fn serialize_sm_chart<const LEGACY: bool>(
 }
 
 #[must_use]
-fn serialize_ssc_chart<const LEGACY: bool>(
+fn serialize_ssc_chart<const LEGACY_NUM: bool, const LEGACY_ESCAPE: bool>(
     out: &mut dyn io::Write,
     chart: &crate::ChartSummary,
 ) -> io::Result<usize> {
@@ -565,7 +619,8 @@ fn serialize_ssc_chart<const LEGACY: bool>(
     ];
 
     for prop in props {
-        written_bytes += prop.serialize::<LEGACY>(true, chart.chart_has_own_timing, out)?;
+        written_bytes +=
+            prop.serialize::<LEGACY_NUM, LEGACY_ESCAPE>(true, chart.chart_has_own_timing, out)?;
     }
 
     Ok(written_bytes)

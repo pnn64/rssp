@@ -1026,6 +1026,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     );
     let serialize_fixture = serialize_bench::SerializeFixture::new();
     serialize_bench::assert_behavior(&serialize_fixture);
+    let serialize_escape_fixture = serialize_bench::EscapeFixture::new();
+    serialize_bench::assert_escape_behavior(&serialize_escape_fixture);
     let report_fixture = report_timing_bench::fixture();
     let report_summary = rssp::analyze(
         report_fixture.as_bytes(),
@@ -1834,6 +1836,69 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     serialize.finish();
+
+    let mut serialize_escape = c.benchmark_group("cycles/serialize_escape_metadata");
+    serialize_escape.sample_size(50);
+    serialize_escape.measurement_time(Duration::from_secs(3));
+    serialize_escape.throughput(Throughput::Bytes(
+        serialize_escape_fixture.output_len as u64,
+    ));
+    serialize_escape.bench_function("byte_at_a_time", |b| {
+        let mut output = Vec::with_capacity(serialize_escape_fixture.output_len);
+        b.iter(|| {
+            output.clear();
+            black_box(serialize_bench::write_escape(
+                black_box(&serialize_escape_fixture.summary),
+                black_box(&mut output),
+                true,
+            ));
+            black_box(&output);
+        });
+    });
+    serialize_escape.bench_function("batched_spans", |b| {
+        let mut output = Vec::with_capacity(serialize_escape_fixture.output_len);
+        b.iter(|| {
+            output.clear();
+            black_box(serialize_bench::write_escape(
+                black_box(&serialize_escape_fixture.summary),
+                black_box(&mut output),
+                false,
+            ));
+            black_box(&output);
+        });
+    });
+    serialize_escape.finish();
+
+    let escape_field = serialize_escape_fixture.summary.title_str.as_bytes();
+    let mut sm_escape = c.benchmark_group("cycles/sm_escape_metadata");
+    sm_escape.sample_size(50);
+    sm_escape.measurement_time(Duration::from_secs(3));
+    sm_escape.throughput(Throughput::Bytes(escape_field.len() as u64));
+    sm_escape.bench_function("byte_at_a_time", |b| {
+        let mut output = Vec::with_capacity(serialize_escape_fixture.output_len);
+        b.iter(|| {
+            output.clear();
+            black_box(serialize_bench::write_escape_field(
+                black_box(escape_field),
+                black_box(&mut output),
+                true,
+            ));
+            black_box(&output);
+        });
+    });
+    sm_escape.bench_function("batched_spans", |b| {
+        let mut output = Vec::with_capacity(serialize_escape_fixture.output_len);
+        b.iter(|| {
+            output.clear();
+            black_box(serialize_bench::write_escape_field(
+                black_box(escape_field),
+                black_box(&mut output),
+                false,
+            ));
+            black_box(&output);
+        });
+    });
+    sm_escape.finish();
 
     let mut timing_arrays = c.benchmark_group("cycles/report_json_timing_arrays");
     timing_arrays.sample_size(20);

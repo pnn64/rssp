@@ -40,6 +40,69 @@ fn bench_serialize(c: &mut Criterion) {
         });
     });
     group.finish();
+
+    let escape = serialize_bench::EscapeFixture::new();
+    serialize_bench::assert_escape_behavior(&escape);
+    let mut group = c.benchmark_group("serialize_escape_metadata");
+    group.sample_size(50);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Bytes(escape.output_len as u64));
+    group.bench_function("byte_at_a_time", |b| {
+        let mut output = Vec::with_capacity(escape.output_len);
+        b.iter(|| {
+            output.clear();
+            black_box(serialize_bench::write_escape(
+                black_box(&escape.summary),
+                black_box(&mut output),
+                true,
+            ));
+            black_box(&output);
+        });
+    });
+    group.bench_function("batched_spans", |b| {
+        let mut output = Vec::with_capacity(escape.output_len);
+        b.iter(|| {
+            output.clear();
+            black_box(serialize_bench::write_escape(
+                black_box(&escape.summary),
+                black_box(&mut output),
+                false,
+            ));
+            black_box(&output);
+        });
+    });
+    group.finish();
+
+    let field = escape.summary.title_str.as_bytes();
+    let mut group = c.benchmark_group("sm_escape_metadata");
+    group.sample_size(50);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Bytes(field.len() as u64));
+    group.bench_function("byte_at_a_time", |b| {
+        let mut output = Vec::with_capacity(escape.output_len);
+        b.iter(|| {
+            output.clear();
+            black_box(serialize_bench::write_escape_field(
+                black_box(field),
+                black_box(&mut output),
+                true,
+            ));
+            black_box(&output);
+        });
+    });
+    group.bench_function("batched_spans", |b| {
+        let mut output = Vec::with_capacity(escape.output_len);
+        b.iter(|| {
+            output.clear();
+            black_box(serialize_bench::write_escape_field(
+                black_box(field),
+                black_box(&mut output),
+                false,
+            ));
+            black_box(&output);
+        });
+    });
+    group.finish();
 }
 
 criterion_group!(benches, bench_serialize);

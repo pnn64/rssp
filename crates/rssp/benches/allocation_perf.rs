@@ -2438,22 +2438,25 @@ fn run_timing_text_alloc(iterations: usize) {
 }
 
 fn run_serialize_phase(
-    fixture: &serialize_bench::SerializeFixture,
+    mode: &str,
+    summary: &rssp::SimfileSummary,
+    output_len: usize,
     phase: &str,
     iterations: usize,
     legacy: bool,
+    mut write: impl FnMut(&rssp::SimfileSummary, &mut Vec<u8>, bool) -> usize,
 ) {
-    let mut output = Vec::with_capacity(fixture.output_len);
+    let mut output = Vec::with_capacity(output_len);
     reset_counters();
     let before = Counters::read();
     let start = Instant::now();
     let mut checksum = 0usize;
     for _ in 0..iterations {
         output.clear();
-        checksum = checksum.wrapping_add(serialize_bench::write(
-            black_box(&fixture.summary),
+        checksum = checksum.wrapping_add(write(
+            black_box(summary),
             black_box(&mut output),
-            legacy,
+            black_box(legacy),
         ));
         black_box(&output);
     }
@@ -2462,17 +2465,18 @@ fn run_serialize_phase(
     let divisor = iterations as f64;
     println!(
         concat!(
-            "mode=serialize phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "mode={} phase={} iters={} checksum={} elapsed_s={:.6} ",
             "throughput_mib_s={:.3} alloc_calls_per_iter={:.1} ",
             "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
             "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
             "live_growth_bytes={} peak_live_growth_bytes={}"
         ),
+        mode,
         phase,
         iterations,
         black_box(checksum),
         elapsed.as_secs_f64(),
-        fixture.output_len as f64 * divisor / elapsed.as_secs_f64() / (1024.0 * 1024.0),
+        output_len as f64 * divisor / elapsed.as_secs_f64() / (1024.0 * 1024.0),
         (after.alloc_calls - before.alloc_calls) as f64 / divisor,
         (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
         (after.realloc_calls - before.realloc_calls) as f64 / divisor,
@@ -2486,8 +2490,45 @@ fn run_serialize_phase(
 fn run_serialize_alloc(iterations: usize) {
     let fixture = serialize_bench::SerializeFixture::new();
     serialize_bench::assert_behavior(&fixture);
-    run_serialize_phase(&fixture, "temporary-strings", iterations, true);
-    run_serialize_phase(&fixture, "direct-writer", iterations, false);
+    run_serialize_phase(
+        "serialize",
+        &fixture.summary,
+        fixture.output_len,
+        "temporary-strings",
+        iterations,
+        true,
+        serialize_bench::write,
+    );
+    run_serialize_phase(
+        "serialize",
+        &fixture.summary,
+        fixture.output_len,
+        "direct-writer",
+        iterations,
+        false,
+        serialize_bench::write,
+    );
+
+    let escape = serialize_bench::EscapeFixture::new();
+    serialize_bench::assert_escape_behavior(&escape);
+    run_serialize_phase(
+        "serialize-escape",
+        &escape.summary,
+        escape.output_len,
+        "byte-at-a-time",
+        iterations,
+        true,
+        serialize_bench::write_escape,
+    );
+    run_serialize_phase(
+        "serialize-escape",
+        &escape.summary,
+        escape.output_len,
+        "batched-spans",
+        iterations,
+        false,
+        serialize_bench::write_escape,
+    );
 }
 
 fn run_nps_vec_alloc(
