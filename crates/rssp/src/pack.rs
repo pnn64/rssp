@@ -193,6 +193,44 @@ fn pick_pack_parent_img(pack_dir: &Path, group_name: &str) -> Option<PathBuf> {
     let mut first = None;
     for entry in entries.flatten() {
         let name = entry.file_name();
+        let name_path = Path::new(&name);
+        if assets::is_mac_resource_fork(name_path)
+            || !name_path
+                .file_stem()
+                .is_some_and(|stem| assets::name_eq_ci(stem, group_name))
+        {
+            continue;
+        }
+        let Some(rank) = name_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .and_then(assets::img_rank)
+        else {
+            continue;
+        };
+        if !assets::entry_is_file(&entry) {
+            continue;
+        }
+        if rank == 0 {
+            return Some(parent.join(name));
+        }
+        if first
+            .as_ref()
+            .is_none_or(|(current_rank, _)| rank < *current_rank)
+        {
+            first = Some((rank, name));
+        }
+    }
+    first.map(|(_, name)| parent.join(name))
+}
+
+#[cfg(feature = "profile")]
+fn pick_pack_parent_img_legacy(pack_dir: &Path, group_name: &str) -> Option<PathBuf> {
+    let parent = pack_dir.parent()?;
+    let entries = fs::read_dir(parent).ok()?;
+    let mut first = None;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
         if name.to_string_lossy().starts_with("._") {
             continue;
         }
@@ -222,6 +260,19 @@ fn pick_pack_parent_img(pack_dir: &Path, group_name: &str) -> Option<PathBuf> {
         }
     }
     first.map(|(_, path)| path)
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_pick_pack_parent_img(
+    pack_dir: &Path,
+    group_name: &str,
+    legacy: bool,
+) -> Option<PathBuf> {
+    if legacy {
+        pick_pack_parent_img_legacy(pack_dir, group_name)
+    } else {
+        pick_pack_parent_img(pack_dir, group_name)
+    }
 }
 
 fn pick_first_img(dir: &Path, mut matches: impl FnMut(&Path) -> bool) -> Option<PathBuf> {

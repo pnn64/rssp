@@ -133,6 +133,16 @@ pub mod profile {
     }
 
     #[must_use]
+    pub fn pack_parent_img(pack_dir: &Path, group_name: &str) -> Option<PathBuf> {
+        crate::pack::profile_pick_pack_parent_img(pack_dir, group_name, false)
+    }
+
+    #[must_use]
+    pub fn pack_parent_img_legacy(pack_dir: &Path, group_name: &str) -> Option<PathBuf> {
+        crate::pack::profile_pick_pack_parent_img(pack_dir, group_name, true)
+    }
+
+    #[must_use]
     pub fn background_changes_legacy(
         song_dir: &Path,
         simfile_data: &[u8],

@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 pub const SONG_COUNT: usize = 64;
 pub const SONG_ENTRY_COUNT: usize = 5;
 pub const LOOSE_ENTRY_COUNT: usize = 256;
-pub const SONGS_ROOT_ENTRY_COUNT: usize = 1 + LOOSE_ENTRY_COUNT;
+pub const PARENT_IMG_COUNT: usize = 3;
+pub const SONGS_ROOT_ENTRY_COUNT: usize = 1 + LOOSE_ENTRY_COUNT + PARENT_IMG_COUNT;
 pub const ROOT_ENTRY_COUNT: usize = 1 + 128 + SONG_COUNT;
 pub const TREE_ENTRY_COUNT: usize =
     SONGS_ROOT_ENTRY_COUNT + ROOT_ENTRY_COUNT + SONG_COUNT * SONG_ENTRY_COUNT;
@@ -30,6 +31,14 @@ impl PackFixture {
         for index in 0..LOOSE_ENTRY_COUNT {
             std::fs::write(root.join(format!("Loose-{index:03}.dat")), [])
                 .expect("benchmark loose root file should be writable");
+        }
+        for name in [
+            "Performance Pack.gif",
+            "PERFORMANCE PACK.jpeg",
+            "performance pack.jpg",
+        ] {
+            std::fs::write(root.join(name), [])
+                .expect("benchmark parent pack image should be writable");
         }
 
         let mut pack_ini = String::new();
@@ -118,6 +127,18 @@ impl PackFixture {
         for (new, old) in new.iter().zip(&old) {
             assert_pack_scan(new, old);
         }
+    }
+
+    pub fn assert_parent_img_behavior(&self) {
+        for group_name in ["Performance Pack", "performance pack", "Missing Pack"] {
+            let old = rssp::profile::pack_parent_img_legacy(&self.pack_dir, group_name);
+            let new = rssp::profile::pack_parent_img(&self.pack_dir, group_name);
+            assert_eq!(new, old, "parent pack image changed");
+        }
+        assert_eq!(
+            rssp::profile::pack_parent_img(&self.pack_dir, "Performance Pack"),
+            Some(self.root.join("performance pack.jpg")),
+        );
     }
 
     pub fn assert_root_behavior(&self) {
