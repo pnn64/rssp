@@ -1,9 +1,12 @@
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
 const FIXTURE: &str = include_str!("fixtures/watch_yo_step.ssc");
 const EXTENSION: &str = "ssc";
+
+#[path = "support/nps_stats.rs"]
+mod nps_stats_bench;
 
 fn large_pair_map(entries: usize) -> String {
     use std::fmt::Write;
@@ -429,6 +432,7 @@ fn bench_nps_inner(c: &mut Criterion) {
 }
 
 fn bench_nps_stats(c: &mut Criterion) {
+    nps_stats_bench::assert_behavior();
     let (charts, globals) = build_nps_inputs();
     let timing_inputs = build_nps_timing_inputs(&charts, &globals);
     let mut group = c.benchmark_group("nps_stats");
@@ -476,6 +480,25 @@ fn bench_nps_stats(c: &mut Criterion) {
         });
     });
     group.finish();
+
+    let values = nps_stats_bench::values();
+    let mut owned = c.benchmark_group("nps_stats_owned_16385");
+    owned.sample_size(100);
+    owned.measurement_time(Duration::from_secs(3));
+    owned.throughput(Throughput::Elements(nps_stats_bench::VALUE_COUNT));
+    owned.bench_function("copy_to_scratch", |b| {
+        b.iter(|| black_box(rssp::bpm::get_nps_stats(black_box(&values))));
+    });
+    owned.bench_function("select_in_place", |b| {
+        b.iter_batched(
+            || values.clone(),
+            |mut values| {
+                black_box(rssp::bpm::get_nps_stats_in_place(black_box(&mut values)));
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    owned.finish();
 }
 
 fn equally_spaced_chart(measures: usize, rows_per_measure: usize) -> Vec<u8> {

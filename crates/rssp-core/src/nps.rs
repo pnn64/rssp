@@ -410,21 +410,43 @@ fn fixed_measure_time(parts: crate::timing::FixedTimingParts, measure: usize) ->
     f64::from(start + (row as f32 / ROWS_PER_BEAT as f32) / bps) - global_offset
 }
 
-fn median_with_scratch(arr: &[f64], scratch: &mut Vec<f64>) -> f64 {
+fn median_in_place(arr: &mut [f64]) -> f64 {
     if arr.is_empty() {
         return 0.0;
     }
-    scratch.extend_from_slice(arr);
-    let mid = scratch.len() / 2;
-    scratch.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-    if scratch.len() % 2 == 1 {
-        scratch[mid]
+    let mid = arr.len() / 2;
+    arr.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    if arr.len() % 2 == 1 {
+        arr[mid]
     } else {
-        f64::midpoint(
-            scratch[..mid].iter().fold(f64::MIN, |a, &b| a.max(b)),
-            scratch[mid],
-        )
+        f64::midpoint(arr[..mid].iter().fold(f64::MIN, |a, &b| a.max(b)), arr[mid])
     }
+}
+
+fn scan_nps(nps: &[f64]) -> (f64, Option<f64>) {
+    if nps.is_empty() {
+        return (0.0, Some(0.0));
+    }
+    if nps.len() < NPS_MEDIAN_SCAN_MIN {
+        return (nps.iter().fold(f64::MIN, |a, &b| a.max(b)).max(0.0), None);
+    }
+
+    let (mut max, mut zeros) = (f64::MIN, 0usize);
+    let (first, mut all_same, mut all_finite) = (nps[0], true, true);
+    for &value in nps {
+        max = max.max(value);
+        zeros += usize::from(value == 0.0);
+        all_same &= value == first;
+        all_finite &= value.is_finite();
+    }
+    let median = if all_same {
+        Some(first)
+    } else if all_finite && zeros > nps.len() / 2 {
+        Some(0.0)
+    } else {
+        None
+    };
+    (max.max(0.0), median)
 }
 
 #[must_use]
@@ -436,33 +458,22 @@ pub fn get_nps_stats(nps: &[f64]) -> (f64, f64) {
 #[must_use]
 pub fn get_nps_stats_with_scratch(nps: &[f64], scratch: &mut Vec<f64>) -> (f64, f64) {
     scratch.clear();
-    if nps.is_empty() {
-        return (0.0, 0.0);
-    }
-    if nps.len() < NPS_MEDIAN_SCAN_MIN {
-        return (
-            nps.iter().fold(f64::MIN, |a, &b| a.max(b)).max(0.0),
-            median_with_scratch(nps, scratch),
-        );
-    }
+    let (max, median) = scan_nps(nps);
+    let median = median.unwrap_or_else(|| {
+        scratch.extend_from_slice(nps);
+        median_in_place(scratch)
+    });
+    (max, median)
+}
 
-    let (mut max, mut zeros) = (f64::MIN, 0usize);
-    let (first, mut all_same, mut all_finite) = (nps[0], true, true);
-    for &v in nps {
-        max = max.max(v);
-        zeros += usize::from(v == 0.0);
-        all_same &= v == first;
-        all_finite &= v.is_finite();
-    }
-
-    let med = if all_same {
-        first
-    } else if all_finite && zeros > nps.len() / 2 {
-        0.0
-    } else {
-        median_with_scratch(nps, scratch)
-    };
-    (max.max(0.0), med)
+/// Computes NPS statistics by using `nps` as median-selection storage.
+///
+/// The values may be reordered. Use this when the owned input is no longer
+/// needed after the call to avoid allocating and copying a second buffer.
+#[must_use]
+pub fn get_nps_stats_in_place(nps: &mut [f64]) -> (f64, f64) {
+    let (max, median) = scan_nps(nps);
+    (max, median.unwrap_or_else(|| median_in_place(nps)))
 }
 
 #[must_use]

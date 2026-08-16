@@ -1,7 +1,7 @@
 #[cfg(windows)]
 use criterion::measurement::{Measurement, ValueFormatter};
 #[cfg(windows)]
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 #[cfg(windows)]
 use std::fmt::Write as _;
 #[cfg(windows)]
@@ -17,6 +17,9 @@ mod assets_bench;
 #[allow(dead_code)]
 #[path = "support/course.rs"]
 mod course_bench;
+#[cfg(windows)]
+#[path = "support/nps_stats.rs"]
+mod nps_stats_bench;
 #[cfg(windows)]
 #[path = "support/pack.rs"]
 mod pack_bench;
@@ -1303,6 +1306,26 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     optimizations.finish();
+
+    nps_stats_bench::assert_behavior();
+    let owned_nps = nps_stats_bench::values();
+    let mut owned_nps_stats = c.benchmark_group("cycles/nps_stats_owned_16385");
+    owned_nps_stats.sample_size(50);
+    owned_nps_stats.measurement_time(Duration::from_secs(3));
+    owned_nps_stats.throughput(Throughput::Elements(nps_stats_bench::VALUE_COUNT));
+    owned_nps_stats.bench_function("copy_to_scratch", |b| {
+        b.iter(|| black_box(rssp::bpm::get_nps_stats(black_box(&owned_nps))));
+    });
+    owned_nps_stats.bench_function("select_in_place", |b| {
+        b.iter_batched(
+            || owned_nps.clone(),
+            |mut values| {
+                black_box(rssp::bpm::get_nps_stats_in_place(black_box(&mut values)));
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    owned_nps_stats.finish();
 
     let mut bpm_stats = c.benchmark_group("cycles/bpm_range_stats");
     bpm_stats.sample_size(20);

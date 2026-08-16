@@ -21,7 +21,7 @@ pub(crate) fn is_display_bpm(bpm: f64) -> bool {
 
 pub use crate::nps::{
     compute_measure_nps_vec, compute_measure_nps_vec_with_timing, get_nps_stats,
-    get_nps_stats_with_scratch,
+    get_nps_stats_in_place, get_nps_stats_with_scratch,
 };
 
 #[inline]

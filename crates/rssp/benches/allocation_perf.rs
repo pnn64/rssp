@@ -13,6 +13,8 @@ mod assets_bench;
 mod course_bench;
 #[path = "support/metadata.rs"]
 mod metadata_bench;
+#[path = "support/nps_stats.rs"]
+mod nps_stats_bench;
 #[path = "support/pack.rs"]
 mod pack_bench;
 #[path = "support/report_nps.rs"]
@@ -106,6 +108,7 @@ enum Mode {
     TimingMerge,
     TimingText,
     Nps,
+    NpsStats,
     NpsCursor,
     Minimize,
     Bpms,
@@ -214,6 +217,7 @@ fn parse_args() -> (Mode, usize) {
                     "timing-merge" => Mode::TimingMerge,
                     "timing-text" => Mode::TimingText,
                     "nps" => Mode::Nps,
+                    "nps-stats" => Mode::NpsStats,
                     "nps-cursor" => Mode::NpsCursor,
                     "minimize" => Mode::Minimize,
                     "bpms" => Mode::Bpms,
@@ -306,6 +310,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         | Mode::SmTiming
         | Mode::TimingMerge
         | Mode::TimingText
+        | Mode::NpsStats
         | Mode::NpsCursor => rssp::AnalysisOptions::default(),
         Mode::Full | Mode::AnalysisReuse => rssp::AnalysisOptions {
             mono_threshold: 6,
@@ -418,7 +423,11 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
                     black_box(notation);
                 }
             }
-            Mode::Matrix | Mode::AnalysisReuse | Mode::StreamOutputs | Mode::NpsCursor => {
+            Mode::Matrix
+            | Mode::AnalysisReuse
+            | Mode::StreamOutputs
+            | Mode::NpsStats
+            | Mode::NpsCursor => {
                 unreachable!("mode uses its dedicated allocation runner")
             }
             Mode::Minimize => {
@@ -675,6 +684,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::TimingMerge => "timing-merge",
         Mode::TimingText => "timing-text",
         Mode::Nps => "nps",
+        Mode::NpsStats => "nps-stats",
         Mode::NpsCursor => "nps-cursor",
         Mode::Minimize => "minimize",
         Mode::Bpms => "bpms",
@@ -2469,6 +2479,56 @@ fn run_nps_vec_alloc(
     );
 }
 
+fn run_nps_stats_phase(phase: &str, iterations: usize, mut compute: impl FnMut() -> (f64, f64)) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0u64;
+    for _ in 0..iterations {
+        let stats = compute();
+        checksum = checksum.wrapping_add(stats.0.to_bits() ^ stats.1.to_bits());
+        black_box(stats);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=nps-stats phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_values_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        nps_stats_bench::VALUE_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_nps_stats_alloc(iterations: usize) {
+    nps_stats_bench::assert_behavior();
+    let values = nps_stats_bench::values();
+    run_nps_stats_phase("copy-to-scratch", iterations, || {
+        rssp::bpm::get_nps_stats(black_box(&values))
+    });
+
+    let mut owned = values.clone();
+    run_nps_stats_phase("select-in-place", iterations, || {
+        owned.copy_from_slice(&values);
+        rssp::bpm::get_nps_stats_in_place(black_box(&mut owned))
+    });
+}
+
 fn run_nps_cursor_alloc(iterations: usize) {
     let (bpms, stops, _) = timing_build_fixture();
     let timing = rssp::timing::timing_data_from_chart_data(
@@ -3376,6 +3436,10 @@ fn main() {
         }
         Mode::TimingText => {
             run_timing_text_alloc(iterations);
+            return;
+        }
+        Mode::NpsStats => {
+            run_nps_stats_alloc(iterations);
             return;
         }
         Mode::NpsCursor => {

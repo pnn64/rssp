@@ -10,7 +10,7 @@ use web_time::{Duration, Instant};
 use crate::analysis::{AnalysisOptions, AnalysisScratch, PreparedAnalysis, analyze_prepared_in};
 use crate::assets;
 use crate::math::{round_dp, round_sig_figs_6};
-use crate::nps::get_nps_stats;
+use crate::nps::get_nps_stats_in_place;
 use crate::pack;
 use crate::parse::{clean_tag, decode_bytes, decode_unescape_trim, extract_sections, unescape_tag};
 use crate::patterns::PATTERN_COUNT;
@@ -1541,7 +1541,7 @@ fn analyze_crs_path_impl(
     };
     total.candle_percent = round_dp(total.candle_percent, 2);
 
-    let (max_nps_raw, median_nps_raw) = get_nps_stats(&measure_nps_all);
+    let (max_nps_raw, median_nps_raw) = get_nps_stats_in_place(&mut measure_nps_all);
     total.max_nps = round_sig_figs_6(max_nps_raw);
     total.median_nps = round_dp(median_nps_raw, 2);
     total.short_hash = hash_list.join(", ");
