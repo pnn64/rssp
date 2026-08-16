@@ -1,4 +1,4 @@
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use std::ffi::{OsStr, OsString};
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
@@ -8,6 +8,8 @@ use std::time::Duration;
 mod assets_bench;
 #[path = "support/pack.rs"]
 mod pack_bench;
+#[path = "support/path_sort.rs"]
+mod path_sort_bench;
 
 fn bench_pack_scan(c: &mut Criterion) {
     let fixture = pack_bench::PackFixture::new();
@@ -543,6 +545,28 @@ fn bench_hint_normalize(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_path_sort(c: &mut Criterion) {
+    path_sort_bench::assert_behavior();
+    let paths = path_sort_bench::paths();
+    let mut group = c.benchmark_group("path_sort_ci");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(2));
+    group.throughput(Throughput::Elements(path_sort_bench::PATH_COUNT as u64));
+    for (name, legacy) in [("cached_strings", true), ("contiguous_keys", false)] {
+        group.bench_function(name, |b| {
+            b.iter_batched(
+                || paths.clone(),
+                |mut paths| {
+                    rssp::profile::sort_paths_ci(black_box(&mut paths), legacy);
+                    black_box(paths);
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_pack_scan,
@@ -557,6 +581,7 @@ criterion_group!(
     bench_asset_fallbacks,
     bench_song_assets,
     bench_selection_algorithms,
-    bench_hint_normalize
+    bench_hint_normalize,
+    bench_path_sort
 );
 criterion_main!(benches);

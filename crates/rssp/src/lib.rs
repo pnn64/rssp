@@ -43,6 +43,10 @@ pub mod profile {
         (first, second)
     }
 
+    pub fn sort_paths_ci(paths: &mut [PathBuf], legacy: bool) {
+        crate::pack::profile_sort_paths_ci(paths, legacy);
+    }
+
     #[must_use]
     pub fn match_mask_ci(name: &str, mask: &str) -> bool {
         crate::assets::match_mask_ci(name, mask)

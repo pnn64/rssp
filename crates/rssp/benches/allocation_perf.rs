@@ -21,6 +21,8 @@ mod metadata_bench;
 mod nps_stats_bench;
 #[path = "support/pack.rs"]
 mod pack_bench;
+#[path = "support/path_sort.rs"]
+mod path_sort_bench;
 #[path = "support/report_nps.rs"]
 mod report_nps_bench;
 #[path = "support/report_patterns.rs"]
@@ -151,6 +153,7 @@ enum Mode {
     PackHintNormalize,
     PackRoot,
     PackScan,
+    PathSort,
     BackgroundChanges,
     AssetFallbacks,
     SongAssets,
@@ -266,6 +269,7 @@ fn parse_args() -> (Mode, usize) {
                     "pack-hint" => Mode::PackHintNormalize,
                     "pack-root" => Mode::PackRoot,
                     "pack-scan" => Mode::PackScan,
+                    "path-sort" => Mode::PathSort,
                     "background-changes" => Mode::BackgroundChanges,
                     "asset-fallbacks" => Mode::AssetFallbacks,
                     "song-assets" => Mode::SongAssets,
@@ -354,6 +358,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         Mode::PackHintNormalize => rssp::AnalysisOptions::default(),
         Mode::PackRoot => rssp::AnalysisOptions::default(),
         Mode::PackScan => rssp::AnalysisOptions::default(),
+        Mode::PathSort => rssp::AnalysisOptions::default(),
         Mode::BackgroundChanges => rssp::AnalysisOptions::default(),
         Mode::AssetFallbacks => rssp::AnalysisOptions::default(),
         Mode::SongAssets => rssp::AnalysisOptions::default(),
@@ -759,6 +764,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::PackHintNormalize => "pack-hint",
         Mode::PackRoot => "pack-root",
         Mode::PackScan => "pack-scan",
+        Mode::PathSort => "path-sort",
         Mode::BackgroundChanges => "background-changes",
         Mode::AssetFallbacks => "asset-fallbacks",
         Mode::SongAssets => "song-assets",
@@ -3125,6 +3131,51 @@ fn run_pack_root_alloc(iterations: usize) {
     run_pack_root_phase("cached-entry-types", iterations, rssp::profile::pack_root);
 }
 
+fn run_path_sort_phase(phase: &str, iterations: usize, legacy: bool) {
+    let mut paths = path_sort_bench::paths();
+    rssp::profile::sort_paths_ci(&mut paths, false);
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        paths.reverse();
+        rssp::profile::sort_paths_ci(black_box(&mut paths), legacy);
+        checksum = checksum.wrapping_add(paths[0].as_os_str().len());
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=path-sort phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_paths_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        path_sort_bench::PATH_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+    black_box(paths);
+}
+
+fn run_path_sort_alloc(iterations: usize) {
+    path_sort_bench::assert_behavior();
+    run_path_sort_phase("cached-strings", iterations, true);
+    run_path_sort_phase("contiguous-keys", iterations, false);
+}
+
 fn run_pack_scan_alloc(iterations: usize) {
     let fixture = pack_bench::PackFixture::new();
     let image_fixture = pack_bench::ImageHintFixture::new();
@@ -4330,6 +4381,10 @@ fn main() {
         }
         Mode::PackScan => {
             run_pack_scan_alloc(iterations);
+            return;
+        }
+        Mode::PathSort => {
+            run_path_sort_alloc(iterations);
             return;
         }
         Mode::BackgroundChanges => {

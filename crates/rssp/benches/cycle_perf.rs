@@ -30,6 +30,9 @@ mod nps_stats_bench;
 #[path = "support/pack.rs"]
 mod pack_bench;
 #[cfg(windows)]
+#[path = "support/path_sort.rs"]
+mod path_sort_bench;
+#[cfg(windows)]
 #[path = "support/report_nps.rs"]
 mod report_nps_bench;
 #[cfg(windows)]
@@ -1202,6 +1205,24 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
                     ));
                 }
             });
+        });
+    }
+    path_sort_bench::assert_behavior();
+    let sort_paths = path_sort_bench::paths();
+    optimizations.throughput(Throughput::Elements(path_sort_bench::PATH_COUNT as u64));
+    for (name, legacy) in [
+        ("path_sort_cached_strings", true),
+        ("path_sort_contiguous_keys", false),
+    ] {
+        optimizations.bench_function(name, |b| {
+            b.iter_batched(
+                || sort_paths.clone(),
+                |mut paths| {
+                    rssp::profile::sort_paths_ci(black_box(&mut paths), legacy);
+                    black_box(paths);
+                },
+                BatchSize::SmallInput,
+            );
         });
     }
     translate_bench::assert_behavior();

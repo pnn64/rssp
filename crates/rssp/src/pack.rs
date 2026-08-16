@@ -65,8 +65,101 @@ pub struct PackScan {
     pub songs: Vec<SongScan>,
 }
 
+struct CompactKey {
+    start: u32,
+    end: u32,
+    original: u32,
+}
+
+fn sort_compact_ci<T>(
+    values: &mut [T],
+    estimate: usize,
+    mut append_key: impl FnMut(&T, &mut Vec<u8>),
+    fallback: impl FnMut(&T, &T) -> std::cmp::Ordering,
+) {
+    if u32::try_from(values.len()).is_err() {
+        values.sort_by(fallback);
+        return;
+    }
+    let mut text = Vec::with_capacity(values.len().saturating_mul(estimate));
+    let mut keys = Vec::with_capacity(values.len());
+    let mut compact = true;
+    for (original, value) in values.iter().enumerate() {
+        let start = text.len();
+        append_key(value, &mut text);
+        if u32::try_from(text.len()).is_err() {
+            compact = false;
+            break;
+        }
+        keys.push(CompactKey {
+            start: start as u32,
+            end: text.len() as u32,
+            original: original as u32,
+        });
+    }
+    if !compact {
+        values.sort_by(fallback);
+        return;
+    }
+    keys.sort_by(|left, right| {
+        text[left.start as usize..left.end as usize]
+            .cmp(&text[right.start as usize..right.end as usize])
+    });
+
+    let mut destinations = vec![0u32; values.len()];
+    for (target, key) in keys.iter().enumerate() {
+        destinations[key.original as usize] = target as u32;
+    }
+    for index in 0..values.len() {
+        while destinations[index] as usize != index {
+            let target = destinations[index] as usize;
+            values.swap(index, target);
+            destinations.swap(index, target);
+        }
+    }
+}
+
 fn sort_paths_ci(paths: &mut [PathBuf]) {
-    paths.sort_by_cached_key(|p| assets::lc_name(p));
+    sort_compact_ci(
+        paths,
+        24,
+        |path, text| {
+            if let Some(name) = path.file_name() {
+                text.extend(
+                    name.to_string_lossy()
+                        .as_bytes()
+                        .iter()
+                        .map(u8::to_ascii_lowercase),
+                );
+            }
+        },
+        |left, right| assets::cmp_name_ci(left, right),
+    );
+}
+
+fn sort_packs_ci(packs: &mut [PackScan]) {
+    sort_compact_ci(
+        packs,
+        24,
+        |pack, text| {
+            text.extend(
+                pack.group_name
+                    .as_bytes()
+                    .iter()
+                    .map(u8::to_ascii_lowercase),
+            );
+        },
+        |left, right| assets::cmp_ascii_ci(left.group_name.as_bytes(), right.group_name.as_bytes()),
+    );
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_sort_paths_ci(paths: &mut [PathBuf], legacy: bool) {
+    if legacy {
+        paths.sort_by_cached_key(|path| assets::lc_name(path));
+    } else {
+        sort_paths_ci(paths);
+    }
 }
 
 #[cfg(any(test, feature = "profile"))]
@@ -975,7 +1068,7 @@ pub fn scan_songs_dir(dir: &Path, opt: ScanOpt) -> Result<Vec<PackScan>, ScanErr
             packs.push(pack);
         }
     }
-    packs.sort_by_cached_key(|p| p.group_name.to_ascii_lowercase());
+    sort_packs_ci(&mut packs);
     Ok(packs)
 }
 
@@ -1066,7 +1159,7 @@ mod tests {
     use super::{
         DupPolicy, PackIniRaw, ScanError, ScanOpt, find_simfiles, parse_pack_ini,
         pick_pack_parent_img, scan_pack_dir, scan_pack_root, scan_pack_root_legacy, scan_song_dir,
-        scan_songs_dir,
+        scan_songs_dir, sort_paths_ci,
     };
     use crate::assets;
     use std::fs;
@@ -1077,6 +1170,22 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn compact_path_sort_matches_cached_keys() {
+        let mut expected = vec![
+            PathBuf::from("Songs/Alpha.ssc"),
+            PathBuf::from("Songs/alpha.SM"),
+            PathBuf::from("Songs/BETA.ssc"),
+            PathBuf::from("Songs/beta.ssc"),
+            PathBuf::from("Songs/éclair.ssc"),
+            PathBuf::from("Songs/Äther.sm"),
+        ];
+        let mut actual = expected.clone();
+        expected.sort_by_cached_key(|path| assets::lc_name(path));
+        sort_paths_ci(&mut actual);
+        assert_eq!(actual, expected);
     }
 
     fn write_file(path: &Path) {

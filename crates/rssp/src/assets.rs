@@ -26,6 +26,7 @@ pub struct ResolvedBackgroundChange {
     pub target: BackgroundChangeTarget,
 }
 
+#[cfg(any(test, feature = "profile"))]
 pub(crate) fn lc_name(path: &Path) -> String {
     path.file_name()
         .map(|s| s.to_string_lossy().to_ascii_lowercase())
@@ -163,7 +164,7 @@ fn list_image_candidates(dir: &Path) -> Vec<PathBuf> {
     candidates
 }
 
-fn cmp_ascii_ci(left: &[u8], right: &[u8]) -> Ordering {
+pub(crate) fn cmp_ascii_ci(left: &[u8], right: &[u8]) -> Ordering {
     for index in 0..left.len().min(right.len()) {
         let ordering = left[index]
             .to_ascii_lowercase()
@@ -295,7 +296,6 @@ fn is_movie_ext(path: &Path) -> bool {
         .is_some_and(|ext| MOVIE_EXTS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
 }
 
-#[cfg(any(test, feature = "profile"))]
 pub(crate) fn cmp_name_ci(left: &Path, right: &Path) -> Ordering {
     let left = left
         .file_name()
