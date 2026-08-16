@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, hash_map::Entry};
 use std::ffi::{OsStr, OsString};
+use std::hash::BuildHasher;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
@@ -1528,6 +1529,10 @@ enum CourseHashKey {
     Other(String),
 }
 
+// These keys are locally computed fixed-width chart digests, so the fast,
+// per-table-seeded hasher is appropriate for this internal dedup set.
+type CourseHashSet = HashSet<CourseHashKey, foldhash::fast::RandomState>;
+
 impl CourseHashKey {
     fn from_str(value: &str) -> Self {
         <[u8; 16]>::try_from(value.as_bytes())
@@ -1535,12 +1540,36 @@ impl CourseHashKey {
     }
 }
 
-fn dedup_push(vec: &mut Vec<String>, seen: &mut HashSet<CourseHashKey>, value: &str) {
+fn dedup_push<S: BuildHasher>(
+    vec: &mut Vec<String>,
+    seen: &mut HashSet<CourseHashKey, S>,
+    value: &str,
+) {
     if value.is_empty() {
         return;
     }
     if seen.insert(CourseHashKey::from_str(value)) {
         vec.push(value.to_string());
+    }
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+#[must_use]
+pub fn profile_dedup_hashes(values: &[String], std_hash: bool) -> Vec<String> {
+    fn collect<S: BuildHasher + Default>(values: &[String]) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut seen = HashSet::with_hasher(S::default());
+        for value in values {
+            dedup_push(&mut out, &mut seen, value);
+        }
+        out
+    }
+
+    if std_hash {
+        collect::<std::collections::hash_map::RandomState>(values)
+    } else {
+        collect::<foldhash::fast::RandomState>(values)
     }
 }
 
@@ -1640,9 +1669,9 @@ fn analyze_crs_path_impl(
     let mut sim_cache: HashMap<PathBuf, SimfileSummary> = HashMap::with_capacity(cache_capacity);
     let mut entries = Vec::with_capacity(entry_count);
     let mut hash_list = Vec::new();
-    let mut hash_seen = HashSet::new();
+    let mut hash_seen = CourseHashSet::default();
     let mut bpm_neutral_hash_list = Vec::new();
-    let mut bpm_neutral_hash_seen = HashSet::new();
+    let mut bpm_neutral_hash_seen = CourseHashSet::default();
 
     let mut meters = Vec::with_capacity(entry_count);
     let mut measure_nps_all = Vec::new();
@@ -1780,7 +1809,7 @@ fn analyze_crs_path_impl(
 #[cfg(test)]
 mod tests {
     use super::{
-        CourseHashKey, CourseSong, Difficulty, SongSort, analyze_crs_path, analyze_crs_path_impl,
+        CourseHashSet, CourseSong, Difficulty, SongSort, analyze_crs_path, analyze_crs_path_impl,
         dedup_push, merge_custom_patterns, normalize_stepstype, parse_crs, stepstype_eq,
     };
     use std::collections::HashSet;
@@ -1876,7 +1905,7 @@ mod tests {
         let mut expected = Vec::new();
         let mut expected_seen = HashSet::new();
         let mut actual = Vec::new();
-        let mut actual_seen: HashSet<CourseHashKey> = HashSet::new();
+        let mut actual_seen = CourseHashSet::default();
 
         for value in values {
             dedup_push_materialized(&mut expected, &mut expected_seen, value);

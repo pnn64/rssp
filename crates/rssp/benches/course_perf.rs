@@ -79,6 +79,50 @@ fn bench_course_analysis(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_hash_dedup(c: &mut Criterion) {
+    let values = course_bench::hash_values();
+    course_bench::assert_hash_dedup_behavior(&values);
+    let mut group = c.benchmark_group("course_hash_dedup_4096");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(course_bench::HASH_DEDUP_COUNT as u64));
+    group.bench_function("std_sip_hash", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_dedup_hashes(black_box(&values), true));
+        });
+    });
+    group.bench_function("fold_hash", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_dedup_hashes(
+                black_box(&values),
+                false,
+            ));
+        });
+    });
+    group.finish();
+
+    let values = course_bench::course_hash_values();
+    course_bench::assert_hash_dedup_behavior(&values);
+    let mut group = c.benchmark_group("course_hash_dedup_64");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(course_bench::COURSE_HASH_COUNT as u64));
+    group.bench_function("std_sip_hash", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_dedup_hashes(black_box(&values), true));
+        });
+    });
+    group.bench_function("fold_hash", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_dedup_hashes(
+                black_box(&values),
+                false,
+            ));
+        });
+    });
+    group.finish();
+}
+
 fn bench_course_parse(c: &mut Criterion) {
     let fixture = course_bench::CourseFixture::new();
     let input = std::fs::read(fixture.course_path()).expect("benchmark course should be readable");
@@ -562,6 +606,7 @@ fn bench_song_resolve(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_course_analysis,
+    bench_hash_dedup,
     bench_course_parse,
     bench_song_mods,
     bench_select_mods,

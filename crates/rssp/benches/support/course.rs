@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 const SIMFILE: &[u8] = include_bytes!("../fixtures/hash_fixture.ssc");
 pub const SONG_COUNT: usize = 64;
+pub const COURSE_HASH_COUNT: usize = SONG_COUNT;
+pub const HASH_DEDUP_COUNT: usize = 4_096;
 pub const MOD_COUNT: u64 = 9;
 pub const MODS: &str =
     " 1.5x, reverse, mirror, noholds, nomines, sudden, showcourse, nodifficult, award2 ";
@@ -32,6 +34,37 @@ pub const TITLE_MATCH_BATCH: usize = 1_024;
 pub const TITLE_MATCH_INPUT: &[u8] =
     b"#TITLE:Performance Song;#SUBTITLE:Benchmark Mix;#ARTIST:RSSP;";
 pub const TITLE_MATCH_EXPECTED: &str = "Performance Song Benchmark Mix";
+
+pub fn hash_values() -> Vec<String> {
+    (0..HASH_DEDUP_COUNT)
+        .map(|index| format!("{:016x}", index % 3_072))
+        .collect()
+}
+
+pub fn course_hash_values() -> Vec<String> {
+    (0..COURSE_HASH_COUNT)
+        .map(|index| format!("{:016x}", index % 48))
+        .collect()
+}
+
+pub fn assert_hash_dedup_behavior(values: &[String]) {
+    assert_eq!(
+        rssp::course::profile_dedup_hashes(values, false),
+        rssp::course::profile_dedup_hashes(values, true)
+    );
+    let edges = [
+        "".to_string(),
+        "0123456789abcdef".to_string(),
+        "0123456789abcdef".to_string(),
+        "short".to_string(),
+        "short".to_string(),
+        "é234567890abcdef".to_string(),
+    ];
+    assert_eq!(
+        rssp::course::profile_dedup_hashes(&edges, false),
+        rssp::course::profile_dedup_hashes(&edges, true)
+    );
+}
 
 pub fn assert_step_norm_behavior() {
     for raw in STEP_NORM_CASES {

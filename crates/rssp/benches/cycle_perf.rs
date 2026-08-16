@@ -1050,6 +1050,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     resolve_fixture.assert_behavior();
     course_bench::assert_step_norm_behavior();
     course_bench::assert_title_match_behavior();
+    let course_hashes = course_bench::hash_values();
+    course_bench::assert_hash_dedup_behavior(&course_hashes);
     let course_input =
         std::fs::read(course_fixture.course_path()).expect("benchmark course should be readable");
     let legacy_course = rssp::course::profile_parse_crs(&course_input, true)
@@ -1584,6 +1586,28 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     }
     elapsed_events.finish();
+
+    let mut course_hash_dedup = c.benchmark_group("cycles/course_hash_dedup_4096");
+    course_hash_dedup.sample_size(100);
+    course_hash_dedup.measurement_time(Duration::from_secs(3));
+    course_hash_dedup.throughput(Throughput::Elements(course_bench::HASH_DEDUP_COUNT as u64));
+    course_hash_dedup.bench_function("std_sip_hash", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_dedup_hashes(
+                black_box(&course_hashes),
+                true,
+            ));
+        });
+    });
+    course_hash_dedup.bench_function("fold_hash", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_dedup_hashes(
+                black_box(&course_hashes),
+                false,
+            ));
+        });
+    });
+    course_hash_dedup.finish();
 
     let mut course_parse = c.benchmark_group("cycles/course_parse");
     course_parse.sample_size(50);
