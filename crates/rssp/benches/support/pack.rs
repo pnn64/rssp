@@ -11,6 +11,10 @@ pub const TREE_ENTRY_COUNT: usize =
     SONGS_ROOT_ENTRY_COUNT + ROOT_ENTRY_COUNT + SONG_COUNT * SONG_ENTRY_COUNT;
 pub const BANNER_HINT: &str = "missing*.png";
 pub const BACKGROUND_HINT: &str = "background*.jpg";
+pub const HINT_IMAGE_COUNT: usize = 256;
+pub const HINT_OTHER_COUNT: usize = 256;
+pub const HINT_ENTRY_COUNT: usize = HINT_IMAGE_COUNT + HINT_OTHER_COUNT;
+pub const SUBDIR_HINT: &str = "Images/banner*.png";
 
 pub struct PackFixture {
     root: PathBuf,
@@ -223,6 +227,58 @@ fn assert_song_result(
 }
 
 impl Drop for PackFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+pub struct ImageHintFixture {
+    root: PathBuf,
+    pack_dir: PathBuf,
+}
+
+impl ImageHintFixture {
+    pub fn new() -> Self {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should follow the Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "rssp-pack-image-bench-{}-{unique}",
+            std::process::id()
+        ));
+        let pack_dir = root.join("Image Pack");
+        let images = pack_dir.join("Images");
+        std::fs::create_dir_all(&images).expect("benchmark image directory should be creatable");
+        for index in 0..HINT_IMAGE_COUNT {
+            std::fs::write(images.join(format!("Banner-{index:03}.PNG")), [])
+                .expect("benchmark hint image should be writable");
+        }
+        for index in 0..HINT_OTHER_COUNT {
+            std::fs::write(images.join(format!("Other-{index:03}.dat")), [])
+                .expect("benchmark non-image should be writable");
+        }
+        Self { root, pack_dir }
+    }
+
+    pub fn pack_dir(&self) -> &Path {
+        &self.pack_dir
+    }
+
+    pub fn assert_behavior(&self) {
+        for hint in [SUBDIR_HINT, "images/BANNER-255.png", "Images/missing*.png"] {
+            let old = rssp::profile::pack_subdir_img_legacy(&self.pack_dir, hint);
+            let new = rssp::profile::pack_subdir_img(&self.pack_dir, hint);
+            assert_eq!(new, old, "subdirectory pack image changed");
+        }
+        assert_eq!(
+            rssp::profile::pack_subdir_img(&self.pack_dir, SUBDIR_HINT),
+            Some(self.pack_dir.join("Images").join("Banner-000.PNG")),
+        );
+    }
+}
+
+impl Drop for ImageHintFixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
     }

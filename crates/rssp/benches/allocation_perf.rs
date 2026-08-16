@@ -2884,10 +2884,24 @@ fn run_pack_root_alloc(iterations: usize) {
 
 fn run_pack_scan_alloc(iterations: usize) {
     let fixture = pack_bench::PackFixture::new();
+    let image_fixture = pack_bench::ImageHintFixture::new();
     fixture.assert_song_behavior();
     fixture.assert_tree_behavior();
     fixture.assert_songs_behavior();
     fixture.assert_parent_img_behavior();
+    image_fixture.assert_behavior();
+    run_subdir_img_phase(
+        &image_fixture,
+        "full-paths",
+        iterations,
+        rssp::profile::pack_subdir_img_legacy,
+    );
+    run_subdir_img_phase(
+        &image_fixture,
+        "candidate-names",
+        iterations,
+        rssp::profile::pack_subdir_img,
+    );
     run_parent_img_phase(
         &fixture,
         "full-path-stats",
@@ -2967,6 +2981,53 @@ fn run_pack_scan_alloc(iterations: usize) {
         black_box(checksum),
         elapsed.as_secs_f64(),
         pack_bench::SONG_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_subdir_img_phase<F>(
+    fixture: &pack_bench::ImageHintFixture,
+    phase: &str,
+    iterations: usize,
+    pick: F,
+) where
+    F: Fn(&Path, &str) -> Option<PathBuf>,
+{
+    black_box(pick(fixture.pack_dir(), pack_bench::SUBDIR_HINT));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let image = pick(
+            black_box(fixture.pack_dir()),
+            black_box(pack_bench::SUBDIR_HINT),
+        );
+        checksum = checksum.wrapping_add(usize::from(image.is_some()));
+        black_box(image);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=pack-subdir-img phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "entries_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        pack_bench::HINT_ENTRY_COUNT as f64 * divisor / elapsed.as_secs_f64(),
         (after.alloc_calls - before.alloc_calls) as f64 / divisor,
         (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
         (after.realloc_calls - before.realloc_calls) as f64 / divisor,

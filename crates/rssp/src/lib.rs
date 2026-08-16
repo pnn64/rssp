@@ -143,6 +143,16 @@ pub mod profile {
     }
 
     #[must_use]
+    pub fn pack_subdir_img(pack_dir: &Path, hint: &str) -> Option<PathBuf> {
+        crate::pack::profile_pick_subdir_img(pack_dir, hint, false)
+    }
+
+    #[must_use]
+    pub fn pack_subdir_img_legacy(pack_dir: &Path, hint: &str) -> Option<PathBuf> {
+        crate::pack::profile_pick_subdir_img(pack_dir, hint, true)
+    }
+
+    #[must_use]
     pub fn background_changes_legacy(
         song_dir: &Path,
         simfile_data: &[u8],

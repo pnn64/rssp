@@ -999,11 +999,13 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let select_input = course_bench::select_input();
     let course_options = course_bench::fast_options();
     let pack_fixture = pack_bench::PackFixture::new();
+    let pack_image_fixture = pack_bench::ImageHintFixture::new();
     pack_fixture.assert_root_behavior();
     pack_fixture.assert_song_behavior();
     pack_fixture.assert_tree_behavior();
     pack_fixture.assert_songs_behavior();
     pack_fixture.assert_parent_img_behavior();
+    pack_image_fixture.assert_behavior();
     let asset_fixture = assets_bench::AssetFixture::with_movies(1);
     asset_fixture.assert_song_assets_behavior();
     asset_fixture.assert_music_behavior();
@@ -1587,6 +1589,28 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     parent_img.finish();
+
+    let mut subdir_img = c.benchmark_group("cycles/pack_subdir_image");
+    subdir_img.sample_size(20);
+    subdir_img.measurement_time(Duration::from_secs(3));
+    subdir_img.throughput(Throughput::Elements(pack_bench::HINT_ENTRY_COUNT as u64));
+    subdir_img.bench_function("full_paths", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::pack_subdir_img_legacy(
+                black_box(pack_image_fixture.pack_dir()),
+                black_box(pack_bench::SUBDIR_HINT),
+            ))
+        });
+    });
+    subdir_img.bench_function("candidate_names", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::pack_subdir_img(
+                black_box(pack_image_fixture.pack_dir()),
+                black_box(pack_bench::SUBDIR_HINT),
+            ))
+        });
+    });
+    subdir_img.finish();
 
     let mut song_scan = c.benchmark_group("cycles/song_simfile_discovery");
     song_scan.sample_size(20);

@@ -93,6 +93,33 @@ fn bench_parent_img(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_subdir_img(c: &mut Criterion) {
+    let fixture = pack_bench::ImageHintFixture::new();
+    fixture.assert_behavior();
+
+    let mut group = c.benchmark_group("pack_subdir_image");
+    group.sample_size(30);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(pack_bench::HINT_ENTRY_COUNT as u64));
+    group.bench_function("full_paths", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::pack_subdir_img_legacy(
+                black_box(fixture.pack_dir()),
+                black_box(pack_bench::SUBDIR_HINT),
+            ))
+        });
+    });
+    group.bench_function("candidate_names", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::pack_subdir_img(
+                black_box(fixture.pack_dir()),
+                black_box(pack_bench::SUBDIR_HINT),
+            ))
+        });
+    });
+    group.finish();
+}
+
 fn bench_song_scan(c: &mut Criterion) {
     let fixture = pack_bench::PackFixture::new();
     fixture.assert_song_behavior();
@@ -500,6 +527,7 @@ criterion_group!(
     bench_pack_scan,
     bench_songs_root,
     bench_parent_img,
+    bench_subdir_img,
     bench_song_scan,
     bench_simfile_tree,
     bench_pack_root,

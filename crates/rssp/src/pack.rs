@@ -69,10 +69,12 @@ fn sort_paths_ci(paths: &mut [PathBuf]) {
     paths.sort_by_cached_key(|p| assets::lc_name(p));
 }
 
+#[cfg(any(test, feature = "profile"))]
 fn should_replace(first: Option<&Path>, candidate: &Path) -> bool {
     first.is_none_or(|current| assets::cmp_name_ci(candidate, current).is_lt())
 }
 
+#[cfg(any(test, feature = "profile"))]
 fn keep_first_path(first: &mut Option<PathBuf>, candidate: PathBuf) {
     if should_replace(first.as_deref(), &candidate) {
         *first = Some(candidate);
@@ -275,7 +277,33 @@ pub(crate) fn profile_pick_pack_parent_img(
     }
 }
 
-fn pick_first_img(dir: &Path, mut matches: impl FnMut(&Path) -> bool) -> Option<PathBuf> {
+fn pick_first_img(dir: &Path, mut matches: impl FnMut(&OsStr) -> bool) -> Option<PathBuf> {
+    let entries = fs::read_dir(dir).ok()?;
+    let mut first = None;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_path = Path::new(&name);
+        if assets::is_mac_resource_fork(name_path) {
+            continue;
+        }
+        let Some(ext) = name_path.extension().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if assets::img_rank(ext).is_none() || !assets::entry_is_file(&entry) {
+            continue;
+        }
+        if matches(&name) {
+            keep_first_name(&mut first, &name);
+        }
+    }
+    first.map(|name| dir.join(name))
+}
+
+#[cfg(any(test, feature = "profile"))]
+fn pick_first_img_full_paths(
+    dir: &Path,
+    mut matches: impl FnMut(&Path) -> bool,
+) -> Option<PathBuf> {
     let entries = fs::read_dir(dir).ok()?;
     let mut first = None;
     for entry in entries.flatten() {
@@ -298,7 +326,7 @@ fn pick_first_img(dir: &Path, mut matches: impl FnMut(&Path) -> bool) -> Option<
 
 #[cfg(any(test, feature = "profile"))]
 fn pick_pack_dir_img(pack_dir: &Path) -> Option<PathBuf> {
-    pick_first_img(pack_dir, |_| true)
+    pick_first_img_full_paths(pack_dir, |_| true)
 }
 
 #[cfg(any(test, feature = "profile"))]
@@ -314,7 +342,7 @@ fn pick_ini_img_legacy(pack_dir: &Path, hint: &str) -> Option<PathBuf> {
     } else {
         assets::is_dir_ci(pack_dir, subdir).unwrap_or_else(|| pack_dir.join(subdir))
     };
-    pick_first_img(&dir, |path| {
+    pick_first_img_full_paths(&dir, |path| {
         path.file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| assets::match_mask_ci(name, mask))
@@ -346,11 +374,24 @@ fn pick_ini_img(
         return root_match;
     }
     let dir = assets::is_dir_ci(pack_dir, subdir).unwrap_or_else(|| pack_dir.join(subdir));
-    pick_first_img(&dir, |path| {
-        path.file_name()
-            .and_then(|name| name.to_str())
+    pick_first_img(&dir, |name| {
+        name.to_str()
             .is_some_and(|name| assets::match_mask_ci(name, mask))
     })
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_pick_subdir_img(
+    pack_dir: &Path,
+    hint: &str,
+    legacy: bool,
+) -> Option<PathBuf> {
+    if legacy {
+        pick_ini_img_legacy(pack_dir, hint)
+    } else {
+        let hint = normalized_img_hint(hint)?;
+        pick_ini_img(pack_dir, Some(&hint), None)
+    }
 }
 
 fn simfile_ext(path: &Path) -> Option<&'static str> {
