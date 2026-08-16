@@ -23,6 +23,8 @@ mod report_patterns_bench;
 mod report_timing_bench;
 #[path = "support/step_parity.rs"]
 mod step_parity_bench;
+#[path = "support/timing_merge.rs"]
+mod timing_merge_bench;
 #[path = "support/translate.rs"]
 mod translate_bench;
 
@@ -98,6 +100,7 @@ enum Mode {
     Hashes,
     Durations,
     TimingBuild,
+    TimingMerge,
     TimingText,
     Nps,
     NpsCursor,
@@ -204,6 +207,7 @@ fn parse_args() -> (Mode, usize) {
                     "hashes" => Mode::Hashes,
                     "durations" => Mode::Durations,
                     "timing-build" => Mode::TimingBuild,
+                    "timing-merge" => Mode::TimingMerge,
                     "timing-text" => Mode::TimingText,
                     "nps" => Mode::Nps,
                     "nps-cursor" => Mode::NpsCursor,
@@ -295,6 +299,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         | Mode::FusedMap
         | Mode::DisplayBpm
         | Mode::TimingBuild
+        | Mode::TimingMerge
         | Mode::TimingText
         | Mode::NpsCursor => rssp::AnalysisOptions::default(),
         Mode::Full | Mode::AnalysisReuse => rssp::AnalysisOptions {
@@ -661,6 +666,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Hashes => "hashes",
         Mode::Durations => "durations",
         Mode::TimingBuild => "timing-build",
+        Mode::TimingMerge => "timing-merge",
         Mode::TimingText => "timing-text",
         Mode::Nps => "nps",
         Mode::NpsCursor => "nps-cursor",
@@ -2197,6 +2203,78 @@ fn run_timing_build_alloc(iterations: usize) {
     );
 }
 
+type TimingMergeFn = for<'a> fn(
+    &[(f32, f32)],
+    &'a [(f32, f32)],
+    &[(f32, f32)],
+    &[(f32, f32)],
+) -> std::borrow::Cow<'a, [(f32, f32)]>;
+
+fn run_timing_merge_phase(
+    fixture: &timing_merge_bench::TimingMergeFixture,
+    phase: &str,
+    iterations: usize,
+    merge: TimingMergeFn,
+) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let output = merge(
+            black_box(&fixture.bpms),
+            black_box(&fixture.stops),
+            black_box(&fixture.delays),
+            black_box(&fixture.warps),
+        );
+        checksum = checksum
+            .wrapping_add(output.len())
+            .wrapping_add(output.last().map_or(0, |pair| pair.1.to_bits() as usize));
+        black_box(output);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=timing-merge phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_segments_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        timing_merge_bench::MERGE_INPUT_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_timing_merge_alloc(iterations: usize) {
+    timing_merge_bench::assert_behavior();
+    let fixture = timing_merge_bench::TimingMergeFixture::new();
+    run_timing_merge_phase(
+        &fixture,
+        "materialize-warps",
+        iterations,
+        timing_merge_bench::legacy_convert,
+    );
+    run_timing_merge_phase(
+        &fixture,
+        "fused-warps",
+        iterations,
+        rssp::timing::convert_warps_and_delays_to_sm_stops,
+    );
+}
+
 fn run_timing_text_phase(
     fixture: &report_timing_bench::TimingTextFixture,
     phase: &str,
@@ -3224,6 +3302,10 @@ fn main() {
         }
         Mode::TimingBuild => {
             run_timing_build_alloc(iterations);
+            return;
+        }
+        Mode::TimingMerge => {
+            run_timing_merge_alloc(iterations);
             return;
         }
         Mode::TimingText => {

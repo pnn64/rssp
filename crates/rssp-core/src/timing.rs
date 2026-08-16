@@ -1078,6 +1078,7 @@ fn process_bpms_and_stops_sm(
     (out_bpms, out_stops, out_warps, f64::from(beat0_offset))
 }
 
+#[must_use]
 pub fn convert_warps_and_delays_to_sm_stops<'a>(
     bpms: &[(f32, f32)],
     stops: &'a [(f32, f32)],
@@ -1088,29 +1089,15 @@ pub fn convert_warps_and_delays_to_sm_stops<'a>(
         return Cow::Borrowed(stops);
     }
 
-    let mut warp_stops = Vec::new();
-    let mut bpm_index = 0;
-    for (warp_beat, warp_value) in warps {
-        // Find the current BPM
-        while bpm_index + 1 < bpms.len() && bpms[bpm_index + 1].0 <= *warp_beat {
-            bpm_index += 1;
-        }
-        let bps = 60.0 / bpms[bpm_index].1;
-        let skip = bps * warp_value;
-        warp_stops.push((*warp_beat, -skip));
-    }
-
     // Perform a 3-way merge on the SM stop sources.
     // If two sources apply the same beat, sum up their values into a single pair.
-    let mut sm_stops = Vec::with_capacity(stops.len() + delays.len() + warp_stops.len());
+    let mut sm_stops = Vec::with_capacity(stops.len() + delays.len() + warps.len());
+    let mut bpm_index = 0;
     let mut stops_index = 0;
     let mut delays_index = 0;
-    let mut warp_stops_index = 0;
+    let mut warp_index = 0;
 
-    while stops_index < stops.len()
-        || delays_index < delays.len()
-        || warp_stops_index < warp_stops.len()
-    {
+    while stops_index < stops.len() || delays_index < delays.len() || warp_index < warps.len() {
         // Find the smallest remaining key.
         let mut key = None;
 
@@ -1120,16 +1107,11 @@ pub fn convert_warps_and_delays_to_sm_stops<'a>(
         if delays_index < delays.len() && key.is_none_or(|k| delays[delays_index].0 < k) {
             key = Some(delays[delays_index].0);
         }
-        if warp_stops_index < warp_stops.len()
-            && key.is_none_or(|k| warp_stops[warp_stops_index].0 < k)
-        {
-            key = Some(warp_stops[warp_stops_index].0);
+        if warp_index < warps.len() && key.is_none_or(|k| warps[warp_index].0 < k) {
+            key = Some(warps[warp_index].0);
         }
 
-        let key = match key {
-            Some(k) => k,
-            None => break, // Should be unreachable, but just in case
-        };
+        let Some(key) = key else { break };
         let mut value = 0.0;
 
         if stops_index < stops.len() && stops[stops_index].0 == key {
@@ -1140,9 +1122,13 @@ pub fn convert_warps_and_delays_to_sm_stops<'a>(
             value += delays[delays_index].1;
             delays_index += 1;
         }
-        if warp_stops_index < warp_stops.len() && warp_stops[warp_stops_index].0 == key {
-            value += warp_stops[warp_stops_index].1;
-            warp_stops_index += 1;
+        if warp_index < warps.len() && warps[warp_index].0 == key {
+            // Convert at the merge head instead of materializing every warp first.
+            while bpm_index + 1 < bpms.len() && bpms[bpm_index + 1].0 <= key {
+                bpm_index += 1;
+            }
+            value -= 60.0 / bpms[bpm_index].1 * warps[warp_index].1;
+            warp_index += 1;
         }
 
         if value != 0.0 {

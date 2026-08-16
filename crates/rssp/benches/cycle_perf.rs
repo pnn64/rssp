@@ -32,6 +32,9 @@ mod report_timing_bench;
 #[cfg(windows)]
 #[path = "support/step_parity.rs"]
 mod step_parity_bench;
+#[cfg(windows)]
+#[path = "support/timing_merge.rs"]
+mod timing_merge_bench;
 
 #[cfg(windows)]
 #[derive(Clone, Copy)]
@@ -773,6 +776,34 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     timing_build.finish();
+
+    timing_merge_bench::assert_behavior();
+    let timing_merge_fixture = timing_merge_bench::TimingMergeFixture::new();
+    let mut timing_merge = c.benchmark_group("cycles/sm_stop_merge_2048_each");
+    timing_merge.throughput(Throughput::Elements(timing_merge_bench::MERGE_INPUT_COUNT));
+    timing_merge.sample_size(50);
+    timing_merge.measurement_time(Duration::from_secs(3));
+    timing_merge.bench_function("materialize_warps", |b| {
+        b.iter(|| {
+            black_box(timing_merge_bench::legacy_convert(
+                black_box(&timing_merge_fixture.bpms),
+                black_box(&timing_merge_fixture.stops),
+                black_box(&timing_merge_fixture.delays),
+                black_box(&timing_merge_fixture.warps),
+            ));
+        });
+    });
+    timing_merge.bench_function("fused_warps", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::convert_warps_and_delays_to_sm_stops(
+                black_box(&timing_merge_fixture.bpms),
+                black_box(&timing_merge_fixture.stops),
+                black_box(&timing_merge_fixture.delays),
+                black_box(&timing_merge_fixture.warps),
+            ));
+        });
+    });
+    timing_merge.finish();
 
     let cursor_densities: Vec<_> = (0..512)
         .map(|idx| [0, 16, 20, 24, 32][(idx * 7) % 5])

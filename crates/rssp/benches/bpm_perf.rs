@@ -3,6 +3,9 @@ use std::fmt::Write as _;
 use std::hint::black_box;
 use std::time::Duration;
 
+#[path = "support/timing_merge.rs"]
+mod timing_merge_bench;
+
 const FIXTURE: &str = include_str!("fixtures/bpm_fixture.ssc");
 
 fn control_pair_map(entries: usize) -> (String, String) {
@@ -675,6 +678,38 @@ fn bench_timing_segment_cleanup(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_sm_stop_merge(c: &mut Criterion) {
+    timing_merge_bench::assert_behavior();
+    let fixture = timing_merge_bench::TimingMergeFixture::new();
+    let mut group = c.benchmark_group("sm_stop_merge_2048_each");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(criterion::Throughput::Elements(
+        timing_merge_bench::MERGE_INPUT_COUNT,
+    ));
+    group.bench_function("materialize_warps", |b| {
+        b.iter(|| {
+            black_box(timing_merge_bench::legacy_convert(
+                black_box(&fixture.bpms),
+                black_box(&fixture.stops),
+                black_box(&fixture.delays),
+                black_box(&fixture.warps),
+            ));
+        });
+    });
+    group.bench_function("fused_warps", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::convert_warps_and_delays_to_sm_stops(
+                black_box(&fixture.bpms),
+                black_box(&fixture.stops),
+                black_box(&fixture.delays),
+                black_box(&fixture.warps),
+            ));
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_bpm_pipeline,
@@ -687,6 +722,7 @@ criterion_group!(
     bench_bpm_stats,
     bench_mines_nonfake,
     bench_parse_bpm_map,
-    bench_timing_segment_cleanup
+    bench_timing_segment_cleanup,
+    bench_sm_stop_merge
 );
 criterion_main!(benches);
