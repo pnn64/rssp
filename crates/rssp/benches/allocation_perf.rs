@@ -9,6 +9,8 @@ use std::time::Instant;
 #[allow(dead_code)]
 #[path = "support/assets.rs"]
 mod assets_bench;
+#[path = "support/bpm_display.rs"]
+mod bpm_display_bench;
 #[path = "support/course.rs"]
 mod course_bench;
 #[path = "support/elapsed.rs"]
@@ -128,6 +130,7 @@ enum Mode {
     NormalizeMap,
     FusedMap,
     DisplayBpm,
+    BpmDisplayTags,
     BpmStats,
     ElapsedEvents,
     Tech,
@@ -245,6 +248,7 @@ fn parse_args() -> (Mode, usize) {
                     "normalize-map" => Mode::NormalizeMap,
                     "fused-map" => Mode::FusedMap,
                     "display-bpm" => Mode::DisplayBpm,
+                    "bpm-display-tags" => Mode::BpmDisplayTags,
                     "bpm-stats" => Mode::BpmStats,
                     "elapsed-events" => Mode::ElapsedEvents,
                     "tech" => Mode::Tech,
@@ -333,6 +337,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         | Mode::NormalizeMap
         | Mode::FusedMap
         | Mode::DisplayBpm
+        | Mode::BpmDisplayTags
         | Mode::ElapsedEvents
         | Mode::TimingBuild
         | Mode::SmTiming
@@ -445,7 +450,8 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             | Mode::CleanMap
             | Mode::NormalizeMap
             | Mode::FusedMap
-            | Mode::DisplayBpm => {
+            | Mode::DisplayBpm
+            | Mode::BpmDisplayTags => {
                 unreachable!("mode uses its dedicated allocation runner")
             }
             Mode::Tech => {
@@ -742,6 +748,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::NormalizeMap => "normalize-map",
         Mode::FusedMap => "fused-map",
         Mode::DisplayBpm => "display-bpm",
+        Mode::BpmDisplayTags => "bpm-display-tags",
         Mode::BpmStats => "bpm-stats",
         Mode::ElapsedEvents => "elapsed-events",
         Mode::Tech => "tech",
@@ -1541,6 +1548,53 @@ fn run_display_bpm_alloc(iterations: usize) {
         after.live_bytes as isize - before.live_bytes as isize,
         after.peak_live_bytes.saturating_sub(before.live_bytes),
     );
+}
+
+fn run_bpm_display_tags_phase(data: &[u8], phase: &str, iterations: usize, legacy: bool) {
+    black_box(bpm_display_bench::compute(data, legacy));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let snapshots = bpm_display_bench::compute(black_box(data), legacy);
+        checksum = checksum
+            .wrapping_add(snapshots.len())
+            .wrapping_add(snapshots[0].display_bpm.len())
+            .wrapping_add(snapshots[snapshots.len() - 1].display_bpm.len());
+        black_box(snapshots);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=bpm-display-tags phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_charts_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        bpm_display_bench::CHART_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_bpm_display_tags_alloc(iterations: usize) {
+    let fixture = bpm_display_bench::fixture();
+    bpm_display_bench::assert_behavior(&fixture);
+    run_bpm_display_tags_phase(&fixture, "owned-temporary", iterations, true);
+    run_bpm_display_tags_phase(&fixture, "borrowed-tag", iterations, false);
 }
 
 fn run_clean_map_alloc(iterations: usize) {
@@ -4461,6 +4515,10 @@ fn main() {
         }
         Mode::DisplayBpm => {
             run_display_bpm_alloc(iterations);
+            return;
+        }
+        Mode::BpmDisplayTags => {
+            run_bpm_display_tags_alloc(iterations);
             return;
         }
         Mode::CustomCompile => {

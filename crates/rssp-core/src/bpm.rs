@@ -381,10 +381,28 @@ pub fn normalize_chart_tag(tag: Option<&[u8]>) -> Option<String> {
     map_tag_opt(tag, normalize_float_digits)
 }
 
-fn decode_display_bpm_tag(tag: Option<&[u8]>) -> Option<String> {
-    tag.map(decode_bytes)
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+fn trim_owned(mut value: String) -> String {
+    let trimmed = value.trim();
+    let start = trimmed.as_ptr() as usize - value.as_ptr() as usize;
+    let end = start + trimmed.len();
+    value.truncate(end);
+    if start != 0 {
+        value.drain(..start);
+    }
+    value
+}
+
+fn decode_display_bpm_tag<const BORROW: bool>(tag: Option<&[u8]>) -> Option<Cow<'_, str>> {
+    let decoded = decode_bytes(tag?);
+    let value = if BORROW {
+        match decoded {
+            Cow::Borrowed(value) => Cow::Borrowed(value.trim()),
+            Cow::Owned(value) => Cow::Owned(trim_owned(value)),
+        }
+    } else {
+        Cow::Owned(decoded.trim().to_string())
+    };
+    (!value.is_empty()).then_some(value)
 }
 
 fn split_display_bpm_params(tag: &str) -> (&str, Option<&str>) {
@@ -561,7 +579,7 @@ fn chart_metadata(fields: &[&[u8]], fmt: TimingFormat) -> Option<(String, String
     ))
 }
 
-fn chart_bpm_snapshot(
+fn chart_bpm_snapshot<const BORROW_DISPLAY: bool>(
     entry: &ParsedChartEntry<'_>,
     global: &TimingTags,
     bpms_norm: &str,
@@ -600,7 +618,7 @@ fn chart_bpm_snapshot(
             bpm_max_raw: cached.bpm_max_raw,
         }
     };
-    let chart_dbpm = decode_display_bpm_tag(entry.chart_display_bpm.as_deref());
+    let chart_dbpm = decode_display_bpm_tag::<BORROW_DISPLAY>(entry.chart_display_bpm.as_deref());
     let (display_bpm_min_raw, display_bpm_max_raw, display_bpm) = resolve_display_bpm(
         chart_dbpm.as_deref(),
         timing.bpm_min_raw,
@@ -670,6 +688,27 @@ pub fn actual_bpm_range_raw_f32(map: &[(f32, f32)]) -> (f64, f64) {
 }
 
 pub fn chart_bpm_snapshots(data: &[u8], ext: &str) -> Result<Vec<ChartBpmSnapshot>, String> {
+    chart_bpm_snapshots_impl::<true>(data, ext)
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn chart_bpm_snapshots_for_bench(
+    data: &[u8],
+    ext: &str,
+    legacy_display_alloc: bool,
+) -> Result<Vec<ChartBpmSnapshot>, String> {
+    if legacy_display_alloc {
+        chart_bpm_snapshots_impl::<false>(data, ext)
+    } else {
+        chart_bpm_snapshots_impl::<true>(data, ext)
+    }
+}
+
+fn chart_bpm_snapshots_impl<const BORROW_DISPLAY: bool>(
+    data: &[u8],
+    ext: &str,
+) -> Result<Vec<ChartBpmSnapshot>, String> {
     let parsed = extract_sections(data, ext).map_err(|e| e.to_string())?;
     let fmt = timing_format_from_ext(ext);
     let use_chart = steps_timing_allowed(parse_version(parsed.version, fmt), fmt);
@@ -678,7 +717,7 @@ pub fn chart_bpm_snapshots(data: &[u8], ext: &str) -> Result<Vec<ChartBpmSnapsho
     let mut snapshots = Vec::with_capacity(parsed.notes_list.len());
     let mut global_timing = None;
     for entry in &parsed.notes_list {
-        if let Some(snapshot) = chart_bpm_snapshot(
+        if let Some(snapshot) = chart_bpm_snapshot::<BORROW_DISPLAY>(
             entry,
             &global,
             &bpms_norm,
@@ -1356,6 +1395,29 @@ pub fn normalize_and_tidy_bpms(param: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn borrowed_display_bpm_tag_matches_owned() {
+        for raw in [
+            None,
+            Some(&b" 120:240 "[..]),
+            Some(&b" \t\r\n "[..]),
+            Some(&b"\xA0120:240\xA0"[..]),
+        ] {
+            assert_eq!(
+                decode_display_bpm_tag::<true>(raw),
+                decode_display_bpm_tag::<false>(raw)
+            );
+        }
+        assert!(matches!(
+            decode_display_bpm_tag::<true>(Some(b"120:240")),
+            Some(Cow::Borrowed("120:240"))
+        ));
+        assert!(matches!(
+            decode_display_bpm_tag::<true>(Some(b"\xA0120:240\xA0")),
+            Some(Cow::Owned(value)) if value == "120:240"
+        ));
+    }
 
     #[test]
     fn borrowed_clean_maps_match_owned() {

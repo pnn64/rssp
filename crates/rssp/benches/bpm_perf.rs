@@ -3,6 +3,8 @@ use std::fmt::Write as _;
 use std::hint::black_box;
 use std::time::Duration;
 
+#[path = "support/bpm_display.rs"]
+mod bpm_display_bench;
 #[path = "support/elapsed.rs"]
 mod elapsed_bench;
 #[path = "support/timing_borrow.rs"]
@@ -216,6 +218,24 @@ fn bench_bpm_pipeline(c: &mut Criterion) {
                     .expect("inherited BPM snapshots should succeed");
             black_box(snapshots);
         });
+    });
+    group.finish();
+}
+
+fn bench_display_tags(c: &mut Criterion) {
+    let fixture = bpm_display_bench::fixture();
+    bpm_display_bench::assert_behavior(&fixture);
+    let mut group = c.benchmark_group("bpm_display_tags_256");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(criterion::Throughput::Elements(
+        bpm_display_bench::CHART_COUNT as u64,
+    ));
+    group.bench_function("owned_temporary", |b| {
+        b.iter(|| black_box(bpm_display_bench::compute(black_box(&fixture), true)));
+    });
+    group.bench_function("borrowed_tag", |b| {
+        b.iter(|| black_box(bpm_display_bench::compute(black_box(&fixture), false)));
     });
     group.finish();
 }
@@ -757,6 +777,7 @@ fn bench_elapsed_events(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_bpm_pipeline,
+    bench_display_tags,
     bench_bpm_inner,
     bench_bpm_format,
     bench_clean_timing_map,

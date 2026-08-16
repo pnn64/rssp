@@ -14,6 +14,9 @@ use std::time::Duration;
 #[path = "support/assets.rs"]
 mod assets_bench;
 #[cfg(windows)]
+#[path = "support/bpm_display.rs"]
+mod bpm_display_bench;
+#[cfg(windows)]
 #[allow(dead_code)]
 #[path = "support/course.rs"]
 mod course_bench;
@@ -454,6 +457,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         .map(|idx| (idx as f64 * 4.0, 60.0 + (idx % 300) as f64))
         .collect();
     let bpm_stats_values: Vec<_> = bpm_stats_map.iter().map(|&(_, bpm)| bpm).collect();
+    let bpm_display_fixture = bpm_display_bench::fixture();
+    bpm_display_bench::assert_behavior(&bpm_display_fixture);
 
     let mut parsing = c.benchmark_group("cycles/parsing");
     parsing.throughput(Throughput::Elements(ENTRIES as u64));
@@ -491,6 +496,28 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     display_bpm.finish();
+
+    let mut display_tags = c.benchmark_group("cycles/bpm_display_tags_256");
+    display_tags.throughput(Throughput::Elements(bpm_display_bench::CHART_COUNT as u64));
+    display_tags.sample_size(100);
+    display_tags.measurement_time(Duration::from_secs(3));
+    display_tags.bench_function("owned_temporary", |b| {
+        b.iter(|| {
+            black_box(bpm_display_bench::compute(
+                black_box(&bpm_display_fixture),
+                true,
+            ));
+        });
+    });
+    display_tags.bench_function("borrowed_tag", |b| {
+        b.iter(|| {
+            black_box(bpm_display_bench::compute(
+                black_box(&bpm_display_fixture),
+                false,
+            ));
+        });
+    });
+    display_tags.finish();
 
     let mut tech_notation = c.benchmark_group("cycles/tech_notation");
     tech_notation.sample_size(100);
