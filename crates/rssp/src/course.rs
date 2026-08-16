@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, hash_map::Entry};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
@@ -1201,6 +1202,18 @@ fn song_dir_name(dir: &Path) -> String {
         .unwrap_or_default()
 }
 
+fn sorted_dir_names(dir: &Path) -> Option<Vec<OsString>> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut names = Vec::new();
+    for entry in entries.flatten() {
+        if assets::entry_is_dir(&entry) {
+            names.push(entry.file_name());
+        }
+    }
+    names.sort_by(|left, right| assets::cmp_os_ci(left, right));
+    Some(names)
+}
+
 fn resolve_song_dir(songs_dir: &Path, group: Option<&str>, song: &str) -> Option<PathBuf> {
     let song = song.trim();
     if song.is_empty() {
@@ -1221,19 +1234,60 @@ fn resolve_song_dir(songs_dir: &Path, group: Option<&str>, song: &str) -> Option
             return direct;
         }
 
-        let Ok(entries) = std::fs::read_dir(&group_dir) else {
-            return None;
-        };
+        for name in sorted_dir_names(&group_dir)? {
+            let dir = group_dir.join(name);
+            let scan = pack::scan_song_dir(&dir, pack::ScanOpt::default()).ok()??;
+            let sim = simfile::open(&scan.simfile).ok()?;
+            let title = simfile_translit_full_title(&sim.data, sim.extension)?;
+            if title.eq_ignore_ascii_case(song) {
+                return Some(dir);
+            }
+        }
+        return None;
+    }
+
+    for name in sorted_dir_names(songs_dir)? {
+        let group_dir = songs_dir.join(name);
+        if let Some(dir) = assets::is_dir_ci(&group_dir, song).or_else(|| {
+            let p = group_dir.join(song);
+            p.is_dir().then_some(p)
+        }) {
+            return Some(dir);
+        }
+    }
+    None
+}
+
+#[cfg(feature = "profile")]
+fn resolve_song_dir_legacy(songs_dir: &Path, group: Option<&str>, song: &str) -> Option<PathBuf> {
+    let song = song.trim();
+    if song.is_empty() {
+        return None;
+    }
+
+    if let Some(group) = group.map(str::trim).filter(|g| !g.is_empty()) {
+        let group_dir = assets::is_dir_ci(songs_dir, group).or_else(|| {
+            let path = songs_dir.join(group);
+            path.is_dir().then_some(path)
+        })?;
+        let direct = assets::is_dir_ci(&group_dir, song).or_else(|| {
+            let path = group_dir.join(song);
+            path.is_dir().then_some(path)
+        });
+        if direct.is_some() {
+            return direct;
+        }
+
+        let entries = std::fs::read_dir(&group_dir).ok()?;
         let mut subdirs: Vec<PathBuf> = entries
             .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_dir())
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
             .collect();
-        subdirs.sort_by_cached_key(|p| {
-            p.file_name()
-                .map(|s| s.to_string_lossy().to_ascii_lowercase())
+        subdirs.sort_by_cached_key(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().to_ascii_lowercase())
         });
-
         for dir in subdirs {
             let scan = pack::scan_song_dir(&dir, pack::ScanOpt::default()).ok()??;
             let sim = simfile::open(&scan.simfile).ok()?;
@@ -1245,28 +1299,40 @@ fn resolve_song_dir(songs_dir: &Path, group: Option<&str>, song: &str) -> Option
         return None;
     }
 
-    let Ok(entries) = std::fs::read_dir(songs_dir) else {
-        return None;
-    };
+    let entries = std::fs::read_dir(songs_dir).ok()?;
     let mut groups: Vec<PathBuf> = entries
         .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
         .collect();
-    groups.sort_by_cached_key(|p| {
-        p.file_name()
-            .map(|s| s.to_string_lossy().to_ascii_lowercase())
+    groups.sort_by_cached_key(|path| {
+        path.file_name()
+            .map(|name| name.to_string_lossy().to_ascii_lowercase())
     });
-
     for group_dir in groups {
         if let Some(dir) = assets::is_dir_ci(&group_dir, song).or_else(|| {
-            let p = group_dir.join(song);
-            p.is_dir().then_some(p)
+            let path = group_dir.join(song);
+            path.is_dir().then_some(path)
         }) {
             return Some(dir);
         }
     }
     None
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+pub fn profile_resolve_song_dir(
+    songs_dir: &Path,
+    group: Option<&str>,
+    song: &str,
+    legacy: bool,
+) -> Option<PathBuf> {
+    if legacy {
+        resolve_song_dir_legacy(songs_dir, group, song)
+    } else {
+        resolve_song_dir(songs_dir, group, song)
+    }
 }
 
 fn guess_songs_dir(course_path: &Path) -> Option<PathBuf> {

@@ -453,6 +453,39 @@ fn bench_course_banner(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_song_resolve(c: &mut Criterion) {
+    let fixture = course_bench::ResolveFixture::new();
+    fixture.assert_behavior();
+
+    let mut group = c.benchmark_group("course_song_resolve_384");
+    group.sample_size(20);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(
+        course_bench::RESOLVE_ENTRY_COUNT as u64,
+    ));
+    group.bench_function("full_paths_metadata_keys", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_resolve_song_dir(
+                black_box(fixture.songs_dir()),
+                None,
+                black_box(course_bench::RESOLVE_SONG),
+                true,
+            ))
+        });
+    });
+    group.bench_function("entry_types_names", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_resolve_song_dir(
+                black_box(fixture.songs_dir()),
+                None,
+                black_box(course_bench::RESOLVE_SONG),
+                false,
+            ))
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_course_analysis,
@@ -462,6 +495,7 @@ criterion_group!(
     bench_select_parse,
     bench_stepstype_match,
     bench_pattern_merge,
-    bench_course_banner
+    bench_course_banner,
+    bench_song_resolve
 );
 criterion_main!(benches);

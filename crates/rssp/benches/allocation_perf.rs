@@ -140,6 +140,7 @@ enum Mode {
     CourseAnalyze,
     CourseStepType,
     CourseBanner,
+    CourseResolve,
     PackRoot,
     PackScan,
     BackgroundChanges,
@@ -250,6 +251,7 @@ fn parse_args() -> (Mode, usize) {
                     "course-analyze" => Mode::CourseAnalyze,
                     "course-stepstype" => Mode::CourseStepType,
                     "course-banner" => Mode::CourseBanner,
+                    "course-resolve" => Mode::CourseResolve,
                     "pack-root" => Mode::PackRoot,
                     "pack-scan" => Mode::PackScan,
                     "background-changes" => Mode::BackgroundChanges,
@@ -331,7 +333,9 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         | Mode::CourseSelectMods
         | Mode::CourseSelectParse
         | Mode::CourseAnalyze => rssp::AnalysisOptions::default(),
-        Mode::CourseStepType | Mode::CourseBanner => rssp::AnalysisOptions::default(),
+        Mode::CourseStepType | Mode::CourseBanner | Mode::CourseResolve => {
+            rssp::AnalysisOptions::default()
+        }
         Mode::PackRoot => rssp::AnalysisOptions::default(),
         Mode::PackScan => rssp::AnalysisOptions::default(),
         Mode::BackgroundChanges => rssp::AnalysisOptions::default(),
@@ -507,6 +511,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::CourseBanner => {
                 unreachable!("course banner mode uses its dedicated allocation runner")
+            }
+            Mode::CourseResolve => {
+                unreachable!("course resolve mode uses its dedicated allocation runner")
             }
             Mode::PackRoot => {
                 unreachable!("pack root mode uses its dedicated allocation runner")
@@ -720,6 +727,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::CourseAnalyze => "course-analyze",
         Mode::CourseStepType => "course-stepstype",
         Mode::CourseBanner => "course-banner",
+        Mode::CourseResolve => "course-resolve",
         Mode::PackRoot => "pack-root",
         Mode::PackScan => "pack-scan",
         Mode::BackgroundChanges => "background-changes",
@@ -2808,6 +2816,64 @@ fn run_course_banner_alloc(iterations: usize) {
     run_course_banner_phase(&fixture, "one-scan-ranked", iterations, false);
 }
 
+fn run_course_resolve_phase(
+    fixture: &course_bench::ResolveFixture,
+    phase: &str,
+    iterations: usize,
+    legacy: bool,
+) {
+    let resolve = || {
+        rssp::course::profile_resolve_song_dir(
+            fixture.songs_dir(),
+            None,
+            course_bench::RESOLVE_SONG,
+            legacy,
+        )
+    };
+    black_box(resolve().expect("benchmark song should resolve"));
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let song_dir = resolve().expect("benchmark song should resolve");
+        checksum = checksum.wrapping_add(song_dir.as_os_str().len());
+        black_box(song_dir);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=course-resolve phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_entries_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        course_bench::RESOLVE_ENTRY_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_course_resolve_alloc(iterations: usize) {
+    let fixture = course_bench::ResolveFixture::new();
+    fixture.assert_behavior();
+    run_course_resolve_phase(&fixture, "full-paths-metadata-keys", iterations, true);
+    run_course_resolve_phase(&fixture, "entry-types-names", iterations, false);
+}
+
 fn run_pack_root_phase<F>(phase: &str, iterations: usize, scan: F)
 where
     F: Fn(
@@ -3959,6 +4025,10 @@ fn main() {
         }
         Mode::CourseBanner => {
             run_course_banner_alloc(iterations);
+            return;
+        }
+        Mode::CourseResolve => {
+            run_course_resolve_alloc(iterations);
             return;
         }
         Mode::PackRoot => {

@@ -12,6 +12,11 @@ pub const SELECT_MODS: &[u8] =
 pub const SELECT_COUNT: usize = 64;
 pub const SELECT_PARAMS: u64 = 12;
 pub const BANNER_ENTRY_COUNT: usize = 258;
+pub const RESOLVE_GROUP_COUNT: usize = 128;
+pub const RESOLVE_FILE_COUNT: usize = 256;
+pub const RESOLVE_ENTRY_COUNT: usize = RESOLVE_GROUP_COUNT + RESOLVE_FILE_COUNT;
+pub const RESOLVE_SONG: &str = "Target Song";
+pub const RESOLVE_TITLE: &str = "RSSP Hash Perf Fixture Benchmark";
 
 pub fn select_input() -> Vec<u8> {
     let mut course = String::with_capacity(64 + SELECT_COUNT * 256);
@@ -79,6 +84,91 @@ impl CourseFixture {
 }
 
 impl Drop for CourseFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+pub struct ResolveFixture {
+    root: PathBuf,
+    songs_dir: PathBuf,
+    expected: PathBuf,
+    title_expected: PathBuf,
+}
+
+impl ResolveFixture {
+    pub fn new() -> Self {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should follow the Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "rssp-course-resolve-{}-{unique}",
+            std::process::id()
+        ));
+        let songs_dir = root.join("Songs");
+        std::fs::create_dir_all(&songs_dir).expect("benchmark root should be creatable");
+        for index in 0..RESOLVE_GROUP_COUNT {
+            std::fs::create_dir(songs_dir.join(format!("Group-{index:03}")))
+                .expect("benchmark group should be creatable");
+        }
+        for index in 0..RESOLVE_FILE_COUNT {
+            std::fs::write(songs_dir.join(format!("Loose-{index:03}.txt")), [])
+                .expect("benchmark loose file should be writable");
+        }
+        let expected = songs_dir.join("Group-000").join(RESOLVE_SONG);
+        std::fs::create_dir(&expected).expect("benchmark song should be creatable");
+        let title_expected = songs_dir.join("Group-001").join("Alias Directory");
+        std::fs::create_dir(&title_expected).expect("benchmark alias should be creatable");
+        std::fs::write(title_expected.join("Alias.ssc"), SIMFILE)
+            .expect("benchmark alias simfile should be writable");
+        Self {
+            root,
+            songs_dir,
+            expected,
+            title_expected,
+        }
+    }
+
+    pub fn songs_dir(&self) -> &Path {
+        &self.songs_dir
+    }
+
+    pub fn assert_behavior(&self) {
+        const CASES: [(Option<&str>, &str); 7] = [
+            (None, RESOLVE_SONG),
+            (None, " target song "),
+            (Some("Group-000"), RESOLVE_SONG),
+            (Some("group-000"), "target song"),
+            (Some("Group-001"), RESOLVE_TITLE),
+            (None, "Missing Song"),
+            (None, " "),
+        ];
+        for (group, song) in CASES {
+            let legacy = rssp::course::profile_resolve_song_dir(&self.songs_dir, group, song, true);
+            let current =
+                rssp::course::profile_resolve_song_dir(&self.songs_dir, group, song, false);
+            assert_eq!(current, legacy, "song resolution must not change");
+        }
+        assert_eq!(
+            rssp::course::profile_resolve_song_dir(&self.songs_dir, None, RESOLVE_SONG, false,)
+                .as_deref(),
+            Some(self.expected.as_path())
+        );
+        assert_eq!(
+            rssp::course::profile_resolve_song_dir(
+                &self.songs_dir,
+                Some("Group-001"),
+                RESOLVE_TITLE,
+                false,
+            )
+            .as_deref(),
+            Some(self.title_expected.as_path())
+        );
+    }
+}
+
+impl Drop for ResolveFixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
     }

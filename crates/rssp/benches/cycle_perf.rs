@@ -972,6 +972,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let mut stream_tokens = Vec::new();
     let course_fixture = course_bench::CourseFixture::new();
     let banner_fixture = course_bench::BannerFixture::new();
+    let resolve_fixture = course_bench::ResolveFixture::new();
     let legacy_banner = rssp::course::profile_course_banner(banner_fixture.course_path(), "", true);
     let current_banner =
         rssp::course::profile_course_banner(banner_fixture.course_path(), "", false);
@@ -980,6 +981,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         "course banner selection must not change"
     );
     assert_eq!(current_banner, Some(banner_fixture.expected_banner()));
+    resolve_fixture.assert_behavior();
     let course_input =
         std::fs::read(course_fixture.course_path()).expect("benchmark course should be readable");
     let legacy_course = rssp::course::profile_parse_crs(&course_input, true)
@@ -1490,6 +1492,34 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     course_banner.finish();
+
+    let mut course_resolve = c.benchmark_group("cycles/course_song_resolve_384");
+    course_resolve.sample_size(20);
+    course_resolve.measurement_time(Duration::from_secs(3));
+    course_resolve.throughput(Throughput::Elements(
+        course_bench::RESOLVE_ENTRY_COUNT as u64,
+    ));
+    course_resolve.bench_function("full_paths_metadata_keys", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_resolve_song_dir(
+                black_box(resolve_fixture.songs_dir()),
+                None,
+                black_box(course_bench::RESOLVE_SONG),
+                true,
+            ))
+        });
+    });
+    course_resolve.bench_function("entry_types_names", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_resolve_song_dir(
+                black_box(resolve_fixture.songs_dir()),
+                None,
+                black_box(course_bench::RESOLVE_SONG),
+                false,
+            ))
+        });
+    });
+    course_resolve.finish();
 
     let mut pack = c.benchmark_group("cycles/pack_root_discovery");
     pack.sample_size(20);
