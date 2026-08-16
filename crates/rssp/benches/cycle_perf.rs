@@ -1739,6 +1739,35 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     });
     course_parse.finish();
 
+    course_bench::assert_parse_reserve_behavior();
+    let reserve_typical = course_bench::parse_input(course_bench::PARSE_TYPICAL_COUNT);
+    let reserve_large = course_bench::parse_input(course_bench::PARSE_LARGE_COUNT);
+    for (name, input, entry_count) in [
+        (
+            "cycles/course_entry_reserve_fixed_10",
+            reserve_typical.as_slice(),
+            course_bench::PARSE_TYPICAL_COUNT,
+        ),
+        (
+            "cycles/course_entry_reserve_fixed_256",
+            reserve_large.as_slice(),
+            course_bench::PARSE_LARGE_COUNT,
+        ),
+    ] {
+        let mut group = c.benchmark_group(name);
+        group.sample_size(100);
+        group.measurement_time(Duration::from_secs(3));
+        group.throughput(Throughput::Elements(entry_count as u64));
+        for (phase, legacy) in [("growing_vec", true), ("presized_vec", false)] {
+            group.bench_function(phase, |b| {
+                b.iter(|| {
+                    black_box(course_bench::parse_reserved(black_box(input), legacy));
+                });
+            });
+        }
+        group.finish();
+    }
+
     let mut course_mods = c.benchmark_group("cycles/course_song_mods");
     course_mods.sample_size(100);
     course_mods.measurement_time(Duration::from_secs(3));

@@ -151,6 +151,7 @@ enum Mode {
     CourseJson,
     CourseCsv,
     CourseParse,
+    CourseEntryReserve,
     CourseMods,
     CourseSelectMods,
     CourseSelectParse,
@@ -271,6 +272,7 @@ fn parse_args() -> (Mode, usize) {
                     "course-json" => Mode::CourseJson,
                     "course-csv" => Mode::CourseCsv,
                     "course-parse" => Mode::CourseParse,
+                    "course-entry-reserve" => Mode::CourseEntryReserve,
                     "course-mods" => Mode::CourseMods,
                     "course-select-mods" => Mode::CourseSelectMods,
                     "course-select-parse" => Mode::CourseSelectParse,
@@ -362,6 +364,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
             ..rssp::AnalysisOptions::default()
         },
         Mode::CourseParse
+        | Mode::CourseEntryReserve
         | Mode::CourseMods
         | Mode::CourseSelectMods
         | Mode::CourseSelectParse
@@ -533,7 +536,7 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             Mode::CourseCsv => {
                 unreachable!("course report mode uses its dedicated allocation runner")
             }
-            Mode::CourseParse => {
+            Mode::CourseParse | Mode::CourseEntryReserve => {
                 unreachable!("course parse mode uses its dedicated allocation runner")
             }
             Mode::CourseMods => {
@@ -777,6 +780,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::CourseJson => "course-json",
         Mode::CourseCsv => "course-csv",
         Mode::CourseParse => "course-parse",
+        Mode::CourseEntryReserve => "course-entry-reserve",
         Mode::CourseMods => "course-mods",
         Mode::CourseSelectMods => "course-select-mods",
         Mode::CourseSelectParse => "course-select-parse",
@@ -2284,6 +2288,63 @@ fn run_course_parse_alloc(iterations: usize) {
 
     run_course_parse_phase(&input, "legacy-control-allocs", iterations, true);
     run_course_parse_phase(&input, "stream-control-fields", iterations, false);
+}
+
+fn run_course_entry_reserve_phase(
+    input: &[u8],
+    entry_count: usize,
+    phase: &str,
+    iterations: usize,
+    legacy: bool,
+) {
+    black_box(course_bench::parse_reserved(input, legacy));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let parsed = course_bench::parse_reserved(black_box(input), legacy);
+        checksum = checksum.wrapping_add(parsed.entries.len());
+        black_box(parsed);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=course-entry-reserve entries={} phase={} iters={} checksum={} ",
+            "elapsed_s={:.6} throughput_entries_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        entry_count,
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        entry_count as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_course_entry_reserve_alloc(iterations: usize) {
+    course_bench::assert_parse_reserve_behavior();
+    let typical = course_bench::parse_input(course_bench::PARSE_TYPICAL_COUNT);
+    let large = course_bench::parse_input(course_bench::PARSE_LARGE_COUNT);
+    for (input, entry_count) in [
+        (typical.as_slice(), course_bench::PARSE_TYPICAL_COUNT),
+        (large.as_slice(), course_bench::PARSE_LARGE_COUNT),
+    ] {
+        run_course_entry_reserve_phase(input, entry_count, "growing-vec", iterations, true);
+        run_course_entry_reserve_phase(input, entry_count, "presized-vec", iterations, false);
+    }
 }
 
 fn run_course_mods_alloc(iterations: usize) {
@@ -4679,6 +4740,10 @@ fn main() {
         }
         Mode::CourseParse => {
             run_course_parse_alloc(iterations);
+            return;
+        }
+        Mode::CourseEntryReserve => {
+            run_course_entry_reserve_alloc(iterations);
             return;
         }
         Mode::CourseMods => {

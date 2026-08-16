@@ -953,7 +953,33 @@ pub fn profile_course_banner_full_paths(course_path: &Path, banner_tag: &str) ->
     resolve_banner_full_paths(course_path, banner_tag)
 }
 
-fn parse_crs_with<const LEGACY: bool>(data: &[u8]) -> Result<CourseFile, String> {
+// Bound speculative storage derived from untrusted course text.
+const MAX_COURSE_RESERVE: usize = 64;
+
+fn course_reserve_len(data_len: usize, start: usize, next: usize) -> usize {
+    let entry_len = next.saturating_sub(start).max(1);
+    data_len
+        .saturating_sub(start)
+        .div_ceil(entry_len)
+        .clamp(1, MAX_COURSE_RESERVE)
+}
+
+fn push_course_entry<const RESERVE_ENTRIES: bool>(
+    entries: &mut Vec<CourseEntry>,
+    entry: CourseEntry,
+    data_len: usize,
+    start: usize,
+    next: usize,
+) {
+    if RESERVE_ENTRIES && entries.capacity() == 0 {
+        entries.reserve_exact(course_reserve_len(data_len, start, next));
+    }
+    entries.push(entry);
+}
+
+fn parse_crs_with<const LEGACY: bool, const RESERVE_ENTRIES: bool>(
+    data: &[u8],
+) -> Result<CourseFile, String> {
     let mut name = String::new();
     let mut name_translit = String::new();
     let mut scripter = String::new();
@@ -971,6 +997,7 @@ fn parse_crs_with<const LEGACY: bool>(data: &[u8]) -> Result<CourseFile, String>
             break;
         };
         i += pos;
+        let tag_start = i;
         let s = &data[i..];
         let Some(name_end) = s.iter().position(|&b| b == b':') else {
             i += 1;
@@ -1039,7 +1066,13 @@ fn parse_crs_with<const LEGACY: bool>(data: &[u8]) -> Result<CourseFile, String>
             continue;
         }
         if name_bytes.eq_ignore_ascii_case(b"SONG") {
-            entries.push(parse_song_entry(value));
+            push_course_entry::<RESERVE_ENTRIES>(
+                &mut entries,
+                parse_song_entry(value),
+                data.len(),
+                tag_start,
+                i,
+            );
             continue;
         }
         if name_bytes.eq_ignore_ascii_case(b"SONGSELECT") {
@@ -1068,16 +1101,26 @@ fn parse_crs_with<const LEGACY: bool>(data: &[u8]) -> Result<CourseFile, String>
 }
 
 pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
-    parse_crs_with::<false>(data)
+    parse_crs_with::<false, true>(data)
 }
 
 #[cfg(feature = "profile")]
 #[doc(hidden)]
 pub fn profile_parse_crs(data: &[u8], legacy: bool) -> Result<CourseFile, String> {
     if legacy {
-        parse_crs_with::<true>(data)
+        parse_crs_with::<true, true>(data)
     } else {
-        parse_crs_with::<false>(data)
+        parse_crs_with::<false, true>(data)
+    }
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+pub fn profile_parse_crs_reserve(data: &[u8], legacy_growth: bool) -> Result<CourseFile, String> {
+    if legacy_growth {
+        parse_crs_with::<false, false>(data)
+    } else {
+        parse_crs_with::<false, true>(data)
     }
 }
 

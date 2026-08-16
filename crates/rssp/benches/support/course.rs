@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 const SIMFILE: &[u8] = include_bytes!("../fixtures/hash_fixture.ssc");
 pub const SONG_COUNT: usize = 64;
+pub const PARSE_TYPICAL_COUNT: usize = 10;
+pub const PARSE_LARGE_COUNT: usize = 256;
 pub const COURSE_HASH_COUNT: usize = SONG_COUNT;
 pub const HASH_DEDUP_COUNT: usize = 4_096;
 pub const MOD_COUNT: u64 = 9;
@@ -34,6 +36,56 @@ pub const TITLE_MATCH_BATCH: usize = 1_024;
 pub const TITLE_MATCH_INPUT: &[u8] =
     b"#TITLE:Performance Song;#SUBTITLE:Benchmark Mix;#ARTIST:RSSP;";
 pub const TITLE_MATCH_EXPECTED: &str = "Performance Song Benchmark Mix";
+
+pub fn parse_input(entry_count: usize) -> Vec<u8> {
+    let mut course = String::with_capacity(256 + entry_count * 40);
+    course.push_str(concat!(
+        "#COURSE:Parse Performance;\n",
+        "#COURSETRANSLIT:Parse Perf;\n",
+        "#SCRIPTER:Benchmark;\n",
+        "#DESCRIPTION:Entry reserve fixture;\n",
+        "#BANNER:banner.png;\n",
+        "#BACKGROUND:background.png;\n",
+        "#REPEAT:YES;\n",
+        "#LIVES:4;\n",
+        "#METER:Beginner:3:Easy:6:Medium:9:Hard:12:Challenge:15:Edit:18;\n",
+    ));
+    for index in 0..entry_count {
+        writeln!(
+            &mut course,
+            "#SONG:Group/Song{index:03}:Challenge:1.5x,mirror;"
+        )
+        .expect("writing to a String should succeed");
+    }
+    course.into_bytes()
+}
+
+fn assert_same_course(left: &rssp::course::CourseFile, right: &rssp::course::CourseFile) {
+    assert_eq!(left.name, right.name);
+    assert_eq!(left.name_translit, right.name_translit);
+    assert_eq!(left.scripter, right.scripter);
+    assert_eq!(left.description, right.description);
+    assert_eq!(left.banner, right.banner);
+    assert_eq!(left.background, right.background);
+    assert_eq!(left.repeat, right.repeat);
+    assert_eq!(left.lives, right.lives);
+    assert_eq!(left.meters, right.meters);
+    assert_eq!(left.entries, right.entries);
+}
+
+pub fn parse_reserved(data: &[u8], legacy: bool) -> rssp::course::CourseFile {
+    rssp::course::profile_parse_crs_reserve(data, legacy).expect("course fixture should parse")
+}
+
+pub fn assert_parse_reserve_behavior() {
+    for entry_count in [0, 1, PARSE_TYPICAL_COUNT, PARSE_LARGE_COUNT] {
+        let input = parse_input(entry_count);
+        let legacy = parse_reserved(&input, true);
+        let current = parse_reserved(&input, false);
+        assert_same_course(&current, &legacy);
+        assert_eq!(current.entries.len(), entry_count);
+    }
+}
 
 pub fn hash_values() -> Vec<String> {
     (0..HASH_DEDUP_COUNT)

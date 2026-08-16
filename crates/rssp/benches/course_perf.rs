@@ -267,6 +267,37 @@ fn bench_course_parse(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_course_entry_reserve(c: &mut Criterion) {
+    course_bench::assert_parse_reserve_behavior();
+    let typical = course_bench::parse_input(course_bench::PARSE_TYPICAL_COUNT);
+    let large = course_bench::parse_input(course_bench::PARSE_LARGE_COUNT);
+    for (name, input, entry_count) in [
+        (
+            "course_entry_reserve_fixed_10",
+            typical.as_slice(),
+            course_bench::PARSE_TYPICAL_COUNT,
+        ),
+        (
+            "course_entry_reserve_fixed_256",
+            large.as_slice(),
+            course_bench::PARSE_LARGE_COUNT,
+        ),
+    ] {
+        let mut group = c.benchmark_group(name);
+        group.sample_size(100);
+        group.measurement_time(Duration::from_secs(3));
+        group.throughput(Throughput::Elements(entry_count as u64));
+        for (phase, legacy) in [("growing_vec", true), ("presized_vec", false)] {
+            group.bench_function(phase, |b| {
+                b.iter(|| {
+                    black_box(course_bench::parse_reserved(black_box(input), legacy));
+                });
+            });
+        }
+        group.finish();
+    }
+}
+
 fn bench_song_mods(c: &mut Criterion) {
     assert_eq!(
         rssp::course::profile_song_mods(true, course_bench::MODS),
@@ -608,6 +639,7 @@ criterion_group!(
     bench_course_analysis,
     bench_hash_dedup,
     bench_course_parse,
+    bench_course_entry_reserve,
     bench_song_mods,
     bench_select_mods,
     bench_select_parse,
