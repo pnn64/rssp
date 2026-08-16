@@ -1002,6 +1002,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     pack_fixture.assert_root_behavior();
     pack_fixture.assert_song_behavior();
     pack_fixture.assert_tree_behavior();
+    pack_fixture.assert_songs_behavior();
     let asset_fixture = assets_bench::AssetFixture::with_movies(1);
     asset_fixture.assert_song_assets_behavior();
     asset_fixture.assert_music_behavior();
@@ -1531,6 +1532,36 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     pack.finish();
+
+    let mut songs_root = c.benchmark_group("cycles/songs_root_discovery");
+    songs_root.sample_size(20);
+    songs_root.measurement_time(Duration::from_secs(3));
+    songs_root.throughput(Throughput::Elements(
+        pack_bench::SONGS_ROOT_ENTRY_COUNT as u64,
+    ));
+    songs_root.bench_function("probe_every_entry", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::profile::scan_songs_dir_legacy(
+                    black_box(pack_fixture.tree_root()),
+                    black_box(rssp::pack::ScanOpt::default()),
+                )
+                .expect("benchmark Songs root should scan"),
+            )
+        });
+    });
+    songs_root.bench_function("cached_dir_types", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::pack::scan_songs_dir(
+                    black_box(pack_fixture.tree_root()),
+                    black_box(rssp::pack::ScanOpt::default()),
+                )
+                .expect("benchmark Songs root should scan"),
+            )
+        });
+    });
+    songs_root.finish();
 
     let mut song_scan = c.benchmark_group("cycles/song_simfile_discovery");
     song_scan.sample_size(20);

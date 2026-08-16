@@ -125,6 +125,13 @@ pub mod profile {
         crate::pack::profile_find_simfiles_legacy(root, opt)
     }
 
+    pub fn scan_songs_dir_legacy(
+        dir: &Path,
+        opt: ScanOpt,
+    ) -> Result<Vec<crate::pack::PackScan>, ScanError> {
+        crate::pack::profile_scan_songs_dir_legacy(dir, opt)
+    }
+
     #[must_use]
     pub fn background_changes_legacy(
         song_dir: &Path,

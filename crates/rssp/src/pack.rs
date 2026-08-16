@@ -770,6 +770,10 @@ pub fn scan_pack_dir(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, ScanE
     if assets::is_mac_resource_fork(dir) || !dir.is_dir() {
         return Ok(None);
     }
+    scan_pack_dir_valid(dir, opt)
+}
+
+fn scan_pack_dir_valid(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, ScanError> {
     let Some(group_name) = dir.file_name().and_then(|s| s.to_str()) else {
         return Err(ScanError::InvalidUtf8Path);
     };
@@ -860,6 +864,28 @@ pub fn scan_songs_dir(dir: &Path, opt: ScanOpt) -> Result<Vec<PackScan>, ScanErr
         let Ok(entry) = entry else {
             continue;
         };
+        let name = entry.file_name();
+        if assets::is_mac_resource_fork(Path::new(&name)) || !assets::entry_is_dir(&entry) {
+            continue;
+        }
+        if let Some(pack) = scan_pack_dir_valid(&dir.join(name), opt)? {
+            packs.push(pack);
+        }
+    }
+    packs.sort_by_cached_key(|p| p.group_name.to_ascii_lowercase());
+    Ok(packs)
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_scan_songs_dir_legacy(
+    dir: &Path,
+    opt: ScanOpt,
+) -> Result<Vec<PackScan>, ScanError> {
+    let mut packs = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let Ok(entry) = entry else {
+            continue;
+        };
         let path = entry.path();
         if assets::is_mac_resource_fork(&path) {
             continue;
@@ -868,7 +894,7 @@ pub fn scan_songs_dir(dir: &Path, opt: ScanOpt) -> Result<Vec<PackScan>, ScanErr
             packs.push(pack);
         }
     }
-    packs.sort_by_cached_key(|p| p.group_name.to_ascii_lowercase());
+    packs.sort_by_cached_key(|pack| pack.group_name.to_ascii_lowercase());
     Ok(packs)
 }
 

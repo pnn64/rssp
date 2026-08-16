@@ -2886,6 +2886,19 @@ fn run_pack_scan_alloc(iterations: usize) {
     let fixture = pack_bench::PackFixture::new();
     fixture.assert_song_behavior();
     fixture.assert_tree_behavior();
+    fixture.assert_songs_behavior();
+    run_songs_root_phase(
+        &fixture,
+        "probe-every-entry",
+        iterations,
+        rssp::profile::scan_songs_dir_legacy,
+    );
+    run_songs_root_phase(
+        &fixture,
+        "cached-dir-types",
+        iterations,
+        rssp::pack::scan_songs_dir,
+    );
     run_simfile_tree_phase(
         &fixture,
         "rescan-subdirs",
@@ -2941,6 +2954,57 @@ fn run_pack_scan_alloc(iterations: usize) {
         black_box(checksum),
         elapsed.as_secs_f64(),
         pack_bench::SONG_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_songs_root_phase<F>(
+    fixture: &pack_bench::PackFixture,
+    phase: &str,
+    iterations: usize,
+    scan: F,
+) where
+    F: Fn(&Path, rssp::pack::ScanOpt) -> Result<Vec<rssp::pack::PackScan>, rssp::pack::ScanError>,
+{
+    black_box(
+        scan(fixture.tree_root(), rssp::pack::ScanOpt::default())
+            .expect("benchmark Songs root should scan"),
+    );
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let packs = scan(
+            black_box(fixture.tree_root()),
+            black_box(rssp::pack::ScanOpt::default()),
+        )
+        .expect("benchmark Songs root should scan");
+        checksum = checksum.wrapping_add(packs.len());
+        black_box(packs);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=songs-root phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "entries_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        pack_bench::SONGS_ROOT_ENTRY_COUNT as f64 * divisor / elapsed.as_secs_f64(),
         (after.alloc_calls - before.alloc_calls) as f64 / divisor,
         (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
         (after.realloc_calls - before.realloc_calls) as f64 / divisor,

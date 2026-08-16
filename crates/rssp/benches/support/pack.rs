@@ -3,8 +3,11 @@ use std::path::{Path, PathBuf};
 
 pub const SONG_COUNT: usize = 64;
 pub const SONG_ENTRY_COUNT: usize = 5;
+pub const LOOSE_ENTRY_COUNT: usize = 256;
+pub const SONGS_ROOT_ENTRY_COUNT: usize = 1 + LOOSE_ENTRY_COUNT;
 pub const ROOT_ENTRY_COUNT: usize = 1 + 128 + SONG_COUNT;
-pub const TREE_ENTRY_COUNT: usize = 1 + ROOT_ENTRY_COUNT + SONG_COUNT * SONG_ENTRY_COUNT;
+pub const TREE_ENTRY_COUNT: usize =
+    SONGS_ROOT_ENTRY_COUNT + ROOT_ENTRY_COUNT + SONG_COUNT * SONG_ENTRY_COUNT;
 pub const BANNER_HINT: &str = "missing*.png";
 pub const BACKGROUND_HINT: &str = "background*.jpg";
 
@@ -24,6 +27,10 @@ impl PackFixture {
             std::env::temp_dir().join(format!("rssp-pack-bench-{}-{unique}", std::process::id()));
         let pack_dir = root.join("Performance Pack");
         std::fs::create_dir_all(&pack_dir).expect("benchmark pack should be creatable");
+        for index in 0..LOOSE_ENTRY_COUNT {
+            std::fs::write(root.join(format!("Loose-{index:03}.dat")), [])
+                .expect("benchmark loose root file should be writable");
+        }
 
         let mut pack_ini = String::new();
         writeln!(
@@ -102,6 +109,17 @@ impl PackFixture {
         }
     }
 
+    pub fn assert_songs_behavior(&self) {
+        let old = rssp::profile::scan_songs_dir_legacy(&self.root, rssp::pack::ScanOpt::default())
+            .expect("legacy Songs root should scan");
+        let new = rssp::pack::scan_songs_dir(&self.root, rssp::pack::ScanOpt::default())
+            .expect("filtered Songs root should scan");
+        assert_eq!(new.len(), old.len(), "pack count changed");
+        for (new, old) in new.iter().zip(&old) {
+            assert_pack_scan(new, old);
+        }
+    }
+
     pub fn assert_root_behavior(&self) {
         for (banner, background) in [
             (BANNER_HINT, BACKGROUND_HINT),
@@ -131,6 +149,27 @@ impl PackFixture {
                 assert_eq!(new_song.extension, old_song.extension);
             }
         }
+    }
+}
+
+fn assert_pack_scan(new: &rssp::pack::PackScan, old: &rssp::pack::PackScan) {
+    assert_eq!(new.dir, old.dir);
+    assert_eq!(new.group_name, old.group_name);
+    assert_eq!(new.display_title, old.display_title);
+    assert_eq!(new.sort_title, old.sort_title);
+    assert_eq!(new.translit_title, old.translit_title);
+    assert_eq!(new.series, old.series);
+    assert_eq!(new.year, old.year);
+    assert_eq!(new.version, old.version);
+    assert_eq!(new.has_pack_ini, old.has_pack_ini);
+    assert_eq!(new.sync_pref, old.sync_pref);
+    assert_eq!(new.banner_path, old.banner_path);
+    assert_eq!(new.background_path, old.background_path);
+    assert_eq!(new.songs.len(), old.songs.len());
+    for (new, old) in new.songs.iter().zip(&old.songs) {
+        assert_eq!(new.dir, old.dir);
+        assert_eq!(new.simfile, old.simfile);
+        assert_eq!(new.extension, old.extension);
     }
 }
 
