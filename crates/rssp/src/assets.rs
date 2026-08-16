@@ -166,16 +166,23 @@ fn cmp_ascii_ci(left: &[u8], right: &[u8]) -> Ordering {
     left.len().cmp(&right.len())
 }
 
-fn cmp_os_ci(left: &OsStr, right: &OsStr) -> Ordering {
+pub(crate) fn cmp_os_ci(left: &OsStr, right: &OsStr) -> Ordering {
     let left = left.to_string_lossy();
     let right = right.to_string_lossy();
     cmp_ascii_ci(left.as_bytes(), right.as_bytes())
 }
 
-fn entry_is_file(entry: &fs::DirEntry) -> bool {
+pub(crate) fn entry_is_file(entry: &fs::DirEntry) -> bool {
     match entry.file_type() {
         Ok(file_type) => file_type.is_file() || (file_type.is_symlink() && entry.path().is_file()),
         Err(_) => entry.path().is_file(),
+    }
+}
+
+pub(crate) fn entry_is_dir(entry: &fs::DirEntry) -> bool {
+    match entry.file_type() {
+        Ok(file_type) => file_type.is_dir() || (file_type.is_symlink() && entry.path().is_dir()),
+        Err(_) => entry.path().is_dir(),
     }
 }
 

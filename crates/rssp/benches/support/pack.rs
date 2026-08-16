@@ -59,6 +59,37 @@ impl PackFixture {
     pub fn pack_dir(&self) -> &Path {
         &self.pack_dir
     }
+
+    pub fn assert_root_behavior(&self) {
+        for (banner, background) in [
+            (BANNER_HINT, BACKGROUND_HINT),
+            ("image*.png", "missing*.jpg"),
+            ("", ""),
+        ] {
+            let old = rssp::profile::pack_root_full_paths(
+                &self.pack_dir,
+                rssp::pack::ScanOpt::default(),
+                banner,
+                background,
+            )
+            .expect("full-path pack root should scan");
+            let new = rssp::profile::pack_root(
+                &self.pack_dir,
+                rssp::pack::ScanOpt::default(),
+                banner,
+                background,
+            )
+            .expect("cached-type pack root should scan");
+            assert_eq!(new.0, old.0, "pack banner changed");
+            assert_eq!(new.1, old.1, "pack background changed");
+            assert_eq!(new.2.len(), old.2.len(), "pack songs changed");
+            for (new_song, old_song) in new.2.iter().zip(&old.2) {
+                assert_eq!(new_song.dir, old_song.dir);
+                assert_eq!(new_song.simfile, old_song.simfile);
+                assert_eq!(new_song.extension, old_song.extension);
+            }
+        }
+    }
 }
 
 impl Drop for PackFixture {

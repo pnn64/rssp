@@ -999,6 +999,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let select_input = course_bench::select_input();
     let course_options = course_bench::fast_options();
     let pack_fixture = pack_bench::PackFixture::new();
+    pack_fixture.assert_root_behavior();
     let asset_fixture = assets_bench::AssetFixture::with_movies(1);
     asset_fixture.assert_song_assets_behavior();
     asset_fixture.assert_music_behavior();
@@ -1501,7 +1502,20 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             )
         });
     });
-    pack.bench_function("one_pass", |b| {
+    pack.bench_function("full_path_stats", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::profile::pack_root_full_paths(
+                    black_box(pack_fixture.pack_dir()),
+                    black_box(rssp::pack::ScanOpt::default()),
+                    black_box(pack_bench::BANNER_HINT),
+                    black_box(pack_bench::BACKGROUND_HINT),
+                )
+                .expect("benchmark pack root should scan"),
+            )
+        });
+    });
+    pack.bench_function("cached_entry_types", |b| {
         b.iter(|| {
             black_box(
                 rssp::profile::pack_root(

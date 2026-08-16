@@ -32,6 +32,7 @@ fn bench_pack_scan(c: &mut Criterion) {
 
 fn bench_pack_root(c: &mut Criterion) {
     let fixture = pack_bench::PackFixture::new();
+    fixture.assert_root_behavior();
     let opt = rssp::pack::ScanOpt::default();
 
     let mut group = c.benchmark_group("pack_root_discovery");
@@ -51,7 +52,20 @@ fn bench_pack_root(c: &mut Criterion) {
             )
         });
     });
-    group.bench_function("one_pass", |b| {
+    group.bench_function("full_path_stats", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::profile::pack_root_full_paths(
+                    black_box(fixture.pack_dir()),
+                    black_box(opt),
+                    black_box(pack_bench::BANNER_HINT),
+                    black_box(pack_bench::BACKGROUND_HINT),
+                )
+                .expect("benchmark pack root should scan"),
+            )
+        });
+    });
+    group.bench_function("cached_entry_types", |b| {
         b.iter(|| {
             black_box(
                 rssp::profile::pack_root(

@@ -104,6 +104,15 @@ pub mod profile {
         crate::pack::profile_pack_root(dir, opt, banner, background, true)
     }
 
+    pub fn pack_root_full_paths(
+        dir: &Path,
+        opt: ScanOpt,
+        banner: &str,
+        background: &str,
+    ) -> Result<PackRootResult, ScanError> {
+        crate::pack::profile_pack_root_full_paths(dir, opt, banner, background)
+    }
+
     #[must_use]
     pub fn background_changes_legacy(
         song_dir: &Path,

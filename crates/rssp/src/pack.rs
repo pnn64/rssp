@@ -1,3 +1,4 @@
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -78,9 +79,19 @@ fn keep_first_path(first: &mut Option<PathBuf>, candidate: PathBuf) {
     }
 }
 
+#[cfg(feature = "profile")]
 fn keep_first_ref(first: &mut Option<PathBuf>, candidate: &Path) {
     if should_replace(first.as_deref(), candidate) {
         *first = Some(candidate.to_path_buf());
+    }
+}
+
+fn keep_first_name(first: &mut Option<OsString>, candidate: &OsStr) {
+    if first
+        .as_ref()
+        .is_none_or(|current| assets::cmp_os_ci(candidate, current).is_lt())
+    {
+        *first = Some(candidate.to_os_string());
     }
 }
 
@@ -390,11 +401,8 @@ struct RootEntries {
     songs: Vec<SongScan>,
 }
 
-/// Takes one worker-owned snapshot of a pack root and releases it when the
-/// scan ends. It has no shared state, eviction, or gameplay miss path; memory
-/// is bounded by the returned songs plus three selected image paths, and work
-/// is one root entry visit plus each candidate song's normal scan.
-fn scan_root_entries(
+#[cfg(feature = "profile")]
+fn scan_root_entries_full_paths(
     dir: &Path,
     opt: ScanOpt,
     banner_mask: Option<&str>,
@@ -446,6 +454,77 @@ fn scan_root_entries(
     })
 }
 
+/// Takes one worker-owned snapshot of a pack root and releases it when the
+/// scan ends. It has no shared state, eviction, or gameplay miss path; memory
+/// is bounded by the returned songs plus three selected image paths, and work
+/// is one root entry visit plus each candidate song's normal scan.
+fn scan_root_entries(
+    dir: &Path,
+    opt: ScanOpt,
+    banner_mask: Option<&str>,
+    background_mask: Option<&str>,
+) -> Result<RootEntries, ScanError> {
+    let mut first_img = None;
+    let mut banner = None;
+    let mut background = None;
+    let mut songs = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let name = entry.file_name();
+        let name_path = Path::new(&name);
+        if assets::is_mac_resource_fork(name_path) {
+            continue;
+        }
+        if assets::entry_is_dir(&entry) {
+            let path = dir.join(&name);
+            if let Some(song) = scan_song_dir(&path, opt)? {
+                songs.push(song);
+            }
+            continue;
+        }
+        if name_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .and_then(assets::img_rank)
+            .is_none()
+            || !assets::entry_is_file(&entry)
+        {
+            continue;
+        }
+        keep_first_name(&mut first_img, &name);
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        if banner_mask.is_some_and(|mask| assets::match_mask_ci(name_str, mask)) {
+            keep_first_name(&mut banner, &name);
+        }
+        if background_mask.is_some_and(|mask| assets::match_mask_ci(name_str, mask)) {
+            keep_first_name(&mut background, &name);
+        }
+    }
+    Ok(RootEntries {
+        first_img: first_img.map(|name| dir.join(name)),
+        banner: banner.map(|name| dir.join(name)),
+        background: background.map(|name| dir.join(name)),
+        songs,
+    })
+}
+
+fn finish_pack_root(
+    dir: &Path,
+    banner_hint: Option<&str>,
+    background_hint: Option<&str>,
+    root: RootEntries,
+) -> PackRoot {
+    PackRoot {
+        banner: pick_ini_img(dir, banner_hint, root.banner).or(root.first_img),
+        background: pick_ini_img(dir, background_hint, root.background),
+        songs: root.songs,
+    }
+}
+
 fn scan_pack_root(
     dir: &Path,
     opt: ScanOpt,
@@ -460,11 +539,35 @@ fn scan_pack_root(
         root_img_mask(banner_hint.as_deref()),
         root_img_mask(background_hint.as_deref()),
     )?;
-    Ok(PackRoot {
-        banner: pick_ini_img(dir, banner_hint.as_deref(), root.banner).or(root.first_img),
-        background: pick_ini_img(dir, background_hint.as_deref(), root.background),
-        songs: root.songs,
-    })
+    Ok(finish_pack_root(
+        dir,
+        banner_hint.as_deref(),
+        background_hint.as_deref(),
+        root,
+    ))
+}
+
+#[cfg(feature = "profile")]
+fn scan_pack_root_full_paths(
+    dir: &Path,
+    opt: ScanOpt,
+    banner: &str,
+    background: &str,
+) -> Result<PackRoot, ScanError> {
+    let banner_hint = normalized_img_hint(banner);
+    let background_hint = normalized_img_hint(background);
+    let root = scan_root_entries_full_paths(
+        dir,
+        opt,
+        root_img_mask(banner_hint.as_deref()),
+        root_img_mask(background_hint.as_deref()),
+    )?;
+    Ok(finish_pack_root(
+        dir,
+        banner_hint.as_deref(),
+        background_hint.as_deref(),
+        root,
+    ))
 }
 
 #[cfg(any(test, feature = "profile"))]
@@ -513,6 +616,17 @@ pub(crate) fn profile_pack_root(
     } else {
         scan_pack_root(dir, opt, banner, background)?
     };
+    Ok((root.banner, root.background, root.songs))
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_pack_root_full_paths(
+    dir: &Path,
+    opt: ScanOpt,
+    banner: &str,
+    background: &str,
+) -> Result<ProfilePackRoot, ScanError> {
+    let root = scan_pack_root_full_paths(dir, opt, banner, background)?;
     Ok((root.banner, root.background, root.songs))
 }
 

@@ -2,7 +2,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::fmt::Write as _;
 use std::fs;
 use std::hint::black_box;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
@@ -2808,33 +2808,32 @@ fn run_course_banner_alloc(iterations: usize) {
     run_course_banner_phase(&fixture, "one-scan-ranked", iterations, false);
 }
 
-fn run_pack_root_phase(phase: &str, iterations: usize, legacy: bool) {
+fn run_pack_root_phase<F>(phase: &str, iterations: usize, scan: F)
+where
+    F: Fn(
+        &Path,
+        rssp::pack::ScanOpt,
+        &str,
+        &str,
+    ) -> Result<rssp::profile::PackRootResult, rssp::pack::ScanError>,
+{
     let fixture = pack_bench::PackFixture::new();
-    let scan = |legacy| {
-        if legacy {
-            rssp::profile::pack_root_legacy(
-                fixture.pack_dir(),
-                rssp::pack::ScanOpt::default(),
-                pack_bench::BANNER_HINT,
-                pack_bench::BACKGROUND_HINT,
-            )
-        } else {
-            rssp::profile::pack_root(
-                fixture.pack_dir(),
-                rssp::pack::ScanOpt::default(),
-                pack_bench::BANNER_HINT,
-                pack_bench::BACKGROUND_HINT,
-            )
-        }
+    let scan = || {
+        scan(
+            fixture.pack_dir(),
+            rssp::pack::ScanOpt::default(),
+            pack_bench::BANNER_HINT,
+            pack_bench::BACKGROUND_HINT,
+        )
     };
-    black_box(scan(legacy).expect("benchmark pack root should scan"));
+    black_box(scan().expect("benchmark pack root should scan"));
 
     reset_counters();
     let before = Counters::read();
     let start = Instant::now();
     let mut checksum = 0usize;
     for _ in 0..iterations {
-        let (banner, background, songs) = scan(legacy).expect("benchmark pack root should scan");
+        let (banner, background, songs) = scan().expect("benchmark pack root should scan");
         checksum = checksum
             .wrapping_add(banner.is_some() as usize)
             .wrapping_add(background.is_some() as usize)
@@ -2868,8 +2867,19 @@ fn run_pack_root_phase(phase: &str, iterations: usize, legacy: bool) {
 }
 
 fn run_pack_root_alloc(iterations: usize) {
-    run_pack_root_phase("legacy-repeated-scans", iterations, true);
-    run_pack_root_phase("one-pass", iterations, false);
+    let fixture = pack_bench::PackFixture::new();
+    fixture.assert_root_behavior();
+    run_pack_root_phase(
+        "legacy-repeated-scans",
+        iterations,
+        rssp::profile::pack_root_legacy,
+    );
+    run_pack_root_phase(
+        "full-path-stats",
+        iterations,
+        rssp::profile::pack_root_full_paths,
+    );
+    run_pack_root_phase("cached-entry-types", iterations, rssp::profile::pack_root);
 }
 
 fn run_pack_scan_alloc(iterations: usize) {
