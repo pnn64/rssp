@@ -301,7 +301,24 @@ fn has_row(rows: &[i32], row: i32) -> bool {
 }
 
 // --- Segment tidying ---
-fn tidy_row_segments(mut segments: Vec<Segment>) -> Vec<Segment> {
+fn compact_row_segments(mut segments: Vec<Segment>) -> Vec<Segment> {
+    let mut write = 0;
+    for read in 0..segments.len() {
+        let row = segment_row(&segments[read]);
+        if write != 0 && segment_row(&segments[write - 1]) == row {
+            segments[write - 1] = segments[read];
+        } else {
+            if write != read {
+                segments[write] = segments[read];
+            }
+            write += 1;
+        }
+    }
+    segments.truncate(write);
+    segments
+}
+
+fn tidy_row_segments_mode<const PACKED: bool>(mut segments: Vec<Segment>) -> Vec<Segment> {
     let mut ordered = true;
     let mut previous_row = i32::MIN;
 
@@ -313,20 +330,33 @@ fn tidy_row_segments(mut segments: Vec<Segment>) -> Vec<Segment> {
     }
 
     if ordered {
-        let mut write = 0;
-        for read in 0..segments.len() {
-            let row = segment_row(&segments[read]);
-            if write != 0 && segment_row(&segments[write - 1]) == row {
-                segments[write - 1] = segments[read];
-            } else {
-                if write != read {
-                    segments[write] = segments[read];
-                }
-                write += 1;
+        return compact_row_segments(segments);
+    }
+
+    if PACKED && segments.len() <= u32::MAX as usize {
+        let mut keyed: Vec<_> = segments
+            .into_iter()
+            .enumerate()
+            .map(|(index, segment)| {
+                let row = segment_row(&segment) as u32 ^ (1 << 31);
+                ((u64::from(row) << 32) | index as u64, segment)
+            })
+            .collect();
+        keyed.sort_unstable_by_key(|entry| entry.0);
+
+        let mut out = Vec::with_capacity(keyed.len());
+        let mut index = 0;
+        while index < keyed.len() {
+            let row = keyed[index].0 >> 32;
+            let mut last = keyed[index].1;
+            index += 1;
+            while index < keyed.len() && keyed[index].0 >> 32 == row {
+                last = keyed[index].1;
+                index += 1;
             }
+            out.push(last);
         }
-        segments.truncate(write);
-        return segments;
+        return out;
     }
 
     let mut keyed: Vec<_> = segments
@@ -350,6 +380,20 @@ fn tidy_row_segments(mut segments: Vec<Segment>) -> Vec<Segment> {
     }
 
     out
+}
+
+fn tidy_row_segments(segments: Vec<Segment>) -> Vec<Segment> {
+    tidy_row_segments_mode::<true>(segments)
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn tidy_row_segments_for_bench(segments: Vec<Segment>, legacy: bool) -> Vec<Segment> {
+    if legacy {
+        tidy_row_segments_mode::<false>(segments)
+    } else {
+        tidy_row_segments_mode::<true>(segments)
+    }
 }
 
 #[inline]

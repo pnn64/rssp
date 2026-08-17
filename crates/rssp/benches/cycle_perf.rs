@@ -69,6 +69,9 @@ mod timing_borrow_bench;
 #[path = "support/timing_merge.rs"]
 mod timing_merge_bench;
 #[cfg(windows)]
+#[path = "support/timing_sort.rs"]
+mod timing_sort_bench;
+#[cfg(windows)]
 #[path = "support/translate.rs"]
 mod translate_bench;
 
@@ -437,6 +440,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let medium_speed_map = transition_speed_map(512);
     let timing_maps = timing_borrow_bench::TimingMaps::new();
     timing_borrow_bench::assert_behavior(&timing_maps);
+    let timing_sort_fixture = timing_sort_bench::fixture();
+    timing_sort_bench::assert_behavior(&timing_sort_fixture);
     let legacy_metadata = cp1252_metadata(ENTRIES);
     let (valid_tech, valid_description) = tech_prefix_bench::valid_input();
     let invalid_tech = tech_prefix_bench::invalid_input();
@@ -771,6 +776,21 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     normalization.finish();
+
+    let mut timing_sort = c.benchmark_group("cycles/timing_segment_sort_4096");
+    timing_sort.throughput(Throughput::Elements(timing_sort_bench::ENTRY_COUNT as u64));
+    timing_sort.sample_size(100);
+    timing_sort.measurement_time(Duration::from_secs(3));
+    for (phase, legacy) in [("wide_keys", true), ("packed_keys", false)] {
+        timing_sort.bench_function(phase, |b| {
+            b.iter_batched(
+                || timing_sort_fixture.clone(),
+                |input| black_box(timing_sort_bench::tidy(input, legacy)),
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    timing_sort.finish();
 
     let mut cleanup = c.benchmark_group("cycles/cleanup");
     cleanup.throughput(Throughput::Elements(ENTRIES as u64));

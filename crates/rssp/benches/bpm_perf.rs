@@ -1,4 +1,4 @@
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use std::fmt::Write as _;
 use std::hint::black_box;
 use std::time::Duration;
@@ -11,6 +11,8 @@ mod elapsed_bench;
 mod timing_borrow_bench;
 #[path = "support/timing_merge.rs"]
 mod timing_merge_bench;
+#[path = "support/timing_sort.rs"]
+mod timing_sort_bench;
 
 const FIXTURE: &str = include_str!("fixtures/bpm_fixture.ssc");
 
@@ -718,6 +720,27 @@ fn bench_timing_segment_cleanup(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_timing_segment_sort(c: &mut Criterion) {
+    let fixture = timing_sort_bench::fixture();
+    timing_sort_bench::assert_behavior(&fixture);
+    let mut group = c.benchmark_group("timing_segment_sort_4096");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(criterion::Throughput::Elements(
+        timing_sort_bench::ENTRY_COUNT as u64,
+    ));
+    for (phase, legacy) in [("wide_keys", true), ("packed_keys", false)] {
+        group.bench_function(phase, |b| {
+            b.iter_batched(
+                || fixture.clone(),
+                |input| black_box(timing_sort_bench::tidy(input, legacy)),
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
 fn bench_sm_stop_merge(c: &mut Criterion) {
     timing_merge_bench::assert_behavior();
     let fixture = timing_merge_bench::TimingMergeFixture::new();
@@ -789,6 +812,7 @@ criterion_group!(
     bench_mines_nonfake,
     bench_parse_bpm_map,
     bench_timing_segment_cleanup,
+    bench_timing_segment_sort,
     bench_sm_stop_merge,
     bench_elapsed_events
 );

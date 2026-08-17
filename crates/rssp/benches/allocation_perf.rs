@@ -47,6 +47,8 @@ mod tech_prefix_bench;
 mod timing_borrow_bench;
 #[path = "support/timing_merge.rs"]
 mod timing_merge_bench;
+#[path = "support/timing_sort.rs"]
+mod timing_sort_bench;
 #[path = "support/translate.rs"]
 mod translate_bench;
 
@@ -126,6 +128,7 @@ enum Mode {
     Durations,
     LastBeat,
     TimingBuild,
+    TimingSort,
     SmTiming,
     TimingMerge,
     TimingText,
@@ -249,6 +252,7 @@ fn parse_args() -> (Mode, usize) {
                     "durations" => Mode::Durations,
                     "last-beat" => Mode::LastBeat,
                     "timing-build" => Mode::TimingBuild,
+                    "timing-sort" => Mode::TimingSort,
                     "sm-timing" => Mode::SmTiming,
                     "timing-merge" => Mode::TimingMerge,
                     "timing-text" => Mode::TimingText,
@@ -357,6 +361,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         | Mode::BpmDisplayTags
         | Mode::ElapsedEvents
         | Mode::TimingBuild
+        | Mode::TimingSort
         | Mode::SmTiming
         | Mode::TimingMerge
         | Mode::TimingText
@@ -475,6 +480,7 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             | Mode::BpmDisplayTags => {
                 unreachable!("mode uses its dedicated allocation runner")
             }
+            Mode::TimingSort => unreachable!("mode uses its dedicated allocation runner"),
             Mode::ParseDispatch | Mode::ParseAppend | Mode::ParseReserve => {
                 unreachable!("mode uses its dedicated allocation runner")
             }
@@ -765,6 +771,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Durations => "durations",
         Mode::LastBeat => "last-beat",
         Mode::TimingBuild => "timing-build",
+        Mode::TimingSort => "timing-sort",
         Mode::SmTiming => "sm-timing",
         Mode::TimingMerge => "timing-merge",
         Mode::TimingText => "timing-text",
@@ -2968,6 +2975,58 @@ fn run_timing_build_alloc(iterations: usize) {
         after.live_bytes as isize - before.live_bytes as isize,
         after.peak_live_bytes.saturating_sub(before.live_bytes),
     );
+}
+
+fn run_timing_sort_phase(
+    fixture: &[rssp::timing::Segment],
+    phase: &str,
+    iterations: usize,
+    legacy: bool,
+) {
+    black_box(timing_sort_bench::tidy(fixture.to_vec(), legacy));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0u64;
+    for _ in 0..iterations {
+        let output = timing_sort_bench::tidy(fixture.to_vec(), legacy);
+        checksum = checksum
+            .wrapping_add(output.len() as u64)
+            .wrapping_add(output.first().map_or(0, |segment| segment.value.to_bits()))
+            .wrapping_add(output.last().map_or(0, |segment| segment.value.to_bits()));
+        black_box(output);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=timing-sort phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_segments_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        timing_sort_bench::ENTRY_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_timing_sort_alloc(iterations: usize) {
+    let fixture = timing_sort_bench::fixture();
+    timing_sort_bench::assert_behavior(&fixture);
+    run_timing_sort_phase(&fixture, "wide-keys", iterations, true);
+    run_timing_sort_phase(&fixture, "packed-keys", iterations, false);
 }
 
 fn run_sm_timing_phase(
@@ -5248,6 +5307,10 @@ fn main() {
         }
         Mode::TimingBuild => {
             run_timing_build_alloc(iterations);
+            return;
+        }
+        Mode::TimingSort => {
+            run_timing_sort_alloc(iterations);
             return;
         }
         Mode::SmTiming => {
