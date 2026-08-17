@@ -182,6 +182,7 @@ enum Mode {
     TranslateMarkers,
     MetadataAnalyze,
     CustomCompile,
+    DefaultPatternDfa,
     ParitySingle,
     ParityDouble,
     ParitySingleHolds,
@@ -306,6 +307,7 @@ fn parse_args() -> (Mode, usize) {
                     "translate-markers" => Mode::TranslateMarkers,
                     "metadata-analyze" => Mode::MetadataAnalyze,
                     "custom-compile" => Mode::CustomCompile,
+                    "default-pattern-dfa" => Mode::DefaultPatternDfa,
                     "parity-single" => Mode::ParitySingle,
                     "parity-double" => Mode::ParityDouble,
                     "parity-single-holds" => Mode::ParitySingleHolds,
@@ -399,7 +401,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         Mode::SongAssets => rssp::AnalysisOptions::default(),
         Mode::TranslateMarkers => rssp::AnalysisOptions::default(),
         Mode::MetadataAnalyze => rssp::AnalysisOptions::default(),
-        Mode::CustomCompile => rssp::AnalysisOptions::default(),
+        Mode::CustomCompile | Mode::DefaultPatternDfa => rssp::AnalysisOptions::default(),
         Mode::JsonFull => rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
@@ -825,6 +827,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::TranslateMarkers => "translate-markers",
         Mode::MetadataAnalyze => "metadata-analyze",
         Mode::CustomCompile => "custom-compile",
+        Mode::DefaultPatternDfa => "default-pattern-dfa",
         Mode::ParitySingle => "parity-single",
         Mode::ParityDouble => "parity-double",
         Mode::ParitySingleHolds => "parity-single-holds",
@@ -1207,6 +1210,78 @@ fn run_pattern_count_phase(
         after.live_bytes as isize - before.live_bytes as isize,
         after.peak_live_bytes.saturating_sub(before.live_bytes),
     );
+}
+
+fn run_default_dfa_phase(
+    phase: &str,
+    iterations: usize,
+    bitmasks: &[u8],
+    detect: impl Fn(&[u8]) -> rssp::patterns::PatternCounts,
+) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0u32;
+    for _ in 0..iterations {
+        let counts = detect(black_box(bitmasks));
+        checksum = checksum.wrapping_add(counts.iter().sum::<u32>());
+        black_box(counts);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=default-pattern-dfa phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_builds_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_default_dfa_alloc(iterations: usize) {
+    let rows = pattern_scratch_bench::rows();
+    let bitmasks: Vec<_> = rows
+        .iter()
+        .map(|row| {
+            u8::from(row[0] != b'0')
+                | (u8::from(row[1] != b'0') << 1)
+                | (u8::from(row[2] != b'0') << 2)
+                | (u8::from(row[3] != b'0') << 3)
+        })
+        .collect();
+    let input = &bitmasks[..256.min(bitmasks.len())];
+    let expected = rssp::patterns::detect_default_patterns_runtime_build_for_bench(&bitmasks);
+    assert_eq!(rssp::patterns::detect_default_patterns(&bitmasks), expected);
+    assert_eq!(
+        rssp::patterns::detect_default_patterns_heap_for_bench(&bitmasks),
+        expected
+    );
+    let (heap_bytes, static_bytes) = rssp::patterns::default_pattern_dfa_sizes_for_bench();
+    println!(
+        "mode=default-pattern-dfa heap_payload_bytes={} static_bytes={}",
+        heap_bytes, static_bytes
+    );
+    run_default_dfa_phase("runtime-build", iterations, input, |input| {
+        rssp::patterns::detect_default_patterns_runtime_build_for_bench(input)
+    });
+    run_default_dfa_phase("static", iterations, input, |input| {
+        rssp::patterns::detect_default_patterns(input)
+    });
 }
 
 fn run_custom_pattern_alloc(iterations: usize) {
@@ -5389,6 +5464,10 @@ fn main() {
         }
         Mode::CustomCompile => {
             run_custom_pattern_alloc(iterations);
+            return;
+        }
+        Mode::DefaultPatternDfa => {
+            run_default_dfa_alloc(iterations);
             return;
         }
         Mode::StreamOutputs => {

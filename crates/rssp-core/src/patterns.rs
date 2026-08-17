@@ -1,5 +1,3 @@
-use std::sync::LazyLock;
-
 // ============================================================================
 // Pattern Variant Enum
 // ============================================================================
@@ -363,16 +361,19 @@ macro_rules! define_patterns {
         default { $($default_variant:ident $default_bits:literal,)* }
         extra { $($extra_variant:ident $extra_bits:literal,)* }
     ) => {
-        pub static DEFAULT_PATTERNS: &[PatternDef] = &[
+        const DEFAULT_PATTERN_VALUES: &[PatternDef] = &[
             $(pattern_def!($default_variant, $default_bits),)*
         ];
-        pub static EXTRA_PATTERNS: &[PatternDef] = &[
+        const EXTRA_PATTERN_VALUES: &[PatternDef] = &[
             $(pattern_def!($extra_variant, $extra_bits),)*
         ];
-        pub static ALL_PATTERNS: &[PatternDef] = &[
+        const ALL_PATTERN_VALUES: &[PatternDef] = &[
             $(pattern_def!($default_variant, $default_bits),)*
             $(pattern_def!($extra_variant, $extra_bits),)*
         ];
+        pub static DEFAULT_PATTERNS: &[PatternDef] = DEFAULT_PATTERN_VALUES;
+        pub static EXTRA_PATTERNS: &[PatternDef] = EXTRA_PATTERN_VALUES;
+        pub static ALL_PATTERNS: &[PatternDef] = ALL_PATTERN_VALUES;
     };
 }
 
@@ -459,8 +460,198 @@ define_patterns! {
     }
 }
 
-static PATTERN_DFA: LazyLock<AcDfa<PatternVariant>> =
-    LazyLock::new(|| ac_build(ALL_PATTERNS.iter().copied(), |byte| byte));
+const PATTERN_DEF_COUNT: usize = 76;
+const PATTERN_STATE_COUNT: usize = 190;
+const PATTERN_OUTPUT_COUNT: usize = 167;
+const PATTERN_GOTO_LEN: usize = PATTERN_STATE_COUNT * AC_ALPHA;
+
+struct PatternDfa {
+    goto: [u8; PATTERN_GOTO_LEN],
+    output_ranges: [u16; PATTERN_STATE_COUNT],
+    flat_outputs: [u8; PATTERN_OUTPUT_COUNT],
+}
+
+const fn pattern_finalize_output(
+    state: usize,
+    fail_target: usize,
+    direct_heads: &[u8; PATTERN_STATE_COUNT],
+    direct_values: &[u8; PATTERN_DEF_COUNT],
+    direct_next: &[u8; PATTERN_DEF_COUNT],
+    output_ranges: &mut [u16; PATTERN_STATE_COUNT],
+    flat_outputs: &mut [u8; PATTERN_OUTPUT_COUNT],
+    flat_len: &mut usize,
+) {
+    let output_start = *flat_len;
+    let mut node = direct_heads[state];
+    while node != u8::MAX {
+        flat_outputs[*flat_len] = direct_values[node as usize];
+        *flat_len += 1;
+        node = direct_next[node as usize];
+    }
+
+    let mut left = output_start;
+    let mut right = *flat_len;
+    while left < right {
+        right -= 1;
+        if left >= right {
+            break;
+        }
+        let value = flat_outputs[left];
+        flat_outputs[left] = flat_outputs[right];
+        flat_outputs[right] = value;
+        left += 1;
+    }
+
+    if fail_target != 0 {
+        let inherited = output_ranges[fail_target];
+        let inherited_start = (inherited & 0xff) as usize;
+        let inherited_len = (inherited >> 8) as usize;
+        let mut index = 0usize;
+        while index < inherited_len {
+            flat_outputs[*flat_len] = flat_outputs[inherited_start + index];
+            *flat_len += 1;
+            index += 1;
+        }
+    }
+
+    let len = *flat_len - output_start;
+    output_ranges[state] = output_start as u16 | ((len as u16) << 8);
+}
+
+const fn build_pattern_dfa(patterns: &[PatternDef]) -> PatternDfa {
+    let mut goto = [u8::MAX; PATTERN_GOTO_LEN];
+    let mut direct_heads = [u8::MAX; PATTERN_STATE_COUNT];
+    let mut direct_values = [0u8; PATTERN_DEF_COUNT];
+    let mut direct_next = [u8::MAX; PATTERN_DEF_COUNT];
+    let mut state_count = 1usize;
+    let mut direct_count = 0usize;
+
+    let mut pattern_index = 0usize;
+    while pattern_index < patterns.len() {
+        let (variant, pattern) = patterns[pattern_index];
+        if !pattern.is_empty() {
+            let mut state = 0usize;
+            let mut byte_index = 0usize;
+            while byte_index < pattern.len() {
+                let symbol = (pattern[byte_index] & 0x0f) as usize;
+                let transition = state * AC_ALPHA + symbol;
+                if goto[transition] == u8::MAX {
+                    goto[transition] = state_count as u8;
+                    state_count += 1;
+                }
+                state = goto[transition] as usize;
+                byte_index += 1;
+            }
+            direct_values[direct_count] = variant as u8;
+            direct_next[direct_count] = direct_heads[state];
+            direct_heads[state] = direct_count as u8;
+            direct_count += 1;
+        }
+        pattern_index += 1;
+    }
+
+    let mut fail = [0u8; PATTERN_STATE_COUNT];
+    let mut queue = [0u8; PATTERN_STATE_COUNT - 1];
+    let mut queue_start = 0usize;
+    let mut queue_end = 0usize;
+    let mut output_ranges = [0u16; PATTERN_STATE_COUNT];
+    let mut flat_outputs = [0u8; PATTERN_OUTPUT_COUNT];
+    let mut flat_len = 0usize;
+
+    let mut symbol = 0usize;
+    while symbol < AC_ALPHA {
+        let next = goto[symbol];
+        if next == u8::MAX {
+            goto[symbol] = 0;
+        } else {
+            queue[queue_end] = next;
+            queue_end += 1;
+            pattern_finalize_output(
+                next as usize,
+                0,
+                &direct_heads,
+                &direct_values,
+                &direct_next,
+                &mut output_ranges,
+                &mut flat_outputs,
+                &mut flat_len,
+            );
+        }
+        symbol += 1;
+    }
+
+    while queue_start < queue_end {
+        let state = queue[queue_start] as usize;
+        queue_start += 1;
+        let fail_state = fail[state] as usize;
+        symbol = 0;
+        while symbol < AC_ALPHA {
+            let transition = state * AC_ALPHA + symbol;
+            let child = goto[transition];
+            if child == u8::MAX {
+                goto[transition] = goto[fail_state * AC_ALPHA + symbol];
+            } else {
+                queue[queue_end] = child;
+                queue_end += 1;
+                let fail_target = goto[fail_state * AC_ALPHA + symbol];
+                fail[child as usize] = fail_target;
+                pattern_finalize_output(
+                    child as usize,
+                    fail_target as usize,
+                    &direct_heads,
+                    &direct_values,
+                    &direct_next,
+                    &mut output_ranges,
+                    &mut flat_outputs,
+                    &mut flat_len,
+                );
+            }
+            symbol += 1;
+        }
+    }
+
+    assert!(patterns.len() == PATTERN_DEF_COUNT);
+    assert!(direct_count == PATTERN_DEF_COUNT);
+    assert!(state_count == PATTERN_STATE_COUNT);
+    assert!(flat_len == PATTERN_OUTPUT_COUNT);
+    PatternDfa {
+        goto,
+        output_ranges,
+        flat_outputs,
+    }
+}
+
+#[inline(always)]
+fn pattern_output_slice(state: u8) -> &'static [u8] {
+    let range = PATTERN_DFA.output_ranges[state as usize];
+    let start = (range & 0xff) as usize;
+    let len = (range >> 8) as usize;
+    debug_assert!(start + len <= PATTERN_OUTPUT_COUNT);
+    // SAFETY: build_pattern_dfa creates each packed range from indices into
+    // flat_outputs, and its const-evaluated writes enforce the array bound.
+    unsafe { std::slice::from_raw_parts(PATTERN_DFA.flat_outputs.as_ptr().add(start), len) }
+}
+
+// Immutable process-lifetime table shared lock-free by analysis callers. It is
+// const-built (no warmup or miss work), has fixed 190-state/167-output capacity,
+// never evicts, and resides in the binary until process teardown. Each input
+// byte performs one transition plus at most three output visits. The
+// default-pattern-DFA allocation/cycle benchmarks cover storage and lookup cost.
+static PATTERN_DFA: PatternDfa = build_pattern_dfa(ALL_PATTERN_VALUES);
+
+#[inline]
+fn pattern_search_array(text: &[u8]) -> PatternCounts {
+    let mut counts = [0u32; PATTERN_COUNT];
+    let mut state = 0u8;
+    for &byte in text {
+        let symbol = (byte & 0x0f) as usize;
+        state = PATTERN_DFA.goto[state as usize * AC_ALPHA + symbol];
+        for &id in pattern_output_slice(state) {
+            counts[id as usize] += 1;
+        }
+    }
+    counts
+}
 
 // ============================================================================
 // Pattern Detection Functions
@@ -481,7 +672,38 @@ pub fn detect_patterns<B: AsRef<[u8]>>(
 }
 
 pub fn detect_default_patterns(bitmasks: &[u8]) -> PatternCounts {
-    ac_search_array(bitmasks, &PATTERN_DFA)
+    pattern_search_array(bitmasks)
+}
+
+#[cfg(feature = "bench-support")]
+static LEGACY_PATTERN_DFA: std::sync::LazyLock<AcDfa<PatternVariant>> =
+    std::sync::LazyLock::new(|| ac_build(ALL_PATTERNS.iter().copied(), |byte| byte));
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn detect_default_patterns_heap_for_bench(bitmasks: &[u8]) -> PatternCounts {
+    ac_search_array(bitmasks, &LEGACY_PATTERN_DFA)
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn detect_default_patterns_runtime_build_for_bench(bitmasks: &[u8]) -> PatternCounts {
+    let dfa = ac_build(ALL_PATTERNS.iter().copied(), |byte| byte);
+    ac_search_array(bitmasks, &dfa)
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn default_pattern_dfa_sizes_for_bench() -> (usize, usize) {
+    let heap = &*LEGACY_PATTERN_DFA;
+    let heap_bytes = heap.goto.len() * std::mem::size_of::<u32>()
+        + heap.output_starts.len() * std::mem::size_of::<u32>()
+        + heap.output_lens.len() * std::mem::size_of::<u32>()
+        + heap.flat_outputs.len() * std::mem::size_of::<PatternVariant>();
+    (heap_bytes, std::mem::size_of::<PatternDfa>())
 }
 
 // ============================================================================
@@ -671,7 +893,7 @@ pub fn analyze_patterns_from_rows_with_scratch(
     custom_counts: &mut Vec<u32>,
 ) -> PatternAnalysis {
     let mut detected_patterns = [0u32; PATTERN_COUNT];
-    let mut default_state = 0u32;
+    let mut default_state = 0u8;
     custom_counts.clear();
     custom_counts.resize(compiled.patterns.len(), 0);
     let mut custom_state = 0u32;
@@ -684,7 +906,7 @@ pub fn analyze_patterns_from_rows_with_scratch(
         let sym = (mask & 0x0F) as usize;
 
         default_state = PATTERN_DFA.goto[default_state as usize * AC_ALPHA + sym];
-        for &id in ac_output_slice(&PATTERN_DFA, default_state) {
+        for &id in pattern_output_slice(default_state) {
             detected_patterns[id as usize] += 1;
         }
 

@@ -1103,6 +1103,25 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let mut nps_scratch = Vec::new();
     let custom_patterns = custom_pattern_input(256);
     let custom_pattern_rows = pattern_scratch_bench::rows();
+    let default_pattern_masks: Vec<_> = custom_pattern_rows
+        .iter()
+        .map(|row| {
+            u8::from(row[0] != b'0')
+                | (u8::from(row[1] != b'0') << 1)
+                | (u8::from(row[2] != b'0') << 2)
+                | (u8::from(row[3] != b'0') << 3)
+        })
+        .collect();
+    let default_expected =
+        rssp::patterns::detect_default_patterns_runtime_build_for_bench(&default_pattern_masks);
+    assert_eq!(
+        rssp::patterns::detect_default_patterns_heap_for_bench(&default_pattern_masks),
+        default_expected
+    );
+    assert_eq!(
+        rssp::patterns::detect_default_patterns(&default_pattern_masks),
+        default_expected
+    );
     let custom_pattern_compiled = rssp::patterns::compile_custom_patterns(&custom_patterns);
     pattern_scratch_bench::assert_behavior(&custom_pattern_rows, 6, &custom_pattern_compiled);
     let mut custom_count_scratch = Vec::new();
@@ -1594,6 +1613,39 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         b.iter(|| {
             black_box(rssp::patterns::compile_custom_patterns(black_box(
                 &custom_patterns,
+            )));
+        });
+    });
+    let default_init_masks = &default_pattern_masks[..256];
+    optimizations.throughput(Throughput::Elements(1));
+    optimizations.bench_function("default_dfa_runtime_build", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::patterns::detect_default_patterns_runtime_build_for_bench(black_box(
+                    default_init_masks,
+                )),
+            );
+        });
+    });
+    optimizations.bench_function("default_dfa_static", |b| {
+        b.iter(|| {
+            black_box(rssp::patterns::detect_default_patterns(black_box(
+                default_init_masks,
+            )));
+        });
+    });
+    optimizations.throughput(Throughput::Elements(default_pattern_masks.len() as u64));
+    optimizations.bench_function("default_dfa_heap_search", |b| {
+        b.iter(|| {
+            black_box(rssp::patterns::detect_default_patterns_heap_for_bench(
+                black_box(&default_pattern_masks),
+            ));
+        });
+    });
+    optimizations.bench_function("default_dfa_compact_search", |b| {
+        b.iter(|| {
+            black_box(rssp::patterns::detect_default_patterns(black_box(
+                &default_pattern_masks,
             )));
         });
     });
