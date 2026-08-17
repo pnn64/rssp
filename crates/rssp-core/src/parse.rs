@@ -1139,27 +1139,29 @@ fn bgchanges_tag_len(s: &[u8]) -> Option<usize> {
     (layer.is_empty() || layer == b"1").then_some(i + 1)
 }
 
-pub fn extract_bgchanges_values<'a>(data: &'a [u8]) -> Vec<&'a [u8]> {
-    let mut out = Vec::new();
+pub fn bgchanges_values(data: &[u8]) -> impl Iterator<Item = &[u8]> {
     let mut i = 0usize;
-    while i < data.len() {
-        let Some(pos) = find_byte(&data[i..], b'#') else {
-            break;
-        };
-        i += pos;
-        let s = &data[i..];
-        let Some(tag_len) = bgchanges_tag_len(s) else {
-            i += 1;
-            continue;
-        };
-        if let Some((value, adv)) = parse_tag_val(s, tag_len, true) {
-            out.push(value);
-            i += adv;
-        } else {
+    std::iter::from_fn(move || {
+        while i < data.len() {
+            let pos = find_byte(&data[i..], b'#')?;
+            i += pos;
+            let s = &data[i..];
+            let Some(tag_len) = bgchanges_tag_len(s) else {
+                i += 1;
+                continue;
+            };
+            if let Some((value, adv)) = parse_tag_val(s, tag_len, true) {
+                i += adv;
+                return Some(value);
+            }
             i += 1;
         }
-    }
-    out
+        None
+    })
+}
+
+pub fn extract_bgchanges_values(data: &[u8]) -> Vec<&[u8]> {
+    bgchanges_values(data).collect()
 }
 
 #[must_use]
@@ -1310,8 +1312,8 @@ mod tests {
     use std::borrow::Cow;
 
     use super::{
-        decode_cp1252, decode_unescape_trim, extract_sections, extract_sections_impl,
-        parse_version, unescape_trim_cow,
+        bgchanges_values, decode_cp1252, decode_unescape_trim, extract_bgchanges_values,
+        extract_sections, extract_sections_impl, parse_version, unescape_trim_cow,
     };
     use crate::timing::{STEPFILE_VERSION_NUMBER, TimingFormat};
 
@@ -1434,6 +1436,30 @@ mod tests {
             b"TIME=0:END=9999:MODS=overhead:\
               TIME=0.241:END=0.438:MODS=*1.875 15% invert:\
               TIME=0.338:END=0.515:MODS=*1.946 no invert"
+        );
+    }
+
+    #[test]
+    fn streamed_bgchanges_match_collected_values() {
+        let data = b"#TITLE:Backgrounds;\n\
+#BGCHANGES:0=first.png;\n\
+#BGCHANGES2:ignored;\n\
+#ANIMATIONS:4=second.mp4;\n\
+#BGCHANGES1:8=third.png;\n\
+#BGCHANGESX:ignored;\n\
+#BGCHANGES:unterminated";
+        let previous = extract_bgchanges_values(data);
+        let streamed: Vec<_> = bgchanges_values(data).collect();
+
+        assert_eq!(streamed, previous);
+        assert_eq!(
+            streamed,
+            [
+                &b"0=first.png"[..],
+                &b"4=second.mp4"[..],
+                &b"8=third.png"[..],
+                &b"unterminated"[..],
+            ]
         );
     }
 

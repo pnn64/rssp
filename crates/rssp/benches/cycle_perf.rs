@@ -1203,6 +1203,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     pack_fixture.assert_parent_img_behavior();
     pack_image_fixture.assert_behavior();
     let asset_fixture = assets_bench::AssetFixture::with_movies(1);
+    asset_fixture.assert_background_behavior();
     asset_fixture.assert_song_assets_behavior();
     asset_fixture.assert_music_behavior();
     asset_fixture.assert_rel_path_behavior();
@@ -1215,6 +1216,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         .sum::<usize>();
     let delimiter_fields = assets_bench::delimiter_fields();
     let delimiter_bytes = delimiter_fields.iter().map(String::len).sum::<usize>();
+    let bgchange_tags = assets_bench::bgchange_tags();
+    assets_bench::assert_bgchange_values_behavior(&bgchange_tags);
     let timing_text_fixture = report_timing_bench::timing_text();
     let legacy_timing_text = rssp::profile::timing_text(
         &timing_text_fixture.time_signatures,
@@ -2186,6 +2189,14 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             ))
         });
     });
+    background.bench_function("materialized_values", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::background_changes_materialized(
+                black_box(asset_fixture.song_dir()),
+                black_box(asset_fixture.simfile()),
+            ))
+        });
+    });
     background.bench_function("catalog_movie", |b| {
         b.iter(|| {
             black_box(rssp::assets::resolve_background_changes_like_itg(
@@ -2195,6 +2206,25 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     background.finish();
+
+    let mut bg_values = c.benchmark_group("cycles/background_change_values");
+    bg_values.sample_size(100);
+    bg_values.measurement_time(Duration::from_secs(3));
+    bg_values.throughput(Throughput::Elements(assets_bench::BG_TAG_COUNT as u64));
+    bg_values.bench_function("materialized", |b| {
+        b.iter(|| {
+            black_box(rssp::parse::extract_bgchanges_values(black_box(
+                &bgchange_tags,
+            )))
+        });
+    });
+    bg_values.bench_function("streamed", |b| {
+        b.iter(|| {
+            let count = rssp::parse::bgchanges_values(black_box(&bgchange_tags)).count();
+            black_box(count)
+        });
+    });
+    bg_values.finish();
 
     let mut relative_assets = c.benchmark_group("cycles/asset_relative_paths");
     relative_assets.sample_size(20);

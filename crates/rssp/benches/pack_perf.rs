@@ -253,6 +253,7 @@ fn bench_pack_root(c: &mut Criterion) {
 
 fn bench_background_changes(c: &mut Criterion) {
     let fixture = assets_bench::AssetFixture::with_movies(1);
+    fixture.assert_background_behavior();
 
     let mut group = c.benchmark_group("background_changes");
     group.sample_size(30);
@@ -261,6 +262,14 @@ fn bench_background_changes(c: &mut Criterion) {
     group.bench_function("root_rescan", |b| {
         b.iter(|| {
             black_box(rssp::profile::background_changes_legacy(
+                black_box(fixture.song_dir()),
+                black_box(fixture.simfile()),
+            ))
+        });
+    });
+    group.bench_function("materialized_values", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::background_changes_materialized(
                 black_box(fixture.song_dir()),
                 black_box(fixture.simfile()),
             ))
@@ -275,6 +284,25 @@ fn bench_background_changes(c: &mut Criterion) {
         });
     });
     group.finish();
+
+    let tags = assets_bench::bgchange_tags();
+    assets_bench::assert_bgchange_values_behavior(&tags);
+    let mut values = c.benchmark_group("background_change_values");
+    values.sample_size(100);
+    values.measurement_time(Duration::from_secs(3));
+    values.throughput(Throughput::Elements(assets_bench::BG_TAG_COUNT as u64));
+    values.bench_function("materialized", |b| {
+        b.iter(|| {
+            black_box(rssp::parse::extract_bgchanges_values(black_box(&tags)));
+        });
+    });
+    values.bench_function("streamed", |b| {
+        b.iter(|| {
+            let count = rssp::parse::bgchanges_values(black_box(&tags)).count();
+            black_box(count);
+        });
+    });
+    values.finish();
 
     let mut delimiters = c.benchmark_group("background_delimiters");
     delimiters.sample_size(30);

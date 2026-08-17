@@ -11,6 +11,27 @@ pub const SOUND_COUNT: usize = 129;
 pub const DELIMITER_FIELD_COUNT: usize = 4_096;
 pub const REL_PATH_COUNT: usize = 256;
 pub const REL_COMPONENT_COUNT: usize = 4_096;
+pub const BG_TAG_COUNT: usize = 256;
+
+pub fn bgchange_tags() -> Vec<u8> {
+    let mut input = String::with_capacity(BG_TAG_COUNT * 40);
+    for index in 0..BG_TAG_COUNT {
+        writeln!(
+            &mut input,
+            "#BGCHANGES:{}=Background-{index:03}.png;",
+            index * 4
+        )
+        .expect("writing to a String cannot fail");
+    }
+    input.into_bytes()
+}
+
+pub fn assert_bgchange_values_behavior(input: &[u8]) {
+    let previous = rssp::parse::extract_bgchanges_values(input);
+    let streamed: Vec<_> = rssp::parse::bgchanges_values(input).collect();
+    assert_eq!(streamed, previous);
+    assert_eq!(streamed.len(), BG_TAG_COUNT);
+}
 
 pub fn relative_paths() -> Vec<String> {
     (0..REL_PATH_COUNT)
@@ -187,6 +208,12 @@ impl AssetFixture {
             let current = rssp::assets::resolve_song_assets(&self.image_dir, banner, background);
             assert_eq!(current, legacy);
         }
+    }
+
+    pub fn assert_background_behavior(&self) {
+        let previous = rssp::profile::background_changes_materialized(&self.root, &self.simfile);
+        let current = rssp::assets::resolve_background_changes_like_itg(&self.root, &self.simfile);
+        assert_eq!(current, previous);
     }
 
     pub fn assert_music_behavior(&self) {

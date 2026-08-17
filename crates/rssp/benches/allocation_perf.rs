@@ -4453,15 +4453,71 @@ fn run_bgchanges_phase(
 
 fn run_background_changes_alloc(iterations: usize) {
     let fixture = assets_bench::AssetFixture::with_movies(1);
+    fixture.assert_background_behavior();
     run_bgchanges_phase("root-rescan", iterations, &fixture, |dir, data| {
         rssp::profile::background_changes_legacy(dir, data)
     });
     run_bgchanges_phase("double-find", iterations, &fixture, |dir, data| {
         rssp::profile::background_changes_double_find(dir, data)
     });
+    run_bgchanges_phase("materialized-values", iterations, &fixture, |dir, data| {
+        rssp::profile::background_changes_materialized(dir, data)
+    });
     run_bgchanges_phase("single-scan", iterations, &fixture, |dir, data| {
         rssp::assets::resolve_background_changes_like_itg(dir, data)
     });
+
+    let tags = assets_bench::bgchange_tags();
+    assets_bench::assert_bgchange_values_behavior(&tags);
+    run_bgchange_values_phase("materialized", iterations, &tags, |data| {
+        let values = rssp::parse::extract_bgchanges_values(data);
+        let count = values.len();
+        black_box(values);
+        count
+    });
+    run_bgchange_values_phase("streamed", iterations, &tags, |data| {
+        rssp::parse::bgchanges_values(data).count()
+    });
+}
+
+fn run_bgchange_values_phase(
+    phase: &str,
+    iterations: usize,
+    input: &[u8],
+    scan: impl Fn(&[u8]) -> usize,
+) {
+    black_box(scan(input));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        checksum = checksum.wrapping_add(scan(black_box(input)));
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=background-change-values phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_tags_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        assets_bench::BG_TAG_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
 }
 
 fn run_asset_fallbacks_alloc(iterations: usize) {

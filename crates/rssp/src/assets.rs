@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 
 use memchr::memchr2;
 
-use crate::parse::{decode_bytes, extract_bgchanges_values, unescape_tag};
+#[cfg(any(test, feature = "profile"))]
+use crate::parse::extract_bgchanges_values;
+use crate::parse::{bgchanges_values, decode_bytes, unescape_tag};
 
 const RANDOM_BACKGROUND_FILE: &str = "-random-";
 const NO_SONG_BG_FILE: &str = "-nosongbg-";
@@ -1082,9 +1084,9 @@ fn upsert_bgchange(
     }
 }
 
-fn resolve_bgchanges_with(
+fn resolve_bgchanges_with<'a>(
     song_dir: &Path,
-    simfile_data: &[u8],
+    values: impl IntoIterator<Item = &'a [u8]>,
     files: &BgFileCatalog,
     fallback_movie: impl FnOnce() -> Option<PathBuf>,
     find_delimiter: impl Fn(&str) -> Option<usize>,
@@ -1093,7 +1095,7 @@ fn resolve_bgchanges_with(
     let mut out: Vec<ResolvedBackgroundChange> = Vec::new();
     let mut saw_no_song_bg = false;
     let mut beats_ordered = true;
-    for raw in extract_bgchanges_values(simfile_data) {
+    for raw in values {
         let decoded = decode_bytes(raw);
         let text = unescape_tag(decoded.as_ref());
         for_each_bgchange_pair_with(
@@ -1170,7 +1172,13 @@ pub fn resolve_background_changes_like_itg(
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
     let (files, movie) = list_song_dir_rel_files::<true>(song_dir);
-    resolve_bgchanges_with(song_dir, simfile_data, &files, || movie, find_bg_delimiter)
+    resolve_bgchanges_with(
+        song_dir,
+        bgchanges_values(simfile_data),
+        &files,
+        || movie,
+        find_bg_delimiter,
+    )
 }
 
 #[cfg(any(test, feature = "profile"))]
@@ -1178,7 +1186,7 @@ fn resolve_bgchanges_legacy(song_dir: &Path, simfile_data: &[u8]) -> Vec<Resolve
     let (files, _) = list_song_dir_rel_files::<false>(song_dir);
     resolve_bgchanges_with(
         song_dir,
-        simfile_data,
+        extract_bgchanges_values(simfile_data),
         &files,
         || only_movie_file(song_dir),
         find_bg_delimiter,
@@ -1193,10 +1201,25 @@ fn resolve_bgchanges_double_find(
     let (files, movie) = list_song_dir_rel_files::<true>(song_dir);
     resolve_bgchanges_with(
         song_dir,
-        simfile_data,
+        extract_bgchanges_values(simfile_data),
         &files,
         || movie,
         find_bg_delimiter_legacy,
+    )
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_bgchanges_materialized(
+    song_dir: &Path,
+    simfile_data: &[u8],
+) -> Vec<ResolvedBackgroundChange> {
+    let (files, movie) = list_song_dir_rel_files::<true>(song_dir);
+    resolve_bgchanges_with(
+        song_dir,
+        extract_bgchanges_values(simfile_data),
+        &files,
+        || movie,
+        find_bg_delimiter,
     )
 }
 
