@@ -2123,6 +2123,25 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             )
         });
     });
+    let duplicate_opt = rssp::pack::ScanOpt {
+        dup: rssp::pack::DupPolicy::Error,
+    };
+    song_scan.bench_function("joined_paths_error", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::scan_song_dir_joined_paths(
+                black_box(pack_fixture.song_dir()),
+                black_box(duplicate_opt),
+            ))
+        });
+    });
+    song_scan.bench_function("deferred_paths_error", |b| {
+        b.iter(|| {
+            black_box(rssp::pack::scan_song_dir(
+                black_box(pack_fixture.song_dir()),
+                black_box(duplicate_opt),
+            ))
+        });
+    });
     song_scan.finish();
 
     let mut simfile_tree = c.benchmark_group("cycles/simfile_tree_discovery");

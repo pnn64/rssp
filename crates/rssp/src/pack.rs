@@ -119,6 +119,7 @@ fn sort_compact_ci<T>(
     }
 }
 
+#[cfg(any(test, feature = "profile"))]
 fn sort_paths_ci(paths: &mut [PathBuf]) {
     sort_compact_ci(
         paths,
@@ -135,6 +136,10 @@ fn sort_paths_ci(paths: &mut [PathBuf]) {
         },
         |left, right| assets::cmp_name_ci(left, right),
     );
+}
+
+fn sort_names_ci(names: &mut [OsString]) {
+    names.sort_by(|left, right| assets::cmp_os_ci(left, right));
 }
 
 fn sort_packs_ci(packs: &mut [PackScan]) {
@@ -522,6 +527,7 @@ fn simfile_names(dir: &Path) -> io::Result<impl Iterator<Item = (&'static str, O
     }))
 }
 
+#[cfg(any(test, feature = "profile"))]
 fn simfile_paths(dir: &Path) -> io::Result<impl Iterator<Item = (&'static str, PathBuf)> + '_> {
     Ok(simfile_names(dir)?.map(move |(extension, name)| (extension, dir.join(name))))
 }
@@ -595,7 +601,8 @@ fn scan_song_dir_first_full_paths(dir: &Path) -> Result<Option<SongScan>, ScanEr
         .or_else(|| first_sm.map(|path| song_scan(dir, path, "sm"))))
 }
 
-fn scan_song_dir_duplicates(
+#[cfg(any(test, feature = "profile"))]
+fn scan_song_dir_duplicates_joined(
     dir: &Path,
     paths: impl Iterator<Item = (&'static str, PathBuf)>,
 ) -> Result<Option<SongScan>, ScanError> {
@@ -611,6 +618,23 @@ fn scan_song_dir_duplicates(
     select_duplicate_scan(dir, sms, sscs)
 }
 
+fn scan_song_dir_duplicates(
+    dir: &Path,
+    names: impl Iterator<Item = (&'static str, OsString)>,
+) -> Result<Option<SongScan>, ScanError> {
+    let mut sms = Vec::new();
+    let mut sscs = Vec::new();
+    for (extension, name) in names {
+        if extension == "ssc" {
+            sscs.push(name);
+        } else {
+            sms.push(name);
+        }
+    }
+    select_duplicate_names(dir, sms, sscs)
+}
+
+#[cfg(any(test, feature = "profile"))]
 fn select_duplicate_scan(
     dir: &Path,
     mut sms: Vec<PathBuf>,
@@ -641,6 +665,38 @@ fn select_duplicate_scan(
         });
     }
     Ok(Some(song_scan(dir, simfile, "sm")))
+}
+
+fn select_duplicate_names(
+    dir: &Path,
+    mut sms: Vec<OsString>,
+    mut sscs: Vec<OsString>,
+) -> Result<Option<SongScan>, ScanError> {
+    sort_names_ci(&mut sms);
+    sort_names_ci(&mut sscs);
+
+    if let Some(name) = sscs.pop() {
+        if !sscs.is_empty() {
+            sscs.push(name);
+            return Err(ScanError::DuplicateSimfile {
+                ext: "ssc",
+                paths: sscs.into_iter().map(|name| dir.join(name)).collect(),
+            });
+        }
+        return Ok(Some(song_scan(dir, dir.join(name), "ssc")));
+    }
+
+    let Some(name) = sms.pop() else {
+        return Ok(None);
+    };
+    if !sms.is_empty() {
+        sms.push(name);
+        return Err(ScanError::DuplicateSimfile {
+            ext: "sm",
+            paths: sms.into_iter().map(|name| dir.join(name)).collect(),
+        });
+    }
+    Ok(Some(song_scan(dir, dir.join(name), "sm")))
 }
 
 fn scan_tree_dir(dir: &Path, opt: ScanOpt) -> Result<(Option<SongScan>, Vec<OsString>), ScanError> {
@@ -678,18 +734,18 @@ fn scan_tree_dir(dir: &Path, opt: ScanOpt) -> Result<(Option<SongScan>, Vec<OsSt
                 keep_first_owned(first, name);
             }
             DupPolicy::Error => {
-                let paths = if extension == "ssc" {
+                let names = if extension == "ssc" {
                     &mut sscs
                 } else {
                     &mut sms
                 };
-                paths.push(dir.join(name));
+                names.push(name);
             }
         }
     }
     let song = match opt.dup {
         DupPolicy::First => first_song_scan(dir, first_sm, first_ssc),
-        DupPolicy::Error => select_duplicate_scan(dir, sms, sscs)?,
+        DupPolicy::Error => select_duplicate_names(dir, sms, sscs)?,
     };
     Ok((song, subdirs))
 }
@@ -701,7 +757,7 @@ pub fn scan_song_dir(dir: &Path, opt: ScanOpt) -> Result<Option<SongScan>, ScanE
 
     match opt.dup {
         DupPolicy::First => scan_song_dir_first(dir),
-        DupPolicy::Error => scan_song_dir_duplicates(dir, simfile_paths(dir)?),
+        DupPolicy::Error => scan_song_dir_duplicates(dir, simfile_names(dir)?),
     }
 }
 
@@ -716,7 +772,22 @@ pub(crate) fn profile_scan_song_dir_full_paths(
 
     match opt.dup {
         DupPolicy::First => scan_song_dir_first_full_paths(dir),
-        DupPolicy::Error => scan_song_dir_duplicates(dir, simfile_paths_full_paths(dir)?),
+        DupPolicy::Error => scan_song_dir_duplicates_joined(dir, simfile_paths_full_paths(dir)?),
+    }
+}
+
+#[cfg(any(test, feature = "profile"))]
+pub(crate) fn profile_scan_song_dir_joined_paths(
+    dir: &Path,
+    opt: ScanOpt,
+) -> Result<Option<SongScan>, ScanError> {
+    if assets::is_mac_resource_fork(dir) {
+        return Ok(None);
+    }
+
+    match opt.dup {
+        DupPolicy::First => scan_song_dir_first(dir),
+        DupPolicy::Error => scan_song_dir_duplicates_joined(dir, simfile_paths(dir)?),
     }
 }
 
@@ -1158,8 +1229,8 @@ pub(crate) fn profile_find_simfiles_legacy(root: &Path, opt: ScanOpt) -> Vec<Pat
 mod tests {
     use super::{
         DupPolicy, PackIniRaw, ScanError, ScanOpt, find_simfiles, parse_pack_ini,
-        pick_pack_parent_img, scan_pack_dir, scan_pack_root, scan_pack_root_legacy, scan_song_dir,
-        scan_songs_dir, sort_paths_ci,
+        pick_pack_parent_img, profile_scan_song_dir_joined_paths, scan_pack_dir, scan_pack_root,
+        scan_pack_root_legacy, scan_song_dir, scan_songs_dir, sort_paths_ci,
     };
     use crate::assets;
     use std::fs;
@@ -1244,16 +1315,23 @@ mod tests {
             write_file(&root.join(name));
         }
 
-        let error = scan_song_dir(
-            &root,
-            ScanOpt {
-                dup: DupPolicy::Error,
-            },
-        )
-        .unwrap_err();
+        let opt = ScanOpt {
+            dup: DupPolicy::Error,
+        };
+        let previous = profile_scan_song_dir_joined_paths(&root, opt).unwrap_err();
+        let error = scan_song_dir(&root, opt).unwrap_err();
+        let ScanError::DuplicateSimfile {
+            ext: previous_ext,
+            paths: previous_paths,
+        } = previous
+        else {
+            panic!("expected a prior duplicate simfile error");
+        };
         let ScanError::DuplicateSimfile { ext, paths } = error else {
             panic!("expected a duplicate simfile error");
         };
+        assert_eq!(ext, previous_ext);
+        assert_eq!(paths, previous_paths);
         assert_eq!(ext, "ssc");
         assert_eq!(
             paths,

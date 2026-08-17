@@ -126,6 +126,9 @@ fn bench_song_scan(c: &mut Criterion) {
     let fixture = pack_bench::PackFixture::new();
     fixture.assert_song_behavior();
     let opt = rssp::pack::ScanOpt::default();
+    let error_opt = rssp::pack::ScanOpt {
+        dup: rssp::pack::DupPolicy::Error,
+    };
 
     let mut group = c.benchmark_group("song_simfile_discovery");
     group.sample_size(30);
@@ -148,6 +151,22 @@ fn bench_song_scan(c: &mut Criterion) {
                 rssp::pack::scan_song_dir(black_box(fixture.song_dir()), black_box(opt))
                     .expect("benchmark song should scan"),
             )
+        });
+    });
+    group.bench_function("joined_paths_error", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::scan_song_dir_joined_paths(
+                black_box(fixture.song_dir()),
+                black_box(error_opt),
+            ))
+        });
+    });
+    group.bench_function("deferred_paths_error", |b| {
+        b.iter(|| {
+            black_box(rssp::pack::scan_song_dir(
+                black_box(fixture.song_dir()),
+                black_box(error_opt),
+            ))
         });
     });
     group.finish();

@@ -3844,12 +3844,31 @@ fn run_pack_scan_alloc(iterations: usize) {
         &fixture,
         "full-paths",
         iterations,
+        rssp::pack::ScanOpt::default(),
         rssp::profile::scan_song_dir_full_paths,
     );
     run_song_scan_phase(
         &fixture,
         "candidate-names",
         iterations,
+        rssp::pack::ScanOpt::default(),
+        rssp::pack::scan_song_dir,
+    );
+    let duplicate_opt = rssp::pack::ScanOpt {
+        dup: rssp::pack::DupPolicy::Error,
+    };
+    run_song_scan_phase(
+        &fixture,
+        "joined-paths-error",
+        iterations,
+        duplicate_opt,
+        rssp::profile::scan_song_dir_joined_paths,
+    );
+    run_song_scan_phase(
+        &fixture,
+        "deferred-paths-error",
+        iterations,
+        duplicate_opt,
         rssp::pack::scan_song_dir,
     );
     black_box(
@@ -4086,6 +4105,7 @@ fn run_song_scan_phase<F>(
     fixture: &pack_bench::PackFixture,
     phase: &str,
     iterations: usize,
+    opt: rssp::pack::ScanOpt,
     scan: F,
 ) where
     F: Fn(
@@ -4093,22 +4113,23 @@ fn run_song_scan_phase<F>(
         rssp::pack::ScanOpt,
     ) -> Result<Option<rssp::pack::SongScan>, rssp::pack::ScanError>,
 {
-    black_box(
-        scan(fixture.song_dir(), rssp::pack::ScanOpt::default())
-            .expect("benchmark song should scan"),
-    );
+    fn result_len(result: Result<Option<rssp::pack::SongScan>, rssp::pack::ScanError>) -> usize {
+        match result {
+            Ok(song) => usize::from(song.is_some()),
+            Err(rssp::pack::ScanError::DuplicateSimfile { paths, .. }) => paths.len(),
+            Err(error) => panic!("benchmark song should scan: {error:?}"),
+        }
+    }
+
+    black_box(result_len(scan(fixture.song_dir(), opt)));
     reset_counters();
     let before = Counters::read();
     let start = Instant::now();
     let mut checksum = 0usize;
     for _ in 0..iterations {
-        let song = scan(
-            black_box(fixture.song_dir()),
-            black_box(rssp::pack::ScanOpt::default()),
-        )
-        .expect("benchmark song should scan");
-        checksum = checksum.wrapping_add(usize::from(song.is_some()));
-        black_box(song);
+        let count = result_len(scan(black_box(fixture.song_dir()), black_box(opt)));
+        checksum = checksum.wrapping_add(count);
+        black_box(count);
     }
     let elapsed = start.elapsed();
     let after = Counters::read();

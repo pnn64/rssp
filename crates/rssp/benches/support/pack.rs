@@ -128,6 +128,9 @@ impl PackFixture {
             let old = rssp::profile::scan_song_dir_full_paths(&self.song_dir, opt);
             let new = rssp::pack::scan_song_dir(&self.song_dir, opt);
             assert_song_result(new, old);
+            let previous = rssp::profile::scan_song_dir_joined_paths(&self.song_dir, opt);
+            let new = rssp::pack::scan_song_dir(&self.song_dir, opt);
+            assert_song_result(new, previous);
         }
     }
 

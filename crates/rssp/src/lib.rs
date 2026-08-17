@@ -139,6 +139,13 @@ pub mod profile {
         crate::pack::profile_scan_song_dir_full_paths(dir, opt)
     }
 
+    pub fn scan_song_dir_joined_paths(
+        dir: &Path,
+        opt: ScanOpt,
+    ) -> Result<Option<SongScan>, ScanError> {
+        crate::pack::profile_scan_song_dir_joined_paths(dir, opt)
+    }
+
     #[must_use]
     pub fn find_simfiles_legacy(root: &Path, opt: ScanOpt) -> Vec<PathBuf> {
         crate::pack::profile_find_simfiles_legacy(root, opt)
