@@ -57,6 +57,9 @@ mod sm_timing_bench;
 #[path = "support/step_parity.rs"]
 mod step_parity_bench;
 #[cfg(windows)]
+#[path = "support/tech_prefix.rs"]
+mod tech_prefix_bench;
+#[cfg(windows)]
 #[path = "support/timing_borrow.rs"]
 mod timing_borrow_bench;
 #[cfg(windows)]
@@ -432,8 +435,9 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let timing_maps = timing_borrow_bench::TimingMaps::new();
     timing_borrow_bench::assert_behavior(&timing_maps);
     let legacy_metadata = cp1252_metadata(ENTRIES);
-    let valid_tech = "BR+ FS- 24ths XO+ SKT- 32nds DS++ JA- WA+ BXF- ".repeat(64);
-    let invalid_tech = "BR+garbage Hard unknown ".repeat(64);
+    let (valid_tech, valid_description) = tech_prefix_bench::valid_input();
+    let invalid_tech = tech_prefix_bench::invalid_input();
+    tech_prefix_bench::assert_behavior();
     let row_segments = rssp::timing::TimingSegments {
         beat0_offset_adjust: 0.0,
         bpms: vec![(0.0, 120.0)],
@@ -600,28 +604,31 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     });
     display_tags.finish();
 
-    let mut tech_notation = c.benchmark_group("cycles/tech_notation");
-    tech_notation.sample_size(100);
-    tech_notation.measurement_time(Duration::from_secs(2));
-    tech_notation.throughput(Throughput::Bytes(valid_tech.len() as u64));
-    tech_notation.bench_function("valid", |b| {
-        b.iter(|| {
-            black_box(rssp::tech::parse_tech_notation(
-                black_box(&valid_tech),
-                black_box(""),
-            ));
-        });
-    });
-    tech_notation.throughput(Throughput::Bytes(invalid_tech.len() as u64));
-    tech_notation.bench_function("invalid", |b| {
-        b.iter(|| {
-            black_box(rssp::tech::parse_tech_notation(
-                black_box(""),
-                black_box(&invalid_tech),
-            ));
-        });
-    });
-    tech_notation.finish();
+    for (name, credit, description) in [
+        (
+            "cycles/tech_prefix_valid",
+            valid_tech.as_str(),
+            valid_description.as_str(),
+        ),
+        ("cycles/tech_prefix_invalid", invalid_tech.as_str(), ""),
+    ] {
+        let mut group = c.benchmark_group(name);
+        group.sample_size(100);
+        group.measurement_time(Duration::from_secs(2));
+        group.throughput(Throughput::Bytes((credit.len() + description.len()) as u64));
+        for (phase, legacy) in [("per_chunk_lookup", true), ("per_parse_lookup", false)] {
+            group.bench_function(phase, |b| {
+                b.iter(|| {
+                    black_box(tech_prefix_bench::parse(
+                        black_box(credit),
+                        black_box(description),
+                        legacy,
+                    ));
+                });
+            });
+        }
+        group.finish();
+    }
 
     let mut decoding = c.benchmark_group("cycles/decoding");
     decoding.sample_size(100);

@@ -5,6 +5,9 @@ use std::time::Duration;
 const FIXTURE: &str = include_str!("fixtures/camellia_mix.ssc");
 const EXTENSION: &str = "ssc";
 
+#[path = "support/tech_prefix.rs"]
+mod tech_prefix_bench;
+
 #[derive(Clone)]
 struct TechChartInput {
     chart_data: Vec<u8>,
@@ -292,23 +295,32 @@ fn bench_tech_counts_step_parity(c: &mut Criterion) {
 }
 
 fn bench_tech_notation(c: &mut Criterion) {
-    let credit = "BR+ FS- 24ths XO+ SKT- ".repeat(64);
-    let description = "32nds DS++ JA- WA+ BXF- No Tech ".repeat(64);
-    let mut group = c.benchmark_group("tech_notation");
-    group.sample_size(200);
-    group.measurement_time(Duration::from_secs(2));
-    group.throughput(criterion::Throughput::Bytes(
-        (credit.len() + description.len()) as u64,
-    ));
-    group.bench_function("parse", |b| {
-        b.iter(|| {
-            black_box(rssp::tech::parse_tech_notation(
-                black_box(&credit),
-                black_box(&description),
-            ));
-        });
-    });
-    group.finish();
+    tech_prefix_bench::assert_behavior();
+    let (credit, description) = tech_prefix_bench::valid_input();
+    let invalid = tech_prefix_bench::invalid_input();
+    for (name, credit, description) in [
+        ("tech_prefix_valid", credit.as_str(), description.as_str()),
+        ("tech_prefix_invalid", invalid.as_str(), ""),
+    ] {
+        let mut group = c.benchmark_group(name);
+        group.sample_size(200);
+        group.measurement_time(Duration::from_secs(2));
+        group.throughput(criterion::Throughput::Bytes(
+            (credit.len() + description.len()) as u64,
+        ));
+        for (phase, legacy) in [("per_chunk_lookup", true), ("per_parse_lookup", false)] {
+            group.bench_function(phase, |b| {
+                b.iter(|| {
+                    black_box(tech_prefix_bench::parse(
+                        black_box(credit),
+                        black_box(description),
+                        legacy,
+                    ));
+                });
+            });
+        }
+        group.finish();
+    }
 }
 
 fn bench_counts_with_annotations(c: &mut Criterion) {

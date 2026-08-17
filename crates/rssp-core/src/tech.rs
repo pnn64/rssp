@@ -17,6 +17,36 @@ const KNOWN_TECH_LIST: &[&str] = &[
     "TR", "TR+", "TR-", "WA", "WA+", "WA-", "XMOD", "XMOD+", "XMOD-", "xo", "XO", "XO+", "XO-",
 ];
 
+const TECH_BUCKET_CAPS: [u8; 256] = {
+    let mut table = [0; 256];
+    let mut index = 0;
+    while index < KNOWN_TECH_LIST.len() {
+        let key = KNOWN_TECH_LIST[index].as_bytes()[0] as usize;
+        table[key] += 1;
+        index += 1;
+    }
+    table
+};
+
+type TechTable = [Vec<&'static str>; 256];
+
+fn build_tech_prefixes() -> TechTable {
+    let mut table = std::array::from_fn(|key| Vec::with_capacity(TECH_BUCKET_CAPS[key] as usize));
+    for &pattern in KNOWN_TECH_LIST {
+        table[pattern.as_bytes()[0] as usize].push(pattern);
+    }
+    for list in &mut table {
+        list.sort_unstable_by_key(|pattern| Reverse(pattern.len()));
+    }
+    table
+}
+
+#[inline(always)]
+fn tech_prefixes() -> &'static TechTable {
+    static TABLE: OnceLock<TechTable> = OnceLock::new();
+    TABLE.get_or_init(build_tech_prefixes)
+}
+
 /// Checks if a chunk resembles measure data (contains symbols like / - * | ~ . ' but no letters).
 #[inline(always)]
 fn is_measure_data(chunk: &str) -> bool {
@@ -33,43 +63,16 @@ fn is_measure_data(chunk: &str) -> bool {
 
 /// Finds the longest tech prefix that matches the remainder.
 #[inline(always)]
-fn best_prefix(remainder: &str) -> Option<&'static str> {
-    best_prefix_in(remainder, tech_prefixes())
-}
-
-#[inline(always)]
-fn best_prefix_in(remainder: &str, table: &[Vec<&'static str>]) -> Option<&'static str> {
+fn best_prefix(remainder: &str, table: &[Vec<&'static str>]) -> Option<&'static str> {
     let bytes = remainder.as_bytes();
     if bytes.is_empty() {
         return None;
     }
 
-    let list = &table[bytes[0] as usize];
-
-    list.iter().copied().find(|pat| remainder.starts_with(pat))
-}
-
-#[inline(always)]
-fn tech_prefixes() -> &'static [Vec<&'static str>] {
-    static TABLE: OnceLock<Vec<Vec<&'static str>>> = OnceLock::new();
-    TABLE
-        .get_or_init(|| {
-            let mut table = vec![Vec::new(); 256];
-            for &pat in KNOWN_TECH_LIST {
-                let bytes = pat.as_bytes();
-                if bytes.is_empty() {
-                    continue;
-                }
-                table[bytes[0] as usize].push(pat);
-            }
-            for list in &mut table {
-                if list.len() > 1 {
-                    list.sort_unstable_by_key(|s| Reverse(s.len()));
-                }
-            }
-            table
-        })
-        .as_slice()
+    table[bytes[0] as usize]
+        .iter()
+        .copied()
+        .find(|pattern| remainder.starts_with(pattern))
 }
 
 #[inline(always)]
@@ -84,8 +87,13 @@ fn push_tech(out: &mut String, tech: &str, reserve: usize) {
 }
 
 #[inline(always)]
-fn append_chunk_as_tech(chunk: &str, out: &mut String, reserve: usize) {
-    let Some(first) = best_prefix(chunk) else {
+fn append_chunk_as_tech(
+    chunk: &str,
+    out: &mut String,
+    reserve: usize,
+    table: &[Vec<&'static str>],
+) {
+    let Some(first) = best_prefix(chunk, table) else {
         return;
     };
     let mut remainder = &chunk[first.len()..];
@@ -94,14 +102,13 @@ fn append_chunk_as_tech(chunk: &str, out: &mut String, reserve: usize) {
         return;
     }
 
-    let table = tech_prefixes();
     let mut parts = [""; INLINE_TECH_PARTS];
     parts[0] = first;
     let mut part_count = 1usize;
     let mut overflow = None;
 
     while !remainder.is_empty() {
-        let Some(best) = best_prefix_in(remainder, table) else {
+        let Some(best) = best_prefix(remainder, table) else {
             return;
         };
         if part_count < INLINE_TECH_PARTS {
@@ -118,7 +125,7 @@ fn append_chunk_as_tech(chunk: &str, out: &mut String, reserve: usize) {
     }
     if let Some(mut remainder) = overflow {
         while !remainder.is_empty() {
-            let best = best_prefix_in(remainder, table).expect("validated tech prefix");
+            let best = best_prefix(remainder, table).expect("validated tech prefix");
             push_tech(out, best, reserve);
             remainder = &remainder[best.len()..];
         }
@@ -126,7 +133,7 @@ fn append_chunk_as_tech(chunk: &str, out: &mut String, reserve: usize) {
 }
 
 #[inline(always)]
-fn append_single_tech(input: &str, out: &mut String, reserve: usize) {
+fn append_single_tech(input: &str, out: &mut String, reserve: usize, table: &[Vec<&'static str>]) {
     let mut chunks = input
         .split(|c: char| c.is_whitespace() || c == ',')
         .filter(|s| !s.is_empty())
@@ -142,7 +149,7 @@ fn append_single_tech(input: &str, out: &mut String, reserve: usize) {
             continue;
         }
 
-        append_chunk_as_tech(chunk, out, reserve);
+        append_chunk_as_tech(chunk, out, reserve, table);
     }
 }
 
@@ -154,16 +161,18 @@ pub fn parse_tech_notation(credit: &str, description: &str) -> String {
         .saturating_add(description.len())
         .saturating_add(1);
     let mut out = String::new();
-    append_single_tech(credit, &mut out, reserve);
-    append_single_tech(description, &mut out, reserve);
+    let table = tech_prefixes();
+    append_single_tech(credit, &mut out, reserve, table);
+    append_single_tech(description, &mut out, reserve, table);
     out
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{best_prefix, is_measure_data, parse_tech_notation};
+    use super::{best_prefix, is_measure_data, parse_tech_notation, tech_prefixes};
 
     fn parse_single_reference(input: &str) -> Vec<&'static str> {
+        let table = tech_prefixes();
         let mut results = Vec::new();
         let mut chunks = input
             .split(|c: char| c.is_whitespace() || c == ',')
@@ -182,7 +191,7 @@ mod tests {
             let mut remainder = chunk;
             let start = results.len();
             while !remainder.is_empty() {
-                let Some(best) = best_prefix(remainder) else {
+                let Some(best) = best_prefix(remainder, table) else {
                     results.truncate(start);
                     break;
                 };

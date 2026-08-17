@@ -39,6 +39,8 @@ mod serialize_bench;
 mod sm_timing_bench;
 #[path = "support/step_parity.rs"]
 mod step_parity_bench;
+#[path = "support/tech_prefix.rs"]
+mod tech_prefix_bench;
 #[path = "support/timing_borrow.rs"]
 mod timing_borrow_bench;
 #[path = "support/timing_merge.rs"]
@@ -138,6 +140,7 @@ enum Mode {
     BpmStats,
     ElapsedEvents,
     Tech,
+    TechPrefix,
     Snapshot,
     Csv,
     Json,
@@ -259,6 +262,7 @@ fn parse_args() -> (Mode, usize) {
                     "bpm-stats" => Mode::BpmStats,
                     "elapsed-events" => Mode::ElapsedEvents,
                     "tech" => Mode::Tech,
+                    "tech-prefix" => Mode::TechPrefix,
                     "snapshot" => Mode::Snapshot,
                     "csv" => Mode::Csv,
                     "json" => Mode::Json,
@@ -331,6 +335,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         | Mode::Minimize
         | Mode::Bpms
         | Mode::Tech
+        | Mode::TechPrefix
         | Mode::Snapshot
         | Mode::Csv
         | Mode::Json => rssp::AnalysisOptions {
@@ -476,6 +481,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
                     checksum = checksum.wrapping_add(notation.len());
                     black_box(notation);
                 }
+            }
+            Mode::TechPrefix => {
+                unreachable!("tech prefix mode uses its dedicated allocation runner")
             }
             Mode::Matrix
             | Mode::AnalysisReuse
@@ -767,6 +775,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::BpmStats => "bpm-stats",
         Mode::ElapsedEvents => "elapsed-events",
         Mode::Tech => "tech",
+        Mode::TechPrefix => "tech-prefix",
         Mode::Snapshot => "snapshot",
         Mode::Csv => "csv",
         Mode::Json => "json",
@@ -1727,6 +1736,82 @@ fn run_parse_reserve_alloc(iterations: usize) {
         run_parse_reserve_phase(data, ext, chart_count, "growing-vec", iterations, true);
         run_parse_reserve_phase(data, ext, chart_count, "presized-vec", iterations, false);
     }
+}
+
+fn run_tech_prefix_startup(phase: &str, legacy: bool) {
+    reset_counters();
+    let before = Counters::read();
+    let notation = tech_prefix_bench::parse(black_box("unknown"), black_box(""), legacy);
+    black_box(notation);
+    let after = Counters::read();
+    println!(
+        concat!(
+            "mode=tech-prefix stage=startup phase={} alloc_calls={} dealloc_calls={} ",
+            "realloc_calls={} alloc_bytes={} realloc_bytes={} live_growth_bytes={} ",
+            "peak_live_growth_bytes={}"
+        ),
+        phase,
+        after.alloc_calls - before.alloc_calls,
+        after.dealloc_calls - before.dealloc_calls,
+        after.realloc_calls - before.realloc_calls,
+        after.alloc_bytes - before.alloc_bytes,
+        after.realloc_bytes - before.realloc_bytes,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_tech_prefix_phase(
+    credit: &str,
+    description: &str,
+    phase: &str,
+    iterations: usize,
+    legacy: bool,
+) {
+    black_box(tech_prefix_bench::parse(credit, description, legacy));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let notation = tech_prefix_bench::parse(black_box(credit), black_box(description), legacy);
+        checksum = checksum.wrapping_add(notation.len());
+        black_box(notation);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    let bytes = credit.len() + description.len();
+    println!(
+        concat!(
+            "mode=tech-prefix stage=steady phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_mib_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        bytes as f64 * divisor / elapsed.as_secs_f64() / (1024.0 * 1024.0),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_tech_prefix_alloc(iterations: usize) {
+    run_tech_prefix_startup("presized-array", false);
+    run_tech_prefix_startup("growing-vec", true);
+    tech_prefix_bench::assert_behavior();
+    let (credit, description) = tech_prefix_bench::valid_input();
+    run_tech_prefix_phase(&credit, &description, "per-chunk-lookup", iterations, true);
+    run_tech_prefix_phase(&credit, &description, "per-parse-lookup", iterations, false);
 }
 
 fn run_clean_map_alloc(iterations: usize) {
@@ -4688,6 +4773,10 @@ fn main() {
         }
         Mode::ParseReserve => {
             run_parse_reserve_alloc(iterations);
+            return;
+        }
+        Mode::TechPrefix => {
+            run_tech_prefix_alloc(iterations);
             return;
         }
         Mode::BpmStats => {
