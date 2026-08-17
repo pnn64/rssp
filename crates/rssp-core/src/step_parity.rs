@@ -81,6 +81,9 @@ const FOOT_MASKS: [u8; NUM_FEET] = [0, 1, 2, 4, 8];
 const OTHER_FOOT_IDXS: [usize; NUM_FEET] = [0, 2, 1, 4, 3];
 const LEFT_FOOT_MASK: u8 = FOOT_MASKS[1] | FOOT_MASKS[2];
 const RIGHT_FOOT_MASK: u8 = FOOT_MASKS[3] | FOOT_MASKS[4];
+// Exact permutation totals for the fixed dance-single and dance-double layouts.
+const PERM_TOTALS: [usize; 9] = [0, 0, 0, 0, 85, 0, 0, 0, 517];
+#[cfg(feature = "bench-support")]
 const PERM_CAP: [usize; 9] = [1, 4, 12, 24, 24, 0, 0, 0, 0];
 const OTHER_PART_OF_FOOT: [Foot; NUM_FEET] = [
     Foot::None,
@@ -1008,7 +1011,7 @@ fn row_has_live_hold(row: &Row) -> bool {
 
 struct StepParityGenerator {
     layout: &'static StageLayout,
-    perm_table: &'static [Box<[FootPlacement]>; 256],
+    perm_table: &'static PermTable,
     column_count: usize,
     nodes: Vec<StepParityNode>,
     rows: Vec<Row>,
@@ -1583,10 +1586,9 @@ fn parity_add_node(g: &mut StepParityGenerator, state_key: u32) -> usize {
 
 fn parity_perms_for_row(g: &mut StepParityGenerator, row_idx: usize) -> &'static [FootPlacement] {
     let row = &g.rows[row_idx];
-    let key = (row.note_mask | row.hold_mask) as usize;
-    let union = g.perm_table[key].as_ref();
+    let union = g.perm_table.get(row.note_mask | row.hold_mask);
     if union.is_empty() {
-        let note = g.perm_table[row.note_mask as usize].as_ref();
+        let note = g.perm_table.get(row.note_mask);
         if note.is_empty() { &NO_PERMS } else { note }
     } else {
         union
@@ -2109,14 +2111,14 @@ fn row_counter_add_note(c: &mut RowCounter, col: usize, counts_for_placement: bo
 
 // --- Permutation ---
 
-fn permute_row(
+fn permute_row<F: FnMut(FootPlacement)>(
     layout: &StageLayout,
     mask: u8,
     cols: &mut FootPlacement,
     col: usize,
     col_count: usize,
     used: u8,
-    out: &mut Vec<FootPlacement>,
+    emit: &mut F,
 ) {
     if col >= col_count {
         let (mut lh, mut lt, mut rh, mut rt) = (
@@ -2156,7 +2158,7 @@ fn permute_row(
             return;
         }
 
-        out.push(*cols);
+        emit(*cols);
         return;
     }
 
@@ -2169,11 +2171,11 @@ fn permute_row(
                 continue;
             }
             cols[col] = foot;
-            permute_row(layout, mask, cols, col + 1, col_count, used | fm, out);
+            permute_row(layout, mask, cols, col + 1, col_count, used | fm, emit);
             cols[col] = Foot::None;
         }
     } else {
-        permute_row(layout, mask, cols, col + 1, col_count, used, out);
+        permute_row(layout, mask, cols, col + 1, col_count, used, emit);
     }
 }
 
@@ -2592,9 +2594,36 @@ struct ParsedRow {
     second: f32,
 }
 
+// Process-lifetime analysis cache, initialized through OnceLock and immutable
+// afterwards, so concurrent readers need no locks. Callers may warm it by
+// creating parity scratch at load time; a first-use miss only enumerates the
+// fixed layout in memory and performs one exact allocation (no I/O). Capacity
+// is fixed at 85 single or 517 double placements, with no eviction; storage is
+// released at process teardown. The parity-cache allocation/cycle benchmarks
+// instrument construction. Worst-case work is bounded to 256 masks/517 writes.
 struct LayoutCache {
     layout: StageLayout,
-    perm_table: [Box<[FootPlacement]>; 256],
+    perm_table: PermTable,
+}
+
+struct PermTable {
+    values: Box<[FootPlacement]>,
+    // Low 16 bits are the start, high 16 bits are the length. The largest
+    // supported table has fewer than 3,400 entries and at most 24 per mask.
+    ranges: [u32; 256],
+}
+
+impl PermTable {
+    #[inline(always)]
+    fn get(&self, mask: u8) -> &[FootPlacement] {
+        let range = self.ranges[mask as usize];
+        let start = (range & 0xffff) as usize;
+        let len = (range >> 16) as usize;
+        debug_assert!(start + len <= self.values.len());
+        // SAFETY: build_perm_table creates every range from the buffer's length
+        // before and after appending that mask, and the boxed buffer never moves.
+        unsafe { std::slice::from_raw_parts(self.values.as_ptr().add(start), len) }
+    }
 }
 
 fn layout_cache_new(layout: StageLayout) -> LayoutCache {
@@ -2602,10 +2631,43 @@ fn layout_cache_new(layout: StageLayout) -> LayoutCache {
     LayoutCache { layout, perm_table }
 }
 
-fn build_perm_table(layout: &StageLayout) -> [Box<[FootPlacement]>; 256] {
+fn build_perm_table(layout: &StageLayout) -> PermTable {
+    let col_count = layout_cols(layout);
+    let mask_count = 1usize << col_count;
+    let mut ranges = [0u32; 256];
+    let mut values = Vec::with_capacity(PERM_TOTALS[col_count]);
+
+    for (mask, range) in ranges.iter_mut().enumerate().take(mask_count) {
+        if mask.count_ones() > 4 {
+            continue;
+        }
+        let start = values.len();
+        let mut cols = [Foot::None; MAX_COLUMNS];
+        permute_row(
+            layout,
+            mask as u8,
+            &mut cols,
+            0,
+            col_count,
+            0,
+            &mut |placement| values.push(placement),
+        );
+        let len = values.len() - start;
+        debug_assert!(start <= u16::MAX as usize && len <= u16::MAX as usize);
+        *range = start as u32 | ((len as u32) << 16);
+    }
+
+    assert_eq!(values.len(), PERM_TOTALS[col_count]);
+    PermTable {
+        values: values.into_boxed_slice(),
+        ranges,
+    }
+}
+
+#[cfg(feature = "bench-support")]
+fn build_legacy_perm_table(layout: &StageLayout) -> [Box<[FootPlacement]>; 256] {
     let col_count = layout_cols(layout);
     std::array::from_fn(|mask| {
-        let mask = mask as u8;
         let bits = mask.count_ones() as usize;
         if bits > 4 {
             return Vec::new().into_boxed_slice();
@@ -2613,9 +2675,77 @@ fn build_perm_table(layout: &StageLayout) -> [Box<[FootPlacement]>; 256] {
 
         let mut cols = [Foot::None; MAX_COLUMNS];
         let mut perms = Vec::with_capacity(PERM_CAP[bits]);
-        permute_row(layout, mask, &mut cols, 0, col_count, 0, &mut perms);
+        permute_row(
+            layout,
+            mask as u8,
+            &mut cols,
+            0,
+            col_count,
+            0,
+            &mut |placement| perms.push(placement),
+        );
         perms.into_boxed_slice()
     })
+}
+
+#[cfg(feature = "bench-support")]
+fn perm_fingerprint<'a>(
+    mask_count: usize,
+    mut get: impl FnMut(u8) -> &'a [FootPlacement],
+) -> (usize, u64) {
+    let mut entries = 0usize;
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for mask in 0..mask_count {
+        let perms = get(mask as u8);
+        entries += perms.len();
+        hash = (hash ^ mask as u64).wrapping_mul(0x0100_0000_01b3);
+        hash = (hash ^ perms.len() as u64).wrapping_mul(0x0100_0000_01b3);
+        for placement in perms {
+            for &foot in placement {
+                hash = (hash ^ foot as u64).wrapping_mul(0x0100_0000_01b3);
+            }
+        }
+    }
+    (entries, hash)
+}
+
+#[cfg(feature = "bench-support")]
+fn perm_layout(lanes: usize) -> Option<StageLayout> {
+    match lanes {
+        4 => Some(dance_single_layout()),
+        8 => Some(dance_double_layout()),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn legacy_perm_build_for_bench(lanes: usize) -> Option<(usize, u64)> {
+    let layout = perm_layout(lanes)?;
+    let table = build_legacy_perm_table(&layout);
+    Some(perm_fingerprint(1usize << lanes, |mask| {
+        table[mask as usize].as_ref()
+    }))
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn packed_perm_build_for_bench(lanes: usize) -> Option<(usize, u64)> {
+    let layout = perm_layout(lanes)?;
+    let table = build_perm_table(&layout);
+    Some(perm_fingerprint(1usize << lanes, |mask| table.get(mask)))
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn perm_builds_match_for_bench(lanes: usize) -> bool {
+    let Some(layout) = perm_layout(lanes) else {
+        return false;
+    };
+    let mask_count = 1usize << lanes;
+    let legacy = build_legacy_perm_table(&layout);
+    let packed = build_perm_table(&layout);
+    (0..mask_count).all(|mask| legacy[mask].as_ref() == packed.get(mask as u8))
 }
 
 fn dance_single_cache() -> &'static LayoutCache {
@@ -3593,7 +3723,7 @@ mod tests {
 
         for initial in initial_states {
             for active_mask in 0u8..16 {
-                let permutations = cache.perm_table[active_mask as usize].as_ref();
+                let permutations = cache.perm_table.get(active_mask);
                 let permutations = if permutations.is_empty() {
                     &NO_PERMS
                 } else {

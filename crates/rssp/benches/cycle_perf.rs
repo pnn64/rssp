@@ -3113,6 +3113,27 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     });
     timing_pipelines.finish();
 
+    assert!(rssp::step_parity::perm_builds_match_for_bench(4));
+    assert!(rssp::step_parity::perm_builds_match_for_bench(8));
+    let mut parity_cache = c.benchmark_group("cycles/step_parity_cache");
+    parity_cache.sample_size(50);
+    parity_cache.measurement_time(Duration::from_secs(3));
+    parity_cache.throughput(Throughput::Elements(16));
+    parity_cache.bench_function("legacy_single", |b| {
+        b.iter(|| black_box(rssp::step_parity::legacy_perm_build_for_bench(black_box(4))));
+    });
+    parity_cache.bench_function("packed_single", |b| {
+        b.iter(|| black_box(rssp::step_parity::packed_perm_build_for_bench(black_box(4))));
+    });
+    parity_cache.throughput(Throughput::Elements(256));
+    parity_cache.bench_function("legacy_double", |b| {
+        b.iter(|| black_box(rssp::step_parity::legacy_perm_build_for_bench(black_box(8))));
+    });
+    parity_cache.bench_function("packed_double", |b| {
+        b.iter(|| black_box(rssp::step_parity::packed_perm_build_for_bench(black_box(8))));
+    });
+    parity_cache.finish();
+
     let parity_timing = step_parity_bench::timing();
     let single_rows = step_parity_bench::rows::<4>(
         step_parity_bench::SINGLE_ROW_COUNT,

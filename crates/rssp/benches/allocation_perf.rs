@@ -866,6 +866,66 @@ fn print_parity_alloc(
     );
 }
 
+fn run_perm_build_phase(
+    lanes: usize,
+    phase: &str,
+    iterations: usize,
+    build: fn(usize) -> Option<(usize, u64)>,
+) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0u64;
+    let mut entries = 0usize;
+    for _ in 0..iterations {
+        let built = black_box(build(black_box(lanes))).expect("supported parity layout");
+        entries = built.0;
+        checksum ^= black_box(built.1);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=parity-cache phase={} lanes={} iters={} entries={} checksum={} ",
+            "elapsed_s={:.6} throughput_tables_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        lanes,
+        iterations,
+        entries,
+        checksum,
+        elapsed.as_secs_f64(),
+        divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_perm_build_alloc(lanes: usize, iterations: usize) {
+    assert!(rssp::step_parity::perm_builds_match_for_bench(lanes));
+    run_perm_build_phase(
+        lanes,
+        "legacy",
+        iterations,
+        rssp::step_parity::legacy_perm_build_for_bench,
+    );
+    run_perm_build_phase(
+        lanes,
+        "packed",
+        iterations,
+        rssp::step_parity::packed_perm_build_for_bench,
+    );
+}
+
 fn run_parity_alloc<const LANES: usize>(
     mode: &str,
     row_count: usize,
@@ -873,6 +933,7 @@ fn run_parity_alloc<const LANES: usize>(
     has_holds: bool,
     iterations: usize,
 ) {
+    run_perm_build_alloc(LANES, iterations);
     let rows = if has_holds {
         step_parity_bench::hold_rows::<LANES>(row_count, masks)
     } else {
