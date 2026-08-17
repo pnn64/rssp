@@ -3025,8 +3025,8 @@ fn run_timing_sort_phase(
 fn run_timing_sort_alloc(iterations: usize) {
     let fixture = timing_sort_bench::fixture();
     timing_sort_bench::assert_behavior(&fixture);
-    run_timing_sort_phase(&fixture, "wide-keys", iterations, true);
-    run_timing_sort_phase(&fixture, "packed-keys", iterations, false);
+    run_timing_sort_phase(&fixture, "packed-records", iterations, true);
+    run_timing_sort_phase(&fixture, "key-indices", iterations, false);
 }
 
 fn run_sm_timing_phase(

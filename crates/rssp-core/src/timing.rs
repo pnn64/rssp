@@ -318,47 +318,58 @@ fn compact_row_segments(mut segments: Vec<Segment>) -> Vec<Segment> {
     segments
 }
 
-fn tidy_row_segments_mode<const PACKED: bool>(mut segments: Vec<Segment>) -> Vec<Segment> {
-    let mut ordered = true;
-    let mut previous_row = i32::MIN;
+fn tidy_key_indices(segments: Vec<Segment>) -> Vec<Segment> {
+    let mut keys: Vec<_> = segments
+        .iter()
+        .enumerate()
+        .map(|(index, segment)| segment_sort_key(segment_row(segment), index as u32))
+        .collect();
+    keys.sort_unstable();
 
-    for seg in &mut segments {
-        let row = beat_to_note_row(seg.beat);
-        seg.beat = note_row_to_beat(row);
-        ordered &= row >= previous_row;
-        previous_row = row;
-    }
-
-    if ordered {
-        return compact_row_segments(segments);
-    }
-
-    if PACKED && segments.len() <= u32::MAX as usize {
-        let mut keyed: Vec<_> = segments
-            .into_iter()
-            .enumerate()
-            .map(|(index, segment)| {
-                let row = segment_row(&segment) as u32 ^ (1 << 31);
-                ((u64::from(row) << 32) | index as u64, segment)
-            })
-            .collect();
-        keyed.sort_unstable_by_key(|entry| entry.0);
-
-        let mut out = Vec::with_capacity(keyed.len());
-        let mut index = 0;
-        while index < keyed.len() {
-            let row = keyed[index].0 >> 32;
-            let mut last = keyed[index].1;
+    let mut out = Vec::with_capacity(keys.len());
+    let mut index = 0;
+    while index < keys.len() {
+        let row = keys[index] >> 32;
+        let mut last = keys[index] as u32 as usize;
+        index += 1;
+        while index < keys.len() && keys[index] >> 32 == row {
+            last = keys[index] as u32 as usize;
             index += 1;
-            while index < keyed.len() && keyed[index].0 >> 32 == row {
-                last = keyed[index].1;
-                index += 1;
-            }
-            out.push(last);
         }
-        return out;
+        out.push(segments[last]);
     }
+    out
+}
 
+fn tidy_packed_records(segments: Vec<Segment>) -> Vec<Segment> {
+    let mut keyed: Vec<_> = segments
+        .into_iter()
+        .enumerate()
+        .map(|(index, segment)| {
+            (
+                segment_sort_key(segment_row(&segment), index as u32),
+                segment,
+            )
+        })
+        .collect();
+    keyed.sort_unstable_by_key(|entry| entry.0);
+
+    let mut out = Vec::with_capacity(keyed.len());
+    let mut index = 0;
+    while index < keyed.len() {
+        let row = keyed[index].0 >> 32;
+        let mut last = keyed[index].1;
+        index += 1;
+        while index < keyed.len() && keyed[index].0 >> 32 == row {
+            last = keyed[index].1;
+            index += 1;
+        }
+        out.push(last);
+    }
+    out
+}
+
+fn tidy_wide_records(segments: Vec<Segment>) -> Vec<Segment> {
     let mut keyed: Vec<_> = segments
         .into_iter()
         .enumerate()
@@ -378,8 +389,28 @@ fn tidy_row_segments_mode<const PACKED: bool>(mut segments: Vec<Segment>) -> Vec
         }
         out.push(last);
     }
-
     out
+}
+
+fn tidy_row_segments_mode<const KEYS_ONLY: bool>(mut segments: Vec<Segment>) -> Vec<Segment> {
+    let mut ordered = true;
+    let mut previous_row = i32::MIN;
+    for segment in &mut segments {
+        let row = beat_to_note_row(segment.beat);
+        segment.beat = note_row_to_beat(row);
+        ordered &= row >= previous_row;
+        previous_row = row;
+    }
+
+    if ordered {
+        compact_row_segments(segments)
+    } else if segments.len() > u32::MAX as usize {
+        tidy_wide_records(segments)
+    } else if KEYS_ONLY {
+        tidy_key_indices(segments)
+    } else {
+        tidy_packed_records(segments)
+    }
 }
 
 fn tidy_row_segments(segments: Vec<Segment>) -> Vec<Segment> {
@@ -399,6 +430,11 @@ pub fn tidy_row_segments_for_bench(segments: Vec<Segment>, legacy: bool) -> Vec<
 #[inline]
 fn segment_row(seg: &Segment) -> i32 {
     beat_to_note_row(seg.beat)
+}
+
+#[inline(always)]
+const fn segment_sort_key(row: i32, index: u32) -> u64 {
+    (((row as u32 ^ (1_u32 << 31)) as u64) << 32) | index as u64
 }
 
 #[inline]

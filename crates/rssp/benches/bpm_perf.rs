@@ -729,7 +729,7 @@ fn bench_timing_segment_sort(c: &mut Criterion) {
     group.throughput(criterion::Throughput::Elements(
         timing_sort_bench::ENTRY_COUNT as u64,
     ));
-    for (phase, legacy) in [("wide_keys", true), ("packed_keys", false)] {
+    for (phase, legacy) in [("packed_records", true), ("key_indices", false)] {
         group.bench_function(phase, |b| {
             b.iter_batched(
                 || fixture.clone(),

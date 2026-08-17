@@ -781,7 +781,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     timing_sort.throughput(Throughput::Elements(timing_sort_bench::ENTRY_COUNT as u64));
     timing_sort.sample_size(100);
     timing_sort.measurement_time(Duration::from_secs(3));
-    for (phase, legacy) in [("wide_keys", true), ("packed_keys", false)] {
+    for (phase, legacy) in [("packed_records", true), ("key_indices", false)] {
         timing_sort.bench_function(phase, |b| {
             b.iter_batched(
                 || timing_sort_fixture.clone(),
