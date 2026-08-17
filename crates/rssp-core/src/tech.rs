@@ -1,50 +1,58 @@
-use std::cmp::Reverse;
 use std::sync::OnceLock;
 
 const INLINE_TECH_PARTS: usize = 4;
 
-const KNOWN_TECH_LIST: &[&str] = &[
-    "24ths", "32nds", "br", "BR", "BR+", "BR-", "BT", "BT+", "BT-", "bu", "BU", "BU+", "BU-",
-    "BXF", "BXF+", "BXF-", "bXF", "bXF+", "bXF-", "BxF", "BXf", "BxF+", "BxF-", "bXf", "bXf+",
-    "bXf-", "bxF", "bxF+", "bxF-", "B+XF", "BX-F", "BX-F+", "BX+F+", "B+X-F", "B-X-F-", "B-XF+",
-    "ds", "DS", "DS++", "DS+", "DS-", "dr", "DR", "DR+", "DR-", "dt", "dt-", "DT", "DT+", "DT-",
-    "FL", "FL+", "FL-", "fs", "FS", "FS+", "FS-", "FX", "FX+", "FX-", "GH", "GH+", "GH-", "HA",
-    "HA+", "HA-", "HS", "HS+", "HS-", "ITL+", "ja", "ja-", "JA", "JA+", "JA-", "ju", "ju-", "JU",
-    "JU+", "JU-", "JUMPS", "JUMPS+", "JUMPS-", "KS", "KS+", "KS-", "KT", "KT+", "KT-", "LOL", "ma",
-    "ma-", "MA", "MA+", "MA-", "MD", "MD+", "MD-", "rh", "rh-", "RH", "RH+", "RH-", "Rolls-", "RS",
-    "RS+", "RS-", "SC", "SC+", "SC-", "SDS", "SDS+", "SDS-", "SJ", "SJ+", "SJ-", "SK", "SK+",
-    "SK-", "SS", "SS+", "SS-", "SKT", "SKT+", "SKT-", "SPD", "SPD+", "SPD-", "STR", "STR+", "STR-",
-    "TR", "TR+", "TR-", "WA", "WA+", "WA-", "XMOD", "XMOD+", "XMOD-", "xo", "XO", "XO+", "XO-",
-];
+type TechTable = [&'static [&'static str]; 256];
 
-const TECH_BUCKET_CAPS: [u8; 256] = {
-    let mut table = [0; 256];
-    let mut index = 0;
-    while index < KNOWN_TECH_LIST.len() {
-        let key = KNOWN_TECH_LIST[index].as_bytes()[0] as usize;
-        table[key] += 1;
-        index += 1;
-    }
+// Prefixes within each byte bucket stay longest-first so concatenated notation
+// resolves identically without a runtime sort.
+static TECH_PREFIXES: TechTable = {
+    let mut table: TechTable = [&[]; 256];
+    table[b'2' as usize] = &["24ths"];
+    table[b'3' as usize] = &["32nds"];
+    table[b'B' as usize] = &[
+        "B-X-F-", "BX-F+", "BX+F+", "B+X-F", "B-XF+", "BXF+", "BXF-", "BxF+", "BxF-", "B+XF",
+        "BX-F", "BR+", "BR-", "BT+", "BT-", "BU+", "BU-", "BXF", "BxF", "BXf", "BR", "BT", "BU",
+    ];
+    table[b'D' as usize] = &[
+        "DS++", "DS+", "DS-", "DR+", "DR-", "DT+", "DT-", "DS", "DR", "DT",
+    ];
+    table[b'F' as usize] = &["FL+", "FL-", "FS+", "FS-", "FX+", "FX-", "FL", "FS", "FX"];
+    table[b'G' as usize] = &["GH+", "GH-", "GH"];
+    table[b'H' as usize] = &["HA+", "HA-", "HS+", "HS-", "HA", "HS"];
+    table[b'I' as usize] = &["ITL+"];
+    table[b'J' as usize] = &[
+        "JUMPS+", "JUMPS-", "JUMPS", "JA+", "JA-", "JU+", "JU-", "JA", "JU",
+    ];
+    table[b'K' as usize] = &["KS+", "KS-", "KT+", "KT-", "KS", "KT"];
+    table[b'L' as usize] = &["LOL"];
+    table[b'M' as usize] = &["MA+", "MA-", "MD+", "MD-", "MA", "MD"];
+    table[b'R' as usize] = &["Rolls-", "RH+", "RH-", "RS+", "RS-", "RH", "RS"];
+    table[b'S' as usize] = &[
+        "SDS+", "SDS-", "SKT+", "SKT-", "SPD+", "SPD-", "STR+", "STR-", "SC+", "SC-", "SDS", "SJ+",
+        "SJ-", "SK+", "SK-", "SS+", "SS-", "SKT", "SPD", "STR", "SC", "SJ", "SK", "SS",
+    ];
+    table[b'T' as usize] = &["TR+", "TR-", "TR"];
+    table[b'W' as usize] = &["WA+", "WA-", "WA"];
+    table[b'X' as usize] = &["XMOD+", "XMOD-", "XMOD", "XO+", "XO-", "XO"];
+    table[b'b' as usize] = &[
+        "bXF+", "bXF-", "bXf+", "bXf-", "bxF+", "bxF-", "bXF", "bXf", "bxF", "br", "bu",
+    ];
+    table[b'd' as usize] = &["dt-", "ds", "dr", "dt"];
+    table[b'f' as usize] = &["fs"];
+    table[b'j' as usize] = &["ja-", "ju-", "ja", "ju"];
+    table[b'm' as usize] = &["ma-", "ma"];
+    table[b'r' as usize] = &["rh-", "rh"];
+    table[b'x' as usize] = &["xo"];
     table
 };
 
-type TechTable = [Vec<&'static str>; 256];
-
-fn build_tech_prefixes() -> TechTable {
-    let mut table = std::array::from_fn(|key| Vec::with_capacity(TECH_BUCKET_CAPS[key] as usize));
-    for &pattern in KNOWN_TECH_LIST {
-        table[pattern.as_bytes()[0] as usize].push(pattern);
-    }
-    for list in &mut table {
-        list.sort_unstable_by_key(|pattern| Reverse(pattern.len()));
-    }
-    table
-}
-
 #[inline(always)]
 fn tech_prefixes() -> &'static TechTable {
-    static TABLE: OnceLock<TechTable> = OnceLock::new();
-    TABLE.get_or_init(build_tech_prefixes)
+    // Keep the table behind one opaque pointer so fat LTO retains the compact
+    // lookup loop instead of specializing the static contents into hot callers.
+    static INDEX: OnceLock<&'static TechTable> = OnceLock::new();
+    INDEX.get_or_init(|| &TECH_PREFIXES)
 }
 
 /// Checks if a chunk resembles measure data (contains symbols like / - * | ~ . ' but no letters).
@@ -63,7 +71,7 @@ fn is_measure_data(chunk: &str) -> bool {
 
 /// Finds the longest tech prefix that matches the remainder.
 #[inline(always)]
-fn best_prefix(remainder: &str, table: &[Vec<&'static str>]) -> Option<&'static str> {
+fn best_prefix(remainder: &str, table: &TechTable) -> Option<&'static str> {
     let bytes = remainder.as_bytes();
     if bytes.is_empty() {
         return None;
@@ -87,12 +95,7 @@ fn push_tech(out: &mut String, tech: &str, reserve: usize) {
 }
 
 #[inline(always)]
-fn append_chunk_as_tech(
-    chunk: &str,
-    out: &mut String,
-    reserve: usize,
-    table: &[Vec<&'static str>],
-) {
+fn append_chunk_as_tech(chunk: &str, out: &mut String, reserve: usize, table: &TechTable) {
     let Some(first) = best_prefix(chunk, table) else {
         return;
     };
@@ -133,7 +136,7 @@ fn append_chunk_as_tech(
 }
 
 #[inline(always)]
-fn append_single_tech(input: &str, out: &mut String, reserve: usize, table: &[Vec<&'static str>]) {
+fn append_single_tech(input: &str, out: &mut String, reserve: usize, table: &TechTable) {
     let mut chunks = input
         .split(|c: char| c.is_whitespace() || c == ',')
         .filter(|s| !s.is_empty())
@@ -169,10 +172,9 @@ pub fn parse_tech_notation(credit: &str, description: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{best_prefix, is_measure_data, parse_tech_notation, tech_prefixes};
+    use super::{TECH_PREFIXES, best_prefix, is_measure_data, parse_tech_notation};
 
     fn parse_single_reference(input: &str) -> Vec<&'static str> {
-        let table = tech_prefixes();
         let mut results = Vec::new();
         let mut chunks = input
             .split(|c: char| c.is_whitespace() || c == ',')
@@ -191,7 +193,7 @@ mod tests {
             let mut remainder = chunk;
             let start = results.len();
             while !remainder.is_empty() {
-                let Some(best) = best_prefix(remainder, table) else {
+                let Some(best) = best_prefix(remainder, &TECH_PREFIXES) else {
                     results.truncate(start);
                     break;
                 };

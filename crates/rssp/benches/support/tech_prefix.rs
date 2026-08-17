@@ -16,6 +16,18 @@ const KNOWN_TECH_LIST: &[&str] = &[
     "TR", "TR+", "TR-", "WA", "WA+", "WA-", "XMOD", "XMOD+", "XMOD-", "xo", "XO", "XO+", "XO-",
 ];
 
+const TECH_BUCKET_CAPS: [u8; 256] = {
+    let mut caps = [0; 256];
+    let mut index = 0;
+    while index < KNOWN_TECH_LIST.len() {
+        caps[KNOWN_TECH_LIST[index].as_bytes()[0] as usize] += 1;
+        index += 1;
+    }
+    caps
+};
+
+type TechTable = [Vec<&'static str>; 256];
+
 pub const REPEAT_COUNT: usize = 64;
 
 pub fn valid_input() -> (String, String) {
@@ -43,12 +55,7 @@ fn is_measure_data(input: &str) -> bool {
 }
 
 #[inline(always)]
-fn best_prefix(remainder: &str) -> Option<&'static str> {
-    best_prefix_in(remainder, tech_prefixes())
-}
-
-#[inline(always)]
-fn best_prefix_in(remainder: &str, table: &[Vec<&'static str>]) -> Option<&'static str> {
+fn best_prefix(remainder: &str, table: &TechTable) -> Option<&'static str> {
     let bytes = remainder.as_bytes();
     if bytes.is_empty() {
         return None;
@@ -60,22 +67,19 @@ fn best_prefix_in(remainder: &str, table: &[Vec<&'static str>]) -> Option<&'stat
 }
 
 #[inline(always)]
-fn tech_prefixes() -> &'static [Vec<&'static str>] {
-    static TABLE: OnceLock<Vec<Vec<&'static str>>> = OnceLock::new();
-    TABLE
-        .get_or_init(|| {
-            let mut table = vec![Vec::new(); 256];
-            for &pattern in KNOWN_TECH_LIST {
-                table[pattern.as_bytes()[0] as usize].push(pattern);
-            }
-            for list in &mut table {
-                if list.len() > 1 {
-                    list.sort_unstable_by_key(|pattern| Reverse(pattern.len()));
-                }
-            }
-            table
-        })
-        .as_slice()
+fn tech_prefixes() -> &'static TechTable {
+    static TABLE: OnceLock<TechTable> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table =
+            std::array::from_fn(|key| Vec::with_capacity(TECH_BUCKET_CAPS[key] as usize));
+        for &pattern in KNOWN_TECH_LIST {
+            table[pattern.as_bytes()[0] as usize].push(pattern);
+        }
+        for list in &mut table {
+            list.sort_unstable_by_key(|pattern| Reverse(pattern.len()));
+        }
+        table
+    })
 }
 
 #[inline(always)]
@@ -90,8 +94,8 @@ fn push_tech(out: &mut String, tech: &str, reserve: usize) {
 }
 
 #[inline(always)]
-fn append_chunk(chunk: &str, out: &mut String, reserve: usize) {
-    let Some(first) = best_prefix(chunk) else {
+fn append_chunk(chunk: &str, out: &mut String, reserve: usize, table: &TechTable) {
+    let Some(first) = best_prefix(chunk, table) else {
         return;
     };
     let mut remainder = &chunk[first.len()..];
@@ -100,13 +104,12 @@ fn append_chunk(chunk: &str, out: &mut String, reserve: usize) {
         return;
     }
 
-    let table = tech_prefixes();
     let mut parts = [""; INLINE_TECH_PARTS];
     parts[0] = first;
     let mut part_count = 1usize;
     let mut overflow = None;
     while !remainder.is_empty() {
-        let Some(best) = best_prefix_in(remainder, table) else {
+        let Some(best) = best_prefix(remainder, table) else {
             return;
         };
         if part_count < INLINE_TECH_PARTS {
@@ -123,7 +126,7 @@ fn append_chunk(chunk: &str, out: &mut String, reserve: usize) {
     }
     if let Some(mut remainder) = overflow {
         while !remainder.is_empty() {
-            let best = best_prefix_in(remainder, table).expect("validated tech prefix");
+            let best = best_prefix(remainder, table).expect("validated tech prefix");
             push_tech(out, best, reserve);
             remainder = &remainder[best.len()..];
         }
@@ -131,7 +134,7 @@ fn append_chunk(chunk: &str, out: &mut String, reserve: usize) {
 }
 
 #[inline(always)]
-fn append_single(input: &str, out: &mut String, reserve: usize) {
+fn append_single(input: &str, out: &mut String, reserve: usize, table: &TechTable) {
     let mut chunks = input
         .split(|character: char| character.is_whitespace() || character == ',')
         .filter(|chunk| !chunk.is_empty())
@@ -144,7 +147,7 @@ fn append_single(input: &str, out: &mut String, reserve: usize) {
         if is_measure_data(chunk) {
             continue;
         }
-        append_chunk(chunk, out, reserve);
+        append_chunk(chunk, out, reserve, table);
     }
 }
 
@@ -154,8 +157,9 @@ fn parse_legacy(credit: &str, description: &str) -> String {
         .saturating_add(description.len())
         .saturating_add(1);
     let mut out = String::new();
-    append_single(credit, &mut out, reserve);
-    append_single(description, &mut out, reserve);
+    let table = tech_prefixes();
+    append_single(credit, &mut out, reserve, table);
+    append_single(description, &mut out, reserve, table);
     out
 }
 

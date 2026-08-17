@@ -1935,12 +1935,12 @@ fn run_tech_prefix_phase(
 }
 
 fn run_tech_prefix_alloc(iterations: usize) {
-    run_tech_prefix_startup("presized-array", false);
-    run_tech_prefix_startup("growing-vec", true);
+    run_tech_prefix_startup("const-index", false);
+    run_tech_prefix_startup("runtime-index", true);
     tech_prefix_bench::assert_behavior();
     let (credit, description) = tech_prefix_bench::valid_input();
-    run_tech_prefix_phase(&credit, &description, "per-chunk-lookup", iterations, true);
-    run_tech_prefix_phase(&credit, &description, "per-parse-lookup", iterations, false);
+    run_tech_prefix_phase(&credit, &description, "runtime-index", iterations, true);
+    run_tech_prefix_phase(&credit, &description, "const-index", iterations, false);
 }
 
 fn run_clean_map_alloc(iterations: usize) {

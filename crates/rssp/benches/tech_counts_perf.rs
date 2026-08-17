@@ -308,7 +308,7 @@ fn bench_tech_notation(c: &mut Criterion) {
         group.throughput(criterion::Throughput::Bytes(
             (credit.len() + description.len()) as u64,
         ));
-        for (phase, legacy) in [("per_chunk_lookup", true), ("per_parse_lookup", false)] {
+        for (phase, legacy) in [("runtime_index", true), ("const_index", false)] {
             group.bench_function(phase, |b| {
                 b.iter(|| {
                     black_box(tech_prefix_bench::parse(
