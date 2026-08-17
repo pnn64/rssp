@@ -11,6 +11,8 @@ use std::time::Instant;
 mod assets_bench;
 #[path = "support/bpm_display.rs"]
 mod bpm_display_bench;
+#[path = "support/bpm_summary.rs"]
+mod bpm_summary_bench;
 #[path = "support/course.rs"]
 mod course_bench;
 #[path = "support/elapsed.rs"]
@@ -1579,20 +1581,15 @@ fn run_bpm_stats_alloc_phase(
 }
 
 fn run_bpm_stats_alloc(iterations: usize) {
-    let map: Vec<_> = (0..4_096)
-        .map(|index| {
-            (
-                index as f64 * 4.0,
-                60.125 + ((index * 977) % 1_000) as f64 / 8.0,
-            )
-        })
-        .collect();
-    run_bpm_stats_alloc_phase("allocating", iterations, &map, |map| {
-        rssp::bpm::compute_bpm_range_and_stats(map)
+    let map = bpm_summary_bench::fixture();
+    bpm_summary_bench::assert_behavior(&map);
+    let mut legacy_values = Vec::with_capacity(map.len());
+    run_bpm_stats_alloc_phase("sum-after-fill", iterations, &map, |map| {
+        bpm_summary_bench::compute(map, &mut legacy_values, true)
     });
-    let mut values = Vec::with_capacity(map.len());
-    run_bpm_stats_alloc_phase("reused", iterations, &map, |map| {
-        rssp::bpm::compute_bpm_range_and_stats_with_scratch(map, &mut values)
+    let mut fused_values = Vec::with_capacity(map.len());
+    run_bpm_stats_alloc_phase("sum-while-fill", iterations, &map, |map| {
+        bpm_summary_bench::compute(map, &mut fused_values, false)
     });
 }
 

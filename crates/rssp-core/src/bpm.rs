@@ -1146,7 +1146,7 @@ pub fn compute_bpm_stats(values: &[f64]) -> (f64, f64) {
     } else {
         filtered.extend_from_slice(values);
     }
-    bpm_stats_from_values(&mut filtered, all_values_are_displayable)
+    bpm_stats_from_values::<false>(&mut filtered, all_values_are_displayable, 0.0)
 }
 
 #[must_use]
@@ -1164,7 +1164,7 @@ pub fn compute_bpm_map_stats(map: &[(f64, f64)]) -> (f64, f64) {
     if !all_values_are_displayable {
         filtered.extend(map.iter().map(|&(_, bpm)| bpm));
     }
-    bpm_stats_from_values(&mut filtered, all_values_are_displayable)
+    bpm_stats_from_values::<false>(&mut filtered, all_values_are_displayable, 0.0)
 }
 
 #[must_use]
@@ -1182,6 +1182,33 @@ pub fn compute_bpm_range_and_stats_with_scratch(
     map: &[(f64, f64)],
     values: &mut Vec<f64>,
 ) -> (i32, i32, f64, f64) {
+    compute_bpm_summary::<true>(map, values)
+}
+
+const BPM_SELECTION_MIN: usize = 64;
+
+fn fill_display_bpms<const SUM: bool>(
+    map: &[(f64, f64)],
+    values: &mut Vec<f64>,
+) -> (f64, f64, f64) {
+    let (mut min, mut max, mut sum) = (f64::MAX, f64::MIN, 0.0);
+    for &(_, bpm) in map {
+        if is_display_bpm(bpm) {
+            min = min.min(bpm);
+            max = max.max(bpm);
+            if SUM {
+                sum += bpm;
+            }
+            values.push(bpm);
+        }
+    }
+    (min, max, sum)
+}
+
+fn compute_bpm_summary<const FUSE_SUM: bool>(
+    map: &[(f64, f64)],
+    values: &mut Vec<f64>,
+) -> (i32, i32, f64, f64) {
     values.clear();
     if map.is_empty() {
         return (0, 0, 0.0, 0.0);
@@ -1190,14 +1217,11 @@ pub fn compute_bpm_range_and_stats_with_scratch(
     if values.capacity() < map.len() {
         values.reserve(map.len());
     }
-    let (mut min, mut max) = (f64::MAX, f64::MIN);
-    for &(_, bpm) in map {
-        if is_display_bpm(bpm) {
-            min = min.min(bpm);
-            max = max.max(bpm);
-            values.push(bpm);
-        }
-    }
+    let (mut min, mut max, sum) = if FUSE_SUM && map.len() >= BPM_SELECTION_MIN {
+        fill_display_bpms::<true>(map, values)
+    } else {
+        fill_display_bpms::<false>(map, values)
+    };
 
     let all_values_are_displayable = !values.is_empty();
     if !all_values_are_displayable {
@@ -1208,7 +1232,8 @@ pub fn compute_bpm_range_and_stats_with_scratch(
         }
     }
 
-    let (median, average) = bpm_stats_from_values(values, all_values_are_displayable);
+    let (median, average) =
+        bpm_stats_from_values::<FUSE_SUM>(values, all_values_are_displayable, sum);
     (
         min.max(0.0).round() as i32,
         max.max(0.0).round() as i32,
@@ -1217,11 +1242,32 @@ pub fn compute_bpm_range_and_stats_with_scratch(
     )
 }
 
-fn bpm_stats_from_values(values: &mut [f64], can_select: bool) -> (f64, f64) {
-    const SELECTION_MIN_VALUES: usize = 64;
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn compute_bpm_summary_for_bench(
+    map: &[(f64, f64)],
+    values: &mut Vec<f64>,
+    legacy: bool,
+) -> (i32, i32, f64, f64) {
+    if legacy {
+        compute_bpm_summary::<false>(map, values)
+    } else {
+        compute_bpm_summary::<true>(map, values)
+    }
+}
 
-    if can_select && values.len() >= SELECTION_MIN_VALUES {
-        let average = values.iter().sum::<f64>() / values.len() as f64;
+fn bpm_stats_from_values<const PRECOMPUTED_SUM: bool>(
+    values: &mut [f64],
+    can_select: bool,
+    sum: f64,
+) -> (f64, f64) {
+    if can_select && values.len() >= BPM_SELECTION_MIN {
+        let sum = if PRECOMPUTED_SUM {
+            sum
+        } else {
+            values.iter().sum()
+        };
+        let average = sum / values.len() as f64;
         let mid = values.len() / 2;
         let even = mid * 2 == values.len();
         let (_, upper, _) = values.select_nth_unstable_by(mid, |a, b| {

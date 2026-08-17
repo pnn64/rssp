@@ -5,6 +5,8 @@ use std::time::Duration;
 
 #[path = "support/bpm_display.rs"]
 mod bpm_display_bench;
+#[path = "support/bpm_summary.rs"]
+mod bpm_summary_bench;
 #[path = "support/elapsed.rs"]
 mod elapsed_bench;
 #[path = "support/timing_borrow.rs"]
@@ -510,32 +512,31 @@ fn bench_display_bpm(c: &mut Criterion) {
 }
 
 fn bench_bpm_stats(c: &mut Criterion) {
-    let map: Vec<_> = (0..4_096)
-        .map(|index| {
-            (
-                index as f64 * 4.0,
-                60.125 + ((index * 977) % 1_000) as f64 / 8.0,
-            )
-        })
-        .collect();
-    let mut values = Vec::with_capacity(map.len());
+    let map = bpm_summary_bench::fixture();
+    bpm_summary_bench::assert_behavior(&map);
+    let mut legacy_values = Vec::with_capacity(map.len());
+    let mut fused_values = Vec::with_capacity(map.len());
 
     let mut group = c.benchmark_group("bpm_range_stats");
     group.sample_size(100);
     group.measurement_time(Duration::from_secs(3));
-    group.bench_function("allocating", |b| {
-        b.iter(|| {
-            black_box(rssp::bpm::compute_bpm_range_and_stats(black_box(&map)));
+    group.throughput(criterion::Throughput::Elements(map.len() as u64));
+    for (phase, legacy) in [("sum_after_fill", true), ("sum_while_fill", false)] {
+        let values = if legacy {
+            &mut legacy_values
+        } else {
+            &mut fused_values
+        };
+        group.bench_function(phase, |b| {
+            b.iter(|| {
+                black_box(bpm_summary_bench::compute(
+                    black_box(&map),
+                    black_box(values),
+                    legacy,
+                ));
+            });
         });
-    });
-    group.bench_function("reused", |b| {
-        b.iter(|| {
-            black_box(rssp::bpm::compute_bpm_range_and_stats_with_scratch(
-                black_box(&map),
-                black_box(&mut values),
-            ));
-        });
-    });
+    }
     group.finish();
 }
 

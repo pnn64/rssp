@@ -17,6 +17,9 @@ mod assets_bench;
 #[path = "support/bpm_display.rs"]
 mod bpm_display_bench;
 #[cfg(windows)]
+#[path = "support/bpm_summary.rs"]
+mod bpm_summary_bench;
+#[cfg(windows)]
 #[allow(dead_code)]
 #[path = "support/course.rs"]
 mod course_bench;
@@ -1093,15 +1096,10 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let nps_values: Vec<_> = (0..1_025)
         .map(|idx| ((idx * 37) % 257) as f64 / 7.0)
         .collect();
-    let bpm_stats_map: Vec<_> = (0..4_096)
-        .map(|index| {
-            (
-                index as f64 * 4.0,
-                60.125 + ((index * 977) % 1_000) as f64 / 8.0,
-            )
-        })
-        .collect();
-    let mut bpm_stats_values = Vec::with_capacity(bpm_stats_map.len());
+    let bpm_stats_map = bpm_summary_bench::fixture();
+    bpm_summary_bench::assert_behavior(&bpm_stats_map);
+    let mut legacy_bpm_values = Vec::with_capacity(bpm_stats_map.len());
+    let mut fused_bpm_values = Vec::with_capacity(bpm_stats_map.len());
     let mut nps_scratch = Vec::new();
     let custom_patterns = custom_pattern_input(256);
     let custom_pattern_rows = pattern_scratch_bench::rows();
@@ -1743,21 +1741,22 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     bpm_stats.sample_size(20);
     bpm_stats.measurement_time(Duration::from_secs(3));
     bpm_stats.throughput(Throughput::Elements(bpm_stats_map.len() as u64));
-    bpm_stats.bench_function("allocating", |b| {
-        b.iter(|| {
-            black_box(rssp::bpm::compute_bpm_range_and_stats(black_box(
-                &bpm_stats_map,
-            )))
+    for (phase, legacy) in [("sum_after_fill", true), ("sum_while_fill", false)] {
+        let values = if legacy {
+            &mut legacy_bpm_values
+        } else {
+            &mut fused_bpm_values
+        };
+        bpm_stats.bench_function(phase, |b| {
+            b.iter(|| {
+                black_box(bpm_summary_bench::compute(
+                    black_box(&bpm_stats_map),
+                    black_box(values),
+                    legacy,
+                ))
+            });
         });
-    });
-    bpm_stats.bench_function("reused", |b| {
-        b.iter(|| {
-            black_box(rssp::bpm::compute_bpm_range_and_stats_with_scratch(
-                black_box(&bpm_stats_map),
-                black_box(&mut bpm_stats_values),
-            ))
-        });
-    });
+    }
     bpm_stats.finish();
 
     let elapsed_fixture = elapsed_bench::ElapsedFixture::new();
