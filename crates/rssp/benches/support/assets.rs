@@ -218,6 +218,15 @@ impl AssetFixture {
         assert_eq!(current, previous);
     }
 
+    pub fn assert_catalog_behavior(&self) {
+        for simfile in [self.simfile.as_slice(), b"".as_slice()] {
+            assert_eq!(
+                rssp::assets::resolve_background_changes_like_itg(&self.root, simfile),
+                rssp::profile::background_changes_path_metadata(&self.root, simfile),
+            );
+        }
+    }
+
     pub fn unordered_simfile(&self) -> Vec<u8> {
         let mut simfile = String::with_capacity(UNORDERED_PAIR_COUNT * 48);
         simfile.push_str("#BGCHANGES:");

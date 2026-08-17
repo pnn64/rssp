@@ -1260,6 +1260,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     pack_image_fixture.assert_behavior();
     let asset_fixture = assets_bench::AssetFixture::with_movies(1);
     asset_fixture.assert_background_behavior();
+    asset_fixture.assert_catalog_behavior();
     let unordered_bgchanges = asset_fixture.unordered_simfile();
     asset_fixture.assert_unordered_behavior(&unordered_bgchanges);
     asset_fixture.assert_song_assets_behavior();
@@ -2284,6 +2285,28 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     background.finish();
+
+    let mut background_catalog = c.benchmark_group("cycles/background_catalog_entry_type");
+    background_catalog.sample_size(20);
+    background_catalog.measurement_time(Duration::from_secs(3));
+    background_catalog.throughput(Throughput::Elements(assets_bench::CHANGE_COUNT as u64));
+    background_catalog.bench_function("path_metadata", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::background_changes_path_metadata(
+                black_box(asset_fixture.song_dir()),
+                black_box(asset_fixture.simfile()),
+            ))
+        });
+    });
+    background_catalog.bench_function("cached_entry_type", |b| {
+        b.iter(|| {
+            black_box(rssp::assets::resolve_background_changes_like_itg(
+                black_box(asset_fixture.song_dir()),
+                black_box(asset_fixture.simfile()),
+            ))
+        });
+    });
+    background_catalog.finish();
 
     let mut background_order = c.benchmark_group("cycles/background_change_order");
     background_order.sample_size(20);

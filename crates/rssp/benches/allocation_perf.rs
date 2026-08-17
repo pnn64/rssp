@@ -4618,6 +4618,7 @@ fn run_bgchanges_phase(
 fn run_background_changes_alloc(iterations: usize) {
     let fixture = assets_bench::AssetFixture::with_movies(1);
     fixture.assert_background_behavior();
+    fixture.assert_catalog_behavior();
     let ordered = fixture.simfile();
     run_bgchanges_phase(
         "root-rescan",
@@ -4644,7 +4645,15 @@ fn run_background_changes_alloc(iterations: usize) {
         rssp::profile::background_changes_materialized,
     );
     run_bgchanges_phase(
-        "single-scan",
+        "path-metadata",
+        iterations,
+        assets_bench::CHANGE_COUNT,
+        &fixture,
+        ordered,
+        rssp::profile::background_changes_path_metadata,
+    );
+    run_bgchanges_phase(
+        "cached-entry-type",
         iterations,
         assets_bench::CHANGE_COUNT,
         &fixture,
