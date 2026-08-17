@@ -1176,6 +1176,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     course_bench::assert_hash_dedup_behavior(&course_hashes);
     let course_summary_hashes = course_bench::course_hash_values();
     course_bench::assert_hash_dedup_behavior(&course_summary_hashes);
+    let typical_course_hashes = course_bench::typical_hash_values();
+    course_bench::assert_hash_dedup_behavior(&typical_course_hashes);
     let course_input =
         std::fs::read(course_fixture.course_path()).expect("benchmark course should be readable");
     let legacy_course = rssp::course::profile_parse_crs(&course_input, true)
@@ -1788,6 +1790,26 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     }
     course_hash_reserve.finish();
+
+    let mut typical_hashes = c.benchmark_group("cycles/course_hash_dedup_typical_64");
+    typical_hashes.sample_size(200);
+    typical_hashes.measurement_time(Duration::from_secs(3));
+    typical_hashes.throughput(Throughput::Elements(course_bench::COURSE_HASH_COUNT as u64));
+    typical_hashes.bench_function("fold_hash_bounded_8", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_dedup_hashes_reserved(black_box(
+                &typical_course_hashes,
+            )));
+        });
+    });
+    typical_hashes.bench_function("adaptive_linear", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_dedup_hashes_adaptive(black_box(
+                &typical_course_hashes,
+            )));
+        });
+    });
+    typical_hashes.finish();
 
     let mut course_parse = c.benchmark_group("cycles/course_parse");
     course_parse.sample_size(50);

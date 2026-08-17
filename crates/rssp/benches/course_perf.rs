@@ -134,6 +134,35 @@ fn bench_hash_dedup(c: &mut Criterion) {
             )));
         });
     });
+    group.bench_function("adaptive_promoted", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_dedup_hashes_adaptive(black_box(
+                &values,
+            )));
+        });
+    });
+    group.finish();
+
+    let values = course_bench::typical_hash_values();
+    course_bench::assert_hash_dedup_behavior(&values);
+    let mut group = c.benchmark_group("course_hash_dedup_typical_64");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(course_bench::COURSE_HASH_COUNT as u64));
+    group.bench_function("fold_hash_bounded_8", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_dedup_hashes_reserved(black_box(
+                &values,
+            )));
+        });
+    });
+    group.bench_function("adaptive_linear", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_dedup_hashes_adaptive(black_box(
+                &values,
+            )));
+        });
+    });
     group.finish();
 }
 

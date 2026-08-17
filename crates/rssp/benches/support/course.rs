@@ -6,6 +6,7 @@ pub const SONG_COUNT: usize = 64;
 pub const PARSE_TYPICAL_COUNT: usize = 10;
 pub const PARSE_LARGE_COUNT: usize = 256;
 pub const COURSE_HASH_COUNT: usize = SONG_COUNT;
+pub const TYPICAL_HASH_UNIQUES: usize = 4;
 pub const HASH_DEDUP_COUNT: usize = 4_096;
 pub const MOD_COUNT: u64 = 9;
 pub const MODS: &str =
@@ -99,12 +100,22 @@ pub fn course_hash_values() -> Vec<String> {
         .collect()
 }
 
+pub fn typical_hash_values() -> Vec<String> {
+    (0..COURSE_HASH_COUNT)
+        .map(|index| format!("{:016x}", index % TYPICAL_HASH_UNIQUES))
+        .collect()
+}
+
 pub fn assert_hash_dedup_behavior(values: &[String]) {
     let expected = rssp::course::profile_dedup_hashes(values, false);
     assert_eq!(expected, rssp::course::profile_dedup_hashes(values, true));
     assert_eq!(
         expected,
         rssp::course::profile_dedup_hashes_reserved(values)
+    );
+    assert_eq!(
+        expected,
+        rssp::course::profile_dedup_hashes_adaptive(values)
     );
     let edges = [
         "".to_string(),
@@ -120,6 +131,10 @@ pub fn assert_hash_dedup_behavior(values: &[String]) {
     );
     assert_eq!(
         rssp::course::profile_dedup_hashes_reserved(&edges),
+        rssp::course::profile_dedup_hashes(&edges, false)
+    );
+    assert_eq!(
+        rssp::course::profile_dedup_hashes_adaptive(&edges),
         rssp::course::profile_dedup_hashes(&edges, false)
     );
 }

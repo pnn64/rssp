@@ -2712,22 +2712,64 @@ fn run_course_hash_dedup_alloc(iterations: usize) {
     course_bench::assert_hash_dedup_behavior(&values);
     run_course_hash_dedup_phase(&values, "std-sip-hash-4096", iterations, true);
     run_course_hash_dedup_phase(&values, "fold-hash-4096", iterations, false);
-    run_course_hash_reserve_phase(&values, "fold-hash-growing-4096", iterations, false);
-    run_course_hash_reserve_phase(&values, "fold-hash-bounded-8-4096", iterations, true);
+    run_course_hash_reserve_phase(
+        &values,
+        "fold-hash-growing-4096",
+        iterations,
+        HashDedupMode::Growing,
+    );
+    run_course_hash_reserve_phase(
+        &values,
+        "fold-hash-bounded-8-4096",
+        iterations,
+        HashDedupMode::Bounded,
+    );
 
     let values = course_bench::course_hash_values();
     course_bench::assert_hash_dedup_behavior(&values);
     run_course_hash_dedup_phase(&values, "std-sip-hash-64", iterations, true);
     run_course_hash_dedup_phase(&values, "fold-hash-64", iterations, false);
-    run_course_hash_reserve_phase(&values, "fold-hash-growing-64", iterations, false);
-    run_course_hash_reserve_phase(&values, "fold-hash-bounded-8-64", iterations, true);
+    run_course_hash_reserve_phase(
+        &values,
+        "fold-hash-growing-64",
+        iterations,
+        HashDedupMode::Growing,
+    );
+    run_course_hash_reserve_phase(
+        &values,
+        "fold-hash-bounded-8-64",
+        iterations,
+        HashDedupMode::Bounded,
+    );
+
+    let values = course_bench::typical_hash_values();
+    course_bench::assert_hash_dedup_behavior(&values);
+    run_course_hash_reserve_phase(
+        &values,
+        "fold-hash-bounded-8-typical-64",
+        iterations,
+        HashDedupMode::Bounded,
+    );
+    run_course_hash_reserve_phase(
+        &values,
+        "adaptive-linear-typical-64",
+        iterations,
+        HashDedupMode::Adaptive,
+    );
+}
+
+#[derive(Clone, Copy)]
+enum HashDedupMode {
+    Growing,
+    Bounded,
+    Adaptive,
 }
 
 fn run_course_hash_reserve_phase(
     values: &[String],
     phase: &str,
     iterations: usize,
-    reserved: bool,
+    mode: HashDedupMode,
 ) {
     reset_counters();
     let before = Counters::read();
@@ -2735,10 +2777,10 @@ fn run_course_hash_reserve_phase(
     let mut checksum = 0usize;
     for _ in 0..iterations {
         let values = black_box(values);
-        let output = if reserved {
-            rssp::course::profile_dedup_hashes_reserved(values)
-        } else {
-            rssp::course::profile_dedup_hashes(values, false)
+        let output = match mode {
+            HashDedupMode::Growing => rssp::course::profile_dedup_hashes(values, false),
+            HashDedupMode::Bounded => rssp::course::profile_dedup_hashes_reserved(values),
+            HashDedupMode::Adaptive => rssp::course::profile_dedup_hashes_adaptive(values),
         };
         checksum = checksum
             .wrapping_add(output.len())

@@ -1576,6 +1576,11 @@ enum CourseHashKey {
 // per-table-seeded hasher is appropriate for this internal dedup set.
 type CourseHashSet = HashSet<CourseHashKey, foldhash::fast::RandomState>;
 
+// Small courses defer hash-table creation until a ninth distinct digest. Larger
+// courses retain the prior in-loop hash path to bound the extra traversal.
+const LINEAR_HASH_LIMIT: usize = 8;
+const ADAPTIVE_HASH_MAX: usize = 64;
+
 const fn course_hash_capacity(max_len: usize) -> usize {
     if max_len > 64 {
         0
@@ -1604,6 +1609,42 @@ fn dedup_push<S: BuildHasher>(
     if seen.insert(CourseHashKey::from_str(value)) {
         vec.push(value.to_string());
     }
+}
+
+#[cold]
+fn seed_hashes(values: &[String]) -> CourseHashSet {
+    let mut hashed = CourseHashSet::with_capacity_and_hasher(
+        LINEAR_HASH_LIMIT * 2,
+        foldhash::fast::RandomState::default(),
+    );
+    hashed.extend(values.iter().map(|value| CourseHashKey::from_str(value)));
+    hashed
+}
+
+fn collect_small_course_hashes<T>(
+    values: &[T],
+    get: impl for<'a> Fn(&'a T) -> &'a str,
+) -> Vec<String> {
+    debug_assert!(values.len() <= ADAPTIVE_HASH_MAX);
+    let mut out = Vec::with_capacity(course_hash_capacity(values.len()));
+    for (index, item) in values.iter().enumerate() {
+        let value = get(item);
+        if value.is_empty() || out.iter().any(|existing| existing == value) {
+            continue;
+        }
+        if out.len() < LINEAR_HASH_LIMIT {
+            out.push(value.to_string());
+            continue;
+        }
+
+        let mut seen = seed_hashes(&out);
+        dedup_push(&mut out, &mut seen, value);
+        for item in &values[index + 1..] {
+            dedup_push(&mut out, &mut seen, get(item));
+        }
+        break;
+    }
+    out
 }
 
 #[cfg(feature = "profile")]
@@ -1636,6 +1677,17 @@ pub fn profile_dedup_hashes_reserved(values: &[String]) -> Vec<String> {
         dedup_push(&mut out, &mut seen, value);
     }
     out
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+#[must_use]
+pub fn profile_dedup_hashes_adaptive(values: &[String]) -> Vec<String> {
+    if values.len() > ADAPTIVE_HASH_MAX {
+        profile_dedup_hashes_reserved(values)
+    } else {
+        collect_small_course_hashes(values, String::as_str)
+    }
 }
 
 fn analyze_course_song(
@@ -1733,12 +1785,11 @@ fn analyze_crs_path_impl(
     };
     let mut sim_cache: HashMap<PathBuf, SimfileSummary> = HashMap::with_capacity(cache_capacity);
     let mut entries = Vec::with_capacity(entry_count);
-    let hash_capacity = course_hash_capacity(entry_count);
-    let mut hash_list = Vec::with_capacity(hash_capacity);
+    let mut hash_list = Vec::new();
     let mut hash_seen = CourseHashSet::default();
-    let mut bpm_neutral_hash_list = Vec::with_capacity(hash_capacity);
+    let mut bpm_neutral_hash_list = Vec::new();
     let mut bpm_neutral_hash_seen = CourseHashSet::default();
-
+    let hash_in_loop = entry_count > ADAPTIVE_HASH_MAX;
     let mut meters = Vec::with_capacity(entry_count);
     let mut measure_nps_all = Vec::new();
     let mut analysis_scratch = AnalysisScratch::default();
@@ -1805,12 +1856,14 @@ fn analyze_crs_path_impl(
             base_chart
         };
 
-        dedup_push(&mut hash_list, &mut hash_seen, &chart.short_hash);
-        dedup_push(
-            &mut bpm_neutral_hash_list,
-            &mut bpm_neutral_hash_seen,
-            &chart.bpm_neutral_hash,
-        );
+        if hash_in_loop {
+            dedup_push(&mut hash_list, &mut hash_seen, &chart.short_hash);
+            dedup_push(
+                &mut bpm_neutral_hash_list,
+                &mut bpm_neutral_hash_seen,
+                &chart.bpm_neutral_hash,
+            );
+        }
 
         meters.push(parse_meter(&chart.rating_str));
         measure_nps_all.extend_from_slice(&chart.measure_nps_vec);
@@ -1825,6 +1878,12 @@ fn analyze_crs_path_impl(
             bpm_neutral_sha1: chart.bpm_neutral_hash.clone(),
         });
         add_course_chart(&mut total, chart);
+    }
+
+    if !hash_in_loop {
+        hash_list = collect_small_course_hashes(&entries, |entry| entry.sha1.as_str());
+        bpm_neutral_hash_list =
+            collect_small_course_hashes(&entries, |entry| entry.bpm_neutral_sha1.as_str());
     }
 
     if let Some(meter) = course_meter(&course.meters, course_diff) {
@@ -1876,7 +1935,8 @@ fn analyze_crs_path_impl(
 mod tests {
     use super::{
         CourseHashSet, CourseSong, Difficulty, SongSort, analyze_crs_path, analyze_crs_path_impl,
-        dedup_push, merge_custom_patterns, normalize_stepstype, parse_crs, stepstype_eq,
+        collect_small_course_hashes, dedup_push, merge_custom_patterns, normalize_stepstype,
+        parse_crs, stepstype_eq,
     };
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
@@ -1979,6 +2039,19 @@ mod tests {
         }
 
         assert_eq!(actual, expected);
+
+        let values: Vec<_> = (0..64)
+            .map(|index| format!("{:016x}", index % 48))
+            .collect();
+        let mut expected = Vec::new();
+        let mut expected_seen = HashSet::new();
+        for value in &values {
+            dedup_push_materialized(&mut expected, &mut expected_seen, value);
+        }
+        assert_eq!(
+            collect_small_course_hashes(&values, String::as_str),
+            expected
+        );
     }
 
     #[test]
