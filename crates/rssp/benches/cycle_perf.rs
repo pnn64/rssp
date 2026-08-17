@@ -1174,6 +1174,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     course_bench::assert_title_match_behavior();
     let course_hashes = course_bench::hash_values();
     course_bench::assert_hash_dedup_behavior(&course_hashes);
+    let course_summary_hashes = course_bench::course_hash_values();
+    course_bench::assert_hash_dedup_behavior(&course_summary_hashes);
     let course_input =
         std::fs::read(course_fixture.course_path()).expect("benchmark course should be readable");
     let legacy_course = rssp::course::profile_parse_crs(&course_input, true)
@@ -1749,7 +1751,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             ));
         });
     });
-    course_hash_dedup.bench_function("fold_hash", |b| {
+    course_hash_dedup.bench_function("fold_hash_growing", |b| {
         b.iter(|| {
             black_box(rssp::course::profile_dedup_hashes(
                 black_box(&course_hashes),
@@ -1757,7 +1759,32 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             ));
         });
     });
+    course_hash_dedup.bench_function("fold_hash_bounded_8", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_dedup_hashes_reserved(black_box(
+                &course_hashes,
+            )));
+        });
+    });
     course_hash_dedup.finish();
+
+    let mut course_hash_reserve = c.benchmark_group("cycles/course_hash_dedup_64");
+    course_hash_reserve.sample_size(200);
+    course_hash_reserve.measurement_time(Duration::from_secs(3));
+    course_hash_reserve.throughput(Throughput::Elements(course_bench::COURSE_HASH_COUNT as u64));
+    for (name, reserved) in [("fold_hash_growing", false), ("fold_hash_bounded_8", true)] {
+        course_hash_reserve.bench_function(name, |b| {
+            b.iter(|| {
+                let values = black_box(&course_summary_hashes);
+                black_box(if reserved {
+                    rssp::course::profile_dedup_hashes_reserved(values)
+                } else {
+                    rssp::course::profile_dedup_hashes(values, false)
+                });
+            });
+        });
+    }
+    course_hash_reserve.finish();
 
     let mut course_parse = c.benchmark_group("cycles/course_parse");
     course_parse.sample_size(50);

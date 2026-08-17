@@ -2712,11 +2712,62 @@ fn run_course_hash_dedup_alloc(iterations: usize) {
     course_bench::assert_hash_dedup_behavior(&values);
     run_course_hash_dedup_phase(&values, "std-sip-hash-4096", iterations, true);
     run_course_hash_dedup_phase(&values, "fold-hash-4096", iterations, false);
+    run_course_hash_reserve_phase(&values, "fold-hash-growing-4096", iterations, false);
+    run_course_hash_reserve_phase(&values, "fold-hash-bounded-8-4096", iterations, true);
 
     let values = course_bench::course_hash_values();
     course_bench::assert_hash_dedup_behavior(&values);
     run_course_hash_dedup_phase(&values, "std-sip-hash-64", iterations, true);
     run_course_hash_dedup_phase(&values, "fold-hash-64", iterations, false);
+    run_course_hash_reserve_phase(&values, "fold-hash-growing-64", iterations, false);
+    run_course_hash_reserve_phase(&values, "fold-hash-bounded-8-64", iterations, true);
+}
+
+fn run_course_hash_reserve_phase(
+    values: &[String],
+    phase: &str,
+    iterations: usize,
+    reserved: bool,
+) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let values = black_box(values);
+        let output = if reserved {
+            rssp::course::profile_dedup_hashes_reserved(values)
+        } else {
+            rssp::course::profile_dedup_hashes(values, false)
+        };
+        checksum = checksum
+            .wrapping_add(output.len())
+            .wrapping_add(output.last().map_or(0, String::len));
+        black_box(output);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=course-hash-dedup phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_hashes_s={:.3} alloc_calls_per_iter={:.1} dealloc_calls_per_iter={:.1} ",
+            "realloc_calls_per_iter={:.1} alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        values.len() as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
 }
 
 fn timing_build_fixture() -> (String, String, String) {

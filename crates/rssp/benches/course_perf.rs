@@ -91,12 +91,19 @@ fn bench_hash_dedup(c: &mut Criterion) {
             black_box(rssp::course::profile_dedup_hashes(black_box(&values), true));
         });
     });
-    group.bench_function("fold_hash", |b| {
+    group.bench_function("fold_hash_growing", |b| {
         b.iter(|| {
             black_box(rssp::course::profile_dedup_hashes(
                 black_box(&values),
                 false,
             ));
+        });
+    });
+    group.bench_function("fold_hash_bounded_8", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_dedup_hashes_reserved(black_box(
+                &values,
+            )));
         });
     });
     group.finish();
@@ -112,12 +119,19 @@ fn bench_hash_dedup(c: &mut Criterion) {
             black_box(rssp::course::profile_dedup_hashes(black_box(&values), true));
         });
     });
-    group.bench_function("fold_hash", |b| {
+    group.bench_function("fold_hash_growing", |b| {
         b.iter(|| {
             black_box(rssp::course::profile_dedup_hashes(
                 black_box(&values),
                 false,
             ));
+        });
+    });
+    group.bench_function("fold_hash_bounded_8", |b| {
+        b.iter(|| {
+            black_box(rssp::course::profile_dedup_hashes_reserved(black_box(
+                &values,
+            )));
         });
     });
     group.finish();

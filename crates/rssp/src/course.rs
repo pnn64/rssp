@@ -1576,6 +1576,16 @@ enum CourseHashKey {
 // per-table-seeded hasher is appropriate for this internal dedup set.
 type CourseHashSet = HashSet<CourseHashKey, foldhash::fast::RandomState>;
 
+const fn course_hash_capacity(max_len: usize) -> usize {
+    if max_len > 64 {
+        0
+    } else if max_len < 8 {
+        max_len
+    } else {
+        8
+    }
+}
+
 impl CourseHashKey {
     fn from_str(value: &str) -> Self {
         <[u8; 16]>::try_from(value.as_bytes())
@@ -1614,6 +1624,18 @@ pub fn profile_dedup_hashes(values: &[String], std_hash: bool) -> Vec<String> {
     } else {
         collect::<foldhash::fast::RandomState>(values)
     }
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+#[must_use]
+pub fn profile_dedup_hashes_reserved(values: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(course_hash_capacity(values.len()));
+    let mut seen = CourseHashSet::default();
+    for value in values {
+        dedup_push(&mut out, &mut seen, value);
+    }
+    out
 }
 
 fn analyze_course_song(
@@ -1711,9 +1733,10 @@ fn analyze_crs_path_impl(
     };
     let mut sim_cache: HashMap<PathBuf, SimfileSummary> = HashMap::with_capacity(cache_capacity);
     let mut entries = Vec::with_capacity(entry_count);
-    let mut hash_list = Vec::new();
+    let hash_capacity = course_hash_capacity(entry_count);
+    let mut hash_list = Vec::with_capacity(hash_capacity);
     let mut hash_seen = CourseHashSet::default();
-    let mut bpm_neutral_hash_list = Vec::new();
+    let mut bpm_neutral_hash_list = Vec::with_capacity(hash_capacity);
     let mut bpm_neutral_hash_seen = CourseHashSet::default();
 
     let mut meters = Vec::with_capacity(entry_count);

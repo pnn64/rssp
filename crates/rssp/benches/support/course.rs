@@ -100,9 +100,11 @@ pub fn course_hash_values() -> Vec<String> {
 }
 
 pub fn assert_hash_dedup_behavior(values: &[String]) {
+    let expected = rssp::course::profile_dedup_hashes(values, false);
+    assert_eq!(expected, rssp::course::profile_dedup_hashes(values, true));
     assert_eq!(
-        rssp::course::profile_dedup_hashes(values, false),
-        rssp::course::profile_dedup_hashes(values, true)
+        expected,
+        rssp::course::profile_dedup_hashes_reserved(values)
     );
     let edges = [
         "".to_string(),
@@ -115,6 +117,10 @@ pub fn assert_hash_dedup_behavior(values: &[String]) {
     assert_eq!(
         rssp::course::profile_dedup_hashes(&edges, false),
         rssp::course::profile_dedup_hashes(&edges, true)
+    );
+    assert_eq!(
+        rssp::course::profile_dedup_hashes_reserved(&edges),
+        rssp::course::profile_dedup_hashes(&edges, false)
     );
 }
 
