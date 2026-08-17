@@ -591,7 +591,7 @@ fn try_tag_adv<'a>(s: &'a [u8], tag: &[u8], nl: bool, out: &mut Option<&'a [u8]>
 }
 
 #[inline]
-fn try_tag_append<'a>(
+fn try_tag_append<'a, const PRESIZE: bool>(
     s: &'a [u8],
     tag: &[u8],
     nl: bool,
@@ -603,6 +603,13 @@ fn try_tag_append<'a>(
     let (value, adv) = parse_tag_val(s, tag.len(), nl)?;
     *out = Some(match out.take() {
         None => Cow::Borrowed(value),
+        Some(Cow::Borrowed(previous)) if PRESIZE => {
+            let mut joined = Vec::with_capacity(previous.len() + 1 + value.len());
+            joined.extend_from_slice(previous);
+            joined.push(b':');
+            joined.extend_from_slice(value);
+            Cow::Owned(joined)
+        }
         Some(previous) => {
             let mut joined = previous.into_owned();
             joined.reserve(1 + value.len());
@@ -643,10 +650,15 @@ macro_rules! return_header_tags {
 }
 
 #[inline(never)]
-fn dispatch_notedata_tag<'a>(s: &'a [u8], out: &mut NotedataFields<'a>) -> Option<usize> {
+fn dispatch_notedata_tag<'a, const PRESIZE: bool>(
+    s: &'a [u8],
+    out: &mut NotedataFields<'a>,
+) -> Option<usize> {
     match s.get(1).map_or(0, u8::to_ascii_uppercase) {
         b'A' => {
-            if let Some(advance) = try_tag_append(s, b"#ATTACKS:", true, &mut out.chart_attacks) {
+            if let Some(advance) =
+                try_tag_append::<PRESIZE>(s, b"#ATTACKS:", true, &mut out.chart_attacks)
+            {
                 return Some(advance);
             }
         }
@@ -712,14 +724,16 @@ fn dispatch_notedata_tag<'a>(s: &'a [u8], out: &mut NotedataFields<'a>) -> Optio
 }
 
 #[inline(never)]
-fn dispatch_header_tag<'a>(
+fn dispatch_header_tag<'a, const PRESIZE: bool>(
     s: &'a [u8],
     ssc: bool,
     out: &mut ParsedSimfileData<'a>,
 ) -> Option<usize> {
     match s.get(1).map_or(0, u8::to_ascii_uppercase) {
         b'A' => {
-            if let Some(advance) = try_tag_append(s, b"#ATTACKS:", true, &mut out.attacks) {
+            if let Some(advance) =
+                try_tag_append::<PRESIZE>(s, b"#ATTACKS:", true, &mut out.attacks)
+            {
                 return Some(advance);
             }
             return_header_tags!(
@@ -819,7 +833,7 @@ fn dispatch_header_tag<'a>(
     None
 }
 
-fn parse_notedata_entry<const DISPATCH: bool>(
+fn parse_notedata_entry<const DISPATCH: bool, const PRESIZE: bool>(
     data: &[u8],
     start: usize,
 ) -> (Option<ParsedChartEntry<'_>>, usize) {
@@ -857,12 +871,14 @@ fn parse_notedata_entry<const DISPATCH: bool>(
             );
         }
         if DISPATCH {
-            if let Some(advance) = dispatch_notedata_tag(s, &mut out) {
+            if let Some(advance) = dispatch_notedata_tag::<PRESIZE>(s, &mut out) {
                 i += advance;
                 continue;
             }
         } else {
-            if let Some(adv) = try_tag_append(s, b"#ATTACKS:", true, &mut out.chart_attacks) {
+            if let Some(adv) =
+                try_tag_append::<PRESIZE>(s, b"#ATTACKS:", true, &mut out.chart_attacks)
+            {
                 i += adv;
                 continue;
             }
@@ -953,7 +969,7 @@ fn chart_reserve_len(data_len: usize, start: usize, next: usize) -> usize {
 }
 
 pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfileData<'a>> {
-    extract_sections_impl::<true, true>(data, ext)
+    extract_sections_impl::<true, true, true>(data, ext)
 }
 
 #[cfg(feature = "bench-support")]
@@ -964,9 +980,9 @@ pub fn extract_sections_for_bench<'a>(
     legacy_dispatch: bool,
 ) -> io::Result<ParsedSimfileData<'a>> {
     if legacy_dispatch {
-        extract_sections_impl::<false, true>(data, ext)
+        extract_sections_impl::<false, true, true>(data, ext)
     } else {
-        extract_sections_impl::<true, true>(data, ext)
+        extract_sections_impl::<true, true, true>(data, ext)
     }
 }
 
@@ -978,13 +994,32 @@ pub fn extract_sections_reserve_for_bench<'a>(
     legacy_growth: bool,
 ) -> io::Result<ParsedSimfileData<'a>> {
     if legacy_growth {
-        extract_sections_impl::<true, false>(data, ext)
+        extract_sections_impl::<true, false, true>(data, ext)
     } else {
-        extract_sections_impl::<true, true>(data, ext)
+        extract_sections_impl::<true, true, true>(data, ext)
     }
 }
 
-fn extract_sections_impl<'a, const DISPATCH: bool, const RESERVE_CHARTS: bool>(
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn extract_sections_append_for_bench<'a>(
+    data: &'a [u8],
+    ext: &str,
+    legacy_append: bool,
+) -> io::Result<ParsedSimfileData<'a>> {
+    if legacy_append {
+        extract_sections_impl::<true, true, false>(data, ext)
+    } else {
+        extract_sections_impl::<true, true, true>(data, ext)
+    }
+}
+
+fn extract_sections_impl<
+    'a,
+    const DISPATCH: bool,
+    const RESERVE_CHARTS: bool,
+    const PRESIZE: bool,
+>(
     data: &'a [u8],
     ext: &str,
 ) -> io::Result<ParsedSimfileData<'a>> {
@@ -1002,7 +1037,7 @@ fn extract_sections_impl<'a, const DISPATCH: bool, const RESERVE_CHARTS: bool>(
 
         // SSC notedata block
         if ssc && starts_with_ci(s, b"#NOTEDATA:") {
-            let (entry, next) = parse_notedata_entry::<DISPATCH>(data, i);
+            let (entry, next) = parse_notedata_entry::<DISPATCH, PRESIZE>(data, i);
             if let Some(entry) = entry {
                 if RESERVE_CHARTS && r.notes_list.capacity() == 0 {
                     r.notes_list
@@ -1044,12 +1079,12 @@ fn extract_sections_impl<'a, const DISPATCH: bool, const RESERVE_CHARTS: bool>(
         }
 
         if DISPATCH {
-            if let Some(advance) = dispatch_header_tag(s, ssc, &mut r) {
+            if let Some(advance) = dispatch_header_tag::<PRESIZE>(s, ssc, &mut r) {
                 i += advance;
                 continue;
             }
         } else {
-            if let Some(adv) = try_tag_append(s, b"#ATTACKS:", true, &mut r.attacks) {
+            if let Some(adv) = try_tag_append::<PRESIZE>(s, b"#ATTACKS:", true, &mut r.attacks) {
                 i += adv;
                 continue;
             }
@@ -1335,8 +1370,8 @@ mod tests {
         )
         .as_bytes();
         let current = extract_sections(data, "ssc").expect("fixture should parse");
-        let legacy =
-            extract_sections_impl::<false, true>(data, "ssc").expect("legacy fixture should parse");
+        let legacy = extract_sections_impl::<false, true, true>(data, "ssc")
+            .expect("legacy fixture should parse");
 
         assert_eq!(current.title, Some(&b"Mixed Case"[..]));
         assert_eq!(current.attacks.as_deref(), Some(&b"first:second"[..]));

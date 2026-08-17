@@ -505,6 +505,24 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     }
     parse_dispatch.finish();
 
+    parse_dispatch_bench::assert_append_behavior(&parse_dispatch_fixture, "ssc");
+    let mut parse_append = c.benchmark_group("cycles/parse_attack_append_128_charts");
+    parse_append.throughput(Throughput::Bytes(parse_dispatch_fixture.len() as u64));
+    parse_append.sample_size(100);
+    parse_append.measurement_time(Duration::from_secs(3));
+    for (name, legacy) in [("allocate_then_grow", true), ("presized_copy", false)] {
+        parse_append.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(parse_dispatch_bench::parse_append(
+                    black_box(&parse_dispatch_fixture),
+                    "ssc",
+                    legacy,
+                ));
+            });
+        });
+    }
+    parse_append.finish();
+
     let real_parse_fixture = include_bytes!("fixtures/camellia_mix.ssc");
     parse_dispatch_bench::assert_pair(real_parse_fixture, "ssc");
     let mut real_parse = c.benchmark_group("cycles/parse_dispatch_real_ssc");

@@ -390,6 +390,27 @@ fn bench_parse_reserve(c: &mut Criterion) {
     }
 }
 
+fn bench_parse_append(c: &mut Criterion) {
+    let fixture = parse_dispatch_bench::fixture();
+    parse_dispatch_bench::assert_append_behavior(&fixture, EXTENSION);
+    let mut group = c.benchmark_group("parse_attack_append_128_charts");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Bytes(fixture.len() as u64));
+    for (phase, legacy) in [("allocate_then_grow", true), ("presized_copy", false)] {
+        group.bench_function(phase, |b| {
+            b.iter(|| {
+                black_box(parse_dispatch_bench::parse_append(
+                    black_box(&fixture),
+                    EXTENSION,
+                    legacy,
+                ));
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_metadata_pipeline,
@@ -398,5 +419,6 @@ criterion_group!(
     bench_marker_translation,
     bench_parse_dispatch,
     bench_parse_reserve,
+    bench_parse_append,
 );
 criterion_main!(benches);

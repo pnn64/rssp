@@ -129,6 +129,15 @@ pub fn parse_reserved<'a>(
         .expect("chart reserve fixture should parse")
 }
 
+pub fn parse_append<'a>(
+    data: &'a [u8],
+    ext: &str,
+    legacy: bool,
+) -> rssp::parse::ParsedSimfileData<'a> {
+    rssp::parse::extract_sections_append_for_bench(data, ext, legacy)
+        .expect("attack append fixture should parse")
+}
+
 fn global_fields<'a>(parsed: &'a rssp::parse::ParsedSimfileData<'a>) -> [Option<&'a [u8]>; 40] {
     [
         parsed.title,
@@ -242,6 +251,44 @@ pub fn assert_reserve_behavior() {
     assert_eq!(
         parse_reserved(&sm, "sm", false).notes_list.len(),
         TYPICAL_CHART_COUNT
+    );
+}
+
+pub fn assert_append_behavior(data: &[u8], ext: &str) {
+    let legacy = parse_append(data, ext, true);
+    let current = parse_append(data, ext, false);
+    assert_parsed_eq(&current, &legacy);
+    assert!(matches!(current.attacks, Some(std::borrow::Cow::Owned(_))));
+    assert!(
+        current
+            .notes_list
+            .iter()
+            .all(|entry| matches!(entry.chart_attacks, Some(std::borrow::Cow::Owned(_))))
+    );
+
+    for case in [
+        b"#TITLE:No attacks;".as_slice(),
+        b"#ATTACKS:TIME=1:LEN=2:MODS=mirror;".as_slice(),
+        b"#ATTACKS:first;\n#ATTACKS:second;\n#ATTACKS:third;".as_slice(),
+    ] {
+        let legacy = parse_append(case, ext, true);
+        let current = parse_append(case, ext, false);
+        assert_parsed_eq(&current, &legacy);
+    }
+
+    let single = parse_append(b"#ATTACKS:single;", ext, false);
+    assert!(matches!(
+        single.attacks,
+        Some(std::borrow::Cow::Borrowed(_))
+    ));
+    let triple = parse_append(
+        b"#ATTACKS:first;\n#ATTACKS:second;\n#ATTACKS:third;",
+        ext,
+        false,
+    );
+    assert_eq!(
+        triple.attacks.as_deref(),
+        Some(b"first:second:third".as_slice())
     );
 }
 
