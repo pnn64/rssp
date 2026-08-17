@@ -9,6 +9,39 @@ pub const NON_IMAGE_COUNT: usize = 256;
 pub const MOVIE_COUNT: usize = 128;
 pub const SOUND_COUNT: usize = 129;
 pub const DELIMITER_FIELD_COUNT: usize = 4_096;
+pub const REL_PATH_COUNT: usize = 256;
+pub const REL_COMPONENT_COUNT: usize = 4_096;
+
+pub fn relative_paths() -> Vec<String> {
+    (0..REL_PATH_COUNT)
+        .map(|index| format!("visuals/background,layer-{:02}.PNG", index % ASSET_COUNT))
+        .collect()
+}
+
+pub fn relative_component_paths() -> Vec<String> {
+    (0..REL_COMPONENT_COUNT)
+        .map(|index| match index & 3 {
+            0 => format!("Visuals/Layer-{index:04}.png"),
+            1 => format!("./Visuals/../Visuals/Layer-{index:04}.png"),
+            2 => format!("Group/Song/Visuals/Layer-{index:04}.png"),
+            _ => format!(" Group / Song / Visuals / Layer-{index:04}.png "),
+        })
+        .collect()
+}
+
+pub fn assert_rel_component_behavior(paths: &[String]) {
+    for path in paths.iter().map(String::as_str).chain([
+        "../Visuals/file.png",
+        "a/b/c/d/e/file.png",
+        "Visuals\\file.png",
+        "",
+    ]) {
+        assert!(
+            rssp::profile::relative_asset_parts_match(path),
+            "relative components changed for {path:?}"
+        );
+    }
+}
 
 pub fn delimiter_fields() -> Vec<String> {
     (0..DELIMITER_FIELD_COUNT)
@@ -26,6 +59,7 @@ pub struct AssetFixture {
     root: PathBuf,
     image_dir: PathBuf,
     lookup_dir: PathBuf,
+    relative_dir: PathBuf,
     simfile: Vec<u8>,
 }
 
@@ -47,6 +81,18 @@ impl AssetFixture {
         for index in 0..ASSET_COUNT {
             std::fs::write(visuals.join(format!("Background,Layer-{index:02}.png")), [])
                 .expect("benchmark background should be writable");
+        }
+
+        let relative_dir = root.join("Relative");
+        let relative_visuals = relative_dir.join("Visuals");
+        std::fs::create_dir_all(&relative_visuals)
+            .expect("relative benchmark directory should be creatable");
+        for index in 0..ASSET_COUNT {
+            std::fs::write(
+                relative_visuals.join(format!("Background,Layer-{index:02}.png")),
+                [],
+            )
+            .expect("relative benchmark asset should be writable");
         }
 
         let lookup_dir = root.join("Lookup");
@@ -101,6 +147,7 @@ impl AssetFixture {
             root,
             image_dir,
             lookup_dir,
+            relative_dir,
             simfile: simfile.into_bytes(),
         }
     }
@@ -119,6 +166,10 @@ impl AssetFixture {
 
     pub fn image_dir(&self) -> &Path {
         &self.image_dir
+    }
+
+    pub fn relative_dir(&self) -> &Path {
+        &self.relative_dir
     }
 
     pub fn lookup_name() -> &'static str {
@@ -149,6 +200,25 @@ impl AssetFixture {
             let legacy = rssp::profile::music_path_legacy(&self.root, tag);
             let current = rssp::assets::resolve_music_path_like_itg(&self.root, tag);
             assert_eq!(current, legacy, "music fallback changed for tag {tag:?}");
+        }
+    }
+
+    pub fn assert_rel_path_behavior(&self) {
+        let deep = "a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/file.png";
+        for rel in [
+            "Visuals/Background,Layer-00.png",
+            "visuals/background,layer-01.PNG",
+            "Visuals\\Background,Layer-02.png",
+            "./Visuals/./Background,Layer-03.png",
+            "Visuals/Missing/../Background,Layer-04.png",
+            "../Visuals/Background,Layer-05.png",
+            "Visuals/missing.png",
+            "",
+            deep,
+        ] {
+            let legacy = rssp::profile::relative_asset_path(&self.relative_dir, rel, true);
+            let current = rssp::profile::relative_asset_path(&self.relative_dir, rel, false);
+            assert_eq!(current, legacy, "relative lookup changed for {rel:?}");
         }
     }
 }

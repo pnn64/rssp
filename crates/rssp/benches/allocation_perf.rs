@@ -4395,8 +4395,38 @@ fn run_background_changes_alloc(iterations: usize) {
 fn run_asset_fallbacks_alloc(iterations: usize) {
     let fixture = assets_bench::AssetFixture::new();
     fixture.assert_music_behavior();
+    fixture.assert_rel_path_behavior();
     run_music_fallback_phase(&fixture, "full-paths", iterations, true);
     run_music_fallback_phase(&fixture, "candidate-names", iterations, false);
+    let relative_paths = assets_bench::relative_paths();
+    run_relative_asset_phase(
+        &fixture,
+        &relative_paths,
+        "materialized-components",
+        iterations,
+        true,
+    );
+    run_relative_asset_phase(
+        &fixture,
+        &relative_paths,
+        "inline-components",
+        iterations,
+        false,
+    );
+    let relative_component_paths = assets_bench::relative_component_paths();
+    assets_bench::assert_rel_component_behavior(&relative_component_paths);
+    run_relative_component_phase(
+        &relative_component_paths,
+        "materialized-components",
+        iterations,
+        true,
+    );
+    run_relative_component_phase(
+        &relative_component_paths,
+        "inline-components",
+        iterations,
+        false,
+    );
 
     reset_counters();
     let before = Counters::read();
@@ -4434,6 +4464,89 @@ fn run_asset_fallbacks_alloc(iterations: usize) {
         black_box(checksum),
         elapsed.as_secs_f64(),
         3.0 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_relative_asset_phase(
+    fixture: &assets_bench::AssetFixture,
+    paths: &[String],
+    phase: &str,
+    iterations: usize,
+    legacy: bool,
+) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        for path in black_box(paths) {
+            let resolved = rssp::profile::relative_asset_path(
+                black_box(fixture.relative_dir()),
+                black_box(path),
+                legacy,
+            );
+            checksum = checksum.wrapping_add(usize::from(resolved.is_some()));
+            black_box(resolved);
+        }
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=asset-fallbacks stage=relative-path phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_paths_s={:.3} alloc_calls_per_iter={:.1} dealloc_calls_per_iter={:.1} ",
+            "realloc_calls_per_iter={:.1} alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        assets_bench::REL_PATH_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_relative_component_phase(paths: &[String], phase: &str, iterations: usize, legacy: bool) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0u64;
+    for _ in 0..iterations {
+        for path in black_box(paths) {
+            checksum = checksum.rotate_left(1)
+                ^ rssp::profile::relative_asset_parts_hash(black_box(path), legacy);
+        }
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=asset-fallbacks stage=relative-components phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_paths_s={:.3} alloc_calls_per_iter={:.1} dealloc_calls_per_iter={:.1} ",
+            "realloc_calls_per_iter={:.1} alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        assets_bench::REL_COMPONENT_COUNT as f64 * divisor / elapsed.as_secs_f64(),
         (after.alloc_calls - before.alloc_calls) as f64 / divisor,
         (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
         (after.realloc_calls - before.realloc_calls) as f64 / divisor,

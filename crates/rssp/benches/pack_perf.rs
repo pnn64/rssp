@@ -362,6 +362,63 @@ fn bench_asset_fallbacks(c: &mut Criterion) {
     fallbacks.finish();
 }
 
+fn bench_relative_asset_paths(c: &mut Criterion) {
+    let fixture = assets_bench::AssetFixture::with_movies(1);
+    fixture.assert_rel_path_behavior();
+    let paths = assets_bench::relative_paths();
+    let mut group = c.benchmark_group("asset_relative_paths");
+    group.sample_size(30);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(assets_bench::REL_PATH_COUNT as u64));
+    for (name, legacy) in [
+        ("materialized_components", true),
+        ("inline_components", false),
+    ] {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                let mut found = 0usize;
+                for path in black_box(&paths) {
+                    found += usize::from(
+                        rssp::profile::relative_asset_path(
+                            black_box(fixture.relative_dir()),
+                            black_box(path),
+                            legacy,
+                        )
+                        .is_some(),
+                    );
+                }
+                black_box(found);
+            });
+        });
+    }
+    group.finish();
+}
+
+fn bench_relative_asset_components(c: &mut Criterion) {
+    let paths = assets_bench::relative_component_paths();
+    assets_bench::assert_rel_component_behavior(&paths);
+    let bytes = paths.iter().map(String::len).sum::<usize>();
+    let mut group = c.benchmark_group("asset_relative_components");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Bytes(bytes as u64));
+    for (name, legacy) in [
+        ("materialized_components", true),
+        ("inline_components", false),
+    ] {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                let checksum = black_box(&paths).iter().fold(0u64, |checksum, path| {
+                    checksum.rotate_left(1)
+                        ^ rssp::profile::relative_asset_parts_hash(black_box(path), legacy)
+                });
+                black_box(checksum);
+            });
+        });
+    }
+    group.finish();
+}
+
 fn bench_song_assets(c: &mut Criterion) {
     let fixture = assets_bench::AssetFixture::new();
     fixture.assert_song_assets_behavior();
@@ -579,6 +636,8 @@ criterion_group!(
     bench_background_changes,
     bench_delimiter_scan,
     bench_asset_fallbacks,
+    bench_relative_asset_paths,
+    bench_relative_asset_components,
     bench_song_assets,
     bench_selection_algorithms,
     bench_hint_normalize,

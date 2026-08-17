@@ -58,6 +58,21 @@ pub mod profile {
     }
 
     #[must_use]
+    pub fn relative_asset_path(dir: &Path, rel: &str, legacy: bool) -> Option<PathBuf> {
+        crate::assets::profile_resolve_rel_ci(dir, rel, legacy)
+    }
+
+    #[must_use]
+    pub fn relative_asset_parts_hash(rel: &str, legacy: bool) -> u64 {
+        crate::assets::profile_rel_parts_hash(rel, legacy)
+    }
+
+    #[must_use]
+    pub fn relative_asset_parts_match(rel: &str) -> bool {
+        crate::assets::profile_rel_parts_match(rel)
+    }
+
+    #[must_use]
     pub fn song_assets_legacy(
         song_dir: &Path,
         banner: &str,

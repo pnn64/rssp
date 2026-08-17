@@ -1203,6 +1203,14 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let asset_fixture = assets_bench::AssetFixture::with_movies(1);
     asset_fixture.assert_song_assets_behavior();
     asset_fixture.assert_music_behavior();
+    asset_fixture.assert_rel_path_behavior();
+    let relative_asset_paths = assets_bench::relative_paths();
+    let relative_component_paths = assets_bench::relative_component_paths();
+    assets_bench::assert_rel_component_behavior(&relative_component_paths);
+    let relative_component_bytes = relative_component_paths
+        .iter()
+        .map(String::len)
+        .sum::<usize>();
     let delimiter_fields = assets_bench::delimiter_fields();
     let delimiter_bytes = delimiter_fields.iter().map(String::len).sum::<usize>();
     let timing_text_fixture = report_timing_bench::timing_text();
@@ -2141,6 +2149,56 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     background.finish();
+
+    let mut relative_assets = c.benchmark_group("cycles/asset_relative_paths");
+    relative_assets.sample_size(20);
+    relative_assets.measurement_time(Duration::from_secs(3));
+    relative_assets.throughput(Throughput::Elements(assets_bench::REL_PATH_COUNT as u64));
+    for (name, legacy) in [
+        ("materialized_components", true),
+        ("inline_components", false),
+    ] {
+        relative_assets.bench_function(name, |b| {
+            b.iter(|| {
+                let mut found = 0usize;
+                for path in black_box(&relative_asset_paths) {
+                    found += usize::from(
+                        rssp::profile::relative_asset_path(
+                            black_box(asset_fixture.relative_dir()),
+                            black_box(path),
+                            legacy,
+                        )
+                        .is_some(),
+                    );
+                }
+                black_box(found);
+            });
+        });
+    }
+    relative_assets.finish();
+
+    let mut relative_components = c.benchmark_group("cycles/asset_relative_components");
+    relative_components.sample_size(100);
+    relative_components.measurement_time(Duration::from_secs(3));
+    relative_components.throughput(Throughput::Bytes(relative_component_bytes as u64));
+    for (name, legacy) in [
+        ("materialized_components", true),
+        ("inline_components", false),
+    ] {
+        relative_components.bench_function(name, |b| {
+            b.iter(|| {
+                let checksum =
+                    black_box(&relative_component_paths)
+                        .iter()
+                        .fold(0u64, |checksum, path| {
+                            checksum.rotate_left(1)
+                                ^ rssp::profile::relative_asset_parts_hash(black_box(path), legacy)
+                        });
+                black_box(checksum);
+            });
+        });
+    }
+    relative_components.finish();
 
     let mut music = c.benchmark_group("cycles/music_fallback");
     music.sample_size(20);

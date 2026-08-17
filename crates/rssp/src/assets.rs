@@ -234,8 +234,11 @@ fn image_hint_matches(path: &Path, contains: &[u8], suffix: &[u8]) -> bool {
             .any(|window| window.eq_ignore_ascii_case(contains))
 }
 
-fn resolve_rel_ci(base: &Path, rel: &str) -> Option<PathBuf> {
-    let rel = to_slash(rel);
+// Inline the common file-plus-three-directories case; deeper paths keep the
+// exact materialized fallback instead of imposing an artificial depth limit.
+const INLINE_REL_COMPONENTS: usize = 4;
+
+fn collect_rel_parts(rel: &str) -> Option<Vec<&str>> {
     let mut parts: Vec<&str> = Vec::new();
     for part in rel.split('/') {
         let part = part.trim();
@@ -248,6 +251,29 @@ fn resolve_rel_ci(base: &Path, rel: &str) -> Option<PathBuf> {
         }
         parts.push(part);
     }
+    (!parts.is_empty()).then_some(parts)
+}
+
+fn fill_rel_parts<'a>(rel: &'a str, parts: &mut [&'a str; INLINE_REL_COMPONENTS]) -> Option<usize> {
+    let mut len = 0usize;
+    for part in rel.split('/').map(str::trim) {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            len = len.checked_sub(1)?;
+        } else {
+            if len == INLINE_REL_COMPONENTS {
+                return None;
+            }
+            parts[len] = part;
+            len += 1;
+        }
+    }
+    Some(len)
+}
+
+fn resolve_rel_parts(base: &Path, parts: &[&str]) -> Option<PathBuf> {
     let (file, dirs) = parts.split_last()?;
     let mut dir = base.to_path_buf();
     for seg in dirs {
@@ -260,6 +286,58 @@ fn resolve_rel_ci(base: &Path, rel: &str) -> Option<PathBuf> {
         let p = dir.join(file);
         (!is_mac_resource_fork(&p) && p.is_file()).then_some(p)
     })
+}
+
+fn resolve_rel_ci_materialized(base: &Path, rel: &str) -> Option<PathBuf> {
+    resolve_rel_parts(base, &collect_rel_parts(rel)?)
+}
+
+fn resolve_rel_ci(base: &Path, rel: &str) -> Option<PathBuf> {
+    let rel = to_slash(rel);
+    let mut parts = [""; INLINE_REL_COMPONENTS];
+    let Some(len) = fill_rel_parts(rel.as_ref(), &mut parts) else {
+        return resolve_rel_ci_materialized(base, rel.as_ref());
+    };
+    resolve_rel_parts(base, &parts[..len])
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_resolve_rel_ci(base: &Path, rel: &str, legacy: bool) -> Option<PathBuf> {
+    if legacy {
+        let rel = to_slash(rel);
+        resolve_rel_ci_materialized(base, rel.as_ref())
+    } else {
+        resolve_rel_ci(base, rel)
+    }
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_rel_parts_hash(rel: &str, legacy: bool) -> u64 {
+    let rel = to_slash(rel);
+    let mut inline = [""; INLINE_REL_COMPONENTS];
+    let owned;
+    let parts = if legacy {
+        owned = collect_rel_parts(rel.as_ref()).unwrap_or_default();
+        owned.as_slice()
+    } else if let Some(len) = fill_rel_parts(rel.as_ref(), &mut inline) {
+        &inline[..len]
+    } else {
+        owned = collect_rel_parts(rel.as_ref()).unwrap_or_default();
+        owned.as_slice()
+    };
+    parts.iter().fold(0u64, |hash, part| {
+        part.bytes()
+            .fold(hash.rotate_left(7), |hash, byte| hash ^ u64::from(byte))
+    })
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_rel_parts_match(rel: &str) -> bool {
+    let rel = to_slash(rel);
+    let expected = collect_rel_parts(rel.as_ref());
+    let mut inline = [""; INLINE_REL_COMPONENTS];
+    fill_rel_parts(rel.as_ref(), &mut inline)
+        .is_none_or(|len| expected.as_deref().unwrap_or_default() == &inline[..len])
 }
 
 fn resolve_asset(song_dir: &Path, tag: &str) -> Option<PathBuf> {
