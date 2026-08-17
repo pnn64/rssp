@@ -656,9 +656,24 @@ pub fn analyze_patterns_from_rows(
     mono_threshold: usize,
     compiled: &CompiledCustomPatterns,
 ) -> PatternAnalysis {
+    analyze_patterns_from_rows_with_scratch(rows, mono_threshold, compiled, &mut Vec::new())
+}
+
+/// Analyzes rows while reusing caller-owned custom-pattern count storage.
+///
+/// The buffer is cleared before use and retains capacity for the largest
+/// compiled pattern set passed by the caller.
+#[must_use]
+pub fn analyze_patterns_from_rows_with_scratch(
+    rows: &[[u8; 4]],
+    mono_threshold: usize,
+    compiled: &CompiledCustomPatterns,
+    custom_counts: &mut Vec<u32>,
+) -> PatternAnalysis {
     let mut detected_patterns = [0u32; PATTERN_COUNT];
     let mut default_state = 0u32;
-    let mut custom_counts = vec![0u32; compiled.patterns.len()];
+    custom_counts.clear();
+    custom_counts.resize(compiled.patterns.len(), 0);
     let mut custom_state = 0u32;
     let mut anchors = [0u32; 4];
     let mut mask_history = [0u8; 4];
@@ -694,7 +709,7 @@ pub fn analyze_patterns_from_rows(
         detected_patterns,
         anchors: (anchors[0], anchors[1], anchors[2], anchors[3]),
         facing_steps: facing.finish(),
-        custom_patterns: custom_pattern_summaries(compiled, &custom_counts),
+        custom_patterns: custom_pattern_summaries(compiled, custom_counts),
     }
 }
 

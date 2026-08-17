@@ -26,7 +26,7 @@ use crate::parse::{
 };
 use crate::patterns::{
     CompiledCustomPatterns, PATTERN_COUNT, PatternCounts, PatternVariant,
-    analyze_patterns_from_rows, compile_custom_patterns, compiled_custom_empty,
+    analyze_patterns_from_rows_with_scratch, compile_custom_patterns, compiled_custom_empty,
 };
 use crate::stats::{
     RADAR_CATEGORY_COUNT, StreamCounts, compute_stream_outputs_with_scratch,
@@ -71,8 +71,8 @@ impl Default for AnalysisOptions {
 ///
 /// One workspace is single-thread-only and may be reused sequentially across
 /// any mix of 4-lane and 8-lane simfiles. It retains the largest parity, BPM,
-/// NPS, typed-row, and stream-token buffers it has needed; drop it to release
-/// that memory.
+/// NPS, typed-row, custom-pattern count, and stream-token buffers it has needed;
+/// drop it to release that memory.
 #[derive(Default)]
 pub struct AnalysisScratch {
     parity4: Option<step_parity::TimingRowsScratch<4>>,
@@ -83,6 +83,7 @@ pub struct AnalysisScratch {
     nps: Vec<f64>,
     rows4: stats::TypedRowsScratch<4>,
     rows8: stats::TypedRowsScratch<8>,
+    custom_counts: Vec<u32>,
     stream_tokens: Vec<stats::Token>,
 }
 
@@ -97,6 +98,7 @@ impl std::fmt::Debug for AnalysisScratch {
             .field("nps_capacity", &self.nps.capacity())
             .field("rows4_capacity", &self.rows4.row_capacity())
             .field("rows8_capacity", &self.rows8.row_capacity())
+            .field("custom_count_capacity", &self.custom_counts.capacity())
             .field("stream_capacity", &self.stream_tokens.capacity())
             .finish()
     }
@@ -625,6 +627,7 @@ fn build_chart_summary<const REUSE_BPMS: bool>(
     rows8: &mut stats::TypedRowsScratch<8>,
     chart_bpm_scratch: &mut Vec<(f64, f64)>,
     nps_scratch: &mut Vec<f64>,
+    custom_counts: &mut Vec<u32>,
     stream_tokens: &mut Vec<stats::Token>,
     options: &AnalysisOptions,
 ) -> Option<(ChartSummary, i32)> {
@@ -869,7 +872,12 @@ fn build_chart_summary<const REUSE_BPMS: bool>(
     );
 
     let pattern_analysis = compute_patterns.then(|| {
-        analyze_patterns_from_rows(rows4, options.mono_threshold, compiled_custom_patterns)
+        analyze_patterns_from_rows_with_scratch(
+            rows4,
+            options.mono_threshold,
+            compiled_custom_patterns,
+            custom_counts,
+        )
     });
     let (detected_patterns, (anchor_left, anchor_down, anchor_up, anchor_right)) = pattern_analysis
         .as_ref()
@@ -1090,8 +1098,8 @@ pub fn analyze(
 /// Analyzes a simfile while reusing caller-owned temporary storage.
 ///
 /// This produces the same owned summary as [`analyze`]. Reusing one workspace
-/// across a batch avoids rebuilding large parity arenas and median/token
-/// buffers for every file.
+/// across a batch avoids rebuilding large parity arenas and scratch buffers for
+/// every file.
 ///
 /// # Errors
 ///
@@ -1453,6 +1461,7 @@ fn analyze_with_scratch_impl<const REUSE_BPMS: bool, const BORROW_TIMING: bool>(
             &mut scratch.rows8,
             &mut scratch.chart_bpm_map,
             &mut scratch.nps,
+            &mut scratch.custom_counts,
             &mut scratch.stream_tokens,
             options_ref,
         ) {

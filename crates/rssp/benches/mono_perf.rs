@@ -2,6 +2,9 @@ use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
+#[path = "support/pattern_scratch.rs"]
+mod pattern_scratch_bench;
+
 const FIXTURE: &str = include_str!("fixtures/camellia_mix.ssc");
 const BATCH_FIXTURE: &[u8] = b"#VERSION:0.83;#TITLE:Batch;#BPMS:0=120;\
 #NOTEDATA:;#STEPSTYPE:dance-single;#DIFFICULTY:Challenge;#METER:10;\
@@ -174,6 +177,35 @@ fn bench_custom_patterns(c: &mut Criterion) {
         });
     });
     compile_group.finish();
+
+    let compiled = rssp::patterns::compile_custom_patterns(&patterns);
+    let rows = pattern_scratch_bench::rows();
+    pattern_scratch_bench::assert_behavior(&rows, MONO_THRESHOLD, &compiled);
+    let mut counts = Vec::new();
+    let mut analysis_group = c.benchmark_group("custom_pattern_count_scratch");
+    analysis_group.sample_size(100);
+    analysis_group.measurement_time(Duration::from_secs(2));
+    analysis_group.throughput(Throughput::Elements(rows.len() as u64));
+    analysis_group.bench_function("allocating", |b| {
+        b.iter(|| {
+            black_box(rssp::patterns::analyze_patterns_from_rows(
+                black_box(&rows),
+                black_box(MONO_THRESHOLD),
+                black_box(&compiled),
+            ));
+        });
+    });
+    analysis_group.bench_function("reused", |b| {
+        b.iter(|| {
+            black_box(rssp::patterns::analyze_patterns_from_rows_with_scratch(
+                black_box(&rows),
+                black_box(MONO_THRESHOLD),
+                black_box(&compiled),
+                black_box(&mut counts),
+            ));
+        });
+    });
+    analysis_group.finish();
 
     let options = rssp::AnalysisOptions {
         custom_patterns: patterns,

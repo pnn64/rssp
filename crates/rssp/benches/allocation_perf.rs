@@ -27,6 +27,8 @@ mod pack_bench;
 mod parse_dispatch_bench;
 #[path = "support/path_sort.rs"]
 mod path_sort_bench;
+#[path = "support/pattern_scratch.rs"]
+mod pattern_scratch_bench;
 #[path = "support/report_nps.rs"]
 mod report_nps_bench;
 #[path = "support/report_patterns.rs"]
@@ -1083,6 +1085,55 @@ fn run_custom_pattern_alloc_phase(
     );
 }
 
+fn run_pattern_count_phase(
+    phase: &str,
+    iterations: usize,
+    rows: &[[u8; 4]],
+    mut analyze: impl FnMut(&[[u8; 4]]) -> rssp::patterns::PatternAnalysis,
+) {
+    black_box(analyze(rows));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0u32;
+    for _ in 0..iterations {
+        let analysis = analyze(black_box(rows));
+        checksum = checksum.wrapping_add(
+            analysis
+                .custom_patterns
+                .iter()
+                .map(|entry| entry.count)
+                .sum::<u32>()
+                + analysis.detected_patterns.iter().sum::<u32>(),
+        );
+        black_box(analysis);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=custom-compile stage=count phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_rows_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        rows.len() as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
 fn run_custom_pattern_alloc(iterations: usize) {
     const UNIQUE_PATTERNS: usize = 256;
     let patterns = custom_pattern_input(UNIQUE_PATTERNS);
@@ -1091,6 +1142,16 @@ fn run_custom_pattern_alloc(iterations: usize) {
     });
     run_custom_pattern_alloc_phase("open-addressed", iterations, &patterns, |patterns| {
         rssp::patterns::compile_custom_patterns(patterns)
+    });
+    let compiled = rssp::patterns::compile_custom_patterns(&patterns);
+    let rows = pattern_scratch_bench::rows();
+    pattern_scratch_bench::assert_behavior(&rows, 6, &compiled);
+    run_pattern_count_phase("allocating", iterations, &rows, |rows| {
+        rssp::patterns::analyze_patterns_from_rows(rows, 6, &compiled)
+    });
+    let mut counts = Vec::new();
+    run_pattern_count_phase("reused", iterations, &rows, |rows| {
+        rssp::patterns::analyze_patterns_from_rows_with_scratch(rows, 6, &compiled, &mut counts)
     });
     run_prepared_analysis_alloc(iterations, patterns);
 }

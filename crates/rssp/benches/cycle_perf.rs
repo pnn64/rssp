@@ -39,6 +39,9 @@ mod parse_dispatch_bench;
 #[path = "support/path_sort.rs"]
 mod path_sort_bench;
 #[cfg(windows)]
+#[path = "support/pattern_scratch.rs"]
+mod pattern_scratch_bench;
+#[cfg(windows)]
 #[path = "support/report_nps.rs"]
 mod report_nps_bench;
 #[cfg(windows)]
@@ -1063,6 +1066,10 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let mut bpm_stats_values = Vec::with_capacity(bpm_stats_map.len());
     let mut nps_scratch = Vec::new();
     let custom_patterns = custom_pattern_input(256);
+    let custom_pattern_rows = pattern_scratch_bench::rows();
+    let custom_pattern_compiled = rssp::patterns::compile_custom_patterns(&custom_patterns);
+    pattern_scratch_bench::assert_behavior(&custom_pattern_rows, 6, &custom_pattern_compiled);
+    let mut custom_count_scratch = Vec::new();
     let course_chart_patterns: Vec<_> = custom_patterns
         .chunks_exact(3)
         .map(|patterns| rssp::patterns::CustomPatternSummary {
@@ -1516,6 +1523,26 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             black_box(rssp::patterns::compile_custom_patterns(black_box(
                 &custom_patterns,
             )));
+        });
+    });
+    optimizations.throughput(Throughput::Elements(custom_pattern_rows.len() as u64));
+    optimizations.bench_function("custom_pattern_counts_allocating", |b| {
+        b.iter(|| {
+            black_box(rssp::patterns::analyze_patterns_from_rows(
+                black_box(&custom_pattern_rows),
+                black_box(6),
+                black_box(&custom_pattern_compiled),
+            ));
+        });
+    });
+    optimizations.bench_function("custom_pattern_counts_reused", |b| {
+        b.iter(|| {
+            black_box(rssp::patterns::analyze_patterns_from_rows_with_scratch(
+                black_box(&custom_pattern_rows),
+                black_box(6),
+                black_box(&custom_pattern_compiled),
+                black_box(&mut custom_count_scratch),
+            ));
         });
     });
     optimizations.throughput(Throughput::Elements(1));
