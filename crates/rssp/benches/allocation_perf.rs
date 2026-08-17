@@ -1227,12 +1227,25 @@ fn run_prepared_analysis_alloc(iterations: usize, patterns: Vec<String>) {
         ..rssp::AnalysisOptions::default()
     };
     let prepared = rssp::PreparedAnalysis::new(options.clone());
-    let mut rebuilding_scratch = rssp::AnalysisScratch::default();
-    run_prepared_phase("rebuild-each-file", iterations, || {
-        rssp::analyze_with_scratch(FIXTURE, "ssc", &options, &mut rebuilding_scratch)
-    });
     let mut prepared_scratch = rssp::AnalysisScratch::default();
-    run_prepared_phase("prepared", iterations, || {
+    let expected = rssp::analyze(FIXTURE, "ssc", &options.clone())
+        .expect("fresh batch analysis should succeed");
+    let actual = rssp::analyze_prepared_in(FIXTURE, "ssc", &prepared, &mut prepared_scratch)
+        .expect("prepared batch analysis should succeed");
+    let (mut expected_json, mut actual_json) = (Vec::new(), Vec::new());
+    rssp::report::write_reports(
+        &expected,
+        rssp::report::OutputMode::JSON,
+        &mut expected_json,
+    )
+    .expect("fresh batch summary should serialize");
+    rssp::report::write_reports(&actual, rssp::report::OutputMode::JSON, &mut actual_json)
+        .expect("prepared batch summary should serialize");
+    assert_eq!(actual_json, expected_json);
+    run_prepared_phase("fresh-each-file", iterations, || {
+        rssp::analyze(FIXTURE, "ssc", &options.clone())
+    });
+    run_prepared_phase("prepared-reused", iterations, || {
         rssp::analyze_prepared_in(FIXTURE, "ssc", &prepared, &mut prepared_scratch)
     });
 

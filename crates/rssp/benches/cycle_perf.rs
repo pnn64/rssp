@@ -1122,8 +1122,26 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         ..rssp::AnalysisOptions::default()
     };
     let prepared_batch = rssp::PreparedAnalysis::new(batch_options.clone());
-    let mut batch_scratch = rssp::AnalysisScratch::default();
     let mut prepared_scratch = rssp::AnalysisScratch::default();
+    let expected_batch = rssp::analyze(BATCH_FIXTURE, "ssc", &batch_options.clone())
+        .expect("fresh batch analysis should succeed");
+    let actual_batch =
+        rssp::analyze_prepared_in(BATCH_FIXTURE, "ssc", &prepared_batch, &mut prepared_scratch)
+            .expect("prepared batch analysis should succeed");
+    let (mut expected_batch_json, mut actual_batch_json) = (Vec::new(), Vec::new());
+    rssp::report::write_reports(
+        &expected_batch,
+        rssp::report::OutputMode::JSON,
+        &mut expected_batch_json,
+    )
+    .expect("fresh batch summary should serialize");
+    rssp::report::write_reports(
+        &actual_batch,
+        rssp::report::OutputMode::JSON,
+        &mut actual_batch_json,
+    )
+    .expect("prepared batch summary should serialize");
+    assert_eq!(actual_batch_json, expected_batch_json);
     let analysis_fixture = include_bytes!("fixtures/camellia_mix.ssc");
     let nps_fixture = include_bytes!("fixtures/watch_yo_step.ssc");
     let duration_owned =
@@ -1597,20 +1615,19 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     optimizations.throughput(Throughput::Elements(1));
-    optimizations.bench_function("custom_patterns_rebuild_file", |b| {
+    optimizations.bench_function("custom_patterns_fresh_file", |b| {
         b.iter(|| {
             black_box(
-                rssp::analyze_with_scratch(
+                rssp::analyze(
                     black_box(BATCH_FIXTURE),
                     "ssc",
-                    black_box(&batch_options),
-                    black_box(&mut batch_scratch),
+                    black_box(&batch_options.clone()),
                 )
                 .expect("batch fixture should analyze"),
             );
         });
     });
-    optimizations.bench_function("custom_patterns_prepared_file", |b| {
+    optimizations.bench_function("custom_patterns_prepared_reused", |b| {
         b.iter(|| {
             black_box(
                 rssp::analyze_prepared_in(

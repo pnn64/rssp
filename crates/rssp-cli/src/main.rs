@@ -6,18 +6,18 @@ use std::path::PathBuf;
 mod graph;
 
 use graph::{ColorScheme, generate_density_graph_png};
-use rssp::AnalysisOptions;
-use rssp::analyze;
 use rssp::matrix::get_difficulty;
 use rssp::report::{OutputMode, SimfileSummary, write_course_reports, write_reports};
+use rssp::{AnalysisOptions, AnalysisScratch, PreparedAnalysis, analyze_prepared_in};
 
 /// Analyzes a single simfile and returns the summary
 fn analyze_simfile(
     path: &Path,
-    options: &AnalysisOptions,
+    prepared: &PreparedAnalysis,
+    scratch: &mut AnalysisScratch,
 ) -> io::Result<rssp::report::SimfileSummary> {
     let sim = rssp::simfile::open(path)?;
-    analyze(&sim.data, sim.extension, &options.clone())
+    analyze_prepared_in(&sim.data, sim.extension, prepared, scratch)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
@@ -229,6 +229,8 @@ fn main() -> io::Result<()> {
     };
 
     // --- Process simfiles ---
+    let prepared = PreparedAnalysis::new(options);
+    let mut scratch = AnalysisScratch::default();
     for (idx, simfile_path) in simfiles.iter().enumerate() {
         if simfiles.len() > 1 {
             eprintln!(
@@ -239,7 +241,7 @@ fn main() -> io::Result<()> {
             );
         }
 
-        let simfile = match analyze_simfile(simfile_path, &options) {
+        let simfile = match analyze_simfile(simfile_path, &prepared, &mut scratch) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Error analyzing {}: {}", simfile_path.display(), e);
