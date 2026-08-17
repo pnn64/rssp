@@ -202,6 +202,14 @@ pub mod profile {
         crate::assets::profile_bgchanges_materialized(song_dir, simfile_data)
     }
 
+    #[must_use]
+    pub fn background_changes_linear_upsert(
+        song_dir: &Path,
+        simfile_data: &[u8],
+    ) -> Vec<crate::assets::ResolvedBackgroundChange> {
+        crate::assets::profile_bgchanges_linear_upsert(song_dir, simfile_data)
+    }
+
     pub fn analyze_with_allocating_bpms(
         simfile_data: &[u8],
         extension: &str,

@@ -1260,6 +1260,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     pack_image_fixture.assert_behavior();
     let asset_fixture = assets_bench::AssetFixture::with_movies(1);
     asset_fixture.assert_background_behavior();
+    let unordered_bgchanges = asset_fixture.unordered_simfile();
+    asset_fixture.assert_unordered_behavior(&unordered_bgchanges);
     asset_fixture.assert_song_assets_behavior();
     asset_fixture.assert_music_behavior();
     asset_fixture.assert_rel_path_behavior();
@@ -2282,6 +2284,30 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     background.finish();
+
+    let mut background_order = c.benchmark_group("cycles/background_change_order");
+    background_order.sample_size(20);
+    background_order.measurement_time(Duration::from_secs(3));
+    background_order.throughput(Throughput::Elements(
+        assets_bench::UNORDERED_PAIR_COUNT as u64,
+    ));
+    background_order.bench_function("linear_upsert", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::background_changes_linear_upsert(
+                black_box(asset_fixture.song_dir()),
+                black_box(&unordered_bgchanges),
+            ))
+        });
+    });
+    background_order.bench_function("filtered_upsert", |b| {
+        b.iter(|| {
+            black_box(rssp::assets::resolve_background_changes_like_itg(
+                black_box(asset_fixture.song_dir()),
+                black_box(&unordered_bgchanges),
+            ))
+        });
+    });
+    background_order.finish();
 
     let mut bg_values = c.benchmark_group("cycles/background_change_values");
     bg_values.sample_size(100);

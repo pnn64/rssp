@@ -2,6 +2,8 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 pub const CHANGE_COUNT: usize = 256;
+pub const UNORDERED_CHANGE_COUNT: usize = 4_096;
+pub const UNORDERED_PAIR_COUNT: usize = UNORDERED_CHANGE_COUNT * 2;
 const ASSET_COUNT: usize = 32;
 pub const LOOKUP_COUNT: usize = 256;
 pub const IMAGE_COUNT: usize = 256;
@@ -214,6 +216,46 @@ impl AssetFixture {
         let previous = rssp::profile::background_changes_materialized(&self.root, &self.simfile);
         let current = rssp::assets::resolve_background_changes_like_itg(&self.root, &self.simfile);
         assert_eq!(current, previous);
+    }
+
+    pub fn unordered_simfile(&self) -> Vec<u8> {
+        let mut simfile = String::with_capacity(UNORDERED_PAIR_COUNT * 48);
+        simfile.push_str("#BGCHANGES:");
+        for index in (0..UNORDERED_CHANGE_COUNT).rev() {
+            if index != UNORDERED_CHANGE_COUNT - 1 {
+                simfile.push(',');
+            }
+            write!(
+                &mut simfile,
+                "{}=Visuals/Background,Layer-{:02}.png,{}=Visuals/Background,Layer-{:02}.png",
+                index * 4,
+                index % ASSET_COUNT,
+                index * 4,
+                (index + 1) % ASSET_COUNT,
+            )
+            .expect("writing to a String should succeed");
+        }
+        simfile.push_str(";\n");
+        simfile.into_bytes()
+    }
+
+    pub fn assert_unordered_behavior(&self, simfile: &[u8]) {
+        let expected = rssp::profile::background_changes_linear_upsert(&self.root, simfile);
+        let actual = rssp::assets::resolve_background_changes_like_itg(&self.root, simfile);
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), UNORDERED_CHANGE_COUNT);
+
+        let edge = concat!(
+            "#BGCHANGES:4=Visuals/Background,Layer-00.png,",
+            "-0=Visuals/Background,Layer-01.png,",
+            "8=Visuals/Background,Layer-02.png,",
+            "0=Visuals/Background,Layer-03.png,",
+            "4=Visuals/Background,Layer-04.png;"
+        );
+        assert_eq!(
+            rssp::assets::resolve_background_changes_like_itg(&self.root, edge.as_bytes()),
+            rssp::profile::background_changes_linear_upsert(&self.root, edge.as_bytes()),
+        );
     }
 
     pub fn assert_music_behavior(&self) {

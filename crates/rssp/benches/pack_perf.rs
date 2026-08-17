@@ -254,6 +254,8 @@ fn bench_pack_root(c: &mut Criterion) {
 fn bench_background_changes(c: &mut Criterion) {
     let fixture = assets_bench::AssetFixture::with_movies(1);
     fixture.assert_background_behavior();
+    let unordered = fixture.unordered_simfile();
+    fixture.assert_unordered_behavior(&unordered);
 
     let mut group = c.benchmark_group("background_changes");
     group.sample_size(30);
@@ -284,6 +286,30 @@ fn bench_background_changes(c: &mut Criterion) {
         });
     });
     group.finish();
+
+    let mut order = c.benchmark_group("background_change_order");
+    order.sample_size(30);
+    order.measurement_time(Duration::from_secs(3));
+    order.throughput(Throughput::Elements(
+        assets_bench::UNORDERED_PAIR_COUNT as u64,
+    ));
+    order.bench_function("linear_upsert", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::background_changes_linear_upsert(
+                black_box(fixture.song_dir()),
+                black_box(&unordered),
+            ))
+        });
+    });
+    order.bench_function("filtered_upsert", |b| {
+        b.iter(|| {
+            black_box(rssp::assets::resolve_background_changes_like_itg(
+                black_box(fixture.song_dir()),
+                black_box(&unordered),
+            ))
+        });
+    });
+    order.finish();
 
     let tags = assets_bench::bgchange_tags();
     assets_bench::assert_bgchange_values_behavior(&tags);

@@ -4573,17 +4573,19 @@ fn run_stream_json_alloc(iterations: usize) {
 fn run_bgchanges_phase(
     phase: &str,
     iterations: usize,
+    item_count: usize,
     fixture: &assets_bench::AssetFixture,
+    simfile: &[u8],
     resolve: impl Fn(&std::path::Path, &[u8]) -> Vec<rssp::assets::ResolvedBackgroundChange>,
 ) {
-    black_box(resolve(fixture.song_dir(), fixture.simfile()));
+    black_box(resolve(fixture.song_dir(), simfile));
 
     reset_counters();
     let before = Counters::read();
     let start = Instant::now();
     let mut checksum = 0usize;
     for _ in 0..iterations {
-        let changes = resolve(black_box(fixture.song_dir()), black_box(fixture.simfile()));
+        let changes = resolve(black_box(fixture.song_dir()), black_box(simfile));
         checksum = checksum.wrapping_add(changes.len());
         black_box(changes);
     }
@@ -4602,7 +4604,7 @@ fn run_bgchanges_phase(
         iterations,
         black_box(checksum),
         elapsed.as_secs_f64(),
-        assets_bench::CHANGE_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        item_count as f64 * divisor / elapsed.as_secs_f64(),
         (after.alloc_calls - before.alloc_calls) as f64 / divisor,
         (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
         (after.realloc_calls - before.realloc_calls) as f64 / divisor,
@@ -4616,18 +4618,58 @@ fn run_bgchanges_phase(
 fn run_background_changes_alloc(iterations: usize) {
     let fixture = assets_bench::AssetFixture::with_movies(1);
     fixture.assert_background_behavior();
-    run_bgchanges_phase("root-rescan", iterations, &fixture, |dir, data| {
-        rssp::profile::background_changes_legacy(dir, data)
-    });
-    run_bgchanges_phase("double-find", iterations, &fixture, |dir, data| {
-        rssp::profile::background_changes_double_find(dir, data)
-    });
-    run_bgchanges_phase("materialized-values", iterations, &fixture, |dir, data| {
-        rssp::profile::background_changes_materialized(dir, data)
-    });
-    run_bgchanges_phase("single-scan", iterations, &fixture, |dir, data| {
-        rssp::assets::resolve_background_changes_like_itg(dir, data)
-    });
+    let ordered = fixture.simfile();
+    run_bgchanges_phase(
+        "root-rescan",
+        iterations,
+        assets_bench::CHANGE_COUNT,
+        &fixture,
+        ordered,
+        rssp::profile::background_changes_legacy,
+    );
+    run_bgchanges_phase(
+        "double-find",
+        iterations,
+        assets_bench::CHANGE_COUNT,
+        &fixture,
+        ordered,
+        rssp::profile::background_changes_double_find,
+    );
+    run_bgchanges_phase(
+        "materialized-values",
+        iterations,
+        assets_bench::CHANGE_COUNT,
+        &fixture,
+        ordered,
+        rssp::profile::background_changes_materialized,
+    );
+    run_bgchanges_phase(
+        "single-scan",
+        iterations,
+        assets_bench::CHANGE_COUNT,
+        &fixture,
+        ordered,
+        rssp::assets::resolve_background_changes_like_itg,
+    );
+
+    let unordered = fixture.unordered_simfile();
+    fixture.assert_unordered_behavior(&unordered);
+    run_bgchanges_phase(
+        "unordered-linear-upsert",
+        iterations,
+        assets_bench::UNORDERED_PAIR_COUNT,
+        &fixture,
+        &unordered,
+        rssp::profile::background_changes_linear_upsert,
+    );
+    run_bgchanges_phase(
+        "unordered-filtered-upsert",
+        iterations,
+        assets_bench::UNORDERED_PAIR_COUNT,
+        &fixture,
+        &unordered,
+        rssp::assets::resolve_background_changes_like_itg,
+    );
 
     let tags = assets_bench::bgchange_tags();
     assets_bench::assert_bgchange_values_behavior(&tags);

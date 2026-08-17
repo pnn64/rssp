@@ -14,6 +14,9 @@ use crate::parse::{bgchanges_values, decode_bytes, unescape_tag};
 
 const RANDOM_BACKGROUND_FILE: &str = "-random-";
 const NO_SONG_BG_FILE: &str = "-nosongbg-";
+const BG_BEAT_FILTER_WORDS: usize = 1_024;
+const BG_BEAT_FILTER_MASK: usize = BG_BEAT_FILTER_WORDS * u64::BITS as usize - 1;
+type BgBeatFilter = [u64; BG_BEAT_FILTER_WORDS];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BackgroundChangeTarget {
@@ -1058,10 +1061,11 @@ fn parse_bgchange_pair(
 }
 
 #[inline(always)]
-fn upsert_bgchange(
+fn upsert_bgchange<const FILTER_UNORDERED: bool>(
     out: &mut Vec<ResolvedBackgroundChange>,
     change: ResolvedBackgroundChange,
     beats_ordered: &mut bool,
+    beat_filter: &mut Option<BgBeatFilter>,
 ) {
     if *beats_ordered && let Some(last) = out.last_mut() {
         if last.start_beat == change.start_beat {
@@ -1074,6 +1078,28 @@ fn upsert_bgchange(
         }
         *beats_ordered = false;
     }
+    if FILTER_UNORDERED {
+        if let Some(last) = out.last_mut()
+            && last.start_beat == change.start_beat
+        {
+            *last = change;
+            return;
+        }
+        if beat_filter.is_none() {
+            let mut filter = [0u64; BG_BEAT_FILTER_WORDS];
+            for existing in out.iter() {
+                mark_bg_beat(&mut filter, existing.start_beat);
+            }
+            *beat_filter = Some(filter);
+        }
+        let maybe_seen = beat_filter
+            .as_mut()
+            .is_some_and(|filter| mark_bg_beat(filter, change.start_beat));
+        if !maybe_seen {
+            out.push(change);
+            return;
+        }
+    }
     if let Some(slot) = out
         .iter_mut()
         .find(|existing| existing.start_beat == change.start_beat)
@@ -1084,7 +1110,29 @@ fn upsert_bgchange(
     }
 }
 
-fn resolve_bgchanges_with<'a>(
+// False positives only trigger the exact fallback scan; they cannot change output.
+fn mark_bg_beat(filter: &mut BgBeatFilter, beat: f32) -> bool {
+    if beat.is_nan() {
+        return false;
+    }
+    let key = if beat == 0.0 { 0 } else { beat.to_bits() };
+    let mut hash = u64::from(key);
+    hash ^= hash >> 16;
+    hash = hash.wrapping_mul(0x7FEB_352D);
+    hash ^= hash >> 15;
+    hash = hash.wrapping_mul(0x846C_A68B);
+    hash ^= hash >> 16;
+    let first = hash as usize & BG_BEAT_FILTER_MASK;
+    let second = hash.rotate_left(29) as usize & BG_BEAT_FILTER_MASK;
+    let first_mask = 1u64 << (first & 63);
+    let second_mask = 1u64 << (second & 63);
+    let seen = filter[first >> 6] & first_mask != 0 && filter[second >> 6] & second_mask != 0;
+    filter[first >> 6] |= first_mask;
+    filter[second >> 6] |= second_mask;
+    seen
+}
+
+fn resolve_bgchanges_with<'a, const FILTER_UNORDERED: bool>(
     song_dir: &Path,
     values: impl IntoIterator<Item = &'a [u8]>,
     files: &BgFileCatalog,
@@ -1095,6 +1143,7 @@ fn resolve_bgchanges_with<'a>(
     let mut out: Vec<ResolvedBackgroundChange> = Vec::new();
     let mut saw_no_song_bg = false;
     let mut beats_ordered = true;
+    let mut beat_filter = None;
     for raw in values {
         let decoded = decode_bytes(raw);
         let text = unescape_tag(decoded.as_ref());
@@ -1117,7 +1166,12 @@ fn resolve_bgchanges_with<'a>(
                     saw_no_song_bg = true;
                     return;
                 }
-                upsert_bgchange(&mut out, change, &mut beats_ordered);
+                upsert_bgchange::<FILTER_UNORDERED>(
+                    &mut out,
+                    change,
+                    &mut beats_ordered,
+                    &mut beat_filter,
+                );
             },
         );
     }
@@ -1172,7 +1226,7 @@ pub fn resolve_background_changes_like_itg(
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
     let (files, movie) = list_song_dir_rel_files::<true>(song_dir);
-    resolve_bgchanges_with(
+    resolve_bgchanges_with::<true>(
         song_dir,
         bgchanges_values(simfile_data),
         &files,
@@ -1184,7 +1238,7 @@ pub fn resolve_background_changes_like_itg(
 #[cfg(any(test, feature = "profile"))]
 fn resolve_bgchanges_legacy(song_dir: &Path, simfile_data: &[u8]) -> Vec<ResolvedBackgroundChange> {
     let (files, _) = list_song_dir_rel_files::<false>(song_dir);
-    resolve_bgchanges_with(
+    resolve_bgchanges_with::<true>(
         song_dir,
         extract_bgchanges_values(simfile_data),
         &files,
@@ -1199,7 +1253,7 @@ fn resolve_bgchanges_double_find(
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
     let (files, movie) = list_song_dir_rel_files::<true>(song_dir);
-    resolve_bgchanges_with(
+    resolve_bgchanges_with::<true>(
         song_dir,
         extract_bgchanges_values(simfile_data),
         &files,
@@ -1214,9 +1268,24 @@ pub(crate) fn profile_bgchanges_materialized(
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
     let (files, movie) = list_song_dir_rel_files::<true>(song_dir);
-    resolve_bgchanges_with(
+    resolve_bgchanges_with::<true>(
         song_dir,
         extract_bgchanges_values(simfile_data),
+        &files,
+        || movie,
+        find_bg_delimiter,
+    )
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_bgchanges_linear_upsert(
+    song_dir: &Path,
+    simfile_data: &[u8],
+) -> Vec<ResolvedBackgroundChange> {
+    let (files, movie) = list_song_dir_rel_files::<true>(song_dir);
+    resolve_bgchanges_with::<false>(
+        song_dir,
+        bgchanges_values(simfile_data),
         &files,
         || movie,
         find_bg_delimiter,
@@ -1536,7 +1605,7 @@ mod tests {
                     target: BackgroundChangeTarget::File(PathBuf::from(index.to_string())),
                 };
                 linear_upsert(&mut expected, change.clone());
-                upsert_bgchange(&mut actual, change, &mut beats_ordered);
+                upsert_bgchange::<false>(&mut actual, change, &mut beats_ordered, &mut None);
             }
 
             assert_eq!(actual.len(), expected.len());
