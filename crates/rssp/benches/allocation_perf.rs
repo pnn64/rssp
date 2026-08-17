@@ -4751,10 +4751,52 @@ fn run_bgchanges_phase(
     );
 }
 
+fn run_bgchange_sort_phase(phase: &str, iterations: usize, legacy: bool) {
+    let mut changes = assets_bench::ordered_changes();
+    rssp::profile::sort_background_changes(&mut changes, true, legacy);
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0u32;
+    for _ in 0..iterations {
+        rssp::profile::sort_background_changes(black_box(&mut changes), true, legacy);
+        checksum = checksum
+            .wrapping_add(changes[0].start_beat.to_bits())
+            .wrapping_add(changes[changes.len() - 1].start_beat.to_bits());
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=background-ordered-sort phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_changes_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        assets_bench::ORDERED_CHANGE_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
 fn run_background_changes_alloc(iterations: usize) {
     let fixture = assets_bench::AssetFixture::with_movies(1);
     fixture.assert_background_behavior();
     fixture.assert_catalog_behavior();
+    assets_bench::assert_bgchange_sort_behavior();
+    run_bgchange_sort_phase("always-sort", iterations, true);
+    run_bgchange_sort_phase("ordered-fast-path", iterations, false);
     let ordered = fixture.simfile();
     run_bgchanges_phase(
         "root-rescan",
@@ -4787,6 +4829,14 @@ fn run_background_changes_alloc(iterations: usize) {
         &fixture,
         ordered,
         rssp::profile::background_changes_path_metadata,
+    );
+    run_bgchanges_phase(
+        "always-sort",
+        iterations,
+        assets_bench::CHANGE_COUNT,
+        &fixture,
+        ordered,
+        rssp::profile::background_changes_always_sort,
     );
     run_bgchanges_phase(
         "cached-entry-type",

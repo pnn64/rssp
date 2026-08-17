@@ -1280,6 +1280,9 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let asset_fixture = assets_bench::AssetFixture::with_movies(1);
     asset_fixture.assert_background_behavior();
     asset_fixture.assert_catalog_behavior();
+    assets_bench::assert_bgchange_sort_behavior();
+    let mut ordered_sort_legacy = assets_bench::ordered_changes();
+    let mut ordered_sort_current = assets_bench::ordered_changes();
     let unordered_bgchanges = asset_fixture.unordered_simfile();
     asset_fixture.assert_unordered_behavior(&unordered_bgchanges);
     asset_fixture.assert_song_assets_behavior();
@@ -2386,6 +2389,14 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             ))
         });
     });
+    background.bench_function("always_sort", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::background_changes_always_sort(
+                black_box(asset_fixture.song_dir()),
+                black_box(asset_fixture.simfile()),
+            ))
+        });
+    });
     background.bench_function("catalog_movie", |b| {
         b.iter(|| {
             black_box(rssp::assets::resolve_background_changes_like_itg(
@@ -2395,6 +2406,32 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     background.finish();
+
+    let mut background_sort = c.benchmark_group("cycles/background_ordered_sort");
+    background_sort.sample_size(100);
+    background_sort.measurement_time(Duration::from_secs(2));
+    background_sort.throughput(Throughput::Elements(
+        assets_bench::ORDERED_CHANGE_COUNT as u64,
+    ));
+    background_sort.bench_function("always_sort", |b| {
+        b.iter(|| {
+            rssp::profile::sort_background_changes(
+                black_box(&mut ordered_sort_legacy),
+                black_box(true),
+                true,
+            );
+        });
+    });
+    background_sort.bench_function("ordered_fast_path", |b| {
+        b.iter(|| {
+            rssp::profile::sort_background_changes(
+                black_box(&mut ordered_sort_current),
+                black_box(true),
+                false,
+            );
+        });
+    });
+    background_sort.finish();
 
     let mut background_catalog = c.benchmark_group("cycles/background_catalog_entry_type");
     background_catalog.sample_size(20);

@@ -2,6 +2,8 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 pub const CHANGE_COUNT: usize = 256;
+#[allow(dead_code)]
+pub const ORDERED_CHANGE_COUNT: usize = 4_096;
 pub const UNORDERED_CHANGE_COUNT: usize = 4_096;
 pub const UNORDERED_PAIR_COUNT: usize = UNORDERED_CHANGE_COUNT * 2;
 const ASSET_COUNT: usize = 32;
@@ -26,6 +28,37 @@ pub fn bgchange_tags() -> Vec<u8> {
         .expect("writing to a String cannot fail");
     }
     input.into_bytes()
+}
+
+#[allow(dead_code)]
+pub fn ordered_changes() -> Vec<rssp::assets::ResolvedBackgroundChange> {
+    (0..ORDERED_CHANGE_COUNT)
+        .map(|index| rssp::assets::ResolvedBackgroundChange {
+            start_beat: index as f32,
+            target: match index & 3 {
+                0 => rssp::assets::BackgroundChangeTarget::File(PathBuf::from("still.png")),
+                1 => rssp::assets::BackgroundChangeTarget::Random,
+                2 => rssp::assets::BackgroundChangeTarget::File(PathBuf::from("movie.mp4")),
+                _ => rssp::assets::BackgroundChangeTarget::NoSongBg,
+            },
+        })
+        .collect()
+}
+
+#[allow(dead_code)]
+pub fn assert_bgchange_sort_behavior() {
+    let ordered = ordered_changes();
+    let mut legacy = ordered.clone();
+    let mut current = ordered.clone();
+    rssp::profile::sort_background_changes(&mut legacy, true, true);
+    rssp::profile::sort_background_changes(&mut current, true, false);
+    assert_eq!(current, legacy);
+
+    legacy.reverse();
+    current.reverse();
+    rssp::profile::sort_background_changes(&mut legacy, false, true);
+    rssp::profile::sort_background_changes(&mut current, false, false);
+    assert_eq!(current, legacy);
 }
 
 pub fn assert_bgchange_values_behavior(input: &[u8]) {
@@ -213,9 +246,16 @@ impl AssetFixture {
     }
 
     pub fn assert_background_behavior(&self) {
-        let previous = rssp::profile::background_changes_materialized(&self.root, &self.simfile);
-        let current = rssp::assets::resolve_background_changes_like_itg(&self.root, &self.simfile);
-        assert_eq!(current, previous);
+        for simfile in [
+            self.simfile.as_slice(),
+            b"#BGCHANGES:4=-random-;\n".as_slice(),
+        ] {
+            let previous = rssp::profile::background_changes_materialized(&self.root, simfile);
+            let always_sorted = rssp::profile::background_changes_always_sort(&self.root, simfile);
+            let current = rssp::assets::resolve_background_changes_like_itg(&self.root, simfile);
+            assert_eq!(current, previous);
+            assert_eq!(current, always_sorted);
+        }
     }
 
     pub fn assert_catalog_behavior(&self) {

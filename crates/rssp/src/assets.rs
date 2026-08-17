@@ -1144,7 +1144,34 @@ fn mark_bg_beat(filter: &mut BgBeatFilter, beat: f32) -> bool {
     seen
 }
 
-fn resolve_bgchanges_with<'a, const FILTER_UNORDERED: bool>(
+fn push_beat_zero(
+    out: &mut Vec<ResolvedBackgroundChange>,
+    target: BackgroundChangeTarget,
+    beats_ordered: &mut bool,
+) {
+    if *beats_ordered
+        && out
+            .last()
+            .is_some_and(|last| last.start_beat.total_cmp(&0.0).is_gt())
+    {
+        *beats_ordered = false;
+    }
+    out.push(ResolvedBackgroundChange {
+        start_beat: 0.0,
+        target,
+    });
+}
+
+fn sort_bgchanges<const SKIP_ORDERED: bool>(
+    out: &mut [ResolvedBackgroundChange],
+    beats_ordered: bool,
+) {
+    if !SKIP_ORDERED || !beats_ordered {
+        out.sort_by(|a, b| a.start_beat.total_cmp(&b.start_beat));
+    }
+}
+
+fn resolve_bgchanges_with<'a, const FILTER_UNORDERED: bool, const SKIP_ORDERED: bool>(
     song_dir: &Path,
     values: impl IntoIterator<Item = &'a [u8]>,
     files: &BgFileCatalog,
@@ -1216,19 +1243,21 @@ fn resolve_bgchanges_with<'a, const FILTER_UNORDERED: bool>(
             if let Some(ix) = beat_zero_still_ix {
                 out[ix].target = BackgroundChangeTarget::File(movie);
             } else if !blocks_beat_zero {
-                out.push(ResolvedBackgroundChange {
-                    start_beat: 0.0,
-                    target: BackgroundChangeTarget::File(movie),
-                });
+                push_beat_zero(
+                    &mut out,
+                    BackgroundChangeTarget::File(movie),
+                    &mut beats_ordered,
+                );
             }
         } else if !has_any_file && !blocks_beat_zero {
-            out.push(ResolvedBackgroundChange {
-                start_beat: 0.0,
-                target: BackgroundChangeTarget::File(movie),
-            });
+            push_beat_zero(
+                &mut out,
+                BackgroundChangeTarget::File(movie),
+                &mut beats_ordered,
+            );
         }
     }
-    out.sort_by(|a, b| a.start_beat.total_cmp(&b.start_beat));
+    sort_bgchanges::<SKIP_ORDERED>(&mut out, beats_ordered);
     out
 }
 
@@ -1238,7 +1267,7 @@ pub fn resolve_background_changes_like_itg(
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
     let (files, movie) = list_song_dir_rel_files::<true, true>(song_dir);
-    resolve_bgchanges_with::<true>(
+    resolve_bgchanges_with::<true, true>(
         song_dir,
         bgchanges_values(simfile_data),
         &files,
@@ -1250,7 +1279,7 @@ pub fn resolve_background_changes_like_itg(
 #[cfg(any(test, feature = "profile"))]
 fn resolve_bgchanges_legacy(song_dir: &Path, simfile_data: &[u8]) -> Vec<ResolvedBackgroundChange> {
     let (files, _) = list_song_dir_rel_files::<false, true>(song_dir);
-    resolve_bgchanges_with::<true>(
+    resolve_bgchanges_with::<true, false>(
         song_dir,
         extract_bgchanges_values(simfile_data),
         &files,
@@ -1265,7 +1294,7 @@ fn resolve_bgchanges_double_find(
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
     let (files, movie) = list_song_dir_rel_files::<true, true>(song_dir);
-    resolve_bgchanges_with::<true>(
+    resolve_bgchanges_with::<true, false>(
         song_dir,
         extract_bgchanges_values(simfile_data),
         &files,
@@ -1280,7 +1309,7 @@ pub(crate) fn profile_bgchanges_materialized(
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
     let (files, movie) = list_song_dir_rel_files::<true, true>(song_dir);
-    resolve_bgchanges_with::<true>(
+    resolve_bgchanges_with::<true, false>(
         song_dir,
         extract_bgchanges_values(simfile_data),
         &files,
@@ -1295,7 +1324,7 @@ pub(crate) fn profile_bgchanges_linear_upsert(
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
     let (files, movie) = list_song_dir_rel_files::<true, true>(song_dir);
-    resolve_bgchanges_with::<false>(
+    resolve_bgchanges_with::<false, false>(
         song_dir,
         bgchanges_values(simfile_data),
         &files,
@@ -1310,13 +1339,41 @@ pub(crate) fn profile_bgchanges_path_metadata(
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
     let (files, movie) = list_song_dir_rel_files::<true, false>(song_dir);
-    resolve_bgchanges_with::<true>(
+    resolve_bgchanges_with::<true, false>(
         song_dir,
         bgchanges_values(simfile_data),
         &files,
         || movie,
         find_bg_delimiter,
     )
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_bgchanges_always_sort(
+    song_dir: &Path,
+    simfile_data: &[u8],
+) -> Vec<ResolvedBackgroundChange> {
+    let (files, movie) = list_song_dir_rel_files::<true, true>(song_dir);
+    resolve_bgchanges_with::<true, false>(
+        song_dir,
+        bgchanges_values(simfile_data),
+        &files,
+        || movie,
+        find_bg_delimiter,
+    )
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_sort_bgchanges(
+    changes: &mut [ResolvedBackgroundChange],
+    beats_ordered: bool,
+    legacy: bool,
+) {
+    if legacy {
+        sort_bgchanges::<false>(changes, beats_ordered);
+    } else {
+        sort_bgchanges::<true>(changes, beats_ordered);
+    }
 }
 
 #[cfg(feature = "profile")]

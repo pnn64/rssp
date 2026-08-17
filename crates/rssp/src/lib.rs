@@ -218,6 +218,22 @@ pub mod profile {
         crate::assets::profile_bgchanges_path_metadata(song_dir, simfile_data)
     }
 
+    #[must_use]
+    pub fn background_changes_always_sort(
+        song_dir: &Path,
+        simfile_data: &[u8],
+    ) -> Vec<crate::assets::ResolvedBackgroundChange> {
+        crate::assets::profile_bgchanges_always_sort(song_dir, simfile_data)
+    }
+
+    pub fn sort_background_changes(
+        changes: &mut [crate::assets::ResolvedBackgroundChange],
+        beats_ordered: bool,
+        legacy: bool,
+    ) {
+        crate::assets::profile_sort_bgchanges(changes, beats_ordered, legacy);
+    }
+
     pub fn analyze_with_allocating_bpms(
         simfile_data: &[u8],
         extension: &str,
