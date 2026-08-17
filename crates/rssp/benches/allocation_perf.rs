@@ -5180,8 +5180,106 @@ fn run_translate_markers_phase(input: &str, phase: &str, iterations: usize, lega
     );
 }
 
+fn run_alias_build_phase(phase: &str, iterations: usize, legacy: bool) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for index in 0..iterations {
+        let value = rssp::translate::profile_alias_build(black_box(index), legacy);
+        checksum = checksum
+            .wrapping_add(value.0)
+            .wrapping_add(value.1 as usize);
+        black_box(value);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=alias-table stage=build phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_tables_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_alias_lookup_phase(phase: &str, iterations: usize, aliases: &[&str], legacy: bool) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0u32;
+    for _ in 0..iterations {
+        for &alias in aliases {
+            checksum = checksum.wrapping_add(
+                rssp::translate::profile_alias_lookup(black_box(alias), legacy)
+                    .map_or(0, u32::from),
+            );
+        }
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=alias-table stage=lookup phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_lookups_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        aliases.len() as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
 fn run_translate_markers_alloc(iterations: usize) {
+    const ALIASES: [&str; 12] = [
+        "hka",
+        "KRO",
+        "rightarrow",
+        "whiteheart",
+        "kdot",
+        "omega",
+        "auxtriangle",
+        "menuright",
+        "unknown",
+        "hkaa",
+        "",
+        "UP",
+    ];
     translate_bench::assert_behavior();
+    assert!(rssp::translate::profile_alias_tables_match());
+    let (legacy_bytes, compact_bytes) = rssp::translate::profile_alias_table_sizes();
+    println!("mode=alias-table legacy_bytes={legacy_bytes} compact_bytes={compact_bytes}");
+    run_alias_build_phase("runtime", iterations, true);
+    run_alias_build_phase("static", iterations, false);
+    run_alias_lookup_phase("legacy", iterations, &ALIASES, true);
+    run_alias_lookup_phase("compact", iterations, &ALIASES, false);
     let input = translate_bench::alias_input();
     run_translate_markers_phase(&input, "allocating", iterations, true);
     run_translate_markers_phase(&input, "compact", iterations, false);

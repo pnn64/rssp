@@ -1,5 +1,3 @@
-use std::sync::OnceLock;
-
 use memchr::memchr2;
 
 const INTERNAL_CODEPOINT: u32 = 0xE000;
@@ -254,12 +252,6 @@ static ALIAS_ENTRIES: &[(&str, u32)] = &[
     ("auxback", INTERNAL_CODEPOINT),
 ];
 
-#[derive(Clone, Copy)]
-struct AliasEntry {
-    key: &'static str,
-    value: char,
-}
-
 #[inline(always)]
 const fn lower_byte(b: u8) -> u8 {
     if b'A' <= b && b <= b'Z' { b + 32 } else { b }
@@ -283,58 +275,308 @@ const fn alias_lengths_by_initial() -> [u16; 256] {
 const ALIAS_LENGTHS_BY_INITIAL: [u16; 256] = alias_lengths_by_initial();
 
 #[inline(always)]
-fn alias_hash(bytes: &[u8]) -> usize {
+const fn alias_hash(bytes: &[u8]) -> usize {
     let mut hash = 2_166_136_261u32;
-    for &byte in bytes {
-        hash ^= u32::from(lower_byte(byte));
+    let mut index = 0usize;
+    while index < bytes.len() {
+        hash ^= lower_byte(bytes[index]) as u32;
         hash = hash.wrapping_mul(16_777_619);
+        index += 1;
     }
     hash as usize & (ALIAS_TABLE_LEN - 1)
 }
 
-fn alias_table() -> &'static [Option<AliasEntry>; ALIAS_TABLE_LEN] {
-    static TABLE: OnceLock<[Option<AliasEntry>; ALIAS_TABLE_LEN]> = OnceLock::new();
-    TABLE.get_or_init(|| {
-        let mut table: [Option<AliasEntry>; ALIAS_TABLE_LEN] = [None; ALIAS_TABLE_LEN];
-        let mut next_internal = INTERNAL_CODEPOINT;
-        let invalid = char::REPLACEMENT_CHARACTER;
-        for (alias, codepoint) in ALIAS_ENTRIES {
-            let bytes = alias.as_bytes();
-            if bytes.is_empty() {
-                continue;
+const ALIAS_ENTRY_COUNT: usize = ALIAS_ENTRIES.len();
+const ALIAS_EMPTY: u8 = u8::MAX;
+const ALIAS_INDEX_COUNT: usize = ALIAS_EMPTY as usize;
+const ALIAS_KEY_RADIX: u64 = 38;
+const ALIAS_KEY_MAX_LEN: usize = 11;
+
+struct AliasTable {
+    slots: [u8; ALIAS_TABLE_LEN],
+    keys: [u64; ALIAS_INDEX_COUNT],
+    values: [u16; ALIAS_INDEX_COUNT],
+}
+
+const fn alias_eq(left: &str, right: &str) -> bool {
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut index = 0usize;
+    while index < left.len() {
+        if left[index] != right[index] {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+#[inline(always)]
+const fn alias_digit(byte: u8) -> u64 {
+    let byte = lower_byte(byte);
+    match byte {
+        b'a'..=b'z' => (byte - b'a' + 1) as u64,
+        b'0'..=b'9' => (byte - b'0' + 27) as u64,
+        b'-' => 37,
+        _ => 0,
+    }
+}
+
+const fn alias_key(bytes: &[u8]) -> u64 {
+    assert!(!bytes.is_empty() && bytes.len() <= ALIAS_KEY_MAX_LEN);
+    let mut key = 0u64;
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let digit = alias_digit(bytes[index]);
+        assert!(digit != 0);
+        key = key * ALIAS_KEY_RADIX + digit;
+        index += 1;
+    }
+    key
+}
+
+const fn alias_char(value: u32) -> char {
+    match char::from_u32(value) {
+        Some(value) => value,
+        None => char::REPLACEMENT_CHARACTER,
+    }
+}
+
+const fn build_alias_table() -> AliasTable {
+    assert!(ALIAS_ENTRY_COUNT <= ALIAS_INDEX_COUNT);
+    let mut slots = [ALIAS_EMPTY; ALIAS_TABLE_LEN];
+    let mut keys = [0u64; ALIAS_INDEX_COUNT];
+    let mut values = [0u16; ALIAS_INDEX_COUNT];
+    let mut next_internal = INTERNAL_CODEPOINT;
+    let mut entry_index = 0usize;
+    while entry_index < ALIAS_ENTRY_COUNT {
+        let (alias, codepoint) = ALIAS_ENTRIES[entry_index];
+        let value = if codepoint == INTERNAL_CODEPOINT {
+            let current = next_internal;
+            next_internal += 1;
+            current
+        } else {
+            codepoint
+        };
+        let value = alias_char(value);
+        assert!(value as u32 <= u16::MAX as u32);
+        keys[entry_index] = alias_key(alias.as_bytes());
+        values[entry_index] = value as u16;
+
+        let mut slot = alias_hash(alias.as_bytes());
+        let mut probes = 0usize;
+        while probes < ALIAS_TABLE_LEN {
+            let existing = slots[slot];
+            if existing == ALIAS_EMPTY {
+                slots[slot] = entry_index as u8;
+                break;
             }
-            let value = if *codepoint == INTERNAL_CODEPOINT {
-                let current = next_internal;
-                next_internal += 1;
-                current
-            } else {
-                *codepoint
-            };
-            let ch = char::from_u32(value).unwrap_or(invalid);
-            let mut index = alias_hash(bytes);
-            let mut inserted = false;
-            for _ in 0..ALIAS_TABLE_LEN {
-                match &mut table[index] {
-                    Some(entry) if entry.key == *alias => {
-                        entry.value = ch;
-                        inserted = true;
-                        break;
-                    }
-                    Some(_) => index = (index + 1) & (ALIAS_TABLE_LEN - 1),
-                    slot @ None => {
-                        *slot = Some(AliasEntry {
-                            key: alias,
-                            value: ch,
-                        });
-                        inserted = true;
-                        break;
-                    }
+            if alias_eq(ALIAS_ENTRIES[existing as usize].0, alias) {
+                values[existing as usize] = value as u16;
+                break;
+            }
+            slot = (slot + 1) & (ALIAS_TABLE_LEN - 1);
+            probes += 1;
+        }
+        assert!(probes < ALIAS_TABLE_LEN);
+        entry_index += 1;
+    }
+    AliasTable {
+        slots,
+        keys,
+        values,
+    }
+}
+
+// Immutable process-lifetime table shared lock-free by translation callers. It
+// is const-built (no warmup or miss work), uses fixed index/key/value arrays,
+// never evicts, and resides in the binary until process teardown. Each lookup
+// is bounded to 512 linear probes. The alias-table allocation and cycle
+// benchmarks cover construction, storage, misses, and successful lookup.
+static ALIAS_TABLE: AliasTable = build_alias_table();
+
+#[inline(always)]
+fn alias_hash_key(bytes: &[u8]) -> Option<(usize, u64)> {
+    let mut hash = 2_166_136_261u32;
+    let mut key = 0u64;
+    for &byte in bytes {
+        let byte = lower_byte(byte);
+        let digit = alias_digit(byte);
+        if digit == 0 {
+            return None;
+        }
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(16_777_619);
+        key = key * ALIAS_KEY_RADIX + digit;
+    }
+    Some((hash as usize & (ALIAS_TABLE_LEN - 1), key))
+}
+
+#[inline(always)]
+fn alias_slot_value(entry: usize) -> char {
+    let value = u32::from(ALIAS_TABLE.values[entry]);
+    debug_assert!(char::from_u32(value).is_some());
+    // SAFETY: `build_alias_table` stores only valid BMP `char` values, and the
+    // table is immutable, so every occupied slot indexes a valid encoded char.
+    unsafe { char::from_u32_unchecked(value) }
+}
+
+#[cfg(feature = "profile")]
+#[derive(Clone, Copy)]
+struct LegacyAliasEntry {
+    key: &'static str,
+    value: char,
+}
+
+#[cfg(feature = "profile")]
+fn build_legacy_alias_table(
+    entries: &'static [(&'static str, u32)],
+) -> [Option<LegacyAliasEntry>; ALIAS_TABLE_LEN] {
+    let mut table: [Option<LegacyAliasEntry>; ALIAS_TABLE_LEN] = [None; ALIAS_TABLE_LEN];
+    let mut next_internal = INTERNAL_CODEPOINT;
+    for &(alias, codepoint) in entries {
+        if alias.is_empty() {
+            continue;
+        }
+        let value = if codepoint == INTERNAL_CODEPOINT {
+            let current = next_internal;
+            next_internal += 1;
+            current
+        } else {
+            codepoint
+        };
+        let value = alias_char(value);
+        let mut index = alias_hash(alias.as_bytes());
+        let mut inserted = false;
+        for _ in 0..ALIAS_TABLE_LEN {
+            match &mut table[index] {
+                Some(entry) if entry.key == alias => {
+                    entry.value = value;
+                    inserted = true;
+                    break;
+                }
+                Some(_) => index = (index + 1) & (ALIAS_TABLE_LEN - 1),
+                slot @ None => {
+                    *slot = Some(LegacyAliasEntry { key: alias, value });
+                    inserted = true;
+                    break;
                 }
             }
-            assert!(inserted, "alias lookup table capacity is too small");
         }
-        table
-    })
+        assert!(inserted, "alias lookup table capacity is too small");
+    }
+    table
+}
+
+#[cfg(feature = "profile")]
+fn legacy_alias_table() -> &'static [Option<LegacyAliasEntry>; ALIAS_TABLE_LEN] {
+    static TABLE: std::sync::OnceLock<[Option<LegacyAliasEntry>; ALIAS_TABLE_LEN]> =
+        std::sync::OnceLock::new();
+    TABLE.get_or_init(|| build_legacy_alias_table(ALIAS_ENTRIES))
+}
+
+#[cfg(feature = "profile")]
+fn alias_lookup_legacy(element: &str) -> Option<char> {
+    let bytes = element.as_bytes();
+    if bytes.is_empty()
+        || bytes.len() >= u16::BITS as usize
+        || ALIAS_LENGTHS_BY_INITIAL[usize::from(lower_byte(bytes[0]))] & (1 << bytes.len()) == 0
+    {
+        return None;
+    }
+    let table = legacy_alias_table();
+    let mut index = alias_hash(bytes);
+    for _ in 0..ALIAS_TABLE_LEN {
+        match table[index] {
+            Some(entry) if entry.key.eq_ignore_ascii_case(element) => return Some(entry.value),
+            Some(_) => index = (index + 1) & (ALIAS_TABLE_LEN - 1),
+            None => return None,
+        }
+    }
+    None
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+#[must_use]
+pub fn profile_alias_lookup(element: &str, legacy: bool) -> Option<char> {
+    if legacy {
+        alias_lookup_legacy(element)
+    } else {
+        alias_lookup(element)
+    }
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+#[must_use]
+pub fn profile_alias_build(slot: usize, legacy: bool) -> (usize, u32) {
+    let slot = slot & (ALIAS_TABLE_LEN - 1);
+    if legacy {
+        let table = build_legacy_alias_table(std::hint::black_box(ALIAS_ENTRIES));
+        return table[slot].map_or((0, 0), |entry| (entry.key.len(), entry.value as u32));
+    }
+    let entry = ALIAS_TABLE.slots[slot];
+    if entry == ALIAS_EMPTY {
+        (0, 0)
+    } else {
+        let entry = entry as usize;
+        (ALIAS_ENTRIES[entry].0.len(), alias_slot_value(entry) as u32)
+    }
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+#[must_use]
+pub fn profile_alias_table_sizes() -> (usize, usize) {
+    (
+        std::mem::size_of::<[Option<LegacyAliasEntry>; ALIAS_TABLE_LEN]>(),
+        std::mem::size_of::<AliasTable>(),
+    )
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+#[must_use]
+pub fn profile_alias_tables_match() -> bool {
+    const EDGE_CASES: [&str; 6] = ["", "unknown", "hkaa", "right_arrow", "aux@", "UP"];
+    let legacy = build_legacy_alias_table(ALIAS_ENTRIES);
+    for (slot, expected) in legacy.iter().enumerate() {
+        let entry = ALIAS_TABLE.slots[slot];
+        let actual = if entry == ALIAS_EMPTY {
+            None
+        } else {
+            let entry = entry as usize;
+            Some((ALIAS_ENTRIES[entry].0, alias_slot_value(entry)))
+        };
+        if expected.map(|entry| (entry.key, entry.value)) != actual {
+            return false;
+        }
+    }
+    for &(alias, _) in ALIAS_ENTRIES {
+        if alias_lookup_legacy(alias) != alias_lookup(alias) {
+            return false;
+        }
+        let bytes = alias.as_bytes();
+        let mut uppercase = [0u8; ALIAS_KEY_MAX_LEN];
+        let mut index = 0usize;
+        while index < bytes.len() {
+            uppercase[index] = bytes[index].to_ascii_uppercase();
+            index += 1;
+        }
+        // SAFETY: alias keys are const-validated ASCII, and ASCII uppercase
+        // preserves UTF-8 validity and byte length.
+        let uppercase = unsafe { std::str::from_utf8_unchecked(&uppercase[..bytes.len()]) };
+        if alias_lookup_legacy(uppercase) != alias_lookup(uppercase) {
+            return false;
+        }
+    }
+    EDGE_CASES
+        .into_iter()
+        .all(|alias| alias_lookup_legacy(alias) == alias_lookup(alias))
 }
 
 #[inline(always)]
@@ -343,19 +585,22 @@ fn alias_lookup(element: &str) -> Option<char> {
     if bytes.is_empty() {
         return None;
     }
-    if bytes.len() >= u16::BITS as usize
+    if bytes.len() > ALIAS_KEY_MAX_LEN
         || ALIAS_LENGTHS_BY_INITIAL[usize::from(lower_byte(bytes[0]))] & (1 << bytes.len()) == 0
     {
         return None;
     }
-    let table = alias_table();
-    let mut index = alias_hash(bytes);
+    let (mut index, key) = alias_hash_key(bytes)?;
     for _ in 0..ALIAS_TABLE_LEN {
-        match table[index] {
-            Some(entry) if entry.key.eq_ignore_ascii_case(element) => return Some(entry.value),
-            Some(_) => index = (index + 1) & (ALIAS_TABLE_LEN - 1),
-            None => return None,
+        let entry = ALIAS_TABLE.slots[index];
+        if entry == ALIAS_EMPTY {
+            return None;
         }
+        let entry = entry as usize;
+        if ALIAS_TABLE.keys[entry] == key {
+            return Some(alias_slot_value(entry));
+        }
+        index = (index + 1) & (ALIAS_TABLE_LEN - 1);
     }
     None
 }
@@ -570,14 +815,26 @@ pub fn replace_markers(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ALIAS_ENTRIES, alias_table, parse_numeric_marker, replace_markers_in_place};
+    use super::{
+        ALIAS_ENTRIES, INTERNAL_CODEPOINT, alias_char, parse_numeric_marker,
+        replace_markers_in_place,
+    };
 
     fn alias_lookup_linear(element: &str) -> Option<char> {
-        alias_table()
-            .iter()
-            .flatten()
-            .find(|entry| entry.key.eq_ignore_ascii_case(element))
-            .map(|entry| entry.value)
+        let mut next_internal = INTERNAL_CODEPOINT;
+        for &(alias, codepoint) in ALIAS_ENTRIES {
+            let value = if codepoint == INTERNAL_CODEPOINT {
+                let current = next_internal;
+                next_internal += 1;
+                current
+            } else {
+                codepoint
+            };
+            if alias.eq_ignore_ascii_case(element) {
+                return Some(alias_char(value));
+            }
+        }
+        None
     }
 
     fn replace_markers_materialized(text: &str) -> String {

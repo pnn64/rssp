@@ -1502,6 +1502,64 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     }
     translate_bench::assert_behavior();
+    assert!(rssp::translate::profile_alias_tables_match());
+    black_box(rssp::translate::profile_alias_table_sizes());
+    const ALIAS_LOOKUPS: [&str; 12] = [
+        "hka",
+        "KRO",
+        "rightarrow",
+        "whiteheart",
+        "kdot",
+        "omega",
+        "auxtriangle",
+        "menuright",
+        "unknown",
+        "hkaa",
+        "",
+        "UP",
+    ];
+    let mut legacy_slot = 0usize;
+    let mut static_slot = 0usize;
+    optimizations.throughput(Throughput::Elements(1));
+    optimizations.bench_function("alias_table_runtime_build", |b| {
+        b.iter(|| {
+            legacy_slot = legacy_slot.wrapping_add(1);
+            black_box(rssp::translate::profile_alias_build(
+                black_box(legacy_slot),
+                true,
+            ));
+        });
+    });
+    optimizations.bench_function("alias_table_static", |b| {
+        b.iter(|| {
+            static_slot = static_slot.wrapping_add(1);
+            black_box(rssp::translate::profile_alias_build(
+                black_box(static_slot),
+                false,
+            ));
+        });
+    });
+    optimizations.throughput(Throughput::Elements(ALIAS_LOOKUPS.len() as u64));
+    optimizations.bench_function("alias_lookup_legacy", |b| {
+        b.iter(|| {
+            for alias in ALIAS_LOOKUPS {
+                black_box(rssp::translate::profile_alias_lookup(
+                    black_box(alias),
+                    true,
+                ));
+            }
+        });
+    });
+    optimizations.bench_function("alias_lookup_compact", |b| {
+        b.iter(|| {
+            for alias in ALIAS_LOOKUPS {
+                black_box(rssp::translate::profile_alias_lookup(
+                    black_box(alias),
+                    false,
+                ));
+            }
+        });
+    });
     let marker_input = translate_bench::alias_input();
     optimizations.throughput(Throughput::Elements(translate_bench::MARKER_COUNT as u64));
     for (name, legacy) in [
