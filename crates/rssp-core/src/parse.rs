@@ -63,6 +63,36 @@ pub fn unescape_tag(tag: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
+fn unescape_owned(mut value: String) -> String {
+    if !value.as_bytes().contains(&b'\\') {
+        return value;
+    }
+    let mut escaped = false;
+    value.retain(|ch| {
+        if escaped {
+            escaped = false;
+            true
+        } else if ch == '\\' {
+            escaped = true;
+            false
+        } else {
+            true
+        }
+    });
+    if escaped {
+        value.push('\\');
+    }
+    value
+}
+
+#[must_use]
+pub fn decode_unescape(bytes: &[u8]) -> Cow<'_, str> {
+    match decode_bytes(bytes) {
+        Cow::Borrowed(value) => unescape_tag(value),
+        Cow::Owned(value) => Cow::Owned(unescape_owned(value)),
+    }
+}
+
 #[must_use]
 pub fn unescape_trim_cow(tag: &str) -> Cow<'_, str> {
     match unescape_tag(tag) {
@@ -81,12 +111,9 @@ pub fn unescape_trim(tag: &str) -> String {
 
 #[must_use]
 pub fn decode_unescape_trim(bytes: &[u8]) -> Cow<'_, str> {
-    match decode_bytes(bytes) {
-        Cow::Borrowed(value) => unescape_trim_cow(value),
+    match decode_unescape(bytes) {
+        Cow::Borrowed(value) => Cow::Borrowed(value.trim()),
         Cow::Owned(mut value) => {
-            if value.as_bytes().contains(&b'\\') {
-                value = unescape_tag(&value).into_owned();
-            }
             trim_string_in_place(&mut value);
             Cow::Owned(value)
         }

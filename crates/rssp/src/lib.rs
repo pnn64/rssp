@@ -265,6 +265,11 @@ pub mod profile {
     }
 
     #[must_use]
+    pub fn selectable(tag: Option<&[u8]>, legacy: bool) -> bool {
+        crate::analysis::profile_selectable(tag, legacy)
+    }
+
+    #[must_use]
     #[inline]
     pub fn bg_delimiter(rem: &str) -> Option<usize> {
         crate::assets::profile_find_bg_delimiter(rem)

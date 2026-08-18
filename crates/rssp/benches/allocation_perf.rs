@@ -37,6 +37,8 @@ mod report_nps_bench;
 mod report_patterns_bench;
 #[path = "support/report_timing.rs"]
 mod report_timing_bench;
+#[path = "support/selectable.rs"]
+mod selectable_bench;
 #[path = "support/serialize.rs"]
 mod serialize_bench;
 #[path = "support/sm_timing.rs"]
@@ -4477,6 +4479,10 @@ fn run_song_scan_phase<F>(
 }
 
 fn run_metadata_analyze_alloc(iterations: usize) {
+    selectable_bench::assert_behavior();
+    run_selectable_alloc::<true>("owned_compare", iterations);
+    run_selectable_alloc::<false>("borrowed_compare", iterations);
+
     let fixture = metadata_bench::fixture("0.83");
     let options = metadata_bench::options();
     black_box(
@@ -4513,6 +4519,41 @@ fn run_metadata_analyze_alloc(iterations: usize) {
         black_box(checksum),
         elapsed.as_secs_f64(),
         metadata_bench::CHART_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_selectable_alloc<const LEGACY: bool>(phase: &str, iterations: usize) {
+    black_box(selectable_bench::run::<LEGACY>());
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        checksum = checksum.wrapping_add(selectable_bench::run::<LEGACY>());
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=metadata-analyze phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_tags_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        selectable_bench::BATCH as f64 * divisor / elapsed.as_secs_f64(),
         (after.alloc_calls - before.alloc_calls) as f64 / divisor,
         (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
         (after.realloc_calls - before.realloc_calls) as f64 / divisor,

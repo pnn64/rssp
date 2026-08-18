@@ -20,9 +20,9 @@ use crate::hash::compute_chart_hash_pair;
 use crate::math::{round_dp, round_sig_figs_6};
 use crate::matrix::{MatrixProfile, compute_matrix_profile};
 use crate::parse::{
-    ParsedChartEntry, SSC_VERSION_CHART_NAME_TAG, decode_bytes, decode_unescape_trim,
-    extract_sections, normalize_chart_desc_ref, parse_offset_seconds, parse_version,
-    strip_title_tags, unescape_tag,
+    ParsedChartEntry, SSC_VERSION_CHART_NAME_TAG, decode_bytes, decode_unescape,
+    decode_unescape_trim, extract_sections, normalize_chart_desc_ref, parse_offset_seconds,
+    parse_version, strip_title_tags, unescape_tag,
 };
 use crate::patterns::{
     CompiledCustomPatterns, PATTERN_COUNT, PatternCounts, PatternVariant,
@@ -232,32 +232,20 @@ fn msd_first_param_bytes(bytes: &[u8]) -> &[u8] {
     bytes
 }
 
-fn unescape_owned(mut value: String) -> String {
-    if !value.as_bytes().contains(&b'\\') {
-        return value;
-    }
-    let mut escaped = false;
-    value.retain(|ch| {
-        if escaped {
-            escaped = false;
-            true
-        } else if ch == '\\' {
-            escaped = true;
-            false
-        } else {
-            true
-        }
-    });
-    if escaped {
-        value.push('\\');
-    }
-    value
+fn decode_unescape_owned(bytes: &[u8]) -> String {
+    decode_unescape(bytes).into_owned()
 }
 
-fn decode_unescape_owned(bytes: &[u8]) -> String {
-    match decode_bytes(bytes) {
-        Cow::Borrowed(value) => unescape_tag(value).into_owned(),
-        Cow::Owned(value) => unescape_owned(value),
+fn selectable_value(tag: Option<&[u8]>) -> bool {
+    tag.is_none_or(|bytes| decode_unescape(bytes) != "NO")
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_selectable(tag: Option<&[u8]>, legacy: bool) -> bool {
+    if legacy {
+        tag.map(decode_unescape_owned).unwrap_or_default() != "NO"
+    } else {
+        selectable_value(tag)
     }
 }
 
@@ -1250,11 +1238,7 @@ fn analyze_with_scratch_impl<const REUSE_BPMS: bool, const BORROW_TIMING: bool>(
         .lyricspath
         .map(decode_unescape_owned)
         .unwrap_or_default();
-    let selectable_bool = parsed_data
-        .selectable
-        .map(decode_unescape_owned)
-        .unwrap_or_default()
-        != "NO";
+    let selectable_bool = selectable_value(parsed_data.selectable);
     let timing_format = timing_format_from_ext(extension);
     let display_bpm_str = parsed_data
         .display_bpm

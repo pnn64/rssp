@@ -54,6 +54,9 @@ mod report_patterns_bench;
 #[path = "support/report_timing.rs"]
 mod report_timing_bench;
 #[cfg(windows)]
+#[path = "support/selectable.rs"]
+mod selectable_bench;
+#[cfg(windows)]
 #[path = "support/serialize.rs"]
 mod serialize_bench;
 #[cfg(windows)]
@@ -480,6 +483,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let parse_dispatch_fixture = parse_dispatch_bench::fixture();
     parse_dispatch_bench::assert_behavior(&parse_dispatch_fixture);
     parse_dispatch_bench::assert_reserve_behavior();
+    selectable_bench::assert_behavior();
     let parse_reserve_typical =
         parse_dispatch_bench::fixture_with_charts(parse_dispatch_bench::TYPICAL_CHART_COUNT);
     let parse_reserve_sm =
@@ -669,6 +673,18 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     decoding.finish();
+
+    let mut selectable = c.benchmark_group("cycles/selectable_4096");
+    selectable.throughput(Throughput::Elements(selectable_bench::BATCH as u64));
+    selectable.sample_size(100);
+    selectable.measurement_time(Duration::from_secs(3));
+    selectable.bench_function("owned_compare", |b| {
+        b.iter(|| black_box(selectable_bench::run::<true>()));
+    });
+    selectable.bench_function("borrowed_compare", |b| {
+        b.iter(|| black_box(selectable_bench::run::<false>()));
+    });
+    selectable.finish();
 
     let mut normalization = c.benchmark_group("cycles/normalization");
     normalization.throughput(Throughput::Bytes(pair_map.len() as u64));

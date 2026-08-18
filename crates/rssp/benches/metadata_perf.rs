@@ -9,6 +9,8 @@ const EXTENSION: &str = "ssc";
 mod metadata_bench;
 #[path = "support/parse_dispatch.rs"]
 mod parse_dispatch_bench;
+#[path = "support/selectable.rs"]
+mod selectable_bench;
 #[path = "support/translate.rs"]
 mod translate_bench;
 
@@ -221,6 +223,21 @@ fn bench_chart_metadata_analysis(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_selectable(c: &mut Criterion) {
+    selectable_bench::assert_behavior();
+    let mut group = c.benchmark_group("selectable_4096");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(selectable_bench::BATCH as u64));
+    group.bench_function("owned_compare", |b| {
+        b.iter(|| black_box(selectable_bench::run::<true>()));
+    });
+    group.bench_function("borrowed_compare", |b| {
+        b.iter(|| black_box(selectable_bench::run::<false>()));
+    });
+    group.finish();
+}
+
 fn bench_chart_metadata_strings(c: &mut Criterion) {
     let modern = metadata_bench::fixture("0.83");
     let legacy = metadata_bench::fixture("0.70");
@@ -415,6 +432,7 @@ criterion_group!(
     benches,
     bench_metadata_pipeline,
     bench_chart_metadata_analysis,
+    bench_selectable,
     bench_chart_metadata_strings,
     bench_marker_translation,
     bench_parse_dispatch,
