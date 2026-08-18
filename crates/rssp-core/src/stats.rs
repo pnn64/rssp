@@ -34,6 +34,157 @@ pub struct ArrowStats {
     pub holding: i32,
 }
 
+/// A note category emitted while RSSP minimizes a chart.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartNoteType {
+    Tap,
+    Hold,
+    Roll,
+    Mine,
+    Lift,
+    Fake,
+}
+
+/// A complete note event emitted by RSSP's minimized-row pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParsedChartNote {
+    pub row_index: usize,
+    pub column: usize,
+    pub note_type: ChartNoteType,
+    pub tail_row_index: Option<usize>,
+}
+
+const NO_TAIL_ROW: u32 = u32::MAX;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct RawChartNote {
+    row_index: u32,
+    tail_row_index: u32,
+    column: u8,
+    note_type: ChartNoteType,
+}
+
+impl From<RawChartNote> for ParsedChartNote {
+    fn from(note: RawChartNote) -> Self {
+        Self {
+            row_index: note.row_index as usize,
+            column: note.column as usize,
+            note_type: note.note_type,
+            tail_row_index: (note.tail_row_index != NO_TAIL_ROW)
+                .then_some(note.tail_row_index as usize),
+        }
+    }
+}
+
+/// Reusable intermediate note-event storage.
+#[doc(hidden)]
+#[derive(Default)]
+pub struct ChartNotesScratch {
+    notes: Vec<RawChartNote>,
+    invalid_heads: Vec<usize>,
+    hold_heads: [Option<usize>; 10],
+    lanes: usize,
+    row_index: usize,
+}
+
+impl ChartNotesScratch {
+    fn begin(&mut self, lanes: usize, capacity: usize) {
+        self.notes.clear();
+        self.notes.reserve(capacity);
+        self.invalid_heads.clear();
+        self.hold_heads.fill(None);
+        self.lanes = lanes;
+        self.row_index = 0;
+    }
+
+    fn invalidate_hold(&mut self, column: usize) {
+        if let Some(note_index) = self.hold_heads[column].take() {
+            self.invalid_heads.push(note_index);
+        }
+    }
+
+    fn push_cell(&mut self, column: usize, cell: ChartNoteCell) {
+        if cell == ChartNoteCell::Tail {
+            if let Some(head_index) = self.hold_heads[column].take()
+                && let Some(note) = self.notes.get_mut(head_index)
+            {
+                note.tail_row_index = self.row_index as u32;
+            }
+            return;
+        }
+
+        self.invalidate_hold(column);
+        let note_type = match cell {
+            ChartNoteCell::Tap => ChartNoteType::Tap,
+            ChartNoteCell::Hold => ChartNoteType::Hold,
+            ChartNoteCell::Roll => ChartNoteType::Roll,
+            ChartNoteCell::Mine => ChartNoteType::Mine,
+            ChartNoteCell::Lift => ChartNoteType::Lift,
+            ChartNoteCell::Fake => ChartNoteType::Fake,
+            ChartNoteCell::Tail => unreachable!(),
+        };
+        let note_index = self.notes.len();
+        self.notes.push(RawChartNote {
+            row_index: self.row_index as u32,
+            tail_row_index: NO_TAIL_ROW,
+            column: column as u8,
+            note_type,
+        });
+        if matches!(cell, ChartNoteCell::Hold | ChartNoteCell::Roll) {
+            self.hold_heads[column] = Some(note_index);
+        }
+    }
+
+    fn finish_row(&mut self) {
+        self.row_index += 1;
+    }
+
+    fn finish(&mut self) {
+        for column in 0..self.lanes {
+            self.invalidate_hold(column);
+        }
+        if self.invalid_heads.is_empty() {
+            return;
+        }
+
+        self.invalid_heads.sort_unstable();
+        let mut invalid = self.invalid_heads.iter().copied().peekable();
+        let mut note_index = 0usize;
+        self.notes.retain(|_| {
+            let keep = invalid.peek().copied() != Some(note_index);
+            if !keep {
+                invalid.next();
+            }
+            note_index += 1;
+            keep
+        });
+    }
+
+    /// Drains resolved events while retaining their allocation.
+    pub fn drain(&mut self) -> impl ExactSizeIterator<Item = ParsedChartNote> + '_ {
+        self.notes.drain(..).map(ParsedChartNote::from)
+    }
+
+    /// Capacity of the retained event buffer.
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.notes.capacity()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChartNoteCell {
+    Tap,
+    Hold,
+    Roll,
+    Tail,
+    Mine,
+    Lift,
+    Fake,
+}
+
 pub const RADAR_CATEGORY_COUNT: usize = 14;
 
 const HOLD_END_NONE: usize = usize::MAX;
@@ -269,12 +420,73 @@ fn count_line<const L: usize>(
         return row_count;
     }
 
+    count_line_slow(
+        line,
+        stats,
+        holds_started,
+        ends_seen,
+        phantom_depths,
+        has_phantom,
+        object_depths,
+        &mut |_, _| {},
+    )
+}
+
+#[inline(always)]
+fn count_line_notes<const L: usize>(
+    line: &[u8; L],
+    stats: &mut ArrowStats,
+    holds_started: &mut u32,
+    ends_seen: &mut u32,
+    phantom_depths: &mut [u32; L],
+    has_phantom: &mut bool,
+    object_depths: &mut [u32; L],
+    chart_notes: &mut ChartNotesScratch,
+) -> RowCount {
+    if let Some(mask) = tap_line_mask(line) {
+        let row_count = count_tap_mask(mask, stats, phantom_depths, has_phantom, object_depths);
+        let mut note_mask = mask;
+        while note_mask != 0 {
+            let column = note_mask.trailing_zeros() as usize;
+            chart_notes.push_cell(column, ChartNoteCell::Tap);
+            note_mask &= note_mask - 1;
+        }
+        chart_notes.finish_row();
+        return row_count;
+    }
+
+    let row_count = count_line_slow(
+        line,
+        stats,
+        holds_started,
+        ends_seen,
+        phantom_depths,
+        has_phantom,
+        object_depths,
+        &mut |column, cell| chart_notes.push_cell(column, cell),
+    );
+    chart_notes.finish_row();
+    row_count
+}
+
+#[inline(always)]
+fn count_line_slow<const L: usize>(
+    line: &[u8; L],
+    stats: &mut ArrowStats,
+    holds_started: &mut u32,
+    ends_seen: &mut u32,
+    phantom_depths: &mut [u32; L],
+    has_phantom: &mut bool,
+    object_depths: &mut [u32; L],
+    visit: &mut impl FnMut(usize, ChartNoteCell),
+) -> RowCount {
     let (mut notes, mut new_holds, mut ends) = (0u32, 0i32, 0i32);
     let mut object = false;
 
     for (i, &ch) in line.iter().enumerate() {
         match ch {
             b'1' => {
+                visit(i, ChartNoteCell::Tap);
                 object = true;
                 object_depths[i] = 0;
                 *has_phantom |= phantom_depths[i] != 0;
@@ -283,6 +495,7 @@ fn count_line<const L: usize>(
                 bump_dir(stats, i);
             }
             b'2' => {
+                visit(i, ChartNoteCell::Hold);
                 object_depths[i] = object_depths[i].saturating_add(1);
                 phantom_depths[i] = phantom_depths[i].saturating_add(1);
                 notes += 1;
@@ -292,6 +505,7 @@ fn count_line<const L: usize>(
                 bump_dir(stats, i);
             }
             b'4' => {
+                visit(i, ChartNoteCell::Roll);
                 object_depths[i] = object_depths[i].saturating_add(1);
                 phantom_depths[i] = phantom_depths[i].saturating_add(1);
                 notes += 1;
@@ -301,6 +515,7 @@ fn count_line<const L: usize>(
                 bump_dir(stats, i);
             }
             b'3' => {
+                visit(i, ChartNoteCell::Tail);
                 if object_depths[i] > 0 {
                     object_depths[i] -= 1;
                     object = true;
@@ -309,18 +524,21 @@ fn count_line<const L: usize>(
                 ends += 1;
             }
             b'M' => {
+                visit(i, ChartNoteCell::Mine);
                 object = true;
                 object_depths[i] = 0;
                 *has_phantom |= phantom_depths[i] != 0;
                 stats.mines += 1;
             }
             b'L' => {
+                visit(i, ChartNoteCell::Lift);
                 object = true;
                 object_depths[i] = 0;
                 *has_phantom |= phantom_depths[i] != 0;
                 stats.lifts += 1;
             }
             b'F' => {
+                visit(i, ChartNoteCell::Fake);
                 object = true;
                 object_depths[i] = 0;
                 *has_phantom |= phantom_depths[i] != 0;
@@ -330,9 +548,18 @@ fn count_line<const L: usize>(
                 object = true;
                 object_depths[i] = 0;
             }
-            b'm' => stats.mines += 1,
-            b'l' => stats.lifts += 1,
-            b'f' => stats.fakes += 1,
+            b'm' => {
+                visit(i, ChartNoteCell::Mine);
+                stats.mines += 1;
+            }
+            b'l' => {
+                visit(i, ChartNoteCell::Lift);
+                stats.lifts += 1;
+            }
+            b'f' => {
+                visit(i, ChartNoteCell::Fake);
+                stats.fakes += 1;
+            }
             _ => {}
         }
     }
@@ -371,16 +598,38 @@ fn count_tap_line<const L: usize>(
     has_phantom: &mut bool,
     object_depths: &mut [u32; L],
 ) -> Option<RowCount> {
-    let mask = match L {
+    let mask = tap_line_mask(line)?;
+    Some(count_tap_mask(
+        mask,
+        stats,
+        phantom_depths,
+        has_phantom,
+        object_depths,
+    ))
+}
+
+#[inline(always)]
+fn tap_line_mask<const L: usize>(line: &[u8; L]) -> Option<u8> {
+    match L {
         4 => tap_mask4(line),
         8 => tap_mask8(line),
         _ => None,
-    }?;
+    }
+}
+
+#[inline(always)]
+fn count_tap_mask<const L: usize>(
+    mask: u8,
+    stats: &mut ArrowStats,
+    phantom_depths: &[u32; L],
+    has_phantom: &mut bool,
+    object_depths: &mut [u32; L],
+) -> RowCount {
     if mask == 0 {
-        return Some(RowCount {
+        return RowCount {
             density: false,
             object: false,
-        });
+        };
     }
 
     let notes = mask.count_ones();
@@ -405,10 +654,10 @@ fn count_tap_line<const L: usize>(
         stats.hands += 1;
     }
 
-    Some(RowCount {
+    RowCount {
         density: true,
         object: true,
-    })
+    }
 }
 
 fn recalc_without_phantoms<const L: usize>(
@@ -676,21 +925,63 @@ where
     R: FnMut(usize, usize),
     N: FnMut(&[u8; L], usize, usize, usize, bool),
 {
+    let mut chart_notes = ChartNotesScratch::default();
+    process_chart_in_impl::<L, false, _, _>(data, measure, on_rows, on_line, &mut chart_notes)
+}
+
+fn process_chart_notes_in<const L: usize, R, N>(
+    data: &[u8],
+    measure: &mut Vec<[u8; L]>,
+    on_rows: &mut R,
+    on_line: &mut N,
+    chart_notes: &mut ChartNotesScratch,
+) -> (Vec<u8>, ArrowStats, Vec<usize>)
+where
+    R: FnMut(usize, usize),
+    N: FnMut(&[u8; L], usize, usize, usize, bool),
+{
+    process_chart_in_impl::<L, true, _, _>(data, measure, on_rows, on_line, chart_notes)
+}
+
+fn process_chart_in_impl<const L: usize, const NOTES: bool, R, N>(
+    data: &[u8],
+    measure: &mut Vec<[u8; L]>,
+    on_rows: &mut R,
+    on_line: &mut N,
+    chart_notes: &mut ChartNotesScratch,
+) -> (Vec<u8>, ArrowStats, Vec<usize>)
+where
+    R: FnMut(usize, usize),
+    N: FnMut(&[u8; L], usize, usize, usize, bool),
+{
     let mut stats = ArrowStats::default();
     let (mut holds, mut ends) = (0u32, 0u32);
     let mut phantom_depths = [0u32; L];
     let mut object_depths = [0u32; L];
     let mut has_phantom = false;
     let mut count = |line: &[u8; L]| {
-        count_line(
-            line,
-            &mut stats,
-            &mut holds,
-            &mut ends,
-            &mut phantom_depths,
-            &mut has_phantom,
-            &mut object_depths,
-        )
+        if NOTES {
+            count_line_notes(
+                line,
+                &mut stats,
+                &mut holds,
+                &mut ends,
+                &mut phantom_depths,
+                &mut has_phantom,
+                &mut object_depths,
+                chart_notes,
+            )
+        } else {
+            count_line(
+                line,
+                &mut stats,
+                &mut holds,
+                &mut ends,
+                &mut phantom_depths,
+                &mut has_phantom,
+                &mut object_depths,
+            )
+        }
     };
     let (output, densities) = minimize_chart_core(data, measure, on_rows, on_line, &mut count);
     has_phantom |= phantom_depths.iter().any(|&d| d != 0);
@@ -702,6 +993,10 @@ where
         let step_count = stats.total_steps;
         stats = recalc_without_phantoms(&rows, &hold_ends);
         stats.total_steps = step_count;
+    }
+
+    if NOTES {
+        chart_notes.finish();
     }
 
     (output, stats, densities)
@@ -731,6 +1026,20 @@ pub fn minimize_chart_count_rows(
         8 => minimize_rows_direct::<8, true>(data),
         10 => minimize_rows_direct::<10, true>(data),
         _ => minimize_rows_direct::<4, true>(data),
+    }
+}
+
+/// Minimizes chart data and emits resolved note events without materializing rows.
+pub fn minimize_chart_count_rows_notes(
+    data: &[u8],
+    lanes: usize,
+    chart_notes: &mut ChartNotesScratch,
+) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
+    match lanes {
+        5 => minimize_rows_direct_notes::<5, true>(data, chart_notes),
+        8 => minimize_rows_direct_notes::<8, true>(data, chart_notes),
+        10 => minimize_rows_direct_notes::<10, true>(data, chart_notes),
+        _ => minimize_rows_direct_notes::<4, true>(data, chart_notes),
     }
 }
 
@@ -779,6 +1088,22 @@ fn compact_output_rows<const L: usize>(
 fn minimize_rows_direct<const L: usize, const BEATS: bool>(
     data: &[u8],
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
+    let mut chart_notes = ChartNotesScratch::default();
+    minimize_rows_direct_impl::<L, BEATS, false>(data, &mut chart_notes)
+}
+
+fn minimize_rows_direct_notes<const L: usize, const BEATS: bool>(
+    data: &[u8],
+    chart_notes: &mut ChartNotesScratch,
+) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
+    chart_notes.begin(L, data.len() / (L + 1));
+    minimize_rows_direct_impl::<L, BEATS, true>(data, chart_notes)
+}
+
+fn minimize_rows_direct_impl<const L: usize, const BEATS: bool, const NOTES: bool>(
+    data: &[u8],
+    chart_notes: &mut ChartNotesScratch,
+) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
     let mut output = Vec::with_capacity(data.len());
     let mut densities = Vec::with_capacity(data.len() / ((L + 1) * 4) + 1);
     let mut beats = if BEATS {
@@ -813,15 +1138,28 @@ fn minimize_rows_direct<const L: usize, const BEATS: bool>(
                     let line: &[u8; L] = output[offset..offset + L]
                         .try_into()
                         .expect("minimized row width should match its lane count");
-                    let count = count_line(
-                        line,
-                        &mut stats,
-                        &mut holds,
-                        &mut ends,
-                        &mut phantom_depths,
-                        &mut has_phantom,
-                        &mut object_depths,
-                    );
+                    let count = if NOTES {
+                        count_line_notes(
+                            line,
+                            &mut stats,
+                            &mut holds,
+                            &mut ends,
+                            &mut phantom_depths,
+                            &mut has_phantom,
+                            &mut object_depths,
+                            chart_notes,
+                        )
+                    } else {
+                        count_line(
+                            line,
+                            &mut stats,
+                            &mut holds,
+                            &mut ends,
+                            &mut phantom_depths,
+                            &mut has_phantom,
+                            &mut object_depths,
+                        )
+                    };
                     density += usize::from(count.density);
                     if count.object {
                         (last_m, last_r, last_rows) = (Some(measure), row, rows);
@@ -869,6 +1207,10 @@ fn minimize_rows_direct<const L: usize, const BEATS: bool>(
         let step_count = stats.total_steps;
         stats = recalc_without_phantoms(&rows, &hold_ends);
         stats.total_steps = step_count;
+    }
+
+    if NOTES {
+        chart_notes.finish();
     }
 
     let last = calc_last_beat(last_m, last_r, last_rows);
@@ -1241,6 +1583,25 @@ pub fn minimize_rows_typed_in<const L: usize>(
     data: &[u8],
     scratch: &mut TypedRowsScratch<L>,
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
+    let mut chart_notes = ChartNotesScratch::default();
+    minimize_rows_typed_in_impl::<L, false>(data, scratch, &mut chart_notes)
+}
+
+/// Minimizes typed rows and emits resolved note events while reusing storage.
+pub fn minimize_rows_typed_in_notes<const L: usize>(
+    data: &[u8],
+    scratch: &mut TypedRowsScratch<L>,
+    chart_notes: &mut ChartNotesScratch,
+) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
+    chart_notes.begin(L, data.len() / (L + 1));
+    minimize_rows_typed_in_impl::<L, true>(data, scratch, chart_notes)
+}
+
+fn minimize_rows_typed_in_impl<const L: usize, const NOTES: bool>(
+    data: &[u8],
+    scratch: &mut TypedRowsScratch<L>,
+    chart_notes: &mut ChartNotesScratch,
+) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
     let capacity = data.len() / (L + 1);
     scratch.clear();
     let TypedRowsScratch { rows, measure } = scratch;
@@ -1256,7 +1617,11 @@ pub fn minimize_rows_typed_in<const L: usize>(
         }
     };
 
-    let (out, stats, dens) = process_chart_in::<L, _, _>(data, measure, &mut on_rows, &mut on_line);
+    let (out, stats, dens) = if NOTES {
+        process_chart_notes_in::<L, _, _>(data, measure, &mut on_rows, &mut on_line, chart_notes)
+    } else {
+        process_chart_in::<L, _, _>(data, measure, &mut on_rows, &mut on_line)
+    };
     let last = calc_last_beat(last_m, last_r, last_rows);
     (out, stats, dens, beats, last)
 }
@@ -1959,6 +2324,11 @@ fn density_reduce_shift(measure: &[u8]) -> usize {
 mod tests {
     use super::*;
     use crate::timing::{TimingFormat, timing_data_from_chart_data};
+
+    #[test]
+    fn raw_chart_notes_remain_compact() {
+        assert_eq!(std::mem::size_of::<RawChartNote>(), 12);
+    }
 
     fn timing(fakes: Option<&str>) -> TimingData {
         timing_data_from_chart_data(

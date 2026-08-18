@@ -32,7 +32,8 @@ use crate::stats::{
     RADAR_CATEGORY_COUNT, StreamCounts, compute_stream_outputs_with_scratch,
     compute_timing_aware_stats_from_rows_with_row_to_beat,
     compute_timing_aware_stats_no_holds_from_rows, compute_timing_aware_stats_with_row_to_beat,
-    minimize_chart_count_rows, minimize_rows_typed_in,
+    minimize_chart_count_rows, minimize_chart_count_rows_notes, minimize_rows_typed_in,
+    minimize_rows_typed_in_notes,
 };
 use crate::tech::parse_tech_notation;
 use crate::timing::{
@@ -40,6 +41,8 @@ use crate::timing::{
     has_nonjudgable_rows, steps_timing_allowed, timing_data_from_segments, timing_format_from_ext,
 };
 use crate::{chart_timing_tag_raw, resolve_difficulty_label, supported_stepstype_lanes_bytes};
+
+pub use crate::stats::{ChartNoteType, ParsedChartNote};
 
 /// Options for controlling simfile analysis.
 #[derive(Debug, Clone)]
@@ -85,6 +88,7 @@ pub struct AnalysisScratch {
     rows8: stats::TypedRowsScratch<8>,
     custom_counts: Vec<u32>,
     stream_tokens: Vec<stats::Token>,
+    chart_notes: stats::ChartNotesScratch,
 }
 
 impl std::fmt::Debug for AnalysisScratch {
@@ -100,6 +104,7 @@ impl std::fmt::Debug for AnalysisScratch {
             .field("rows8_capacity", &self.rows8.row_capacity())
             .field("custom_count_capacity", &self.custom_counts.capacity())
             .field("stream_capacity", &self.stream_tokens.capacity())
+            .field("chart_note_capacity", &self.chart_notes.capacity())
             .finish()
     }
 }
@@ -617,6 +622,8 @@ fn build_chart_summary<const REUSE_BPMS: bool>(
     nps_scratch: &mut Vec<f64>,
     custom_counts: &mut Vec<u32>,
     stream_tokens: &mut Vec<stats::Token>,
+    chart_notes: &mut stats::ChartNotesScratch,
+    collect_notes: bool,
     options: &AnalysisOptions,
 ) -> Option<(ChartSummary, i32)> {
     let chart_start_time = Instant::now();
@@ -670,20 +677,32 @@ fn build_chart_summary<const REUSE_BPMS: bool>(
     rows8.clear();
     let (mut minimized_chart, mut stats, measure_densities, row_to_beat, last_beat) =
         if compute_patterns {
-            let (chart, stats, densities, row_to_beat, last_beat) =
-                minimize_rows_typed_in::<4>(chart_data, rows4);
+            let (chart, stats, densities, row_to_beat, last_beat) = if collect_notes {
+                minimize_rows_typed_in_notes::<4>(chart_data, rows4, chart_notes)
+            } else {
+                minimize_rows_typed_in::<4>(chart_data, rows4)
+            };
             (chart, stats, densities, row_to_beat, last_beat)
         } else if !want_parity_rows {
-            let (chart, stats, densities, row_to_beat, last_beat) =
-                minimize_chart_count_rows(chart_data, lanes);
+            let (chart, stats, densities, row_to_beat, last_beat) = if collect_notes {
+                minimize_chart_count_rows_notes(chart_data, lanes, chart_notes)
+            } else {
+                minimize_chart_count_rows(chart_data, lanes)
+            };
             (chart, stats, densities, row_to_beat, last_beat)
         } else if lanes == 8 {
-            let (chart, stats, densities, row_to_beat, last_beat) =
-                minimize_rows_typed_in::<8>(chart_data, rows8);
+            let (chart, stats, densities, row_to_beat, last_beat) = if collect_notes {
+                minimize_rows_typed_in_notes::<8>(chart_data, rows8, chart_notes)
+            } else {
+                minimize_rows_typed_in::<8>(chart_data, rows8)
+            };
             (chart, stats, densities, row_to_beat, last_beat)
         } else {
-            let (chart, stats, densities, row_to_beat, last_beat) =
-                minimize_rows_typed_in::<4>(chart_data, rows4);
+            let (chart, stats, densities, row_to_beat, last_beat) = if collect_notes {
+                minimize_rows_typed_in_notes::<4>(chart_data, rows4, chart_notes)
+            } else {
+                minimize_rows_typed_in::<4>(chart_data, rows4)
+            };
             (chart, stats, densities, row_to_beat, last_beat)
         };
     let rows4 = rows4.rows();
@@ -1099,7 +1118,15 @@ pub fn analyze_with_scratch(
     options: &AnalysisOptions,
     scratch: &mut AnalysisScratch,
 ) -> Result<SimfileSummary, String> {
-    analyze_with_scratch_impl::<true, true>(simfile_data, extension, options, scratch, None)
+    analyze_with_scratch_impl::<true, true, (), fn(ParsedChartNote)>(
+        simfile_data,
+        extension,
+        options,
+        scratch,
+        None,
+        None,
+        None,
+    )
 }
 
 /// Analyzes a simfile with precompiled options and reusable storage.
@@ -1114,12 +1141,43 @@ pub fn analyze_prepared_in(
     prepared: &PreparedAnalysis,
     scratch: &mut AnalysisScratch,
 ) -> Result<SimfileSummary, String> {
-    analyze_with_scratch_impl::<true, true>(
+    analyze_with_scratch_impl::<true, true, (), fn(ParsedChartNote)>(
         simfile_data,
         extension,
         &prepared.options,
         scratch,
         Some(&prepared.custom_patterns),
+        None,
+        None,
+    )
+}
+
+/// Analyzes a simfile and builds caller-owned chart notes during minimization.
+///
+/// The vectors written to `chart_notes` align one-to-one with `summary.charts`.
+/// RSSP uses reusable scratch storage for intermediate events and invokes
+/// `map_note` only after hold tails and invalid heads are resolved.
+///
+/// # Errors
+///
+/// Returns an error when the extension is unsupported, parsing fails, or no
+/// supported chart is present.
+pub fn analyze_prepared_in_with_notes<T>(
+    simfile_data: &[u8],
+    extension: &str,
+    prepared: &PreparedAnalysis,
+    scratch: &mut AnalysisScratch,
+    chart_notes: &mut Vec<Vec<T>>,
+    mut map_note: impl FnMut(ParsedChartNote) -> T,
+) -> Result<SimfileSummary, String> {
+    analyze_with_scratch_impl::<true, true, T, _>(
+        simfile_data,
+        extension,
+        &prepared.options,
+        scratch,
+        Some(&prepared.custom_patterns),
+        Some(chart_notes),
+        Some(&mut map_note),
     )
 }
 
@@ -1130,7 +1188,15 @@ pub(crate) fn profile_analyze_with_allocating_bpms(
     options: &AnalysisOptions,
     scratch: &mut AnalysisScratch,
 ) -> Result<SimfileSummary, String> {
-    analyze_with_scratch_impl::<false, true>(simfile_data, extension, options, scratch, None)
+    analyze_with_scratch_impl::<false, true, (), fn(ParsedChartNote)>(
+        simfile_data,
+        extension,
+        options,
+        scratch,
+        None,
+        None,
+        None,
+    )
 }
 
 #[cfg(feature = "profile")]
@@ -1140,15 +1206,30 @@ pub(crate) fn profile_analyze_owned(
     options: &AnalysisOptions,
     scratch: &mut AnalysisScratch,
 ) -> Result<SimfileSummary, String> {
-    analyze_with_scratch_impl::<true, false>(simfile_data, extension, options, scratch, None)
+    analyze_with_scratch_impl::<true, false, (), fn(ParsedChartNote)>(
+        simfile_data,
+        extension,
+        options,
+        scratch,
+        None,
+        None,
+        None,
+    )
 }
 
-fn analyze_with_scratch_impl<const REUSE_BPMS: bool, const BORROW_TIMING: bool>(
+fn analyze_with_scratch_impl<
+    const REUSE_BPMS: bool,
+    const BORROW_TIMING: bool,
+    T,
+    MapNote: FnMut(ParsedChartNote) -> T,
+>(
     simfile_data: &[u8],
     extension: &str,
     options: &AnalysisOptions,
     scratch: &mut AnalysisScratch,
     prepared_patterns: Option<&CompiledCustomPatterns>,
+    mut chart_notes: Option<&mut Vec<Vec<T>>>,
+    mut map_note: Option<&mut MapNote>,
 ) -> Result<SimfileSummary, String> {
     let total_start_time = Instant::now();
 
@@ -1414,6 +1495,11 @@ fn analyze_with_scratch_impl<const REUSE_BPMS: bool, const BORROW_TIMING: bool>(
     let entries = parsed_data.notes_list;
     let entry_count = entries.len();
     let mut chart_summaries = Vec::with_capacity(entry_count);
+    let collect_notes = chart_notes.is_some();
+    if let Some(chart_notes) = &mut chart_notes {
+        chart_notes.clear();
+        chart_notes.reserve(entry_count);
+    }
     let mut total_length = 0i32;
     let mut global_timing = None;
     let options_ref = &options;
@@ -1447,12 +1533,20 @@ fn analyze_with_scratch_impl<const REUSE_BPMS: bool, const BORROW_TIMING: bool>(
             &mut scratch.nps,
             &mut scratch.custom_counts,
             &mut scratch.stream_tokens,
+            &mut scratch.chart_notes,
+            collect_notes,
             options_ref,
         ) {
             if chart_length > total_length {
                 total_length = chart_length;
             }
             chart_summaries.push(summary);
+            if let (Some(chart_notes), Some(map_note)) = (&mut chart_notes, &mut map_note) {
+                let raw_notes = scratch.chart_notes.drain();
+                let mut mapped_notes = Vec::with_capacity(raw_notes.len());
+                mapped_notes.extend(raw_notes.map(&mut **map_note));
+                chart_notes.push(mapped_notes);
+            }
         }
     }
 
@@ -1584,9 +1678,10 @@ pub fn compute_all_hashes(
 #[cfg(test)]
 mod tests {
     use super::{
-        AnalysisOptions, AnalysisScratch, ChartMetadataStrings, PreparedAnalysis, analyze,
-        analyze_prepared_in, analyze_with_scratch, analyze_with_scratch_impl,
-        chart_metadata_strings, compute_all_hashes, decode_trim_owned, decode_unescape_owned,
+        AnalysisOptions, AnalysisScratch, ChartMetadataStrings, ChartNoteType, ParsedChartNote,
+        PreparedAnalysis, analyze, analyze_prepared_in, analyze_prepared_in_with_notes,
+        analyze_with_scratch, analyze_with_scratch_impl, chart_metadata_strings,
+        compute_all_hashes, decode_trim_owned, decode_unescape_owned,
     };
     use crate::parse::{
         decode_bytes, normalize_chart_desc, normalize_chart_name, unescape_tag, unescape_trim,
@@ -1611,11 +1706,13 @@ mod tests {
             ..AnalysisOptions::default()
         };
         let mut legacy_scratch = AnalysisScratch::default();
-        let expected = analyze_with_scratch_impl::<false, false>(
+        let expected = analyze_with_scratch_impl::<false, false, (), fn(ParsedChartNote)>(
             FIXTURE,
             "ssc",
             &options,
             &mut legacy_scratch,
+            None,
+            None,
             None,
         )
         .expect("legacy analysis should succeed");
@@ -1655,11 +1752,13 @@ mod tests {
             "#BPMS:0=150,4=200;\n#NOTES:\n1000\n0100\n0010\n0001\n;\n"
         )
         .as_bytes();
-        let expected = analyze_with_scratch_impl::<false, false>(
+        let expected = analyze_with_scratch_impl::<false, false, (), fn(ParsedChartNote)>(
             LOCAL_TIMING,
             "ssc",
             &options,
             &mut legacy_scratch,
+            None,
+            None,
             None,
         )
         .expect("legacy local timing analysis should succeed");
@@ -1692,6 +1791,99 @@ mod tests {
         assert_eq!(prepared.options().custom_patterns, options.custom_patterns);
         assert_eq!(json(&first), json(&expected));
         assert_eq!(json(&second), json(&expected));
+    }
+
+    #[test]
+    fn prepared_note_output_resolves_types_tails_and_invalid_heads() {
+        const CHARTS: &[u8] = concat!(
+            "#VERSION:0.83;\n#TITLE:Parsed Notes;\n#BPMS:0=120;\n",
+            "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Challenge;\n",
+            "#METER:1;\n#NOTES:\n1MLF\n2000\n3000\n0400\n0300\n2000\n1000\n3000\n;\n",
+            "#NOTEDATA:;\n#STEPSTYPE:pump-double;\n#DIFFICULTY:Challenge;\n",
+            "#METER:1;\n#NOTES:\n1000000001\n2000000000\n3000000000\n0000000000\n;\n",
+        )
+        .as_bytes();
+        let prepared = PreparedAnalysis::new(AnalysisOptions::default());
+        let mut scratch = AnalysisScratch::default();
+        let mut chart_notes = Vec::new();
+
+        let summary = analyze_prepared_in_with_notes(
+            CHARTS,
+            "ssc",
+            &prepared,
+            &mut scratch,
+            &mut chart_notes,
+            |note| note,
+        )
+        .unwrap();
+
+        assert_eq!(chart_notes.len(), summary.charts.len());
+        assert_eq!(
+            chart_notes[0],
+            [
+                ParsedChartNote {
+                    row_index: 0,
+                    column: 0,
+                    note_type: ChartNoteType::Tap,
+                    tail_row_index: None,
+                },
+                ParsedChartNote {
+                    row_index: 0,
+                    column: 1,
+                    note_type: ChartNoteType::Mine,
+                    tail_row_index: None,
+                },
+                ParsedChartNote {
+                    row_index: 0,
+                    column: 2,
+                    note_type: ChartNoteType::Lift,
+                    tail_row_index: None,
+                },
+                ParsedChartNote {
+                    row_index: 0,
+                    column: 3,
+                    note_type: ChartNoteType::Fake,
+                    tail_row_index: None,
+                },
+                ParsedChartNote {
+                    row_index: 1,
+                    column: 0,
+                    note_type: ChartNoteType::Hold,
+                    tail_row_index: Some(2),
+                },
+                ParsedChartNote {
+                    row_index: 3,
+                    column: 1,
+                    note_type: ChartNoteType::Roll,
+                    tail_row_index: Some(4),
+                },
+                ParsedChartNote {
+                    row_index: 6,
+                    column: 0,
+                    note_type: ChartNoteType::Tap,
+                    tail_row_index: None,
+                },
+            ]
+        );
+        assert_eq!(chart_notes[1].len(), 3);
+        assert_eq!(chart_notes[1][0].column, 0);
+        assert_eq!(chart_notes[1][1].column, 9);
+        assert_eq!(chart_notes[1][2].tail_row_index, Some(2));
+
+        let outer_capacity = chart_notes.capacity();
+        let scratch_capacity = scratch.chart_notes.capacity();
+        chart_notes.drain(..).for_each(drop);
+        analyze_prepared_in_with_notes(
+            CHARTS,
+            "ssc",
+            &prepared,
+            &mut scratch,
+            &mut chart_notes,
+            |note| note,
+        )
+        .unwrap();
+        assert_eq!(chart_notes.capacity(), outer_capacity);
+        assert_eq!(scratch.chart_notes.capacity(), scratch_capacity);
     }
 
     #[test]

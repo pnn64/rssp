@@ -434,8 +434,9 @@ pub mod rounding {
 pub const RSSP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub use analysis::{
-    AnalysisOptions, AnalysisScratch, ChartHashInfo, PreparedAnalysis, analyze,
-    analyze_prepared_in, analyze_with_scratch, compute_all_hashes, display_metadata,
+    AnalysisOptions, AnalysisScratch, ChartHashInfo, ChartNoteType, ParsedChartNote,
+    PreparedAnalysis, analyze, analyze_prepared_in, analyze_prepared_in_with_notes,
+    analyze_with_scratch, compute_all_hashes, display_metadata,
 };
 pub(crate) use rssp_core::chart_timing_tag_raw;
 
