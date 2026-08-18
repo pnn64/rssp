@@ -2339,6 +2339,30 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     });
     song_scan.finish();
 
+    let mut strict_single = c.benchmark_group("cycles/song_simfile_strict_single");
+    strict_single.sample_size(20);
+    strict_single.measurement_time(Duration::from_secs(3));
+    strict_single.throughput(Throughput::Elements(
+        pack_bench::SINGLE_SONG_ENTRY_COUNT as u64,
+    ));
+    strict_single.bench_function("growing_names", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::scan_song_dir_growing_names(
+                black_box(pack_fixture.single_song_dir()),
+                black_box(duplicate_opt),
+            ))
+        });
+    });
+    strict_single.bench_function("inline_first", |b| {
+        b.iter(|| {
+            black_box(rssp::pack::scan_song_dir(
+                black_box(pack_fixture.single_song_dir()),
+                black_box(duplicate_opt),
+            ))
+        });
+    });
+    strict_single.finish();
+
     let mut simfile_tree = c.benchmark_group("cycles/simfile_tree_discovery");
     simfile_tree.sample_size(20);
     simfile_tree.measurement_time(Duration::from_secs(3));

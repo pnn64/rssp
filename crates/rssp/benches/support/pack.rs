@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 pub const SONG_COUNT: usize = 64;
 pub const SONG_ENTRY_COUNT: usize = 5;
+pub const SINGLE_SONG_ENTRY_COUNT: usize = 2;
 pub const LOOSE_ENTRY_COUNT: usize = 256;
 pub const PARENT_IMG_COUNT: usize = 3;
 pub const SONGS_ROOT_ENTRY_COUNT: usize = 1 + LOOSE_ENTRY_COUNT + PARENT_IMG_COUNT;
@@ -42,6 +43,7 @@ pub struct PackFixture {
     root: PathBuf,
     pack_dir: PathBuf,
     song_dir: PathBuf,
+    single_song_dir: PathBuf,
 }
 
 impl PackFixture {
@@ -99,10 +101,21 @@ impl PackFixture {
         }
 
         let song_dir = pack_dir.join("Song000");
+        let single_song_dir = std::env::temp_dir().join(format!(
+            "rssp-single-song-bench-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&single_song_dir)
+            .expect("single-song benchmark directory should be creatable");
+        for name in ["chart.ssc", "audio.ogg"] {
+            std::fs::write(single_song_dir.join(name), [])
+                .expect("single-song benchmark asset should be writable");
+        }
         Self {
             root,
             pack_dir,
             song_dir,
+            single_song_dir,
         }
     }
 
@@ -118,6 +131,10 @@ impl PackFixture {
         &self.song_dir
     }
 
+    pub fn single_song_dir(&self) -> &Path {
+        &self.single_song_dir
+    }
+
     pub fn assert_song_behavior(&self) {
         for opt in [
             rssp::pack::ScanOpt::default(),
@@ -131,7 +148,17 @@ impl PackFixture {
             let previous = rssp::profile::scan_song_dir_joined_paths(&self.song_dir, opt);
             let new = rssp::pack::scan_song_dir(&self.song_dir, opt);
             assert_song_result(new, previous);
+            let growing = rssp::profile::scan_song_dir_growing_names(&self.song_dir, opt);
+            let new = rssp::pack::scan_song_dir(&self.song_dir, opt);
+            assert_song_result(new, growing);
         }
+
+        let opt = rssp::pack::ScanOpt {
+            dup: rssp::pack::DupPolicy::Error,
+        };
+        let old = rssp::profile::scan_song_dir_growing_names(&self.single_song_dir, opt);
+        let new = rssp::pack::scan_song_dir(&self.single_song_dir, opt);
+        assert_song_result(new, old);
     }
 
     pub fn assert_tree_behavior(&self) {
@@ -254,6 +281,7 @@ fn assert_song_result(
 impl Drop for PackFixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
+        let _ = std::fs::remove_dir_all(&self.single_song_dir);
     }
 }
 

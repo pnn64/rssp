@@ -4139,14 +4139,16 @@ fn run_pack_scan_alloc(iterations: usize) {
         rssp::pack::find_simfiles,
     );
     run_song_scan_phase(
-        &fixture,
+        fixture.song_dir(),
+        pack_bench::SONG_ENTRY_COUNT,
         "full-paths",
         iterations,
         rssp::pack::ScanOpt::default(),
         rssp::profile::scan_song_dir_full_paths,
     );
     run_song_scan_phase(
-        &fixture,
+        fixture.song_dir(),
+        pack_bench::SONG_ENTRY_COUNT,
         "candidate-names",
         iterations,
         rssp::pack::ScanOpt::default(),
@@ -4156,15 +4158,33 @@ fn run_pack_scan_alloc(iterations: usize) {
         dup: rssp::pack::DupPolicy::Error,
     };
     run_song_scan_phase(
-        &fixture,
+        fixture.song_dir(),
+        pack_bench::SONG_ENTRY_COUNT,
         "joined-paths-error",
         iterations,
         duplicate_opt,
         rssp::profile::scan_song_dir_joined_paths,
     );
     run_song_scan_phase(
-        &fixture,
+        fixture.song_dir(),
+        pack_bench::SONG_ENTRY_COUNT,
         "deferred-paths-error",
+        iterations,
+        duplicate_opt,
+        rssp::pack::scan_song_dir,
+    );
+    run_song_scan_phase(
+        fixture.single_song_dir(),
+        pack_bench::SINGLE_SONG_ENTRY_COUNT,
+        "growing-names-error-single",
+        iterations,
+        duplicate_opt,
+        rssp::profile::scan_song_dir_growing_names,
+    );
+    run_song_scan_phase(
+        fixture.single_song_dir(),
+        pack_bench::SINGLE_SONG_ENTRY_COUNT,
+        "inline-first-error-single",
         iterations,
         duplicate_opt,
         rssp::pack::scan_song_dir,
@@ -4400,7 +4420,8 @@ fn run_simfile_tree_phase<F>(
 }
 
 fn run_song_scan_phase<F>(
-    fixture: &pack_bench::PackFixture,
+    dir: &Path,
+    entry_count: usize,
     phase: &str,
     iterations: usize,
     opt: rssp::pack::ScanOpt,
@@ -4419,13 +4440,13 @@ fn run_song_scan_phase<F>(
         }
     }
 
-    black_box(result_len(scan(fixture.song_dir(), opt)));
+    black_box(result_len(scan(dir, opt)));
     reset_counters();
     let before = Counters::read();
     let start = Instant::now();
     let mut checksum = 0usize;
     for _ in 0..iterations {
-        let count = result_len(scan(black_box(fixture.song_dir()), black_box(opt)));
+        let count = result_len(scan(black_box(dir), black_box(opt)));
         checksum = checksum.wrapping_add(count);
         black_box(count);
     }
@@ -4444,7 +4465,7 @@ fn run_song_scan_phase<F>(
         iterations,
         black_box(checksum),
         elapsed.as_secs_f64(),
-        pack_bench::SONG_ENTRY_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        entry_count as f64 * divisor / elapsed.as_secs_f64(),
         (after.alloc_calls - before.alloc_calls) as f64 / divisor,
         (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
         (after.realloc_calls - before.realloc_calls) as f64 / divisor,

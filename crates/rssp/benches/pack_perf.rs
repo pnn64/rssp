@@ -170,6 +170,30 @@ fn bench_song_scan(c: &mut Criterion) {
         });
     });
     group.finish();
+
+    let mut strict_single = c.benchmark_group("song_simfile_strict_single");
+    strict_single.sample_size(30);
+    strict_single.measurement_time(Duration::from_secs(3));
+    strict_single.throughput(Throughput::Elements(
+        pack_bench::SINGLE_SONG_ENTRY_COUNT as u64,
+    ));
+    strict_single.bench_function("growing_names", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::scan_song_dir_growing_names(
+                black_box(fixture.single_song_dir()),
+                black_box(error_opt),
+            ))
+        });
+    });
+    strict_single.bench_function("inline_first", |b| {
+        b.iter(|| {
+            black_box(rssp::pack::scan_song_dir(
+                black_box(fixture.single_song_dir()),
+                black_box(error_opt),
+            ))
+        });
+    });
+    strict_single.finish();
 }
 
 fn bench_simfile_tree(c: &mut Criterion) {
