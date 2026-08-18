@@ -11,6 +11,8 @@ mod metadata_bench;
 mod parse_dispatch_bench;
 #[path = "support/selectable.rs"]
 mod selectable_bench;
+#[path = "support/text_report.rs"]
+mod text_report_bench;
 #[path = "support/translate.rs"]
 mod translate_bench;
 
@@ -238,6 +240,39 @@ fn bench_selectable(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_text_report(c: &mut Criterion) {
+    let fixture = metadata_bench::fixture("0.83");
+    let summary = rssp::analyze(fixture.as_bytes(), EXTENSION, &metadata_bench::options())
+        .expect("text report fixture should analyze");
+    text_report_bench::assert_behavior(&summary);
+
+    for (group_name, full) in [
+        ("text_report_pretty_256", false),
+        ("text_report_full_256", true),
+    ] {
+        let mut sizing = Vec::new();
+        text_report_bench::write(&summary, &mut sizing, full, false);
+        let mut group = c.benchmark_group(group_name);
+        group.sample_size(100);
+        group.measurement_time(Duration::from_secs(3));
+        group.throughput(Throughput::Elements(metadata_bench::CHART_COUNT as u64));
+        for (phase, legacy) in [("materialized", true), ("streamed", false)] {
+            let mut output = Vec::with_capacity(sizing.len());
+            group.bench_function(phase, |b| {
+                b.iter(|| {
+                    black_box(text_report_bench::write(
+                        black_box(&summary),
+                        black_box(&mut output),
+                        full,
+                        legacy,
+                    ));
+                });
+            });
+        }
+        group.finish();
+    }
+}
+
 fn bench_chart_metadata_strings(c: &mut Criterion) {
     let modern = metadata_bench::fixture("0.83");
     let legacy = metadata_bench::fixture("0.70");
@@ -433,6 +468,7 @@ criterion_group!(
     bench_metadata_pipeline,
     bench_chart_metadata_analysis,
     bench_selectable,
+    bench_text_report,
     bench_chart_metadata_strings,
     bench_marker_translation,
     bench_parse_dispatch,

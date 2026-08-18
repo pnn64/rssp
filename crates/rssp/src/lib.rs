@@ -288,6 +288,15 @@ pub mod profile {
         crate::report::profile_write_json_materialized(simfile, writer)
     }
 
+    pub fn write_text_report<W: std::io::Write>(
+        simfile: &crate::report::SimfileSummary,
+        writer: &mut W,
+        full: bool,
+        legacy: bool,
+    ) -> std::io::Result<()> {
+        crate::report::profile_write_text(simfile, writer, full, legacy)
+    }
+
     pub fn write_json_timing<W: std::io::Write>(
         writer: &mut W,
         chart: &crate::report::ChartSummary,

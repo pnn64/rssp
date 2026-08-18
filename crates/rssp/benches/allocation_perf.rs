@@ -47,6 +47,8 @@ mod sm_timing_bench;
 mod step_parity_bench;
 #[path = "support/tech_prefix.rs"]
 mod tech_prefix_bench;
+#[path = "support/text_report.rs"]
+mod text_report_bench;
 #[path = "support/timing_borrow.rs"]
 mod timing_borrow_bench;
 #[path = "support/timing_merge.rs"]
@@ -183,6 +185,7 @@ enum Mode {
     SongAssets,
     TranslateMarkers,
     MetadataAnalyze,
+    TextReport,
     CustomCompile,
     DefaultPatternDfa,
     ParitySingle,
@@ -308,6 +311,7 @@ fn parse_args() -> (Mode, usize) {
                     "song-assets" => Mode::SongAssets,
                     "translate-markers" => Mode::TranslateMarkers,
                     "metadata-analyze" => Mode::MetadataAnalyze,
+                    "text-report" => Mode::TextReport,
                     "custom-compile" => Mode::CustomCompile,
                     "default-pattern-dfa" => Mode::DefaultPatternDfa,
                     "parity-single" => Mode::ParitySingle,
@@ -402,7 +406,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         Mode::AssetFallbacks => rssp::AnalysisOptions::default(),
         Mode::SongAssets => rssp::AnalysisOptions::default(),
         Mode::TranslateMarkers => rssp::AnalysisOptions::default(),
-        Mode::MetadataAnalyze => rssp::AnalysisOptions::default(),
+        Mode::MetadataAnalyze | Mode::TextReport => rssp::AnalysisOptions::default(),
         Mode::CustomCompile | Mode::DefaultPatternDfa => rssp::AnalysisOptions::default(),
         Mode::JsonFull => rssp::AnalysisOptions {
             mono_threshold: 6,
@@ -603,6 +607,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::MetadataAnalyze => {
                 unreachable!("metadata analysis mode uses its dedicated allocation runner")
+            }
+            Mode::TextReport => {
+                unreachable!("text report mode uses its dedicated allocation runner")
             }
             Mode::CustomCompile => {
                 unreachable!("custom pattern modes use their dedicated allocation runner")
@@ -828,6 +835,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::SongAssets => "song-assets",
         Mode::TranslateMarkers => "translate-markers",
         Mode::MetadataAnalyze => "metadata-analyze",
+        Mode::TextReport => "text-report",
         Mode::CustomCompile => "custom-compile",
         Mode::DefaultPatternDfa => "default-pattern-dfa",
         Mode::ParitySingle => "parity-single",
@@ -4564,6 +4572,71 @@ fn run_selectable_alloc<const LEGACY: bool>(phase: &str, iterations: usize) {
     );
 }
 
+fn run_text_report_phase(
+    summary: &rssp::report::SimfileSummary,
+    full: bool,
+    phase: &str,
+    legacy: bool,
+    iterations: usize,
+) {
+    let mut sizing = Vec::new();
+    text_report_bench::write(summary, &mut sizing, full, false);
+    let mut output = Vec::with_capacity(sizing.len());
+    black_box(text_report_bench::write(summary, &mut output, full, legacy));
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        checksum = checksum.wrapping_add(text_report_bench::write(
+            black_box(summary),
+            black_box(&mut output),
+            full,
+            legacy,
+        ));
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=text-report phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_charts_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        metadata_bench::CHART_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_text_report_alloc(iterations: usize) {
+    let fixture = metadata_bench::fixture("0.83");
+    let summary = rssp::analyze(fixture.as_bytes(), "ssc", &metadata_bench::options())
+        .expect("text report fixture should analyze");
+    text_report_bench::assert_behavior(&summary);
+    for (phase, full, legacy) in [
+        ("pretty-materialized", false, true),
+        ("pretty-streamed", false, false),
+        ("full-materialized", true, true),
+        ("full-streamed", true, false),
+    ] {
+        run_text_report_phase(&summary, full, phase, legacy, iterations);
+    }
+}
+
 fn run_json_report_phase(
     mode: &str,
     phase: &str,
@@ -5802,6 +5875,10 @@ fn main() {
         }
         Mode::MetadataAnalyze => {
             run_metadata_analyze_alloc(iterations);
+            return;
+        }
+        Mode::TextReport => {
+            run_text_report_alloc(iterations);
             return;
         }
         Mode::JsonNps => {

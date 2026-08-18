@@ -1,4 +1,4 @@
-use std::fmt::Write as _;
+use std::fmt::{self, Write as _};
 use std::io::{self, Write};
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
@@ -383,8 +383,8 @@ pub fn write_reports<W: Write>(
     writer: &mut W,
 ) -> io::Result<()> {
     match mode {
-        OutputMode::Full => write_full_all(writer, simfile),
-        OutputMode::Pretty => write_pretty_all(writer, simfile),
+        OutputMode::Full => write_full_all_with::<W, true>(writer, simfile),
+        OutputMode::Pretty => write_pretty_all_with::<W, true>(writer, simfile),
         OutputMode::JSON => write_json_all(simfile, writer),
         OutputMode::CSV => write_csv_all(writer, simfile),
     }
@@ -409,7 +409,21 @@ pub fn format_json_float(value: f64) -> String {
     format!("{value:.2}")
 }
 
-fn format_duration(seconds: i32) -> String {
+struct DurationDisplay(i32);
+
+impl fmt::Display for DurationDisplay {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let minutes = self.0 / 60;
+        let seconds = self.0 % 60;
+        write!(formatter, "{minutes}m {seconds:02}s")
+    }
+}
+
+const fn format_duration(seconds: i32) -> DurationDisplay {
+    DurationDisplay(seconds)
+}
+
+fn format_duration_owned(seconds: i32) -> String {
     let minutes = seconds / 60;
     let seconds = seconds % 60;
     format!("{minutes}m {seconds:02}s")
@@ -495,7 +509,7 @@ fn write_pretty_course<W: Write>(writer: &mut W, course: &CourseSummary) -> io::
     }
 
     let dummy = dummy_simfile_for_course(course);
-    write_pretty_chart(writer, &course.chart, &dummy)?;
+    write_pretty_chart_with::<W, true>(writer, &course.chart, &dummy)?;
     Ok(())
 }
 
@@ -525,7 +539,7 @@ fn write_full_course<W: Write>(writer: &mut W, course: &CourseSummary) -> io::Re
     }
 
     let dummy = dummy_simfile_for_course(course);
-    write_full_chart(writer, &course.chart, &dummy)?;
+    write_full_chart_with::<W, true>(writer, &course.chart, &dummy)?;
     writeln!(writer, "\nElapsed Time: {:?}", course.total_elapsed)?;
     Ok(())
 }
@@ -2013,20 +2027,65 @@ fn write_gimmicks<W: Write>(
     Ok(())
 }
 
-fn write_pretty_all<W: Write>(writer: &mut W, simfile: &SimfileSummary) -> io::Result<()> {
-    writeln!(writer, "--- Song Details ---")?;
+fn write_chart_header<W: Write, const STREAMED: bool>(
+    writer: &mut W,
+    chart: &ChartSummary,
+) -> io::Result<()> {
+    if !STREAMED {
+        let header = format!(
+            "{} {} : {}",
+            chart.difficulty_str, chart.rating_str, chart.step_artist_str
+        );
+        writeln!(writer, "\n{header}")?;
+        return writeln!(writer, "{}", "-".repeat(header.len()));
+    }
+
     writeln!(
         writer,
-        "Title: {}{} by {}",
-        simfile.title_str,
-        if simfile.subtitle_str.is_empty() {
-            String::new()
-        } else {
-            format!(" {}", simfile.subtitle_str)
-        },
-        simfile.artist_str
+        "\n{} {} : {}",
+        chart.difficulty_str, chart.rating_str, chart.step_artist_str
     )?;
-    writeln!(writer, "Length: {}", format_duration(simfile.total_length))?;
+    let mut remaining =
+        chart.difficulty_str.len() + chart.rating_str.len() + chart.step_artist_str.len() + 4;
+    const DASHES: &[u8; 64] = b"----------------------------------------------------------------";
+    while remaining >= DASHES.len() {
+        writer.write_all(DASHES)?;
+        remaining -= DASHES.len();
+    }
+    writer.write_all(&DASHES[..remaining])?;
+    writer.write_all(b"\n")
+}
+
+fn write_pretty_all_with<W: Write, const STREAMED: bool>(
+    writer: &mut W,
+    simfile: &SimfileSummary,
+) -> io::Result<()> {
+    writeln!(writer, "--- Song Details ---")?;
+    if STREAMED {
+        write!(writer, "Title: {}", simfile.title_str)?;
+        if !simfile.subtitle_str.is_empty() {
+            write!(writer, " {}", simfile.subtitle_str)?;
+        }
+        writeln!(writer, " by {}", simfile.artist_str)?;
+        writeln!(writer, "Length: {}", format_duration(simfile.total_length))?;
+    } else {
+        writeln!(
+            writer,
+            "Title: {}{} by {}",
+            simfile.title_str,
+            if simfile.subtitle_str.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", simfile.subtitle_str)
+            },
+            simfile.artist_str
+        )?;
+        writeln!(
+            writer,
+            "Length: {}",
+            format_duration_owned(simfile.total_length)
+        )?;
+    }
     if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
         writeln!(writer, "BPM: {:.0}", simfile.min_bpm)?;
     } else {
@@ -2036,23 +2095,18 @@ fn write_pretty_all<W: Write>(writer: &mut W, simfile: &SimfileSummary) -> io::R
     }
 
     for chart in &simfile.charts {
-        write_pretty_chart(writer, chart, simfile)?;
+        write_pretty_chart_with::<W, STREAMED>(writer, chart, simfile)?;
     }
 
     Ok(())
 }
 
-fn write_pretty_chart<W: Write>(
+fn write_pretty_chart_with<W: Write, const STREAMED: bool>(
     writer: &mut W,
     chart: &ChartSummary,
     simfile: &SimfileSummary,
 ) -> io::Result<()> {
-    let header = format!(
-        "{} {} : {}",
-        chart.difficulty_str, chart.rating_str, chart.step_artist_str
-    );
-    writeln!(writer, "\n{header}")?;
-    writeln!(writer, "{}", "-".repeat(header.len()))?;
+    write_chart_header::<W, STREAMED>(writer, chart)?;
 
     if (chart.median_nps - chart.max_nps).abs() < f64::EPSILON {
         writeln!(writer, "NPS: {:.2} Median/Peak", chart.median_nps)?;
@@ -2173,7 +2227,10 @@ fn write_pretty_chart<W: Write>(
     Ok(())
 }
 
-fn write_full_all<W: Write>(writer: &mut W, simfile: &SimfileSummary) -> io::Result<()> {
+fn write_full_all_with<W: Write, const STREAMED: bool>(
+    writer: &mut W,
+    simfile: &SimfileSummary,
+) -> io::Result<()> {
     writeln!(writer, "--- Song Details ---")?;
     writeln!(writer, "Title: {}", simfile.title_str)?;
     if !simfile.subtitle_str.is_empty() {
@@ -2190,7 +2247,15 @@ fn write_full_all<W: Write>(writer: &mut W, simfile: &SimfileSummary) -> io::Res
         writeln!(writer, "Artist trans: {}", simfile.artisttranslit_str)?;
     }
 
-    writeln!(writer, "Length: {}", format_duration(simfile.total_length))?;
+    if STREAMED {
+        writeln!(writer, "Length: {}", format_duration(simfile.total_length))?;
+    } else {
+        writeln!(
+            writer,
+            "Length: {}",
+            format_duration_owned(simfile.total_length)
+        )?;
+    }
     if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
         writeln!(writer, "BPM: {:.0}", simfile.min_bpm)?;
     } else {
@@ -2202,24 +2267,19 @@ fn write_full_all<W: Write>(writer: &mut W, simfile: &SimfileSummary) -> io::Res
     writeln!(writer, "Offset: {:.3}", simfile.offset)?;
 
     for chart in &simfile.charts {
-        write_full_chart(writer, chart, simfile)?;
+        write_full_chart_with::<W, STREAMED>(writer, chart, simfile)?;
     }
     writeln!(writer, "\nElapsed Time: {:?}", simfile.total_elapsed)?;
 
     Ok(())
 }
 
-fn write_full_chart<W: Write>(
+fn write_full_chart_with<W: Write, const STREAMED: bool>(
     writer: &mut W,
     chart: &ChartSummary,
     simfile: &SimfileSummary,
 ) -> io::Result<()> {
-    let header = format!(
-        "{} {} : {}",
-        chart.difficulty_str, chart.rating_str, chart.step_artist_str
-    );
-    writeln!(writer, "\n{header}")?;
-    writeln!(writer, "{}", "-".repeat(header.len()))?;
+    write_chart_header::<W, STREAMED>(writer, chart)?;
 
     writeln!(writer, "Step Type: {}", chart.step_type_str)?;
     writeln!(writer, "Matrix Rating: {:.4}", chart.matrix_rating)?;
@@ -4718,6 +4778,21 @@ fn write_json_all_with<
 
 pub fn write_json_all<W: Write>(simfile: &SimfileSummary, writer: &mut W) -> io::Result<()> {
     write_json_all_with::<W, false, false, false, false, false>(simfile, writer)
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_write_text<W: Write>(
+    simfile: &SimfileSummary,
+    writer: &mut W,
+    full: bool,
+    legacy: bool,
+) -> io::Result<()> {
+    match (full, legacy) {
+        (false, false) => write_pretty_all_with::<W, true>(writer, simfile),
+        (false, true) => write_pretty_all_with::<W, false>(writer, simfile),
+        (true, false) => write_full_all_with::<W, true>(writer, simfile),
+        (true, true) => write_full_all_with::<W, false>(writer, simfile),
+    }
 }
 
 #[cfg(feature = "profile")]

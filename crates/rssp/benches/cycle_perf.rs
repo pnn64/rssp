@@ -30,6 +30,9 @@ mod elapsed_bench;
 #[path = "support/last_beat.rs"]
 mod last_beat_bench;
 #[cfg(windows)]
+#[path = "support/metadata.rs"]
+mod metadata_bench;
+#[cfg(windows)]
 #[path = "support/nps_stats.rs"]
 mod nps_stats_bench;
 #[cfg(windows)]
@@ -68,6 +71,9 @@ mod step_parity_bench;
 #[cfg(windows)]
 #[path = "support/tech_prefix.rs"]
 mod tech_prefix_bench;
+#[cfg(windows)]
+#[path = "support/text_report.rs"]
+mod text_report_bench;
 #[cfg(windows)]
 #[path = "support/timing_borrow.rs"]
 mod timing_borrow_bench;
@@ -484,6 +490,10 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     parse_dispatch_bench::assert_behavior(&parse_dispatch_fixture);
     parse_dispatch_bench::assert_reserve_behavior();
     selectable_bench::assert_behavior();
+    let text_fixture = metadata_bench::fixture("0.83");
+    let text_summary = rssp::analyze(text_fixture.as_bytes(), "ssc", &metadata_bench::options())
+        .expect("text report fixture should analyze");
+    text_report_bench::assert_behavior(&text_summary);
     let parse_reserve_typical =
         parse_dispatch_bench::fixture_with_charts(parse_dispatch_bench::TYPICAL_CHART_COUNT);
     let parse_reserve_sm =
@@ -685,6 +695,32 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         b.iter(|| black_box(selectable_bench::run::<false>()));
     });
     selectable.finish();
+
+    for (group_name, full) in [
+        ("cycles/text_report_pretty_256", false),
+        ("cycles/text_report_full_256", true),
+    ] {
+        let mut sizing = Vec::new();
+        text_report_bench::write(&text_summary, &mut sizing, full, false);
+        let mut group = c.benchmark_group(group_name);
+        group.throughput(Throughput::Elements(metadata_bench::CHART_COUNT as u64));
+        group.sample_size(100);
+        group.measurement_time(Duration::from_secs(3));
+        for (phase, legacy) in [("materialized", true), ("streamed", false)] {
+            let mut output = Vec::with_capacity(sizing.len());
+            group.bench_function(phase, |b| {
+                b.iter(|| {
+                    black_box(text_report_bench::write(
+                        black_box(&text_summary),
+                        black_box(&mut output),
+                        full,
+                        legacy,
+                    ));
+                });
+            });
+        }
+        group.finish();
+    }
 
     let mut normalization = c.benchmark_group("cycles/normalization");
     normalization.throughput(Throughput::Bytes(pair_map.len() as u64));
