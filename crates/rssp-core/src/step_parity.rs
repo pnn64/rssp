@@ -514,6 +514,12 @@ struct StateBase4 {
     occupied_mask: u8,
 }
 
+const START_BASE4: StateBase4 = StateBase4 {
+    combined_columns: [Foot::None; 4],
+    where_the_feet_are: [0; NUM_FEET],
+    occupied_mask: 0,
+};
+
 const SINGLE_STATE_COUNT: usize = 1 << 12;
 #[cfg(test)]
 const SINGLE_LAYER_MAX: usize = 625;
@@ -796,7 +802,7 @@ fn calc_action_cost<const CACHED_GEOMETRY: bool>(
 
 fn calc_tap_cost(
     layout: &StageLayout,
-    initial: &State,
+    initial: &StateBase4,
     result_key: u32,
     hit_col: usize,
     side_hit: bool,
@@ -1834,6 +1840,84 @@ fn parity_perms_for_row(g: &mut StepParityGenerator, row_idx: usize) -> &'static
     }
 }
 
+// The common dance-single tap case stays separate so its inner loop carries no
+// general hold/mine/double state. This is intentionally one complete DP loop:
+// splitting its map, prune, and update steps would add hot call boundaries.
+fn parity_tap_row4(
+    g: &mut StepParityGenerator,
+    perms: &[FootPlacement],
+    prev_start: usize,
+    start_id: usize,
+    next_start: usize,
+    tap_col: usize,
+    side_hit: bool,
+    elapsed: f32,
+    prev_row_has_live_hold: bool,
+    costs_nonnegative: bool,
+    facing_cost4: &[f32],
+    spin_class4: &[u8],
+) {
+    for j in 0..g.prev_links.len() {
+        let init_id = prev_start + j;
+        let init_key = if init_id == start_id {
+            0
+        } else {
+            parity_state_key::<4>(g, init_id)
+        };
+        let initial = if init_id == start_id {
+            &START_BASE4
+        } else {
+            &STATE_BASE4[init_key as usize & (SINGLE_STATE_COUNT - 1)]
+        };
+        let init_cost = g.prev_links[j].cost;
+        let moved_mask = ((init_key >> 24) & 0x0f) as u8;
+        let holding_mask = ((init_key >> 28) & 0x0f) as u8;
+        let moved_not_holding = moved_mask & !holding_mask;
+        let left_moved = moved_not_holding & LEFT_FOOT_MASK != 0;
+        let right_moved = moved_not_holding & RIGHT_FOOT_MASK != 0;
+
+        for perm in perms {
+            let key = parity_result_tap_key4(init_key, perm, tap_col);
+            let cost_idx = match row_map_probe::<4>(&g.state_map, key) {
+                RowMapProbe::Found(index) => index,
+                RowMapProbe::Vacant(slot) => {
+                    let id = parity_add_node::<4>(g, key);
+                    let index = g.next_links.len();
+                    debug_assert_eq!(id, next_start + index);
+                    g.next_links.push(LayerLink {
+                        pred: u32::MAX,
+                        cost: f32::MAX,
+                    });
+                    row_map_insert_at(&mut g.state_map, slot, key, index);
+                    index
+                }
+            };
+            let link = &mut g.next_links[cost_idx];
+            if costs_nonnegative && init_cost >= link.cost {
+                continue;
+            }
+            let cost = init_cost
+                + calc_tap_cost(
+                    g.layout,
+                    initial,
+                    key,
+                    tap_col,
+                    side_hit,
+                    elapsed,
+                    left_moved,
+                    right_moved,
+                    prev_row_has_live_hold,
+                    facing_cost4[key as usize & (SINGLE_STATE_COUNT - 1)],
+                    cached_spin_cost4::<true>(spin_class4, init_key, key),
+                );
+            if cost < link.cost {
+                link.cost = cost;
+                link.pred = init_id as u32;
+            }
+        }
+    }
+}
+
 fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usize> {
     // Sample enough layers for mixed row types, then size the arena once from
     // the file's observed state density instead of repeatedly doubling it.
@@ -1878,78 +1962,114 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
             && !row_ctx.multi_active
             && row.note_count < 2;
 
-        for j in 0..g.prev_links.len() {
-            let init_id = prev_start + j;
-            // ITGmania zero-initializes the synthetic starting state's foot
-            // positions. A legitimate solved state may also have key zero, so
-            // the node identity—not the key—must distinguish the two.
-            let init_key = if init_id == start_id {
-                0
-            } else {
-                parity_state_key::<COLS>(g, init_id)
-            };
-            let init_state = if init_id == start_id {
-                state_new()
-            } else {
-                state_from_key::<COLS>(init_key)
-            };
-            let init_cost = g.prev_links[j].cost;
-            let left_moved_not_holding = foot_moved_not_holding(&init_state, &LEFT_PAIR);
-            let right_moved_not_holding = foot_moved_not_holding(&init_state, &RIGHT_PAIR);
-            for perm in perms {
-                let (result, hit, key) = if COLS == 4 {
-                    let (hit, key) = if simple_tap {
-                        (
-                            [INVALID_COLUMN; NUM_FEET],
-                            parity_result_tap_key4(init_key, perm, tap_col),
-                        )
-                    } else if hold_mask == 0 {
-                        parity_result_key4::<false>(&init_state, perm, 0, active_mask)
-                    } else {
-                        parity_result_key4::<true>(&init_state, perm, hold_mask, active_mask)
-                    };
-                    (None, hit, key)
+        if COLS == 4 && simple_tap {
+            parity_tap_row4(
+                g,
+                perms,
+                prev_start,
+                start_id,
+                next_start,
+                tap_col,
+                side_hit,
+                elapsed,
+                prev_row_has_live_hold,
+                costs_nonnegative,
+                facing_cost4,
+                spin_class4,
+            );
+        } else {
+            for j in 0..g.prev_links.len() {
+                let init_id = prev_start + j;
+                // ITGmania zero-initializes the synthetic starting state's foot
+                // positions. A legitimate solved state may also have key zero, so
+                // the node identity—not the key—must distinguish the two.
+                let init_key = if init_id == start_id {
+                    0
                 } else {
-                    let (result, hit, key) = if hold_mask == 0 {
-                        parity_result_state_no_holds::<COLS>(&init_state, perm, active_mask)
-                    } else {
-                        parity_result_state::<COLS>(&init_state, perm, hold_mask, active_mask)
-                    };
-                    (Some(result), hit, key)
+                    parity_state_key::<COLS>(g, init_id)
                 };
-                let cost_idx = match row_map_probe::<COLS>(&g.state_map, key) {
-                    RowMapProbe::Found(index) => index,
-                    RowMapProbe::Vacant(slot) => {
-                        let id = parity_add_node::<COLS>(g, key);
-                        let index = g.next_links.len();
-                        debug_assert_eq!(id, next_start + index);
-                        g.next_links.push(LayerLink {
-                            pred: u32::MAX,
-                            cost: f32::MAX,
-                        });
-                        row_map_insert_at(&mut g.state_map, slot, key, index);
-                        index
-                    }
+                let init_state = if init_id == start_id {
+                    state_new()
+                } else {
+                    state_from_key::<COLS>(init_key)
                 };
-                let calc_cost = || {
-                    let action_cost = if COLS == 4 {
-                        if simple_tap {
-                            calc_tap_cost(
-                                layout,
-                                &init_state,
-                                key,
-                                tap_col,
-                                side_hit,
-                                elapsed,
-                                left_moved_not_holding,
-                                right_moved_not_holding,
-                                prev_row_has_live_hold,
-                                facing_cost4[key as usize & (SINGLE_STATE_COUNT - 1)],
-                                cached_spin_cost4(spin_class4, init_key, key),
+                let init_cost = g.prev_links[j].cost;
+                let left_moved_not_holding = foot_moved_not_holding(&init_state, &LEFT_PAIR);
+                let right_moved_not_holding = foot_moved_not_holding(&init_state, &RIGHT_PAIR);
+                for perm in perms {
+                    let (result, hit, key) = if COLS == 4 {
+                        let (hit, key) = if simple_tap {
+                            (
+                                [INVALID_COLUMN; NUM_FEET],
+                                parity_result_tap_key4(init_key, perm, tap_col),
                             )
+                        } else if hold_mask == 0 {
+                            parity_result_key4::<false>(&init_state, perm, 0, active_mask)
                         } else {
-                            let result = state_from_key::<4>(key);
-                            calc_action_cost::<true>(
+                            parity_result_key4::<true>(&init_state, perm, hold_mask, active_mask)
+                        };
+                        (None, hit, key)
+                    } else {
+                        let (result, hit, key) = if hold_mask == 0 {
+                            parity_result_state_no_holds::<COLS>(&init_state, perm, active_mask)
+                        } else {
+                            parity_result_state::<COLS>(&init_state, perm, hold_mask, active_mask)
+                        };
+                        (Some(result), hit, key)
+                    };
+                    let cost_idx = match row_map_probe::<COLS>(&g.state_map, key) {
+                        RowMapProbe::Found(index) => index,
+                        RowMapProbe::Vacant(slot) => {
+                            let id = parity_add_node::<COLS>(g, key);
+                            let index = g.next_links.len();
+                            debug_assert_eq!(id, next_start + index);
+                            g.next_links.push(LayerLink {
+                                pred: u32::MAX,
+                                cost: f32::MAX,
+                            });
+                            row_map_insert_at(&mut g.state_map, slot, key, index);
+                            index
+                        }
+                    };
+                    let calc_cost = || {
+                        let action_cost = if COLS == 4 {
+                            if simple_tap {
+                                calc_tap_cost(
+                                    layout,
+                                    &STATE_BASE4[init_key as usize & (SINGLE_STATE_COUNT - 1)],
+                                    key,
+                                    tap_col,
+                                    side_hit,
+                                    elapsed,
+                                    left_moved_not_holding,
+                                    right_moved_not_holding,
+                                    prev_row_has_live_hold,
+                                    facing_cost4[key as usize & (SINGLE_STATE_COUNT - 1)],
+                                    cached_spin_cost4::<true>(spin_class4, init_key, key),
+                                )
+                            } else {
+                                let result = state_from_key::<4>(key);
+                                calc_action_cost::<true>(
+                                    layout,
+                                    &init_state,
+                                    &result,
+                                    perm,
+                                    hit,
+                                    &row,
+                                    row_ctx,
+                                    elapsed,
+                                    left_moved_not_holding,
+                                    right_moved_not_holding,
+                                    prev_row_has_live_hold,
+                                    facing_cost4[key as usize & (SINGLE_STATE_COUNT - 1)],
+                                    cached_spin_cost4::<false>(spin_class4, init_key, key),
+                                )
+                            }
+                        } else {
+                            let result = result.unwrap_or_else(|| {
+                                unreachable!("double transition must have state")
+                            });
+                            calc_action_cost::<false>(
                                 layout,
                                 &init_state,
                                 &result,
@@ -1961,56 +2081,38 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                                 left_moved_not_holding,
                                 right_moved_not_holding,
                                 prev_row_has_live_hold,
-                                facing_cost4[key as usize & (SINGLE_STATE_COUNT - 1)],
-                                cached_spin_cost4(spin_class4, init_key, key),
+                                0.0,
+                                0.0,
                             )
-                        }
-                    } else {
-                        let result = result
-                            .unwrap_or_else(|| unreachable!("double transition must have state"));
-                        calc_action_cost::<false>(
-                            layout,
-                            &init_state,
-                            &result,
-                            perm,
-                            hit,
-                            &row,
-                            row_ctx,
-                            elapsed,
-                            left_moved_not_holding,
-                            right_moved_not_holding,
-                            prev_row_has_live_hold,
-                            0.0,
-                            0.0,
-                        )
+                        };
+                        init_cost + action_cost
                     };
-                    init_cost + action_cost
-                };
-                // Single charts have enough competing transitions that keeping the hot
-                // cost/pred pair borrowed together wins. Double charts have smaller layers,
-                // so releasing the cost borrow across calculation is measurably cheaper.
-                if COLS == 4 {
-                    let link = &mut g.next_links[cost_idx];
-                    // With nonnegative elapsed time, action costs cannot lower the path cost.
-                    if costs_nonnegative && init_cost >= link.cost {
+                    // Single charts have enough competing transitions that keeping the hot
+                    // cost/pred pair borrowed together wins. Double charts have smaller layers,
+                    // so releasing the cost borrow across calculation is measurably cheaper.
+                    if COLS == 4 {
+                        let link = &mut g.next_links[cost_idx];
+                        // With nonnegative elapsed time, action costs cannot lower the path cost.
+                        if costs_nonnegative && init_cost >= link.cost {
+                            continue;
+                        }
+                        let nc = calc_cost();
+                        if nc < link.cost {
+                            link.cost = nc;
+                            link.pred = init_id as u32;
+                        }
+                        continue;
+                    }
+
+                    let best_cost = g.next_links[cost_idx].cost;
+                    if costs_nonnegative && init_cost >= best_cost {
                         continue;
                     }
                     let nc = calc_cost();
-                    if nc < link.cost {
-                        link.cost = nc;
-                        link.pred = init_id as u32;
+                    if nc < best_cost {
+                        g.next_links[cost_idx].cost = nc;
+                        parity_set_pred::<COLS>(g, next_start + cost_idx, init_id as u32);
                     }
-                    continue;
-                }
-
-                let best_cost = g.next_links[cost_idx].cost;
-                if costs_nonnegative && init_cost >= best_cost {
-                    continue;
-                }
-                let nc = calc_cost();
-                if nc < best_cost {
-                    g.next_links[cost_idx].cost = nc;
-                    parity_set_pred::<COLS>(g, next_start + cost_idx, init_id as u32);
                 }
             }
         }
@@ -3063,10 +3165,17 @@ fn spin_class4(layout: &StageLayout) -> &'static [u8; SINGLE_STATE_COUNT] {
 }
 
 #[inline(always)]
-fn cached_spin_cost4(classes: &[u8], initial_key: u32, result_key: u32) -> f32 {
+fn cached_spin_cost4<const BRANCHLESS: bool>(
+    classes: &[u8],
+    initial_key: u32,
+    result_key: u32,
+) -> f32 {
     let initial = classes[initial_key as usize & (SINGLE_STATE_COUNT - 1)] & 0b11;
     let result = classes[result_key as usize & (SINGLE_STATE_COUNT - 1)] >> 2;
-    if initial + result == 3 {
+    let is_spin = initial + result == 3;
+    if BRANCHLESS {
+        [0.0, SPIN_WEIGHT][is_spin as usize]
+    } else if is_spin {
         SPIN_WEIGHT
     } else {
         0.0
@@ -4184,6 +4293,22 @@ mod tests {
                     | (spin_class(&cache.layout, &table_state, true) << 2)
             );
         }
+
+        let mut initial_keys = [None; 3];
+        for (key, &classes) in spin_class4.iter().enumerate() {
+            let initial = usize::from(classes & 0b11);
+            if initial < initial_keys.len() {
+                initial_keys[initial].get_or_insert(key as u32);
+            }
+        }
+        for initial_key in initial_keys.into_iter().flatten() {
+            for result_key in 0..SINGLE_STATE_COUNT as u32 {
+                assert_eq!(
+                    cached_spin_cost4::<true>(spin_class4, initial_key, result_key).to_bits(),
+                    cached_spin_cost4::<false>(spin_class4, initial_key, result_key).to_bits()
+                );
+            }
+        }
     }
 
     #[test]
@@ -4354,11 +4479,16 @@ mod tests {
                 for placement in permutations {
                     let (result, hit, key) =
                         parity_result_state_no_holds::<4>(&initial, placement, active_mask);
+                    let initial_base = StateBase4 {
+                        combined_columns: std::array::from_fn(|i| initial.combined_columns[i]),
+                        where_the_feet_are: initial.where_the_feet_are,
+                        occupied_mask: initial.occupied_mask,
+                    };
                     for elapsed in [0.05, 0.25, 0.5] {
                         let facing = facing_costs[key as usize & (SINGLE_STATE_COUNT - 1)];
                         let simple = calc_tap_cost(
                             &cache.layout,
-                            &initial,
+                            &initial_base,
                             key,
                             active_mask.trailing_zeros() as usize,
                             row_ctx.side_mask != 0,
@@ -4367,7 +4497,7 @@ mod tests {
                             right_moved,
                             false,
                             facing,
-                            cached_spin_cost4(spin_classes, initial_key, key),
+                            cached_spin_cost4::<true>(spin_classes, initial_key, key),
                         );
                         let general = calc_action_cost::<false>(
                             &cache.layout,
