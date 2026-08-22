@@ -647,7 +647,7 @@ fn did_jack(
     check(heel_col, pair.heel) || check(toe_col, pair.toe)
 }
 
-fn calc_action_cost<const CACHED_FACING: bool>(
+fn calc_action_cost<const CACHED_GEOMETRY: bool>(
     layout: &StageLayout,
     initial: &State,
     result: &State,
@@ -660,6 +660,7 @@ fn calc_action_cost<const CACHED_FACING: bool>(
     right_moved_not_holding: bool,
     prev_row_has_live_hold: bool,
     facing_cost: f32,
+    spin_cost: f32,
 ) -> f32 {
     let (lh, lt, rh, rt) = (
         hit[foot_idx(Foot::LeftHeel)],
@@ -730,12 +731,16 @@ fn calc_action_cost<const CACHED_FACING: bool>(
     if row_ctx.multi_active {
         cost += calc_twisted_foot_cost(layout, hit);
     }
-    cost += if CACHED_FACING {
+    cost += if CACHED_GEOMETRY {
         facing_cost
     } else {
         calc_facing_cost(layout, result)
     };
-    cost += calc_spin_cost(layout, initial, result);
+    cost += if CACHED_GEOMETRY {
+        spin_cost
+    } else {
+        calc_spin_cost(layout, initial, result)
+    };
     if row_ctx.mine_mask == 0
         && (SLOW_FOOTSWITCH_THRESHOLD..SLOW_FOOTSWITCH_IGNORE).contains(&elapsed)
     {
@@ -755,7 +760,6 @@ fn calc_action_cost<const CACHED_FACING: bool>(
 fn calc_tap_cost(
     layout: &StageLayout,
     initial: &State,
-    result: &State,
     placement: &FootPlacement,
     row_ctx: RowCostCtx,
     elapsed: f32,
@@ -763,13 +767,17 @@ fn calc_tap_cost(
     right_moved_not_holding: bool,
     prev_row_has_live_hold: bool,
     facing_cost: f32,
+    spin_cost: f32,
 ) -> f32 {
-    let moved_mask = result.moved_mask & (LEFT_FOOT_MASK | RIGHT_FOOT_MASK);
-    debug_assert!(moved_mask.count_ones() <= 1);
-    debug_assert_eq!(result.holding_mask, 0);
-
-    let moved_idx = moved_mask.trailing_zeros() as usize + 1;
-    let moved = moved_idx < NUM_FEET;
+    let hit_col = row_ctx.active_mask.trailing_zeros() as usize;
+    let moved_foot = if hit_col < 4 {
+        placement[hit_col]
+    } else {
+        Foot::None
+    };
+    let moved_idx = foot_idx(moved_foot);
+    let moved_mask = FOOT_MASKS[moved_idx];
+    let moved = moved_foot != Foot::None;
     let moved_left = moved && moved_idx <= foot_idx(Foot::LeftToe);
     let prev_moved = if moved_left {
         left_moved_not_holding
@@ -777,27 +785,28 @@ fn calc_tap_cost(
         right_moved_not_holding
     };
     let did_jump = left_moved_not_holding && right_moved_not_holding;
-    let hit_col = if moved {
-        result.where_the_feet_are[moved_idx]
-    } else {
-        INVALID_COLUMN
-    };
-    let jacked = moved
-        && !did_jump
-        && prev_moved
-        && initial.combined_columns[hit_col as usize] == FEET[moved_idx - 1];
+    let jacked =
+        moved && !did_jump && prev_moved && initial.combined_columns[hit_col] == moved_foot;
 
     let mut cost = 0.0;
     if moved && !did_jump && !jacked && prev_moved && !prev_row_has_live_hold {
         cost += DOUBLESTEP_WEIGHT;
     }
     cost += facing_cost;
-    cost += calc_spin_cost(layout, initial, result);
+    cost += spin_cost;
     if (SLOW_FOOTSWITCH_THRESHOLD..SLOW_FOOTSWITCH_IGNORE).contains(&elapsed) {
         cost += calc_footswitch_cost(initial, placement, row_ctx.active_mask, elapsed);
     }
     if row_ctx.side_mask != 0 {
-        cost += calc_sideswitch_cost(initial, result, placement, row_ctx.side_mask);
+        let column = row_ctx.side_mask.trailing_zeros() as usize;
+        let initial_foot = initial.combined_columns[column];
+        if initial_foot != placement[column]
+            && placement[column] != Foot::None
+            && initial_foot != Foot::None
+            && moved_mask & FOOT_MASKS[foot_idx(initial_foot)] == 0
+        {
+            cost += SIDESWITCH_WEIGHT;
+        }
     }
     if moved && jacked && elapsed < JACK_THRESHOLD {
         let time_scaled = JACK_THRESHOLD - elapsed;
@@ -808,8 +817,7 @@ fn calc_tap_cost(
     if moved {
         let initial_col = initial.where_the_feet_are[moved_idx];
         if initial_col != INVALID_COLUMN {
-            cost += (layout_distance(layout, initial_col as usize, hit_col as usize)
-                * DISTANCE_WEIGHT)
+            cost += (layout_distance(layout, initial_col as usize, hit_col) * DISTANCE_WEIGHT)
                 / elapsed;
         }
     }
@@ -986,40 +994,36 @@ fn calc_facing_cost(layout: &StageLayout, result: &State) -> f32 {
 }
 
 fn calc_spin_cost(layout: &StageLayout, initial: &State, result: &State) -> f32 {
-    let get = |s: &State, f: Foot| s.where_the_feet_are[foot_idx(f)];
-
-    let prev_left = layout_avg_point(
-        layout,
-        get(initial, Foot::LeftHeel),
-        get(initial, Foot::LeftToe),
-    );
-    let prev_right = layout_avg_point(
-        layout,
-        get(initial, Foot::RightHeel),
-        get(initial, Foot::RightToe),
-    );
-
-    let mut lt = get(result, Foot::LeftToe);
-    let mut rt = get(result, Foot::RightToe);
-    if lt == INVALID_COLUMN {
-        lt = get(result, Foot::LeftHeel);
+    if spin_class(layout, initial, false) + spin_class(layout, result, true) == 3 {
+        SPIN_WEIGHT
+    } else {
+        0.0
     }
-    if rt == INVALID_COLUMN {
-        rt = get(result, Foot::RightHeel);
-    }
+}
 
-    let left = layout_avg_point(layout, get(result, Foot::LeftHeel), lt);
-    let right = layout_avg_point(layout, get(result, Foot::RightHeel), rt);
-
-    let mut cost = 0.0;
-    if right.x < left.x
-        && prev_right.x < prev_left.x
-        && ((right.y < left.y && prev_right.y > prev_left.y)
-            || (right.y > left.y && prev_right.y < prev_left.y))
-    {
-        cost += SPIN_WEIGHT;
+fn spin_class(layout: &StageLayout, state: &State, toe_fallback: bool) -> u8 {
+    let get = |f: Foot| state.where_the_feet_are[foot_idx(f)];
+    let (lh, mut lt) = (get(Foot::LeftHeel), get(Foot::LeftToe));
+    let (rh, mut rt) = (get(Foot::RightHeel), get(Foot::RightToe));
+    if toe_fallback {
+        if lt == INVALID_COLUMN {
+            lt = lh;
+        }
+        if rt == INVALID_COLUMN {
+            rt = rh;
+        }
     }
-    cost
+    let left = layout_avg_point(layout, lh, lt);
+    let right = layout_avg_point(layout, rh, rt);
+    if right.x >= left.x {
+        0
+    } else if right.y < left.y {
+        1
+    } else if right.y > left.y {
+        2
+    } else {
+        0
+    }
 }
 
 fn calc_footswitch_cost(
@@ -1137,6 +1141,7 @@ struct StepParityGenerator {
     layout: &'static StageLayout,
     perm_table: &'static PermTable,
     facing_cost4: Option<&'static [f32; SINGLE_STATE_COUNT]>,
+    spin_class4: Option<&'static [u8; SINGLE_STATE_COUNT]>,
     column_count: usize,
     single_nodes: Vec<SingleParityNode>,
     double_nodes: Vec<StepParityNode>,
@@ -1179,11 +1184,13 @@ impl Default for LegacyDp {
 
 fn parity_gen(cache: &'static LayoutCache) -> StepParityGenerator {
     let facing_cost4 = (layout_cols(&cache.layout) == 4).then(|| facing_cost4(&cache.layout));
+    let spin_class4 = (layout_cols(&cache.layout) == 4).then(|| spin_class4(&cache.layout));
     StepParityGenerator {
         column_count: layout_cols(&cache.layout),
         layout: &cache.layout,
         perm_table: &cache.perm_table,
         facing_cost4,
+        spin_class4,
         single_nodes: Vec::new(),
         double_nodes: Vec::new(),
         rows: Vec::new(),
@@ -1791,6 +1798,7 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
 
     debug_assert_eq!(g.column_count, COLS);
     let facing_cost4 = g.facing_cost4.map_or(&[][..], |costs| &costs[..]);
+    let spin_class4 = g.spin_class4.map_or(&[][..], |classes| &classes[..]);
     let start_id = parity_add_node::<COLS>(g, 0);
     let mut prev_start = start_id;
     g.prev_links.clear();
@@ -1830,10 +1838,15 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
             // ITGmania zero-initializes the synthetic starting state's foot
             // positions. A legitimate solved state may also have key zero, so
             // the node identity—not the key—must distinguish the two.
+            let init_key = if init_id == start_id {
+                0
+            } else {
+                parity_state_key::<COLS>(g, init_id)
+            };
             let init_state = if init_id == start_id {
                 state_new()
             } else {
-                state_from_key::<COLS>(parity_state_key::<COLS>(g, init_id))
+                state_from_key::<COLS>(init_key)
             };
             let init_cost = g.prev_links[j].cost;
             let left_moved_not_holding = foot_moved_not_holding(&init_state, &LEFT_PAIR);
@@ -1843,7 +1856,7 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                     let (hit, key) = if simple_tap {
                         (
                             [INVALID_COLUMN; NUM_FEET],
-                            parity_result_tap_key4(&init_state, perm, active_mask),
+                            parity_result_tap_key4(&init_state, init_key, perm, active_mask),
                         )
                     } else if hold_mask == 0 {
                         parity_result_key4::<false>(&init_state, perm, 0, active_mask)
@@ -1874,17 +1887,11 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                     }
                 };
                 let calc_cost = || {
-                    let result = if COLS == 4 {
-                        state_from_key::<4>(key)
-                    } else {
-                        result.unwrap_or_else(|| unreachable!("double transition must have state"))
-                    };
                     let action_cost = if COLS == 4 {
                         if simple_tap {
                             calc_tap_cost(
                                 layout,
                                 &init_state,
-                                &result,
                                 perm,
                                 row_ctx,
                                 elapsed,
@@ -1892,8 +1899,10 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                                 right_moved_not_holding,
                                 prev_row_has_live_hold,
                                 facing_cost4[key as usize & (SINGLE_STATE_COUNT - 1)],
+                                cached_spin_cost4(spin_class4, init_key, key),
                             )
                         } else {
+                            let result = state_from_key::<4>(key);
                             calc_action_cost::<true>(
                                 layout,
                                 &init_state,
@@ -1907,9 +1916,12 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                                 right_moved_not_holding,
                                 prev_row_has_live_hold,
                                 facing_cost4[key as usize & (SINGLE_STATE_COUNT - 1)],
+                                cached_spin_cost4(spin_class4, init_key, key),
                             )
                         }
                     } else {
+                        let result = result
+                            .unwrap_or_else(|| unreachable!("double transition must have state"));
                         calc_action_cost::<false>(
                             layout,
                             &init_state,
@@ -1922,6 +1934,7 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                             left_moved_not_holding,
                             right_moved_not_holding,
                             prev_row_has_live_hold,
+                            0.0,
                             0.0,
                         )
                     };
@@ -2072,6 +2085,7 @@ fn legacy_dp_rows<const COLS: usize>(
                         left_moved_not_holding,
                         right_moved_not_holding,
                         prev_row_has_live_hold,
+                        0.0,
                         0.0,
                     );
                 if cost < dp.nodes[res_id].cost {
@@ -2306,15 +2320,35 @@ fn parity_combined_key4(initial: &State, cols: &FootPlacement, moved_mask: u8) -
 }
 
 #[inline(always)]
-fn parity_result_tap_key4(initial: &State, cols: &FootPlacement, active_mask: u8) -> u32 {
+fn parity_result_tap_key4(
+    initial: &State,
+    initial_key: u32,
+    cols: &FootPlacement,
+    active_mask: u8,
+) -> u32 {
     debug_assert!(active_mask.count_ones() <= 1);
     let i = active_mask.trailing_zeros() as usize;
-    let moved_mask = if i < 4 {
-        FOOT_MASKS[foot_idx(cols[i])]
-    } else {
-        0
-    };
-    parity_combined_key4(initial, cols, moved_mask) | (u32::from(moved_mask) << 24)
+    if i >= 4 || cols[i] == Foot::None {
+        return initial_key & (SINGLE_STATE_COUNT - 1) as u32;
+    }
+
+    let foot = cols[i];
+    let fi = foot_idx(foot);
+    let moved_mask = FOOT_MASKS[fi];
+    let mut combined = initial_key & (SINGLE_STATE_COUNT - 1) as u32;
+    combined &= !(0b111 << (i * 3));
+    let previous_col = initial.where_the_feet_are[fi];
+    if previous_col != INVALID_COLUMN {
+        combined &= !(0b111 << (previous_col as usize * 3));
+    }
+    if matches!(foot, Foot::LeftHeel | Foot::RightHeel) {
+        let toe_col = initial.where_the_feet_are[fi + 1];
+        if toe_col != INVALID_COLUMN {
+            combined &= !(0b111 << (toe_col as usize * 3));
+        }
+    }
+    combined |= (foot as u32) << (i * 3);
+    combined | (u32::from(moved_mask) << 24)
 }
 
 #[inline(always)]
@@ -2984,6 +3018,31 @@ fn facing_cost4(layout: &StageLayout) -> &'static [f32; SINGLE_STATE_COUNT] {
             calc_facing_cost(layout, &state)
         })
     })
+}
+
+fn spin_class4(layout: &StageLayout) -> &'static [u8; SINGLE_STATE_COUNT] {
+    // Process-lifetime dance-single table: OnceLock provides thread-safe startup,
+    // parity scratch creation warms all 4,096 inline bytes before solving, and
+    // solves have no misses, allocation, eviction, or destruction work. The
+    // cycle/allocation harnesses cover its constant lookup and worst-row cost.
+    static CLASSES: OnceLock<[u8; SINGLE_STATE_COUNT]> = OnceLock::new();
+    CLASSES.get_or_init(|| {
+        std::array::from_fn(|key| {
+            let state = state_from_key::<4>(key as u32);
+            spin_class(layout, &state, false) | (spin_class(layout, &state, true) << 2)
+        })
+    })
+}
+
+#[inline(always)]
+fn cached_spin_cost4(classes: &[u8], initial_key: u32, result_key: u32) -> f32 {
+    let initial = classes[initial_key as usize & (SINGLE_STATE_COUNT - 1)] & 0b11;
+    let result = classes[result_key as usize & (SINGLE_STATE_COUNT - 1)] >> 2;
+    if initial + result == 3 {
+        SPIN_WEIGHT
+    } else {
+        0.0
+    }
 }
 
 fn build_perm_table(layout: &StageLayout) -> PermTable {
@@ -3727,6 +3786,10 @@ mod tests {
             std::mem::size_of_val(facing_cost4(&dance_single_cache().layout)),
             16_384
         );
+        assert_eq!(
+            std::mem::size_of_val(spin_class4(&dance_single_cache().layout)),
+            4_096
+        );
     }
 
     fn assert_rows_match_lanes(data: &[u8], has_holds: bool) {
@@ -4061,12 +4124,18 @@ mod tests {
     fn single_state_tables_match_scalar_calculation() {
         let cache = dance_single_cache();
         let facing_cost4 = facing_cost4(&cache.layout);
+        let spin_class4 = spin_class4(&cache.layout);
         for key in 0..SINGLE_STATE_COUNT as u32 {
             let table_state = state_from_key::<4>(key);
             assert_eq!(table_state, state_from_key_scalar::<4>(key));
             assert_eq!(
                 facing_cost4[key as usize].to_bits(),
                 calc_facing_cost(&cache.layout, &table_state).to_bits()
+            );
+            assert_eq!(
+                spin_class4[key as usize],
+                spin_class(&cache.layout, &table_state, false)
+                    | (spin_class(&cache.layout, &table_state, true) << 2)
             );
         }
     }
@@ -4096,10 +4165,26 @@ mod tests {
     #[test]
     fn specialized_column_transitions_agree_for_single_panel_states() {
         let cache = dance_single_cache();
-        let initial_states = std::iter::once(state_new())
-            .chain((0..SINGLE_STATE_COUNT as u32).map(state_from_key::<4>));
+        let canonical_state = |state: &State, key: u32| {
+            let mut seen = 0u8;
+            let mut canonical = 0u32;
+            let unique = state.combined_columns[..4]
+                .iter()
+                .enumerate()
+                .all(|(column, &foot)| {
+                    let mask = FOOT_MASKS[foot_idx(foot)];
+                    let unique = seen & mask == 0;
+                    seen |= mask;
+                    canonical |= (foot as u32) << (column * 3);
+                    unique
+                });
+            unique && canonical == key & (SINGLE_STATE_COUNT - 1) as u32
+        };
+        let initial_states = std::iter::once((state_new(), 0))
+            .chain((0..SINGLE_STATE_COUNT as u32).map(|key| (state_from_key::<4>(key), key)));
 
-        for initial in initial_states {
+        for (initial, initial_key) in initial_states {
+            let initial_canonical = canonical_state(&initial, initial_key);
             for active_mask in 0u8..16 {
                 let permutations = cache.perm_table.get(active_mask);
                 let permutations = if permutations.is_empty() {
@@ -4110,6 +4195,9 @@ mod tests {
                 for placement in permutations {
                     let no_holds =
                         parity_result_state_no_holds::<4>(&initial, placement, active_mask);
+                    if initial_canonical {
+                        assert!(canonical_state(&no_holds.0, no_holds.2));
+                    }
                     assert_eq!(
                         no_holds,
                         parity_result_state_no_holds::<8>(&initial, placement, active_mask)
@@ -4118,15 +4206,19 @@ mod tests {
                         parity_result_key4::<false>(&initial, placement, 0, active_mask),
                         (no_holds.1, no_holds.2)
                     );
-                    if active_mask.count_ones() <= 1 {
+                    if active_mask.count_ones() <= 1 && initial_canonical {
                         assert_eq!(
-                            parity_result_tap_key4(&initial, placement, active_mask),
-                            no_holds.2
+                            parity_result_tap_key4(&initial, initial_key, placement, active_mask,),
+                            no_holds.2,
+                            "initial={initial_key:#x} active={active_mask:#x} placement={placement:?}"
                         );
                     }
                     let hold_mask = active_mask & 0b0101;
                     let with_holds =
                         parity_result_state::<4>(&initial, placement, hold_mask, active_mask);
+                    if initial_canonical {
+                        assert!(canonical_state(&with_holds.0, with_holds.2));
+                    }
                     assert_eq!(
                         with_holds,
                         parity_result_state::<8>(&initial, placement, hold_mask, active_mask)
@@ -4180,19 +4272,20 @@ mod tests {
     fn simple_tap_cost_matches_general_path() {
         let cache = dance_single_cache();
         let facing_costs = facing_cost4(&cache.layout);
+        let spin_classes = spin_class4(&cache.layout);
         let mut initial_states = Vec::with_capacity(1 + SINGLE_STATE_COUNT * 16);
-        initial_states.push(state_new());
+        initial_states.push((state_new(), 0));
         for base_key in 0..SINGLE_STATE_COUNT as u32 {
             for moved_mask in [0u8, 1, 2, 3, 4, 8, 12, 15] {
                 for holding_mask in [0, moved_mask] {
                     let key =
                         base_key | (u32::from(moved_mask) << 24) | (u32::from(holding_mask) << 28);
-                    initial_states.push(state_from_key::<4>(key));
+                    initial_states.push((state_from_key::<4>(key), key));
                 }
             }
         }
 
-        for initial in initial_states {
+        for (initial, initial_key) in initial_states {
             let left_moved = foot_moved_not_holding(&initial, &LEFT_PAIR);
             let right_moved = foot_moved_not_holding(&initial, &RIGHT_PAIR);
             for active_mask in [0, 1, 2, 4, 8] {
@@ -4216,7 +4309,6 @@ mod tests {
                         let simple = calc_tap_cost(
                             &cache.layout,
                             &initial,
-                            &result,
                             placement,
                             row_ctx,
                             elapsed,
@@ -4224,8 +4316,9 @@ mod tests {
                             right_moved,
                             false,
                             facing,
+                            cached_spin_cost4(spin_classes, initial_key, key),
                         );
-                        let general = calc_action_cost::<true>(
+                        let general = calc_action_cost::<false>(
                             &cache.layout,
                             &initial,
                             &result,
@@ -4237,7 +4330,8 @@ mod tests {
                             left_moved,
                             right_moved,
                             false,
-                            facing,
+                            0.0,
+                            0.0,
                         );
                         assert_eq!(simple.to_bits(), general.to_bits());
                     }
