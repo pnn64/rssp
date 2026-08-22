@@ -515,6 +515,11 @@ struct StateBase4 {
 }
 
 const SINGLE_STATE_COUNT: usize = 1 << 12;
+#[cfg(test)]
+const SINGLE_LAYER_MAX: usize = 625;
+const SINGLE_STATE_MASK: u32 = 0xff00_0fff;
+const SINGLE_PRED_SHIFT: u32 = 12;
+const SINGLE_PRED_MASK: u32 = 0x0fff;
 // Compile-time, process-lifetime dance-single decode table. It is immutable and
 // shared lock-free, has exactly 4,096 entries, never misses or evicts, performs
 // no warmup/allocation/destruction work, and makes every lookup constant-time.
@@ -609,6 +614,8 @@ struct StepParityNode {
     pred: u32,
 }
 
+type SingleParityNode = u32;
+
 #[derive(Clone, Copy)]
 struct LayerLink {
     pred: u32,
@@ -640,7 +647,7 @@ fn did_jack(
     check(heel_col, pair.heel) || check(toe_col, pair.toe)
 }
 
-fn calc_action_cost<const CACHED_FACING: bool, const SIMPLE_TAP: bool>(
+fn calc_action_cost<const CACHED_FACING: bool>(
     layout: &StageLayout,
     initial: &State,
     result: &State,
@@ -689,14 +696,14 @@ fn calc_action_cost<const CACHED_FACING: bool, const SIMPLE_TAP: bool>(
     );
 
     let mut cost = 0.0;
-    if !SIMPLE_TAP && row_ctx.mine_mask != 0 {
+    if row_ctx.mine_mask != 0 {
         cost += calc_mine_cost(result, row);
     }
-    if !SIMPLE_TAP && row_ctx.has_hold {
+    if row_ctx.has_hold {
         cost += calc_hold_switch_cost(layout, initial, result, row);
         cost += calc_bracket_tap_cost(initial, row, lh, lt, rh, rt, elapsed);
     }
-    if !SIMPLE_TAP && row_ctx.multi_active {
+    if row_ctx.multi_active {
         cost += calc_bracket_jack_cost(
             result,
             moved_left,
@@ -717,10 +724,10 @@ fn calc_action_cost<const CACHED_FACING: bool, const SIMPLE_TAP: bool>(
         right_moved_not_holding,
         prev_row_has_live_hold,
     );
-    if !SIMPLE_TAP && row.note_count >= 2 {
+    if row.note_count >= 2 {
         cost += calc_slow_bracket_cost(row, moved_left, moved_right, elapsed);
     }
-    if !SIMPLE_TAP && row_ctx.multi_active {
+    if row_ctx.multi_active {
         cost += calc_twisted_foot_cost(layout, hit);
     }
     cost += if CACHED_FACING {
@@ -729,7 +736,7 @@ fn calc_action_cost<const CACHED_FACING: bool, const SIMPLE_TAP: bool>(
         calc_facing_cost(layout, result)
     };
     cost += calc_spin_cost(layout, initial, result);
-    if (SIMPLE_TAP || row_ctx.mine_mask == 0)
+    if row_ctx.mine_mask == 0
         && (SLOW_FOOTSWITCH_THRESHOLD..SLOW_FOOTSWITCH_IGNORE).contains(&elapsed)
     {
         cost += calc_footswitch_cost(initial, placement, row_ctx.active_mask, elapsed);
@@ -737,11 +744,75 @@ fn calc_action_cost<const CACHED_FACING: bool, const SIMPLE_TAP: bool>(
     if row_ctx.side_mask != 0 {
         cost += calc_sideswitch_cost(initial, result, placement, row_ctx.side_mask);
     }
-    if !SIMPLE_TAP && row_ctx.mine_mask != 0 {
+    if row_ctx.mine_mask != 0 {
         cost += calc_missed_footswitch_cost(row, jacked_left, jacked_right);
     }
     cost += calc_jack_cost(moved_left, moved_right, jacked_left, jacked_right, elapsed);
     cost += calc_big_movements_cost(layout, initial, result, hit, elapsed);
+    cost
+}
+
+fn calc_tap_cost(
+    layout: &StageLayout,
+    initial: &State,
+    result: &State,
+    placement: &FootPlacement,
+    row_ctx: RowCostCtx,
+    elapsed: f32,
+    left_moved_not_holding: bool,
+    right_moved_not_holding: bool,
+    prev_row_has_live_hold: bool,
+    facing_cost: f32,
+) -> f32 {
+    let moved_mask = result.moved_mask & (LEFT_FOOT_MASK | RIGHT_FOOT_MASK);
+    debug_assert!(moved_mask.count_ones() <= 1);
+    debug_assert_eq!(result.holding_mask, 0);
+
+    let moved_idx = moved_mask.trailing_zeros() as usize + 1;
+    let moved = moved_idx < NUM_FEET;
+    let moved_left = moved && moved_idx <= foot_idx(Foot::LeftToe);
+    let prev_moved = if moved_left {
+        left_moved_not_holding
+    } else {
+        right_moved_not_holding
+    };
+    let did_jump = left_moved_not_holding && right_moved_not_holding;
+    let hit_col = if moved {
+        result.where_the_feet_are[moved_idx]
+    } else {
+        INVALID_COLUMN
+    };
+    let jacked = moved
+        && !did_jump
+        && prev_moved
+        && initial.combined_columns[hit_col as usize] == FEET[moved_idx - 1];
+
+    let mut cost = 0.0;
+    if moved && !did_jump && !jacked && prev_moved && !prev_row_has_live_hold {
+        cost += DOUBLESTEP_WEIGHT;
+    }
+    cost += facing_cost;
+    cost += calc_spin_cost(layout, initial, result);
+    if (SLOW_FOOTSWITCH_THRESHOLD..SLOW_FOOTSWITCH_IGNORE).contains(&elapsed) {
+        cost += calc_footswitch_cost(initial, placement, row_ctx.active_mask, elapsed);
+    }
+    if row_ctx.side_mask != 0 {
+        cost += calc_sideswitch_cost(initial, result, placement, row_ctx.side_mask);
+    }
+    if moved && jacked && elapsed < JACK_THRESHOLD {
+        let time_scaled = JACK_THRESHOLD - elapsed;
+        if time_scaled > 0.0 {
+            cost += (1.0 / time_scaled - 1.0 / JACK_THRESHOLD) * JACK_WEIGHT;
+        }
+    }
+    if moved {
+        let initial_col = initial.where_the_feet_are[moved_idx];
+        if initial_col != INVALID_COLUMN {
+            cost += (layout_distance(layout, initial_col as usize, hit_col as usize)
+                * DISTANCE_WEIGHT)
+                / elapsed;
+        }
+    }
     cost
 }
 
@@ -1067,7 +1138,8 @@ struct StepParityGenerator {
     perm_table: &'static PermTable,
     facing_cost4: Option<&'static [f32; SINGLE_STATE_COUNT]>,
     column_count: usize,
-    nodes: Vec<StepParityNode>,
+    single_nodes: Vec<SingleParityNode>,
+    double_nodes: Vec<StepParityNode>,
     rows: Vec<Row>,
     result_columns: Vec<FootPlacement>,
     prev_links: Vec<LayerLink>,
@@ -1112,7 +1184,8 @@ fn parity_gen(cache: &'static LayoutCache) -> StepParityGenerator {
         layout: &cache.layout,
         perm_table: &cache.perm_table,
         facing_cost4,
-        nodes: Vec::new(),
+        single_nodes: Vec::new(),
+        double_nodes: Vec::new(),
         rows: Vec::new(),
         result_columns: Vec::new(),
         prev_links: Vec::new(),
@@ -1125,7 +1198,8 @@ fn parity_gen(cache: &'static LayoutCache) -> StepParityGenerator {
 #[inline(always)]
 fn parity_reset(g: &mut StepParityGenerator, cols: usize) {
     g.column_count = cols;
-    g.nodes.clear();
+    g.single_nodes.clear();
+    g.double_nodes.clear();
     g.rows.clear();
     g.result_columns.clear();
     g.active_hold_ends.fill(HOLD_END_NONE);
@@ -1637,13 +1711,66 @@ fn parity_build_row(g: &mut StepParityGenerator, counter: &RowCounter) -> Row {
     row
 }
 
-fn parity_add_node(g: &mut StepParityGenerator, state_key: u32) -> usize {
-    let idx = g.nodes.len();
-    g.nodes.push(StepParityNode {
-        state_key,
-        pred: u32::MAX,
-    });
-    idx
+#[inline(always)]
+fn parity_node_len<const COLS: usize>(g: &StepParityGenerator) -> usize {
+    if COLS == 4 {
+        g.single_nodes.len()
+    } else {
+        g.double_nodes.len()
+    }
+}
+
+#[inline(always)]
+fn parity_add_node<const COLS: usize>(g: &mut StepParityGenerator, state_key: u32) -> usize {
+    if COLS == 4 {
+        let idx = g.single_nodes.len();
+        debug_assert_eq!(state_key & !SINGLE_STATE_MASK, 0);
+        g.single_nodes.push(state_key);
+        idx
+    } else {
+        let idx = g.double_nodes.len();
+        g.double_nodes.push(StepParityNode {
+            state_key,
+            pred: u32::MAX,
+        });
+        idx
+    }
+}
+
+#[inline(always)]
+fn parity_state_key<const COLS: usize>(g: &StepParityGenerator, id: usize) -> u32 {
+    if COLS == 4 {
+        g.single_nodes[id]
+    } else {
+        g.double_nodes[id].state_key
+    }
+}
+
+#[inline(always)]
+fn parity_set_pred<const COLS: usize>(g: &mut StepParityGenerator, id: usize, pred: u32) {
+    if COLS == 4 {
+        debug_assert!(id > pred as usize);
+        let delta = id - pred as usize;
+        debug_assert!(delta <= SINGLE_PRED_MASK as usize);
+        debug_assert_eq!(g.single_nodes[id] & !SINGLE_STATE_MASK, 0);
+        g.single_nodes[id] |= (delta as u32) << SINGLE_PRED_SHIFT;
+    } else {
+        g.double_nodes[id].pred = pred;
+    }
+}
+
+#[inline(always)]
+fn parity_pred<const COLS: usize>(g: &StepParityGenerator, id: usize) -> u32 {
+    if COLS == 4 {
+        let delta = (g.single_nodes[id] >> SINGLE_PRED_SHIFT) & SINGLE_PRED_MASK;
+        if delta == 0 {
+            u32::MAX
+        } else {
+            id as u32 - delta
+        }
+    } else {
+        g.double_nodes[id].pred
+    }
 }
 
 fn parity_perms_for_row(g: &mut StepParityGenerator, row_idx: usize) -> &'static [FootPlacement] {
@@ -1664,7 +1791,7 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
 
     debug_assert_eq!(g.column_count, COLS);
     let facing_cost4 = g.facing_cost4.map_or(&[][..], |costs| &costs[..]);
-    let start_id = parity_add_node(g, 0);
+    let start_id = parity_add_node::<COLS>(g, 0);
     let mut prev_start = start_id;
     g.prev_links.clear();
     g.prev_links.push(LayerLink {
@@ -1685,7 +1812,7 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
 
         let perms = parity_perms_for_row(g, i);
         let estimate = g.prev_links.len().saturating_mul(perms.len());
-        let next_start = g.nodes.len();
+        let next_start = parity_node_len::<COLS>(g);
         g.next_links.clear();
         row_map_reset(&mut g.state_map, estimate);
         g.next_links.reserve(estimate);
@@ -1706,14 +1833,19 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
             let init_state = if init_id == start_id {
                 state_new()
             } else {
-                state_from_key::<COLS>(g.nodes[init_id].state_key)
+                state_from_key::<COLS>(parity_state_key::<COLS>(g, init_id))
             };
             let init_cost = g.prev_links[j].cost;
             let left_moved_not_holding = foot_moved_not_holding(&init_state, &LEFT_PAIR);
             let right_moved_not_holding = foot_moved_not_holding(&init_state, &RIGHT_PAIR);
             for perm in perms {
                 let (result, hit, key) = if COLS == 4 {
-                    let (hit, key) = if hold_mask == 0 {
+                    let (hit, key) = if simple_tap {
+                        (
+                            [INVALID_COLUMN; NUM_FEET],
+                            parity_result_tap_key4(&init_state, perm, active_mask),
+                        )
+                    } else if hold_mask == 0 {
                         parity_result_key4::<false>(&init_state, perm, 0, active_mask)
                     } else {
                         parity_result_key4::<true>(&init_state, perm, hold_mask, active_mask)
@@ -1730,7 +1862,7 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                 let cost_idx = match row_map_probe::<COLS>(&g.state_map, key) {
                     RowMapProbe::Found(index) => index,
                     RowMapProbe::Vacant(slot) => {
-                        let id = parity_add_node(g, key);
+                        let id = parity_add_node::<COLS>(g, key);
                         let index = g.next_links.len();
                         debug_assert_eq!(id, next_start + index);
                         g.next_links.push(LayerLink {
@@ -1749,13 +1881,11 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                     };
                     let action_cost = if COLS == 4 {
                         if simple_tap {
-                            calc_action_cost::<true, true>(
+                            calc_tap_cost(
                                 layout,
                                 &init_state,
                                 &result,
                                 perm,
-                                hit,
-                                &row,
                                 row_ctx,
                                 elapsed,
                                 left_moved_not_holding,
@@ -1764,7 +1894,7 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                                 facing_cost4[key as usize & (SINGLE_STATE_COUNT - 1)],
                             )
                         } else {
-                            calc_action_cost::<true, false>(
+                            calc_action_cost::<true>(
                                 layout,
                                 &init_state,
                                 &result,
@@ -1780,7 +1910,7 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                             )
                         }
                     } else {
-                        calc_action_cost::<false, false>(
+                        calc_action_cost::<false>(
                             layout,
                             &init_state,
                             &result,
@@ -1821,24 +1951,34 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                 let nc = calc_cost();
                 if nc < best_cost {
                     g.next_links[cost_idx].cost = nc;
-                    g.nodes[next_start + cost_idx].pred = init_id as u32;
+                    parity_set_pred::<COLS>(g, next_start + cost_idx, init_id as u32);
                 }
             }
         }
 
         if COLS == 4 {
-            debug_assert_eq!(g.nodes.len() - next_start, g.next_links.len());
-            for (node, link) in g.nodes[next_start..].iter_mut().zip(&g.next_links) {
-                node.pred = link.pred;
+            assert!(
+                g.prev_links.len() + g.next_links.len() <= SINGLE_PRED_MASK as usize,
+                "single-panel layer pair exceeded packed predecessor domain"
+            );
+            debug_assert_eq!(parity_node_len::<COLS>(g) - next_start, g.next_links.len());
+            for index in 0..g.next_links.len() {
+                parity_set_pred::<COLS>(g, next_start + index, g.next_links[index].pred);
             }
         }
         prev_start = next_start;
         std::mem::swap(&mut g.prev_links, &mut g.next_links);
 
         if i + 1 == RESERVE_SAMPLE_ROWS && g.rows.len() > RESERVE_SAMPLE_ROWS {
-            let states_per_row = g.nodes.len().div_ceil(RESERVE_SAMPLE_ROWS);
+            let node_len = parity_node_len::<COLS>(g);
+            let states_per_row = node_len.div_ceil(RESERVE_SAMPLE_ROWS);
             let expected = states_per_row.saturating_mul(g.rows.len());
-            g.nodes.reserve(expected.saturating_sub(g.nodes.len()));
+            let additional = expected.saturating_sub(node_len);
+            if COLS == 4 {
+                g.single_nodes.reserve(additional);
+            } else {
+                g.double_nodes.reserve(additional);
+            }
         }
     }
 
@@ -1920,7 +2060,7 @@ fn legacy_dp_rows<const COLS: usize>(
                     continue;
                 }
                 let cost = init_cost
-                    + calc_action_cost::<false, false>(
+                    + calc_action_cost::<false>(
                         g.layout,
                         &init_state,
                         &result,
@@ -2140,6 +2280,44 @@ fn parity_result_state_no_holds<const COLS: usize>(
 }
 
 #[inline(always)]
+fn parity_combined_key4(initial: &State, cols: &FootPlacement, moved_mask: u8) -> u32 {
+    let moved_left = moved_mask & LEFT_FOOT_MASK != 0;
+    let moved_right = moved_mask & RIGHT_FOOT_MASK != 0;
+    let mut combined = 0u32;
+    for (i, &placed) in cols.iter().enumerate().take(4) {
+        let foot = if placed != Foot::None {
+            placed
+        } else {
+            let previous = initial.combined_columns[i];
+            match previous {
+                Foot::LeftHeel | Foot::RightHeel
+                    if moved_mask & FOOT_MASKS[foot_idx(previous)] == 0 =>
+                {
+                    previous
+                }
+                Foot::LeftToe if !moved_left => previous,
+                Foot::RightToe if !moved_right => previous,
+                _ => Foot::None,
+            }
+        };
+        combined |= (foot as u32) << (i * 3);
+    }
+    combined
+}
+
+#[inline(always)]
+fn parity_result_tap_key4(initial: &State, cols: &FootPlacement, active_mask: u8) -> u32 {
+    debug_assert!(active_mask.count_ones() <= 1);
+    let i = active_mask.trailing_zeros() as usize;
+    let moved_mask = if i < 4 {
+        FOOT_MASKS[foot_idx(cols[i])]
+    } else {
+        0
+    };
+    parity_combined_key4(initial, cols, moved_mask) | (u32::from(moved_mask) << 24)
+}
+
+#[inline(always)]
 fn parity_result_key4<const HAS_HOLDS: bool>(
     initial: &State,
     cols: &FootPlacement,
@@ -2166,27 +2344,7 @@ fn parity_result_key4<const HAS_HOLDS: bool>(
         }
     }
 
-    let moved_left = moved_mask & LEFT_FOOT_MASK != 0;
-    let moved_right = moved_mask & RIGHT_FOOT_MASK != 0;
-    let mut combined = 0u32;
-    for (i, &placed) in cols.iter().enumerate().take(4) {
-        let foot = if placed != Foot::None {
-            placed
-        } else {
-            let previous = initial.combined_columns[i];
-            match previous {
-                Foot::LeftHeel | Foot::RightHeel
-                    if moved_mask & FOOT_MASKS[foot_idx(previous)] == 0 =>
-                {
-                    previous
-                }
-                Foot::LeftToe if !moved_left => previous,
-                Foot::RightToe if !moved_right => previous,
-                _ => Foot::None,
-            }
-        };
-        combined |= (foot as u32) << (i * 3);
-    }
+    let combined = parity_combined_key4(initial, cols, moved_mask);
 
     (
         hit,
@@ -2205,8 +2363,9 @@ fn parity_backtrack<const COLS: usize>(g: &mut StepParityGenerator, mut cur: usi
     let mut write = rows;
     while write > 0 {
         write -= 1;
-        g.result_columns[write] = state_from_key::<COLS>(g.nodes[cur].state_key).combined_columns;
-        let prev = g.nodes[cur].pred;
+        g.result_columns[write] =
+            state_from_key::<COLS>(parity_state_key::<COLS>(g, cur)).combined_columns;
+        let prev = parity_pred::<COLS>(g, cur);
         if prev == u32::MAX {
             g.result_columns.clear();
             return false;
@@ -3561,6 +3720,8 @@ mod tests {
     fn hot_storage_stays_compact() {
         assert_eq!(std::mem::size_of::<Row>(), 16);
         assert_eq!(std::mem::size_of::<StateBase4>(), 10);
+        assert_eq!(std::mem::size_of::<StepParityNode>(), 8);
+        assert_eq!(std::mem::size_of::<SingleParityNode>(), 4);
         assert_eq!(std::mem::size_of_val(&STATE_BASE4), 40_960);
         assert_eq!(
             std::mem::size_of_val(facing_cost4(&dance_single_cache().layout)),
@@ -3957,6 +4118,12 @@ mod tests {
                         parity_result_key4::<false>(&initial, placement, 0, active_mask),
                         (no_holds.1, no_holds.2)
                     );
+                    if active_mask.count_ones() <= 1 {
+                        assert_eq!(
+                            parity_result_tap_key4(&initial, placement, active_mask),
+                            no_holds.2
+                        );
+                    }
                     let hold_mask = active_mask & 0b0101;
                     let with_holds =
                         parity_result_state::<4>(&initial, placement, hold_mask, active_mask);
@@ -3971,14 +4138,59 @@ mod tests {
                 }
             }
         }
+
+        let mut max_states = 0usize;
+        let mut max_row = (0u8, 0u8);
+        for active_mask in 0u8..16 {
+            let permutations = cache.perm_table.get(active_mask);
+            let permutations = if permutations.is_empty() {
+                &NO_PERMS
+            } else {
+                permutations
+            };
+            for hold_mask in 0u8..16 {
+                if hold_mask & !active_mask != 0 {
+                    continue;
+                }
+                let mut keys = Vec::new();
+                for initial_key in 0..SINGLE_STATE_COUNT as u32 {
+                    let initial = state_from_key::<4>(initial_key);
+                    for placement in permutations {
+                        keys.push(
+                            parity_result_key4::<true>(&initial, placement, hold_mask, active_mask)
+                                .1,
+                        );
+                    }
+                }
+                keys.sort_unstable();
+                keys.dedup();
+                if keys.len() > max_states {
+                    max_states = keys.len();
+                    max_row = (active_mask, hold_mask);
+                }
+            }
+        }
+        assert!(
+            max_states <= SINGLE_LAYER_MAX,
+            "single row {max_row:?} produced {max_states} states"
+        );
     }
 
     #[test]
     fn simple_tap_cost_matches_general_path() {
         let cache = dance_single_cache();
         let facing_costs = facing_cost4(&cache.layout);
-        let initial_states = std::iter::once(state_new())
-            .chain((0..SINGLE_STATE_COUNT as u32).map(state_from_key::<4>));
+        let mut initial_states = Vec::with_capacity(1 + SINGLE_STATE_COUNT * 16);
+        initial_states.push(state_new());
+        for base_key in 0..SINGLE_STATE_COUNT as u32 {
+            for moved_mask in [0u8, 1, 2, 3, 4, 8, 12, 15] {
+                for holding_mask in [0, moved_mask] {
+                    let key =
+                        base_key | (u32::from(moved_mask) << 24) | (u32::from(holding_mask) << 28);
+                    initial_states.push(state_from_key::<4>(key));
+                }
+            }
+        }
 
         for initial in initial_states {
             let left_moved = foot_moved_not_holding(&initial, &LEFT_PAIR);
@@ -4001,13 +4213,11 @@ mod tests {
                         parity_result_state_no_holds::<4>(&initial, placement, active_mask);
                     for elapsed in [0.05, 0.25, 0.5] {
                         let facing = facing_costs[key as usize & (SINGLE_STATE_COUNT - 1)];
-                        let simple = calc_action_cost::<true, true>(
+                        let simple = calc_tap_cost(
                             &cache.layout,
                             &initial,
                             &result,
                             placement,
-                            hit,
-                            &row,
                             row_ctx,
                             elapsed,
                             left_moved,
@@ -4015,7 +4225,7 @@ mod tests {
                             false,
                             facing,
                         );
-                        let general = calc_action_cost::<true, false>(
+                        let general = calc_action_cost::<true>(
                             &cache.layout,
                             &initial,
                             &result,
