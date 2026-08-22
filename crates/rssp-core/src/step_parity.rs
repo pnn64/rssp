@@ -2800,16 +2800,24 @@ fn calculate_tech_counts(
     }
 
     let cols = layout_cols(layout).min(MAX_COLUMNS);
+    let col_mask = u8::MAX >> (MAX_COLUMNS - cols);
+    debug_assert!(rows.iter().all(|row| row.tech_mask & !col_mask == 0));
 
-    let hit_positions = |combined: &FootPlacement, mask: u8| -> [i8; NUM_FEET] {
+    let hit_positions = |combined: &FootPlacement, row: &Row| -> [i8; NUM_FEET] {
         let mut pos = [INVALID_COLUMN; NUM_FEET];
-        let mut m = mask;
+        let mut m = row.tech_mask;
+        if cols == 4 && row.note_count == 1 {
+            debug_assert!(m.is_power_of_two());
+            let c = m.trailing_zeros() as usize;
+            let foot = combined[c];
+            if foot != Foot::None {
+                pos[foot_idx(foot)] = c as i8;
+            }
+            return pos;
+        }
         while m != 0 {
             let c = m.trailing_zeros() as usize;
             m &= m - 1;
-            if c >= cols {
-                continue;
-            }
             let foot = combined[c];
             if foot != Foot::None {
                 pos[foot_idx(foot)] = c as i8;
@@ -2819,13 +2827,13 @@ fn calculate_tech_counts(
     };
 
     let mut prev_prev_pos = [INVALID_COLUMN; NUM_FEET];
-    let mut prev_pos = hit_positions(&placements[0], rows[0].tech_mask);
+    let mut prev_pos = hit_positions(&placements[0], &rows[0]);
 
     for i in 1..rows.len() {
         let (curr, prev) = (&rows[i], &rows[i - 1]);
         let (curr_combined, prev_combined) = (&placements[i], &placements[i - 1]);
 
-        let curr_pos = hit_positions(curr_combined, curr.tech_mask);
+        let curr_pos = hit_positions(curr_combined, curr);
 
         // Per-row tech is computed by the shared classifier so the aggregate
         // counts here and the per-row annotation flags never drift.
@@ -2870,15 +2878,28 @@ fn classify_row_tech(
 
     // Jacks and doublesteps
     if curr.note_count == 1 && prev.note_count == 1 {
-        for &foot in &FEET {
-            let (cc, pc) = (curr_pos[foot_idx(foot)], prev_pos[foot_idx(foot)]);
-            if cc == INVALID_COLUMN || pc == INVALID_COLUMN {
-                continue;
+        if layout.cols == 4 {
+            let cc = curr.tech_mask.trailing_zeros() as i8;
+            let foot = curr_combined[cc as usize];
+            if foot != Foot::None {
+                let pc = prev_pos[foot_idx(foot)];
+                if cc == pc && elapsed < JACK_CUTOFF {
+                    out.jacks += 1;
+                } else if pc != INVALID_COLUMN && elapsed < DOUBLESTEP_CUTOFF {
+                    out.doublesteps += 1;
+                }
             }
-            if cc == pc && elapsed < JACK_CUTOFF {
-                out.jacks += 1;
-            } else if cc != pc && elapsed < DOUBLESTEP_CUTOFF {
-                out.doublesteps += 1;
+        } else {
+            for &foot in &FEET {
+                let (cc, pc) = (curr_pos[foot_idx(foot)], prev_pos[foot_idx(foot)]);
+                if cc == INVALID_COLUMN || pc == INVALID_COLUMN {
+                    continue;
+                }
+                if cc == pc && elapsed < JACK_CUTOFF {
+                    out.jacks += 1;
+                } else if cc != pc && elapsed < DOUBLESTEP_CUTOFF {
+                    out.doublesteps += 1;
+                }
             }
         }
     }
@@ -3077,16 +3098,24 @@ fn collect_annotations_in(
     let mut counts = TechCounts::default();
 
     let cols = layout_cols(layout).min(MAX_COLUMNS);
+    let col_mask = u8::MAX >> (MAX_COLUMNS - cols);
+    debug_assert!(rows.iter().all(|row| row.tech_mask & !col_mask == 0));
 
-    let hit_positions = |combined: &FootPlacement, mask: u8| -> [i8; NUM_FEET] {
+    let hit_positions = |combined: &FootPlacement, row: &Row| -> [i8; NUM_FEET] {
         let mut pos = [INVALID_COLUMN; NUM_FEET];
-        let mut m = mask;
+        let mut m = row.tech_mask;
+        if cols == 4 && row.note_count == 1 {
+            debug_assert!(m.is_power_of_two());
+            let c = m.trailing_zeros() as usize;
+            let foot = combined[c];
+            if foot != Foot::None {
+                pos[foot_idx(foot)] = c as i8;
+            }
+            return pos;
+        }
         while m != 0 {
             let c = m.trailing_zeros() as usize;
             m &= m - 1;
-            if c >= cols {
-                continue;
-            }
             let foot = combined[c];
             if foot != Foot::None {
                 pos[foot_idx(foot)] = c as i8;
@@ -3102,9 +3131,7 @@ fn collect_annotations_in(
         while m != 0 {
             let c = m.trailing_zeros() as usize;
             m &= m - 1;
-            if c < cols {
-                feet[c] = combined[c];
-            }
+            feet[c] = combined[c];
         }
         feet
     };
@@ -3118,12 +3145,12 @@ fn collect_annotations_in(
     });
 
     let mut prev_prev_pos = [INVALID_COLUMN; NUM_FEET];
-    let mut prev_pos = hit_positions(&placements[0], rows[0].tech_mask);
+    let mut prev_pos = hit_positions(&placements[0], &rows[0]);
 
     for i in 1..n {
         let (curr, prev) = (&rows[i], &rows[i - 1]);
         let (curr_combined, prev_combined) = (&placements[i], &placements[i - 1]);
-        let curr_pos = hit_positions(curr_combined, curr.tech_mask);
+        let curr_pos = hit_positions(curr_combined, curr);
 
         let tech = classify_row_tech(
             layout,
@@ -4220,6 +4247,56 @@ mod tests {
             summed += a.row_tech;
         }
         assert_eq!(summed, counts);
+    }
+
+    #[test]
+    fn single_rows_classify_jacks_and_doublesteps() {
+        let row = |second: f32, mask: u8| {
+            let mut row = row_new();
+            row.second = second;
+            row.note_count = mask.count_ones() as u8;
+            row.note_mask = mask;
+            row.tech_mask = mask;
+            row
+        };
+        let placement = |feet: &[(usize, Foot)]| {
+            let mut placement = [Foot::None; MAX_COLUMNS];
+            for &(column, foot) in feet {
+                placement[column] = foot;
+            }
+            placement
+        };
+        let rows = [
+            row(0.0, 0b0001),
+            row(0.1, 0b0001),
+            row(0.3, 0b0010),
+            row(1.0, 0b0011),
+        ];
+        let placements = [
+            placement(&[(0, Foot::LeftHeel)]),
+            placement(&[(0, Foot::LeftHeel)]),
+            placement(&[(1, Foot::LeftHeel)]),
+            placement(&[(0, Foot::LeftHeel), (1, Foot::LeftToe)]),
+        ];
+        let layout = dance_single_layout();
+
+        let counts = calculate_tech_counts(&rows, &placements, &layout);
+        assert_eq!(counts.jacks, 1);
+        assert_eq!(counts.doublesteps, 1);
+        assert_eq!(counts.brackets, 1);
+        assert_eq!(
+            calculate_tech_counts(&rows, &placements, &dance_double_layout()),
+            counts
+        );
+
+        let mut annotations = Vec::new();
+        assert_eq!(
+            collect_annotations_in(&rows, &placements, &layout, &mut annotations),
+            counts
+        );
+        assert_eq!(annotations[1].row_tech.jacks, 1);
+        assert_eq!(annotations[2].row_tech.doublesteps, 1);
+        assert_eq!(annotations[3].row_tech.brackets, 1);
     }
 
     #[test]
