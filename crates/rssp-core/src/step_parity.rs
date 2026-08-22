@@ -222,7 +222,7 @@ struct StageLayout {
     facing_y_penalty: [f32; PAIR_LEN],
     bracket_ok: [bool; DIST_LEN],
     hold_switch_cost: [f32; DIST_LEN],
-    distances: [f32; DIST_LEN],
+    movement_costs: [f32; DIST_LEN],
 }
 
 fn dance_single_layout() -> StageLayout {
@@ -333,7 +333,7 @@ fn layout_new(points: &[StagePoint], up_mask: u8, down_mask: u8, side_mask: u8) 
 
     let mut bracket_ok = [false; DIST_LEN];
     let mut hold_switch_cost = [0.0f32; DIST_LEN];
-    let mut distances = [0.0f32; DIST_LEN];
+    let mut movement_costs = [0.0f32; DIST_LEN];
 
     for l in 0..cols {
         for r in 0..cols {
@@ -343,7 +343,7 @@ fn layout_new(points: &[StagePoint], up_mask: u8, down_mask: u8, side_mask: u8) 
             bracket_ok[idx] = sq <= 2.0;
             let dist = sq.sqrt();
             hold_switch_cost[idx] = dist * HOLDSWITCH_WEIGHT;
-            distances[idx] = dist;
+            movement_costs[idx] = dist * DISTANCE_WEIGHT;
         }
     }
 
@@ -358,7 +358,7 @@ fn layout_new(points: &[StagePoint], up_mask: u8, down_mask: u8, side_mask: u8) 
         facing_y_penalty,
         bracket_ok,
         hold_switch_cost,
-        distances,
+        movement_costs,
     }
 }
 
@@ -378,8 +378,8 @@ const fn layout_hold_switch_cost(layout: &StageLayout, c1: usize, c2: usize) -> 
 }
 
 #[inline(always)]
-const fn layout_distance(layout: &StageLayout, c1: usize, c2: usize) -> f32 {
-    layout.distances[c1 * MAX_COLUMNS + c2]
+const fn layout_movement_cost(layout: &StageLayout, c1: usize, c2: usize) -> f32 {
+    layout.movement_costs[c1 * MAX_COLUMNS + c2]
 }
 
 #[inline(always)]
@@ -545,6 +545,43 @@ static STATE_BASE4: [StateBase4; SINGLE_STATE_COUNT] = {
             column += 1;
         }
         table[key] = entry;
+        key += 1;
+    }
+    table
+};
+
+const SINGLE_TAP_COUNT: usize = SINGLE_STATE_COUNT * 16;
+// Compile-time, process-lifetime single-tap transition table. Its 65,536 u16
+// entries are immutable and shared lock-free, with no warmup, miss, allocation,
+// eviction, or destruction work. A lookup replaces the repeated packed-state
+// clears required by every dance-single tap candidate.
+static TAP_BASE4: [u16; SINGLE_TAP_COUNT] = {
+    let mut table = [0u16; SINGLE_TAP_COUNT];
+    let mut key = 0usize;
+    while key < SINGLE_STATE_COUNT {
+        let mut column = 0usize;
+        while column < 4 {
+            let mut foot_index = 0usize;
+            while foot_index < FEET.len() {
+                let foot = FEET[foot_index];
+                let fi = foot_idx(foot);
+                let mut combined = key as u32 & !(0b111 << (column * 3));
+                let previous_col = STATE_BASE4[key].where_the_feet_are[fi];
+                if previous_col != INVALID_COLUMN {
+                    combined &= !(0b111 << (previous_col as usize * 3));
+                }
+                if foot as u8 == Foot::LeftHeel as u8 || foot as u8 == Foot::RightHeel as u8 {
+                    let toe_col = STATE_BASE4[key].where_the_feet_are[fi + 1];
+                    if toe_col != INVALID_COLUMN {
+                        combined &= !(0b111 << (toe_col as usize * 3));
+                    }
+                }
+                combined |= (foot as u32) << (column * 3);
+                table[key * 16 + column * 4 + foot_index] = combined as u16;
+                foot_index += 1;
+            }
+            column += 1;
+        }
         key += 1;
     }
     table
@@ -760,8 +797,9 @@ fn calc_action_cost<const CACHED_GEOMETRY: bool>(
 fn calc_tap_cost(
     layout: &StageLayout,
     initial: &State,
-    placement: &FootPlacement,
-    row_ctx: RowCostCtx,
+    result_key: u32,
+    hit_col: usize,
+    side_hit: bool,
     elapsed: f32,
     left_moved_not_holding: bool,
     right_moved_not_holding: bool,
@@ -769,16 +807,19 @@ fn calc_tap_cost(
     facing_cost: f32,
     spin_cost: f32,
 ) -> f32 {
-    let hit_col = row_ctx.active_mask.trailing_zeros() as usize;
-    let moved_foot = if hit_col < 4 {
-        placement[hit_col]
+    let moved_mask = ((result_key >> 24) & 0x0f) as u8;
+    let moved = moved_mask != 0;
+    let moved_idx = if moved {
+        moved_mask.trailing_zeros() as usize + 1
+    } else {
+        0
+    };
+    let moved_foot = if moved {
+        FEET[moved_idx - 1]
     } else {
         Foot::None
     };
-    let moved_idx = foot_idx(moved_foot);
-    let moved_mask = FOOT_MASKS[moved_idx];
-    let moved = moved_foot != Foot::None;
-    let moved_left = moved && moved_idx <= foot_idx(Foot::LeftToe);
+    let moved_left = moved_mask & LEFT_FOOT_MASK != 0;
     let prev_moved = if moved_left {
         left_moved_not_holding
     } else {
@@ -794,14 +835,19 @@ fn calc_tap_cost(
     }
     cost += facing_cost;
     cost += spin_cost;
-    if (SLOW_FOOTSWITCH_THRESHOLD..SLOW_FOOTSWITCH_IGNORE).contains(&elapsed) {
-        cost += calc_footswitch_cost(initial, placement, row_ctx.active_mask, elapsed);
+    if moved && (SLOW_FOOTSWITCH_THRESHOLD..SLOW_FOOTSWITCH_IGNORE).contains(&elapsed) {
+        let initial_foot = initial.combined_columns[hit_col];
+        if initial_foot != Foot::None
+            && initial_foot != moved_foot
+            && initial_foot != OTHER_PART_OF_FOOT[moved_idx]
+        {
+            let time_scaled = elapsed - SLOW_FOOTSWITCH_THRESHOLD;
+            cost += (time_scaled / (SLOW_FOOTSWITCH_THRESHOLD + time_scaled)) * FOOTSWITCH_WEIGHT;
+        }
     }
-    if row_ctx.side_mask != 0 {
-        let column = row_ctx.side_mask.trailing_zeros() as usize;
-        let initial_foot = initial.combined_columns[column];
-        if initial_foot != placement[column]
-            && placement[column] != Foot::None
+    if side_hit && moved {
+        let initial_foot = initial.combined_columns[hit_col];
+        if initial_foot != moved_foot
             && initial_foot != Foot::None
             && moved_mask & FOOT_MASKS[foot_idx(initial_foot)] == 0
         {
@@ -817,8 +863,7 @@ fn calc_tap_cost(
     if moved {
         let initial_col = initial.where_the_feet_are[moved_idx];
         if initial_col != INVALID_COLUMN {
-            cost += (layout_distance(layout, initial_col as usize, hit_col) * DISTANCE_WEIGHT)
-                / elapsed;
+            cost += layout_movement_cost(layout, initial_col as usize, hit_col) / elapsed;
         }
     }
     cost
@@ -1114,9 +1159,7 @@ fn calc_big_movements_cost(
         }
 
         let res_pos = hit[fi];
-        let mut d = (layout_distance(layout, init_pos as usize, res_pos as usize)
-            * DISTANCE_WEIGHT)
-            / elapsed;
+        let mut d = layout_movement_cost(layout, init_pos as usize, res_pos as usize) / elapsed;
 
         let other_pos = hit[OTHER_FOOT_IDXS[fi]];
         if other_pos != INVALID_COLUMN {
@@ -1828,6 +1871,8 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
         let row_ctx = row_cost_ctx(&row, g.layout);
         let layout = g.layout;
         let active_mask = row_ctx.active_mask;
+        let tap_col = active_mask.trailing_zeros() as usize;
+        let side_hit = row_ctx.side_mask != 0;
         let simple_tap = row_ctx.mine_mask == 0
             && !row_ctx.has_hold
             && !row_ctx.multi_active
@@ -1856,7 +1901,7 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                     let (hit, key) = if simple_tap {
                         (
                             [INVALID_COLUMN; NUM_FEET],
-                            parity_result_tap_key4(&init_state, init_key, perm, active_mask),
+                            parity_result_tap_key4(init_key, perm, tap_col),
                         )
                     } else if hold_mask == 0 {
                         parity_result_key4::<false>(&init_state, perm, 0, active_mask)
@@ -1892,8 +1937,9 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                             calc_tap_cost(
                                 layout,
                                 &init_state,
-                                perm,
-                                row_ctx,
+                                key,
+                                tap_col,
+                                side_hit,
                                 elapsed,
                                 left_moved_not_holding,
                                 right_moved_not_holding,
@@ -2320,34 +2366,16 @@ fn parity_combined_key4(initial: &State, cols: &FootPlacement, moved_mask: u8) -
 }
 
 #[inline(always)]
-fn parity_result_tap_key4(
-    initial: &State,
-    initial_key: u32,
-    cols: &FootPlacement,
-    active_mask: u8,
-) -> u32 {
-    debug_assert!(active_mask.count_ones() <= 1);
-    let i = active_mask.trailing_zeros() as usize;
-    if i >= 4 || cols[i] == Foot::None {
+fn parity_result_tap_key4(initial_key: u32, cols: &FootPlacement, hit_col: usize) -> u32 {
+    if hit_col >= 4 || cols[hit_col] == Foot::None {
         return initial_key & (SINGLE_STATE_COUNT - 1) as u32;
     }
 
-    let foot = cols[i];
+    let foot = cols[hit_col];
     let fi = foot_idx(foot);
     let moved_mask = FOOT_MASKS[fi];
-    let mut combined = initial_key & (SINGLE_STATE_COUNT - 1) as u32;
-    combined &= !(0b111 << (i * 3));
-    let previous_col = initial.where_the_feet_are[fi];
-    if previous_col != INVALID_COLUMN {
-        combined &= !(0b111 << (previous_col as usize * 3));
-    }
-    if matches!(foot, Foot::LeftHeel | Foot::RightHeel) {
-        let toe_col = initial.where_the_feet_are[fi + 1];
-        if toe_col != INVALID_COLUMN {
-            combined &= !(0b111 << (toe_col as usize * 3));
-        }
-    }
-    combined |= (foot as u32) << (i * 3);
+    let base = initial_key as usize & (SINGLE_STATE_COUNT - 1);
+    let combined = u32::from(TAP_BASE4[base * 16 + hit_col * 4 + fi - 1]);
     combined | (u32::from(moved_mask) << 24)
 }
 
@@ -3782,6 +3810,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<StepParityNode>(), 8);
         assert_eq!(std::mem::size_of::<SingleParityNode>(), 4);
         assert_eq!(std::mem::size_of_val(&STATE_BASE4), 40_960);
+        assert_eq!(std::mem::size_of_val(&TAP_BASE4), 131_072);
         assert_eq!(
             std::mem::size_of_val(facing_cost4(&dance_single_cache().layout)),
             16_384
@@ -3790,6 +3819,23 @@ mod tests {
             std::mem::size_of_val(spin_class4(&dance_single_cache().layout)),
             4_096
         );
+    }
+
+    #[test]
+    fn movement_table_matches_scalar_geometry() {
+        for layout in [dance_single_layout(), dance_double_layout()] {
+            for initial in 0..layout_cols(&layout) {
+                for result in 0..layout_cols(&layout) {
+                    let dx = layout.columns[initial].x - layout.columns[result].x;
+                    let dy = layout.columns[initial].y - layout.columns[result].y;
+                    let expected = (dx * dx + dy * dy).sqrt() * DISTANCE_WEIGHT;
+                    assert_eq!(
+                        layout_movement_cost(&layout, initial, result).to_bits(),
+                        expected.to_bits()
+                    );
+                }
+            }
+        }
     }
 
     fn assert_rows_match_lanes(data: &[u8], has_holds: bool) {
@@ -4208,7 +4254,11 @@ mod tests {
                     );
                     if active_mask.count_ones() <= 1 && initial_canonical {
                         assert_eq!(
-                            parity_result_tap_key4(&initial, initial_key, placement, active_mask,),
+                            parity_result_tap_key4(
+                                initial_key,
+                                placement,
+                                active_mask.trailing_zeros() as usize,
+                            ),
                             no_holds.2,
                             "initial={initial_key:#x} active={active_mask:#x} placement={placement:?}"
                         );
@@ -4309,8 +4359,9 @@ mod tests {
                         let simple = calc_tap_cost(
                             &cache.layout,
                             &initial,
-                            placement,
-                            row_ctx,
+                            key,
+                            active_mask.trailing_zeros() as usize,
+                            row_ctx.side_mask != 0,
                             elapsed,
                             left_moved,
                             right_moved,
