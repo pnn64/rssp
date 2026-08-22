@@ -864,12 +864,20 @@ pub fn detect_custom_patterns(bitmasks: &[u8], patterns: &[String]) -> Vec<Custo
     detect_custom_patterns_compiled(bitmasks, &compiled)
 }
 
+const NOTE_BYTE: [u8; 256] = {
+    let mut table = [0u8; 256];
+    table[b'1' as usize] = 1;
+    table[b'2' as usize] = 1;
+    table[b'4' as usize] = 1;
+    table
+};
+
 #[inline(always)]
 fn note_mask4(row: &[u8; 4]) -> u8 {
-    u8::from(matches!(row[0], b'1' | b'2' | b'4'))
-        | (u8::from(matches!(row[1], b'1' | b'2' | b'4')) << 1)
-        | (u8::from(matches!(row[2], b'1' | b'2' | b'4')) << 2)
-        | (u8::from(matches!(row[3], b'1' | b'2' | b'4')) << 3)
+    NOTE_BYTE[row[0] as usize]
+        | (NOTE_BYTE[row[1] as usize] << 1)
+        | (NOTE_BYTE[row[2] as usize] << 2)
+        | (NOTE_BYTE[row[3] as usize] << 3)
 }
 
 #[must_use]
@@ -1242,7 +1250,7 @@ mod tests {
         AC_ALPHA, CompiledCustomPatterns, CompiledPattern, CustomPatternSummary, ac_build,
         ac_output_slice, ac_search_vec, analyze_patterns_from_rows, compile_custom_patterns,
         count_anchors, count_facing_steps, detect_custom_patterns_compiled,
-        detect_default_patterns, pattern_bit,
+        detect_default_patterns, note_mask4, pattern_bit,
     };
     use std::collections::HashSet;
 
@@ -1254,6 +1262,18 @@ mod tests {
                 b'1'
             }
         })
+    }
+
+    #[test]
+    fn note_byte_table_matches_row_classifier() {
+        for byte in 0u8..=u8::MAX {
+            for column in 0..4 {
+                let mut row = [b'0'; 4];
+                row[column] = byte;
+                let expected = u8::from(matches!(byte, b'1' | b'2' | b'4')) << column;
+                assert_eq!(note_mask4(&row), expected, "byte={byte} column={column}");
+            }
+        }
     }
 
     fn compile_custom_patterns_materialized(patterns: &[String]) -> CompiledCustomPatterns {

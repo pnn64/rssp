@@ -507,8 +507,61 @@ const fn state_new() -> State {
     }
 }
 
+#[derive(Clone, Copy)]
+struct StateBase4 {
+    combined_columns: [Foot; MAX_COLUMNS],
+    where_the_feet_are: [i8; NUM_FEET],
+    occupied_mask: u8,
+}
+
+const SINGLE_STATE_COUNT: usize = 1 << 12;
+// Compile-time, process-lifetime dance-single decode table. It is immutable and
+// shared lock-free, has exactly 4,096 entries, never misses or evicts, performs
+// no warmup/allocation/destruction work, and makes every lookup constant-time.
+static STATE_BASE4: [StateBase4; SINGLE_STATE_COUNT] = {
+    const EMPTY: StateBase4 = StateBase4 {
+        combined_columns: [Foot::None; MAX_COLUMNS],
+        where_the_feet_are: [INVALID_COLUMN; NUM_FEET],
+        occupied_mask: 0,
+    };
+
+    let mut table = [EMPTY; SINGLE_STATE_COUNT];
+    let mut key = 0usize;
+    while key < SINGLE_STATE_COUNT {
+        let mut entry = EMPTY;
+        let mut column = 0usize;
+        while column < 4 {
+            let foot = FOOT_FROM_KEY_BITS[(key >> (column * 3)) & 0b111];
+            entry.combined_columns[column] = foot;
+            if foot as u8 != Foot::None as u8 {
+                entry.where_the_feet_are[foot_idx(foot)] = column as i8;
+                entry.occupied_mask |= 1u8 << column;
+            }
+            column += 1;
+        }
+        table[key] = entry;
+        key += 1;
+    }
+    table
+};
+
 #[inline(always)]
 fn state_from_key<const COLS: usize>(key: u32) -> State {
+    if COLS == 4 {
+        let base = STATE_BASE4[key as usize & (SINGLE_STATE_COUNT - 1)];
+        return State {
+            combined_columns: base.combined_columns,
+            where_the_feet_are: base.where_the_feet_are,
+            occupied_mask: base.occupied_mask,
+            moved_mask: ((key >> 24) & 0x0f) as u8,
+            holding_mask: ((key >> 28) & 0x0f) as u8,
+        };
+    }
+
+    state_from_key_scalar::<COLS>(key)
+}
+
+fn state_from_key_scalar<const COLS: usize>(key: u32) -> State {
     let mut combined_columns = [Foot::None; MAX_COLUMNS];
     let mut where_the_feet_are = [INVALID_COLUMN; NUM_FEET];
     let mut occupied_mask = 0u8;
@@ -585,7 +638,7 @@ fn did_jack(
     check(heel_col, pair.heel) || check(toe_col, pair.toe)
 }
 
-fn calc_action_cost(
+fn calc_action_cost<const CACHED_FACING: bool>(
     layout: &StageLayout,
     initial: &State,
     result: &State,
@@ -597,6 +650,7 @@ fn calc_action_cost(
     left_moved_not_holding: bool,
     right_moved_not_holding: bool,
     prev_row_has_live_hold: bool,
+    facing_cost: f32,
 ) -> f32 {
     let (lh, lt, rh, rt) = (
         hit[foot_idx(Foot::LeftHeel)],
@@ -667,7 +721,11 @@ fn calc_action_cost(
     if row_ctx.multi_active {
         cost += calc_twisted_foot_cost(layout, hit);
     }
-    cost += calc_facing_cost(layout, result);
+    cost += if CACHED_FACING {
+        facing_cost
+    } else {
+        calc_facing_cost(layout, result)
+    };
     cost += calc_spin_cost(layout, initial, result);
     if row_ctx.mine_mask == 0
         && (SLOW_FOOTSWITCH_THRESHOLD..SLOW_FOOTSWITCH_IGNORE).contains(&elapsed)
@@ -1005,6 +1063,7 @@ fn row_has_live_hold(row: &Row) -> bool {
 struct StepParityGenerator {
     layout: &'static StageLayout,
     perm_table: &'static PermTable,
+    facing_cost4: Option<&'static [f32; SINGLE_STATE_COUNT]>,
     column_count: usize,
     nodes: Vec<StepParityNode>,
     rows: Vec<Row>,
@@ -1045,10 +1104,12 @@ impl Default for LegacyDp {
 }
 
 fn parity_gen(cache: &'static LayoutCache) -> StepParityGenerator {
+    let facing_cost4 = (layout_cols(&cache.layout) == 4).then(|| facing_cost4(&cache.layout));
     StepParityGenerator {
         column_count: layout_cols(&cache.layout),
         layout: &cache.layout,
         perm_table: &cache.perm_table,
+        facing_cost4,
         nodes: Vec::new(),
         rows: Vec::new(),
         result_columns: Vec::new(),
@@ -1600,6 +1661,7 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
     const RESERVE_SAMPLE_ROWS: usize = 64;
 
     debug_assert_eq!(g.column_count, COLS);
+    let facing_cost4 = g.facing_cost4.map_or(&[][..], |costs| &costs[..]);
     let start_id = parity_add_node(g, 0);
     let mut prev_start = start_id;
     g.prev_links.clear();
@@ -1664,8 +1726,8 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                     }
                 };
                 let calc_cost = || {
-                    init_cost
-                        + calc_action_cost(
+                    let action_cost = if COLS == 4 {
+                        calc_action_cost::<true>(
                             layout,
                             &init_state,
                             &result,
@@ -1677,7 +1739,25 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                             left_moved_not_holding,
                             right_moved_not_holding,
                             prev_row_has_live_hold,
+                            facing_cost4[key as usize & (SINGLE_STATE_COUNT - 1)],
                         )
+                    } else {
+                        calc_action_cost::<false>(
+                            layout,
+                            &init_state,
+                            &result,
+                            perm,
+                            hit,
+                            &row,
+                            row_ctx,
+                            elapsed,
+                            left_moved_not_holding,
+                            right_moved_not_holding,
+                            prev_row_has_live_hold,
+                            0.0,
+                        )
+                    };
+                    init_cost + action_cost
                 };
                 // Single charts have enough competing transitions that keeping the hot
                 // cost/pred pair borrowed together wins. Double charts have smaller layers,
@@ -1778,7 +1858,7 @@ fn legacy_dp_rows<const COLS: usize>(
             let init_state = if init_id == start_id {
                 state_new()
             } else {
-                state_from_key::<COLS>(dp.nodes[init_id].state_key)
+                state_from_key_scalar::<COLS>(dp.nodes[init_id].state_key)
             };
             let init_cost = dp.nodes[init_id].cost;
             let left_moved_not_holding = foot_moved_not_holding(&init_state, &LEFT_PAIR);
@@ -1802,7 +1882,7 @@ fn legacy_dp_rows<const COLS: usize>(
                     continue;
                 }
                 let cost = init_cost
-                    + calc_action_cost(
+                    + calc_action_cost::<false>(
                         g.layout,
                         &init_state,
                         &result,
@@ -1814,6 +1894,7 @@ fn legacy_dp_rows<const COLS: usize>(
                         left_moved_not_holding,
                         right_moved_not_holding,
                         prev_row_has_live_hold,
+                        0.0,
                     );
                 if cost < dp.nodes[res_id].cost {
                     dp.nodes[res_id].cost = cost;
@@ -1845,7 +1926,8 @@ fn legacy_backtrack<const COLS: usize>(
     let rows = g.rows.len();
     g.result_columns.resize(rows, [Foot::None; MAX_COLUMNS]);
     for write in (0..rows).rev() {
-        g.result_columns[write] = state_from_key::<COLS>(dp.nodes[cur].state_key).combined_columns;
+        g.result_columns[write] =
+            state_from_key_scalar::<COLS>(dp.nodes[cur].state_key).combined_columns;
         let pred = dp.nodes[cur].pred;
         if pred == u32::MAX {
             g.result_columns.clear();
@@ -2630,6 +2712,26 @@ fn layout_cache_new(layout: StageLayout) -> LayoutCache {
     LayoutCache { layout, perm_table }
 }
 
+// Process-lifetime, single-panel-only table initialized with its owning layout.
+// Once warmed it is immutable and lock-free, has 4,096 inline entries, never
+// misses or evicts, performs no heap allocation, and drops at process teardown.
+fn facing_cost4(layout: &StageLayout) -> &'static [f32; SINGLE_STATE_COUNT] {
+    static COSTS: OnceLock<[f32; SINGLE_STATE_COUNT]> = OnceLock::new();
+    COSTS.get_or_init(|| {
+        std::array::from_fn(|key| {
+            let base = STATE_BASE4[key];
+            let state = State {
+                combined_columns: base.combined_columns,
+                where_the_feet_are: base.where_the_feet_are,
+                occupied_mask: base.occupied_mask,
+                moved_mask: 0,
+                holding_mask: 0,
+            };
+            calc_facing_cost(layout, &state)
+        })
+    })
+}
+
 fn build_perm_table(layout: &StageLayout) -> PermTable {
     let col_count = layout_cols(layout);
     let mask_count = 1usize << col_count;
@@ -3363,6 +3465,12 @@ mod tests {
     #[test]
     fn hot_storage_stays_compact() {
         assert_eq!(std::mem::size_of::<Row>(), 16);
+        assert_eq!(std::mem::size_of::<StateBase4>(), 14);
+        assert_eq!(std::mem::size_of_val(&STATE_BASE4), 57_344);
+        assert_eq!(
+            std::mem::size_of_val(facing_cost4(&dance_single_cache().layout)),
+            16_384
+        );
     }
 
     fn assert_rows_match_lanes(data: &[u8], has_holds: bool) {
@@ -3691,6 +3799,20 @@ mod tests {
         assert_eq!(zero_key, 0);
         assert_eq!(state_from_key::<4>(zero_key), zero_state);
         assert_ne!(zero_state, state_new());
+    }
+
+    #[test]
+    fn single_state_tables_match_scalar_calculation() {
+        let cache = dance_single_cache();
+        let facing_cost4 = facing_cost4(&cache.layout);
+        for key in 0..SINGLE_STATE_COUNT as u32 {
+            let table_state = state_from_key::<4>(key);
+            assert_eq!(table_state, state_from_key_scalar::<4>(key));
+            assert_eq!(
+                facing_cost4[key as usize].to_bits(),
+                calc_facing_cost(&cache.layout, &table_state).to_bits()
+            );
+        }
     }
 
     #[test]

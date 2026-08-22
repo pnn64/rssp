@@ -2,6 +2,38 @@ use std::fs;
 use std::hint::black_box;
 use std::path::PathBuf;
 
+#[cfg(windows)]
+mod thread_cycles {
+    use std::ffi::c_void;
+
+    type Handle = *mut c_void;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentThread() -> Handle;
+        fn QueryThreadCycleTime(thread: Handle, cycles: *mut u64) -> i32;
+        fn SetThreadAffinityMask(thread: Handle, mask: usize) -> usize;
+    }
+
+    pub fn pin() {
+        let cpu_count = std::thread::available_parallelism().map_or(1, usize::from);
+        let cpu = if cpu_count > 2 { 2 } else { 0 };
+        // SAFETY: GetCurrentThread returns a valid pseudo-handle for this thread.
+        let thread = unsafe { GetCurrentThread() };
+        // SAFETY: The mask selects one available logical CPU and the handle is valid.
+        let previous = unsafe { SetThreadAffinityMask(thread, 1usize << cpu) };
+        assert_ne!(previous, 0, "SetThreadAffinityMask failed");
+    }
+
+    pub fn read() -> u64 {
+        let mut cycles = 0;
+        // SAFETY: The pseudo-handle is valid and cycles points to writable u64 storage.
+        let ok = unsafe { QueryThreadCycleTime(GetCurrentThread(), &mut cycles) };
+        assert_ne!(ok, 0, "QueryThreadCycleTime failed");
+        cycles
+    }
+}
+
 const FIXTURES: [(&str, &str); 4] = [
     ("../rssp/benches/fixtures/camellia_mix.ssc", "ssc"),
     ("../rssp/benches/fixtures/hash_fixture.ssc", "ssc"),
@@ -19,6 +51,8 @@ enum Mode {
     ParseOnly,
     AnalyzeFull,
     AnalyzeFast,
+    AnalyzeTech,
+    AnalyzePatterns,
 }
 
 fn parse_mode(raw: &str) -> Option<Mode> {
@@ -28,6 +62,10 @@ fn parse_mode(raw: &str) -> Option<Mode> {
         Some(Mode::AnalyzeFull)
     } else if raw.eq_ignore_ascii_case("analyze_fast") {
         Some(Mode::AnalyzeFast)
+    } else if raw.eq_ignore_ascii_case("analyze_tech") {
+        Some(Mode::AnalyzeTech)
+    } else if raw.eq_ignore_ascii_case("analyze_patterns") {
+        Some(Mode::AnalyzePatterns)
     } else {
         None
     }
@@ -117,6 +155,8 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::ParseOnly => "parse_only",
         Mode::AnalyzeFull => "analyze_full",
         Mode::AnalyzeFast => "analyze_fast",
+        Mode::AnalyzeTech => "analyze_tech",
+        Mode::AnalyzePatterns => "analyze_patterns",
     }
 }
 
@@ -131,6 +171,8 @@ fn run_iters(
     idxs: &[usize],
     full: &rssp::AnalysisOptions,
     fast: &rssp::AnalysisOptions,
+    tech: &rssp::AnalysisOptions,
+    patterns: &rssp::AnalysisOptions,
 ) -> usize {
     let mut checksum = 0usize;
     for _ in 0..iters {
@@ -138,12 +180,16 @@ fn run_iters(
             Mode::ParseOnly => parse_only_loop(corpus),
             Mode::AnalyzeFull => analyze_loop(corpus, idxs, full),
             Mode::AnalyzeFast => analyze_loop(corpus, idxs, fast),
+            Mode::AnalyzeTech => analyze_loop(corpus, idxs, tech),
+            Mode::AnalyzePatterns => analyze_loop(corpus, idxs, patterns),
         });
     }
     checksum
 }
 
 fn main() {
+    #[cfg(windows)]
+    thread_cycles::pin();
     let (mode, iters) = parse_args();
     let corpus = load_fixture_corpus();
 
@@ -157,17 +203,34 @@ fn main() {
         compute_pattern_counts: false,
         ..rssp::AnalysisOptions::default()
     };
+    let tech = rssp::AnalysisOptions {
+        mono_threshold: 6,
+        compute_pattern_counts: false,
+        ..rssp::AnalysisOptions::default()
+    };
+    let patterns = rssp::AnalysisOptions {
+        mono_threshold: 6,
+        compute_tech_counts: false,
+        ..rssp::AnalysisOptions::default()
+    };
     let idxs = analyzable_indexes(&corpus, &fast);
     assert!(!idxs.is_empty(), "fixture corpus has no analyzable charts");
 
-    let checksum = run_iters(mode, iters, &corpus, &idxs, &full, &fast);
+    #[cfg(windows)]
+    let start_cycles = thread_cycles::read();
+    let checksum = run_iters(mode, iters, &corpus, &idxs, &full, &fast, &tech, &patterns);
+    #[cfg(windows)]
+    let cycles = thread_cycles::read() - start_cycles;
+    #[cfg(not(windows))]
+    let cycles = 0;
     println!(
-        "mode={} iters={} files={} bytes={} analyzable={} checksum={}",
+        "mode={} iters={} files={} bytes={} analyzable={} checksum={} cycles={}",
         mode_name(mode),
         iters,
         corpus.len(),
         corpus_bytes(&corpus),
         idxs.len(),
-        black_box(checksum)
+        black_box(checksum),
+        cycles,
     );
 }
