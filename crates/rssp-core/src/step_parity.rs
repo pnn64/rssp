@@ -119,19 +119,25 @@ struct RowStateMap {
 #[derive(Clone, Copy, Default)]
 struct RowMapEntry {
     key: u32,
-    val: u32,
-    mark: u32,
-}
-
-#[derive(Clone, Copy)]
-enum RowMapProbe {
-    Found(usize),
-    Vacant(usize),
+    meta: u32,
 }
 
 const fn row_map_hash(x: u32) -> usize {
     // 0x9E3779B9 is the 32-bit golden ratio prime
     x.wrapping_mul(0x9E3779B9) as usize
+}
+
+// Eight columns can encode at most 3,393 distinct placements of four labeled
+// feet. Including every moved/holding mask gives 868,608 keys, so a deduped
+// row index fits in 20 bits; the remaining 12 bits are a bounded reset epoch.
+const ROW_MAP_VAL_BITS: u32 = 20;
+const ROW_MAP_VAL_MASK: u32 = (1 << ROW_MAP_VAL_BITS) - 1;
+const ROW_MAP_EPOCH_MAX: u32 = (1 << (u32::BITS - ROW_MAP_VAL_BITS)) - 1;
+
+#[derive(Clone, Copy)]
+enum RowMapProbe {
+    Found(usize),
+    Vacant(usize),
 }
 
 #[inline(always)]
@@ -169,10 +175,10 @@ fn row_map_reset(map: &mut RowStateMap, expected: usize) {
         map.entries.resize(need, RowMapEntry::default());
         map.mask = need - 1;
     }
-    map.epoch = map.epoch.wrapping_add(1);
-    if map.epoch == 0 {
+    map.epoch += 1;
+    if map.epoch > ROW_MAP_EPOCH_MAX {
         for entry in &mut map.entries {
-            entry.mark = 0;
+            entry.meta = 0;
         }
         map.epoch = 1;
     }
@@ -184,11 +190,12 @@ fn row_map_probe<const COLS: usize>(map: &RowStateMap, key: u32) -> RowMapProbe 
     let mut idx = row_map_hash_for_key::<COLS>(key) & map.mask;
     loop {
         let entry = &map.entries[idx];
-        if entry.mark != map.epoch {
+        let meta = entry.meta;
+        if meta >> ROW_MAP_VAL_BITS != map.epoch {
             return RowMapProbe::Vacant(idx);
         }
         if entry.key == key {
-            return RowMapProbe::Found(entry.val as usize);
+            return RowMapProbe::Found((meta & ROW_MAP_VAL_MASK) as usize);
         }
         idx = (idx + 1) & map.mask;
     }
@@ -197,11 +204,10 @@ fn row_map_probe<const COLS: usize>(map: &RowStateMap, key: u32) -> RowMapProbe 
 #[inline(always)]
 fn row_map_insert_at(map: &mut RowStateMap, idx: usize, key: u32, val: usize) {
     debug_assert!(idx < map.entries.len());
-    debug_assert!(u32::try_from(val).is_ok());
+    debug_assert!(val <= ROW_MAP_VAL_MASK as usize);
     let entry = &mut map.entries[idx];
-    entry.mark = map.epoch;
     entry.key = key;
-    entry.val = val as u32;
+    entry.meta = (map.epoch << ROW_MAP_VAL_BITS) | val as u32;
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -661,7 +667,6 @@ type SingleParityNode = u32;
 
 #[derive(Clone, Copy)]
 struct LayerLink {
-    pred: u32,
     cost: f32,
 }
 
@@ -1808,8 +1813,8 @@ fn parity_set_pred<const COLS: usize>(g: &mut StepParityGenerator, id: usize, pr
         debug_assert!(id > pred as usize);
         let delta = id - pred as usize;
         debug_assert!(delta <= SINGLE_PRED_MASK as usize);
-        debug_assert_eq!(g.single_nodes[id] & !SINGLE_STATE_MASK, 0);
-        g.single_nodes[id] |= (delta as u32) << SINGLE_PRED_SHIFT;
+        g.single_nodes[id] =
+            (g.single_nodes[id] & SINGLE_STATE_MASK) | (delta as u32) << SINGLE_PRED_SHIFT;
     } else {
         g.double_nodes[id].pred = pred;
     }
@@ -1884,16 +1889,13 @@ fn parity_tap_row4(
                     let id = parity_add_node::<4>(g, key);
                     let index = g.next_links.len();
                     debug_assert_eq!(id, next_start + index);
-                    g.next_links.push(LayerLink {
-                        pred: u32::MAX,
-                        cost: f32::MAX,
-                    });
+                    g.next_links.push(LayerLink { cost: f32::MAX });
                     row_map_insert_at(&mut g.state_map, slot, key, index);
                     index
                 }
             };
-            let link = &mut g.next_links[cost_idx];
-            if costs_nonnegative && init_cost >= link.cost {
+            let best_cost = g.next_links[cost_idx].cost;
+            if costs_nonnegative && init_cost >= best_cost {
                 continue;
             }
             let cost = init_cost
@@ -1910,9 +1912,84 @@ fn parity_tap_row4(
                     facing_cost4[key as usize & (SINGLE_STATE_COUNT - 1)],
                     cached_spin_cost4::<true>(spin_class4, init_key, key),
                 );
-            if cost < link.cost {
-                link.cost = cost;
-                link.pred = init_id as u32;
+            if cost < best_cost {
+                g.next_links[cost_idx].cost = cost;
+                parity_set_pred::<4>(g, next_start + cost_idx, init_id as u32);
+            }
+        }
+    }
+}
+
+// Multi-panel dance-single rows use the general cost model, but need none of
+// the double/hold/mine dispatch carried by the fallback DP loop. Keeping the
+// complete state loop here lets LLVM optimize that row class as one unit.
+fn parity_jump_row4(
+    g: &mut StepParityGenerator,
+    perms: &[FootPlacement],
+    prev_start: usize,
+    start_id: usize,
+    next_start: usize,
+    row: &Row,
+    row_ctx: RowCostCtx,
+    elapsed: f32,
+    prev_row_has_live_hold: bool,
+    costs_nonnegative: bool,
+    facing_cost4: &[f32],
+    spin_class4: &[u8],
+) {
+    for j in 0..g.prev_links.len() {
+        let init_id = prev_start + j;
+        let init_key = if init_id == start_id {
+            0
+        } else {
+            parity_state_key::<4>(g, init_id)
+        };
+        let init_state = if init_id == start_id {
+            state_new()
+        } else {
+            state_from_key::<4>(init_key)
+        };
+        let init_cost = g.prev_links[j].cost;
+        let left_moved = foot_moved_not_holding(&init_state, &LEFT_PAIR);
+        let right_moved = foot_moved_not_holding(&init_state, &RIGHT_PAIR);
+
+        for perm in perms {
+            let (hit, key) = parity_result_key4::<false>(&init_state, perm, 0, row_ctx.active_mask);
+            let cost_idx = match row_map_probe::<4>(&g.state_map, key) {
+                RowMapProbe::Found(index) => index,
+                RowMapProbe::Vacant(slot) => {
+                    let id = parity_add_node::<4>(g, key);
+                    let index = g.next_links.len();
+                    debug_assert_eq!(id, next_start + index);
+                    g.next_links.push(LayerLink { cost: f32::MAX });
+                    row_map_insert_at(&mut g.state_map, slot, key, index);
+                    index
+                }
+            };
+            let best_cost = g.next_links[cost_idx].cost;
+            if costs_nonnegative && init_cost >= best_cost {
+                continue;
+            }
+            let result = state_from_key::<4>(key);
+            let cost = init_cost
+                + calc_action_cost::<true>(
+                    g.layout,
+                    &init_state,
+                    &result,
+                    perm,
+                    hit,
+                    row,
+                    row_ctx,
+                    elapsed,
+                    left_moved,
+                    right_moved,
+                    prev_row_has_live_hold,
+                    facing_cost4[key as usize & (SINGLE_STATE_COUNT - 1)],
+                    cached_spin_cost4::<false>(spin_class4, init_key, key),
+                );
+            if cost < best_cost {
+                g.next_links[cost_idx].cost = cost;
+                parity_set_pred::<4>(g, next_start + cost_idx, init_id as u32);
             }
         }
     }
@@ -1929,10 +2006,7 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
     let start_id = parity_add_node::<COLS>(g, 0);
     let mut prev_start = start_id;
     g.prev_links.clear();
-    g.prev_links.push(LayerLink {
-        pred: u32::MAX,
-        cost: 0.0,
-    });
+    g.prev_links.push(LayerLink { cost: 0.0 });
     g.next_links.clear();
 
     let mut prev_second = g.rows.first().map_or(-1.0, |r| r.second - 1.0);
@@ -1971,6 +2045,21 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                 next_start,
                 tap_col,
                 side_hit,
+                elapsed,
+                prev_row_has_live_hold,
+                costs_nonnegative,
+                facing_cost4,
+                spin_class4,
+            );
+        } else if COLS == 4 && row_ctx.mine_mask == 0 && !row_ctx.has_hold && row_ctx.multi_active {
+            parity_jump_row4(
+                g,
+                perms,
+                prev_start,
+                start_id,
+                next_start,
+                &row,
+                row_ctx,
                 elapsed,
                 prev_row_has_live_hold,
                 costs_nonnegative,
@@ -2023,10 +2112,7 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                             let id = parity_add_node::<COLS>(g, key);
                             let index = g.next_links.len();
                             debug_assert_eq!(id, next_start + index);
-                            g.next_links.push(LayerLink {
-                                pred: u32::MAX,
-                                cost: f32::MAX,
-                            });
+                            g.next_links.push(LayerLink { cost: f32::MAX });
                             row_map_insert_at(&mut g.state_map, slot, key, index);
                             index
                         }
@@ -2087,19 +2173,18 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                         };
                         init_cost + action_cost
                     };
-                    // Single charts have enough competing transitions that keeping the hot
-                    // cost/pred pair borrowed together wins. Double charts have smaller layers,
-                    // so releasing the cost borrow across calculation is measurably cheaper.
+                    // Keep the dense single update monomorphic so it carries no
+                    // double-node predecessor path through the hot loop.
                     if COLS == 4 {
-                        let link = &mut g.next_links[cost_idx];
+                        let best_cost = g.next_links[cost_idx].cost;
                         // With nonnegative elapsed time, action costs cannot lower the path cost.
-                        if costs_nonnegative && init_cost >= link.cost {
+                        if costs_nonnegative && init_cost >= best_cost {
                             continue;
                         }
                         let nc = calc_cost();
-                        if nc < link.cost {
-                            link.cost = nc;
-                            link.pred = init_id as u32;
+                        if nc < best_cost {
+                            g.next_links[cost_idx].cost = nc;
+                            parity_set_pred::<4>(g, next_start + cost_idx, init_id as u32);
                         }
                         continue;
                     }
@@ -2123,9 +2208,6 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                 "single-panel layer pair exceeded packed predecessor domain"
             );
             debug_assert_eq!(parity_node_len::<COLS>(g) - next_start, g.next_links.len());
-            for index in 0..g.next_links.len() {
-                parity_set_pred::<COLS>(g, next_start + index, g.next_links[index].pred);
-            }
         }
         prev_start = next_start;
         std::mem::swap(&mut g.prev_links, &mut g.next_links);
@@ -3918,6 +4000,8 @@ mod tests {
         assert_eq!(std::mem::size_of::<StateBase4>(), 10);
         assert_eq!(std::mem::size_of::<StepParityNode>(), 8);
         assert_eq!(std::mem::size_of::<SingleParityNode>(), 4);
+        assert_eq!(std::mem::size_of::<LayerLink>(), 4);
+        assert_eq!(std::mem::size_of::<RowMapEntry>(), 8);
         assert_eq!(std::mem::size_of_val(&STATE_BASE4), 40_960);
         assert_eq!(std::mem::size_of_val(&TAP_BASE4), 131_072);
         assert_eq!(
@@ -3928,6 +4012,28 @@ mod tests {
             std::mem::size_of_val(spin_class4(&dance_single_cache().layout)),
             4_096
         );
+    }
+
+    #[test]
+    fn row_map_epoch_wrap_forgets_entries() {
+        let mut map = row_map_new();
+        row_map_reset(&mut map, 1);
+        let RowMapProbe::Vacant(slot) = row_map_probe::<4>(&map, 7) else {
+            panic!("new map entry should be vacant");
+        };
+        row_map_insert_at(&mut map, slot, 7, ROW_MAP_VAL_MASK as usize);
+        assert!(matches!(
+            row_map_probe::<4>(&map, 7),
+            RowMapProbe::Found(value) if value == ROW_MAP_VAL_MASK as usize
+        ));
+
+        map.epoch = ROW_MAP_EPOCH_MAX;
+        row_map_reset(&mut map, 1);
+        assert_eq!(map.epoch, 1);
+        assert!(matches!(
+            row_map_probe::<4>(&map, 7),
+            RowMapProbe::Vacant(_)
+        ));
     }
 
     #[test]
