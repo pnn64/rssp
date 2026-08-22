@@ -509,7 +509,7 @@ const fn state_new() -> State {
 
 #[derive(Clone, Copy)]
 struct StateBase4 {
-    combined_columns: [Foot; MAX_COLUMNS],
+    combined_columns: [Foot; 4],
     where_the_feet_are: [i8; NUM_FEET],
     occupied_mask: u8,
 }
@@ -520,7 +520,7 @@ const SINGLE_STATE_COUNT: usize = 1 << 12;
 // no warmup/allocation/destruction work, and makes every lookup constant-time.
 static STATE_BASE4: [StateBase4; SINGLE_STATE_COUNT] = {
     const EMPTY: StateBase4 = StateBase4 {
-        combined_columns: [Foot::None; MAX_COLUMNS],
+        combined_columns: [Foot::None; 4],
         where_the_feet_are: [INVALID_COLUMN; NUM_FEET],
         occupied_mask: 0,
     };
@@ -549,8 +549,10 @@ static STATE_BASE4: [StateBase4; SINGLE_STATE_COUNT] = {
 fn state_from_key<const COLS: usize>(key: u32) -> State {
     if COLS == 4 {
         let base = STATE_BASE4[key as usize & (SINGLE_STATE_COUNT - 1)];
+        let mut combined_columns = [Foot::None; MAX_COLUMNS];
+        combined_columns[..4].copy_from_slice(&base.combined_columns);
         return State {
-            combined_columns: base.combined_columns,
+            combined_columns,
             where_the_feet_are: base.where_the_feet_are,
             occupied_mask: base.occupied_mask,
             moved_mask: ((key >> 24) & 0x0f) as u8,
@@ -638,7 +640,7 @@ fn did_jack(
     check(heel_col, pair.heel) || check(toe_col, pair.toe)
 }
 
-fn calc_action_cost<const CACHED_FACING: bool>(
+fn calc_action_cost<const CACHED_FACING: bool, const SIMPLE_TAP: bool>(
     layout: &StageLayout,
     initial: &State,
     result: &State,
@@ -687,14 +689,14 @@ fn calc_action_cost<const CACHED_FACING: bool>(
     );
 
     let mut cost = 0.0;
-    if row_ctx.mine_mask != 0 {
+    if !SIMPLE_TAP && row_ctx.mine_mask != 0 {
         cost += calc_mine_cost(result, row);
     }
-    if row_ctx.has_hold {
+    if !SIMPLE_TAP && row_ctx.has_hold {
         cost += calc_hold_switch_cost(layout, initial, result, row);
         cost += calc_bracket_tap_cost(initial, row, lh, lt, rh, rt, elapsed);
     }
-    if row_ctx.multi_active {
+    if !SIMPLE_TAP && row_ctx.multi_active {
         cost += calc_bracket_jack_cost(
             result,
             moved_left,
@@ -715,10 +717,10 @@ fn calc_action_cost<const CACHED_FACING: bool>(
         right_moved_not_holding,
         prev_row_has_live_hold,
     );
-    if row.note_count >= 2 {
+    if !SIMPLE_TAP && row.note_count >= 2 {
         cost += calc_slow_bracket_cost(row, moved_left, moved_right, elapsed);
     }
-    if row_ctx.multi_active {
+    if !SIMPLE_TAP && row_ctx.multi_active {
         cost += calc_twisted_foot_cost(layout, hit);
     }
     cost += if CACHED_FACING {
@@ -727,7 +729,7 @@ fn calc_action_cost<const CACHED_FACING: bool>(
         calc_facing_cost(layout, result)
     };
     cost += calc_spin_cost(layout, initial, result);
-    if row_ctx.mine_mask == 0
+    if (SIMPLE_TAP || row_ctx.mine_mask == 0)
         && (SLOW_FOOTSWITCH_THRESHOLD..SLOW_FOOTSWITCH_IGNORE).contains(&elapsed)
     {
         cost += calc_footswitch_cost(initial, placement, row_ctx.active_mask, elapsed);
@@ -735,7 +737,7 @@ fn calc_action_cost<const CACHED_FACING: bool>(
     if row_ctx.side_mask != 0 {
         cost += calc_sideswitch_cost(initial, result, placement, row_ctx.side_mask);
     }
-    if row_ctx.mine_mask != 0 {
+    if !SIMPLE_TAP && row_ctx.mine_mask != 0 {
         cost += calc_missed_footswitch_cost(row, jacked_left, jacked_right);
     }
     cost += calc_jack_cost(moved_left, moved_right, jacked_left, jacked_right, elapsed);
@@ -1691,6 +1693,10 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
         let row_ctx = row_cost_ctx(&row, g.layout);
         let layout = g.layout;
         let active_mask = row_ctx.active_mask;
+        let simple_tap = row_ctx.mine_mask == 0
+            && !row_ctx.has_hold
+            && !row_ctx.multi_active
+            && row.note_count < 2;
 
         for j in 0..g.prev_links.len() {
             let init_id = prev_start + j;
@@ -1706,10 +1712,20 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
             let left_moved_not_holding = foot_moved_not_holding(&init_state, &LEFT_PAIR);
             let right_moved_not_holding = foot_moved_not_holding(&init_state, &RIGHT_PAIR);
             for perm in perms {
-                let (result, hit, key) = if hold_mask == 0 {
-                    parity_result_state_no_holds::<COLS>(&init_state, perm, active_mask)
+                let (result, hit, key) = if COLS == 4 {
+                    let (hit, key) = if hold_mask == 0 {
+                        parity_result_key4::<false>(&init_state, perm, 0, active_mask)
+                    } else {
+                        parity_result_key4::<true>(&init_state, perm, hold_mask, active_mask)
+                    };
+                    (None, hit, key)
                 } else {
-                    parity_result_state::<COLS>(&init_state, perm, hold_mask, active_mask)
+                    let (result, hit, key) = if hold_mask == 0 {
+                        parity_result_state_no_holds::<COLS>(&init_state, perm, active_mask)
+                    } else {
+                        parity_result_state::<COLS>(&init_state, perm, hold_mask, active_mask)
+                    };
+                    (Some(result), hit, key)
                 };
                 let cost_idx = match row_map_probe::<COLS>(&g.state_map, key) {
                     RowMapProbe::Found(index) => index,
@@ -1726,23 +1742,45 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                     }
                 };
                 let calc_cost = || {
-                    let action_cost = if COLS == 4 {
-                        calc_action_cost::<true>(
-                            layout,
-                            &init_state,
-                            &result,
-                            perm,
-                            hit,
-                            &row,
-                            row_ctx,
-                            elapsed,
-                            left_moved_not_holding,
-                            right_moved_not_holding,
-                            prev_row_has_live_hold,
-                            facing_cost4[key as usize & (SINGLE_STATE_COUNT - 1)],
-                        )
+                    let result = if COLS == 4 {
+                        state_from_key::<4>(key)
                     } else {
-                        calc_action_cost::<false>(
+                        result.unwrap_or_else(|| unreachable!("double transition must have state"))
+                    };
+                    let action_cost = if COLS == 4 {
+                        if simple_tap {
+                            calc_action_cost::<true, true>(
+                                layout,
+                                &init_state,
+                                &result,
+                                perm,
+                                hit,
+                                &row,
+                                row_ctx,
+                                elapsed,
+                                left_moved_not_holding,
+                                right_moved_not_holding,
+                                prev_row_has_live_hold,
+                                facing_cost4[key as usize & (SINGLE_STATE_COUNT - 1)],
+                            )
+                        } else {
+                            calc_action_cost::<true, false>(
+                                layout,
+                                &init_state,
+                                &result,
+                                perm,
+                                hit,
+                                &row,
+                                row_ctx,
+                                elapsed,
+                                left_moved_not_holding,
+                                right_moved_not_holding,
+                                prev_row_has_live_hold,
+                                facing_cost4[key as usize & (SINGLE_STATE_COUNT - 1)],
+                            )
+                        }
+                    } else {
+                        calc_action_cost::<false, false>(
                             layout,
                             &init_state,
                             &result,
@@ -1882,7 +1920,7 @@ fn legacy_dp_rows<const COLS: usize>(
                     continue;
                 }
                 let cost = init_cost
-                    + calc_action_cost::<false>(
+                    + calc_action_cost::<false, false>(
                         g.layout,
                         &init_state,
                         &result,
@@ -2098,6 +2136,61 @@ fn parity_result_state_no_holds<const COLS: usize>(
         },
         hit,
         key,
+    )
+}
+
+#[inline(always)]
+fn parity_result_key4<const HAS_HOLDS: bool>(
+    initial: &State,
+    cols: &FootPlacement,
+    hold_mask: u8,
+    active_mask: u8,
+) -> ([i8; NUM_FEET], u32) {
+    let mut hit = [INVALID_COLUMN; NUM_FEET];
+    let (mut moved_mask, mut holding_mask) = (0u8, 0u8);
+    let mut mask = active_mask & 0x0f;
+    while mask != 0 {
+        let i = mask.trailing_zeros() as usize;
+        mask &= mask - 1;
+        let foot = cols[i];
+        if foot == Foot::None {
+            continue;
+        }
+        let fi = foot_idx(foot);
+        hit[fi] = i as i8;
+        let foot_mask = FOOT_MASKS[fi];
+        let held = HAS_HOLDS && hold_mask & (1u8 << i) != 0;
+        holding_mask |= foot_mask * u8::from(held);
+        if !held || initial.combined_columns[i] != foot {
+            moved_mask |= foot_mask;
+        }
+    }
+
+    let moved_left = moved_mask & LEFT_FOOT_MASK != 0;
+    let moved_right = moved_mask & RIGHT_FOOT_MASK != 0;
+    let mut combined = 0u32;
+    for (i, &placed) in cols.iter().enumerate().take(4) {
+        let foot = if placed != Foot::None {
+            placed
+        } else {
+            let previous = initial.combined_columns[i];
+            match previous {
+                Foot::LeftHeel | Foot::RightHeel
+                    if moved_mask & FOOT_MASKS[foot_idx(previous)] == 0 =>
+                {
+                    previous
+                }
+                Foot::LeftToe if !moved_left => previous,
+                Foot::RightToe if !moved_right => previous,
+                _ => Foot::None,
+            }
+        };
+        combined |= (foot as u32) << (i * 3);
+    }
+
+    (
+        hit,
+        combined | (u32::from(moved_mask) << 24) | (u32::from(holding_mask) << 28),
     )
 }
 
@@ -2720,8 +2813,10 @@ fn facing_cost4(layout: &StageLayout) -> &'static [f32; SINGLE_STATE_COUNT] {
     COSTS.get_or_init(|| {
         std::array::from_fn(|key| {
             let base = STATE_BASE4[key];
+            let mut combined_columns = [Foot::None; MAX_COLUMNS];
+            combined_columns[..4].copy_from_slice(&base.combined_columns);
             let state = State {
-                combined_columns: base.combined_columns,
+                combined_columns,
                 where_the_feet_are: base.where_the_feet_are,
                 occupied_mask: base.occupied_mask,
                 moved_mask: 0,
@@ -3465,8 +3560,8 @@ mod tests {
     #[test]
     fn hot_storage_stays_compact() {
         assert_eq!(std::mem::size_of::<Row>(), 16);
-        assert_eq!(std::mem::size_of::<StateBase4>(), 14);
-        assert_eq!(std::mem::size_of_val(&STATE_BASE4), 57_344);
+        assert_eq!(std::mem::size_of::<StateBase4>(), 10);
+        assert_eq!(std::mem::size_of_val(&STATE_BASE4), 40_960);
         assert_eq!(
             std::mem::size_of_val(facing_cost4(&dance_single_cache().layout)),
             16_384
@@ -3840,12 +3935,8 @@ mod tests {
     #[test]
     fn specialized_column_transitions_agree_for_single_panel_states() {
         let cache = dance_single_cache();
-        let mut initial_placement = [Foot::None; MAX_COLUMNS];
-        initial_placement[0] = Foot::LeftHeel;
-        initial_placement[3] = Foot::RightHeel;
-        let (placed, _, _) =
-            parity_result_state_no_holds::<4>(&state_new(), &initial_placement, 0b1001);
-        let initial_states = [state_new(), state_from_key::<4>(0), placed];
+        let initial_states = std::iter::once(state_new())
+            .chain((0..SINGLE_STATE_COUNT as u32).map(state_from_key::<4>));
 
         for initial in initial_states {
             for active_mask in 0u8..16 {
@@ -3856,15 +3947,90 @@ mod tests {
                     permutations
                 };
                 for placement in permutations {
+                    let no_holds =
+                        parity_result_state_no_holds::<4>(&initial, placement, active_mask);
                     assert_eq!(
-                        parity_result_state_no_holds::<4>(&initial, placement, active_mask),
+                        no_holds,
                         parity_result_state_no_holds::<8>(&initial, placement, active_mask)
                     );
-                    let hold_mask = active_mask & 0b0101;
                     assert_eq!(
-                        parity_result_state::<4>(&initial, placement, hold_mask, active_mask),
+                        parity_result_key4::<false>(&initial, placement, 0, active_mask),
+                        (no_holds.1, no_holds.2)
+                    );
+                    let hold_mask = active_mask & 0b0101;
+                    let with_holds =
+                        parity_result_state::<4>(&initial, placement, hold_mask, active_mask);
+                    assert_eq!(
+                        with_holds,
                         parity_result_state::<8>(&initial, placement, hold_mask, active_mask)
                     );
+                    assert_eq!(
+                        parity_result_key4::<true>(&initial, placement, hold_mask, active_mask,),
+                        (with_holds.1, with_holds.2)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn simple_tap_cost_matches_general_path() {
+        let cache = dance_single_cache();
+        let facing_costs = facing_cost4(&cache.layout);
+        let initial_states = std::iter::once(state_new())
+            .chain((0..SINGLE_STATE_COUNT as u32).map(state_from_key::<4>));
+
+        for initial in initial_states {
+            let left_moved = foot_moved_not_holding(&initial, &LEFT_PAIR);
+            let right_moved = foot_moved_not_holding(&initial, &RIGHT_PAIR);
+            for active_mask in [0, 1, 2, 4, 8] {
+                let mut row = row_new();
+                row.note_mask = active_mask;
+                row.tech_mask = active_mask;
+                row.note_count = active_mask.count_ones() as u8;
+                let row_ctx = row_cost_ctx(&row, &cache.layout);
+                let permutations = cache.perm_table.get(active_mask);
+                let permutations = if permutations.is_empty() {
+                    &NO_PERMS
+                } else {
+                    permutations
+                };
+
+                for placement in permutations {
+                    let (result, hit, key) =
+                        parity_result_state_no_holds::<4>(&initial, placement, active_mask);
+                    for elapsed in [0.05, 0.25, 0.5] {
+                        let facing = facing_costs[key as usize & (SINGLE_STATE_COUNT - 1)];
+                        let simple = calc_action_cost::<true, true>(
+                            &cache.layout,
+                            &initial,
+                            &result,
+                            placement,
+                            hit,
+                            &row,
+                            row_ctx,
+                            elapsed,
+                            left_moved,
+                            right_moved,
+                            false,
+                            facing,
+                        );
+                        let general = calc_action_cost::<true, false>(
+                            &cache.layout,
+                            &initial,
+                            &result,
+                            placement,
+                            hit,
+                            &row,
+                            row_ctx,
+                            elapsed,
+                            left_moved,
+                            right_moved,
+                            false,
+                            facing,
+                        );
+                        assert_eq!(simple.to_bits(), general.to_bits());
+                    }
                 }
             }
         }
