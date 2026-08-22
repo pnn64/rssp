@@ -442,10 +442,11 @@ struct Row {
     note_mask: u8,
     tech_mask: u8,
     hold_mask: u8,
-    hold_ends: [f32; MAX_COLUMNS],
     mine_mask: u8,
     mine_i32_mask: u8,
     fake_mine_mask: u8,
+    // Derived while rows are built so the DP never rescans hold endpoints.
+    has_live_hold: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -465,10 +466,10 @@ const fn row_new() -> Row {
         note_mask: 0,
         tech_mask: 0,
         hold_mask: 0,
-        hold_ends: [HOLD_END_NONE; MAX_COLUMNS],
         mine_mask: 0,
         mine_i32_mask: 0,
         fake_mine_mask: 0,
+        has_live_hold: false,
     }
 }
 
@@ -996,15 +997,7 @@ fn calc_big_movements_cost(
 
 #[inline(always)]
 fn row_has_live_hold(row: &Row) -> bool {
-    let mut mask = row.hold_mask;
-    while mask != 0 {
-        let idx = mask.trailing_zeros() as usize;
-        mask &= mask - 1;
-        if row.hold_ends[idx] > row.beat {
-            return true;
-        }
-    }
-    false
+    row.has_live_hold
 }
 
 // --- Generator ---
@@ -1019,6 +1012,8 @@ struct StepParityGenerator {
     prev_links: Vec<LayerLink>,
     next_links: Vec<LayerLink>,
     state_map: RowStateMap,
+    // Row-build state shared by every row instead of 32 endpoint bytes per row.
+    active_hold_ends: [f32; MAX_COLUMNS],
 }
 
 #[cfg(feature = "bench-support")]
@@ -1060,6 +1055,7 @@ fn parity_gen(cache: &'static LayoutCache) -> StepParityGenerator {
         prev_links: Vec::new(),
         next_links: Vec::new(),
         state_map: row_map_new(),
+        active_hold_ends: [HOLD_END_NONE; MAX_COLUMNS],
     }
 }
 
@@ -1069,6 +1065,7 @@ fn parity_reset(g: &mut StepParityGenerator, cols: usize) {
     g.nodes.clear();
     g.rows.clear();
     g.result_columns.clear();
+    g.active_hold_ends.fill(HOLD_END_NONE);
 }
 
 #[inline(always)]
@@ -1548,10 +1545,11 @@ fn parity_flush_row(g: &mut StepParityGenerator, counter: &RowCounter) {
     if counter.last_second == CLM_SECOND_INVALID {
         return;
     }
-    g.rows.push(parity_build_row(g, counter));
+    let row = parity_build_row(g, counter);
+    g.rows.push(row);
 }
 
-fn parity_build_row(g: &StepParityGenerator, counter: &RowCounter) -> Row {
+fn parity_build_row(g: &mut StepParityGenerator, counter: &RowCounter) -> Row {
     let mut row = row_new();
     row.second = counter.last_second;
     row.beat = counter.last_beat;
@@ -1561,15 +1559,16 @@ fn parity_build_row(g: &StepParityGenerator, counter: &RowCounter) -> Row {
     row.mine_mask = counter.next_mine_mask;
     row.mine_i32_mask = counter.next_mine_i32_mask;
     row.fake_mine_mask = counter.next_fake_mine_mask;
-    row.hold_ends = counter.hold_ends;
 
-    if let Some(prev) = g.rows.last() {
-        for c in 0..g.column_count.min(MAX_COLUMNS) {
-            let end = prev.hold_ends[c];
-            if end >= row.beat && row.hold_ends[c] < 0.0 {
-                row.hold_mask |= 1u8 << c;
-                row.hold_ends[c] = end;
-            }
+    for c in 0..g.column_count.min(MAX_COLUMNS) {
+        let previous_end = g.active_hold_ends[c];
+        let next_end = counter.hold_ends[c];
+        if previous_end >= row.beat && next_end < 0.0 {
+            row.hold_mask |= 1u8 << c;
+            row.has_live_hold |= previous_end > row.beat;
+        }
+        if next_end >= 0.0 {
+            g.active_hold_ends[c] = next_end;
         }
     }
     row
@@ -3359,6 +3358,11 @@ mod tests {
             TimingFormat::Ssc,
             true,
         )
+    }
+
+    #[test]
+    fn hot_storage_stays_compact() {
+        assert_eq!(std::mem::size_of::<Row>(), 16);
     }
 
     fn assert_rows_match_lanes(data: &[u8], has_holds: bool) {
