@@ -1293,7 +1293,18 @@ fn parity_analyze(
 ) -> bool {
     parity_reset(g, cols);
     parity_create_rows(g, notes);
+    parity_reserve(g);
     parity_finish(g)
+}
+
+fn parity_reserve(g: &mut StepParityGenerator) {
+    let node_floor = g.rows.len().saturating_add(1);
+    if g.column_count == 4 {
+        g.single_nodes.reserve(node_floor);
+    } else {
+        g.double_nodes.reserve(node_floor);
+    }
+    g.result_columns.reserve(g.rows.len());
 }
 
 fn parity_create_rows(g: &mut StepParityGenerator, notes: Vec<IntermediateNoteData>) {
@@ -1736,6 +1747,7 @@ fn parity_analyze_rows<const LANES: usize>(
     parity_reset(g, cols);
     g.rows.reserve(rows.len());
     parity_create_rows_from_arrays(g, hold_heads, rows, row_to_beat, timing, cols, has_holds);
+    parity_reserve(g);
     parity_finish(g)
 }
 
@@ -2837,7 +2849,7 @@ fn calculate_tech_counts(
 
         // Per-row tech is computed by the shared classifier so the aggregate
         // counts here and the per-row annotation flags never drift.
-        out += classify_row_tech(
+        classify_row_tech(
             layout,
             curr,
             prev,
@@ -2847,6 +2859,7 @@ fn calculate_tech_counts(
             &prev_pos,
             &prev_prev_pos,
             i,
+            &mut out,
         );
 
         prev_prev_pos = prev_pos;
@@ -2855,8 +2868,8 @@ fn calculate_tech_counts(
     out
 }
 
-/// Classify all tech categories triggered by a single judged row, returning
-/// them as per-row counts. This is the single source of truth shared by
+/// Classify all tech categories triggered by a single judged row. This is the
+/// single source of truth shared by
 /// [`calculate_tech_counts`] (which accumulates the counts) and
 /// [`collect_annotations`] (which stores them per row). Summing the per-row
 /// results over a chart reproduces the aggregate [`TechCounts`], so the two can
@@ -2872,8 +2885,8 @@ fn classify_row_tech(
     prev_pos: &[i8; NUM_FEET],
     prev_prev_pos: &[i8; NUM_FEET],
     i: usize,
-) -> TechCounts {
-    let mut out = TechCounts::default();
+    out: &mut TechCounts,
+) {
     let elapsed = curr.second - prev.second;
 
     // Jacks and doublesteps
@@ -2957,8 +2970,6 @@ fn classify_row_tech(
         }
         CrossoverKind::None => {}
     }
-
-    out
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -3152,7 +3163,8 @@ fn collect_annotations_in(
         let (curr_combined, prev_combined) = (&placements[i], &placements[i - 1]);
         let curr_pos = hit_positions(curr_combined, curr);
 
-        let tech = classify_row_tech(
+        let mut tech = TechCounts::default();
+        classify_row_tech(
             layout,
             curr,
             prev,
@@ -3162,6 +3174,7 @@ fn collect_annotations_in(
             &prev_pos,
             &prev_prev_pos,
             i,
+            &mut tech,
         );
         counts += tech;
 

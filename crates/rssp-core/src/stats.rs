@@ -617,6 +617,21 @@ fn tap_line_mask<const L: usize>(line: &[u8; L]) -> Option<u8> {
     }
 }
 
+const TAP_MASK_COUNTS: [u16; 256] = {
+    let mut table = [0u16; 256];
+    let mut mask = 0usize;
+    while mask < table.len() {
+        let bits = mask as u8;
+        table[mask] = bits.count_ones() as u16
+            | ((bits & 0b0001_0001).count_ones() as u16) << 4
+            | ((bits & 0b0010_0010).count_ones() as u16) << 6
+            | ((bits & 0b0100_0100).count_ones() as u16) << 8
+            | ((bits & 0b1000_1000).count_ones() as u16) << 10;
+        mask += 1;
+    }
+    table
+};
+
 #[inline(always)]
 fn count_tap_mask<const L: usize>(
     mask: u8,
@@ -632,7 +647,8 @@ fn count_tap_mask<const L: usize>(
         };
     }
 
-    let notes = mask.count_ones();
+    let counts = u32::from(TAP_MASK_COUNTS[mask as usize]);
+    let notes = counts & 0x0f;
     let mut active_mask = mask;
     while active_mask != 0 {
         let c = active_mask.trailing_zeros() as usize;
@@ -642,10 +658,10 @@ fn count_tap_mask<const L: usize>(
     }
 
     stats.total_arrows += notes;
-    stats.left += (mask & 0b0001_0001).count_ones();
-    stats.down += (mask & 0b0010_0010).count_ones();
-    stats.up += (mask & 0b0100_0100).count_ones();
-    stats.right += (mask & 0b1000_1000).count_ones();
+    stats.left += (counts >> 4) & 0x03;
+    stats.down += (counts >> 6) & 0x03;
+    stats.up += (counts >> 8) & 0x03;
+    stats.right += (counts >> 10) & 0x03;
     stats.total_steps += 1;
     if notes >= 2 {
         stats.jumps += 1;
@@ -2328,6 +2344,18 @@ mod tests {
     #[test]
     fn raw_chart_notes_remain_compact() {
         assert_eq!(std::mem::size_of::<RawChartNote>(), 12);
+    }
+
+    #[test]
+    fn tap_mask_counts_match_bit_counts() {
+        for mask in 0u8..=u8::MAX {
+            let counts = u32::from(TAP_MASK_COUNTS[mask as usize]);
+            assert_eq!(counts & 0x0f, mask.count_ones());
+            assert_eq!((counts >> 4) & 0x03, (mask & 0b0001_0001).count_ones());
+            assert_eq!((counts >> 6) & 0x03, (mask & 0b0010_0010).count_ones());
+            assert_eq!((counts >> 8) & 0x03, (mask & 0b0100_0100).count_ones());
+            assert_eq!((counts >> 10) & 0x03, (mask & 0b1000_1000).count_ones());
+        }
     }
 
     fn timing(fakes: Option<&str>) -> TimingData {
