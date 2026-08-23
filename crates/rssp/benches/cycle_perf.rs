@@ -437,6 +437,70 @@ fn growing_bpm_stats_reference(values: &[f64]) -> (f64, f64) {
 }
 
 #[cfg(windows)]
+fn hash_cycles(
+    rows: &[[u8; 4]],
+    beats: &[f32],
+    timing: &rssp::timing::TimingData,
+    legacy_hash: bool,
+    scratch: &mut rssp::step_parity::TimingRowsScratch<4>,
+) -> u64 {
+    let start = platform::read_cycles();
+    black_box(rssp::step_parity::analyze_timing_rows_hash_for_bench(
+        black_box(rows),
+        black_box(beats),
+        black_box(timing),
+        true,
+        legacy_hash,
+        black_box(scratch),
+    ));
+    platform::read_cycles() - start
+}
+
+#[cfg(windows)]
+#[allow(clippy::cast_precision_loss)]
+fn print_hash_pairs(
+    rows: &[[u8; 4]],
+    beats: &[f32],
+    timing: &rssp::timing::TimingData,
+    legacy_scratch: &mut rssp::step_parity::TimingRowsScratch<4>,
+    folded_scratch: &mut rssp::step_parity::TimingRowsScratch<4>,
+) {
+    const SAMPLES: usize = 31;
+    let mut legacy = [0u64; SAMPLES];
+    let mut folded = [0u64; SAMPLES];
+    let mut ratios = [0.0f64; SAMPLES];
+    for sample in 0..SAMPLES {
+        let (legacy_cycles, folded_cycles) = if sample.is_multiple_of(2) {
+            (
+                hash_cycles(rows, beats, timing, true, legacy_scratch),
+                hash_cycles(rows, beats, timing, false, folded_scratch),
+            )
+        } else {
+            let folded_cycles = hash_cycles(rows, beats, timing, false, folded_scratch);
+            let legacy_cycles = hash_cycles(rows, beats, timing, true, legacy_scratch);
+            (legacy_cycles, folded_cycles)
+        };
+        legacy[sample] = legacy_cycles;
+        folded[sample] = folded_cycles;
+        ratios[sample] = folded_cycles as f64 / legacy_cycles as f64;
+    }
+    legacy.sort_unstable();
+    folded.sort_unstable();
+    ratios.sort_by(f64::total_cmp);
+    let mid = SAMPLES / 2;
+    eprintln!(
+        concat!(
+            "step_parity_hash paired_samples={} legacy_median_cycles={} ",
+            "folded_median_cycles={} median_change={:+.3}%"
+        ),
+        SAMPLES,
+        legacy[mid],
+        folded[mid],
+        (ratios[mid] - 1.0) * 100.0,
+    );
+}
+
+#[cfg(windows)]
 fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     const ENTRIES: usize = 4_096;
     let cpu = platform::stabilize_thread();
@@ -3382,6 +3446,10 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         rssp::step_parity::timing_rows_scratch::<4>().expect("dance-single parity layout");
     let mut current_tap_scratch =
         rssp::step_parity::timing_rows_scratch::<4>().expect("dance-single parity layout");
+    let mut legacy_hash_scratch =
+        rssp::step_parity::timing_rows_scratch::<4>().expect("dance-single parity layout");
+    let mut folded_hash_scratch =
+        rssp::step_parity::timing_rows_scratch::<4>().expect("dance-single parity layout");
     let mut double_scratch =
         rssp::step_parity::timing_rows_scratch::<8>().expect("dance-double parity layout");
     let mut legacy_single =
@@ -3416,6 +3484,32 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         &mut current_tap_scratch,
     );
     assert_eq!(current_tap_counts, legacy_tap_counts);
+    let legacy_hash_counts = rssp::step_parity::analyze_timing_rows_hash_for_bench(
+        &single_hold_rows,
+        &single_beats,
+        &parity_timing,
+        true,
+        true,
+        &mut legacy_hash_scratch,
+    );
+    let folded_hash_counts = rssp::step_parity::analyze_timing_rows_hash_for_bench(
+        &single_hold_rows,
+        &single_beats,
+        &parity_timing,
+        true,
+        false,
+        &mut folded_hash_scratch,
+    );
+    assert_eq!(folded_hash_counts, legacy_hash_counts);
+    if std::env::args().any(|arg| arg.contains("dense_single_holds_hash")) {
+        print_hash_pairs(
+            &single_hold_rows,
+            &single_beats,
+            &parity_timing,
+            &mut legacy_hash_scratch,
+            &mut folded_hash_scratch,
+        );
+    }
 
     let mut parity = c.benchmark_group("cycles/step_parity");
     parity.sample_size(50);
@@ -3528,6 +3622,30 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
                 black_box(&parity_timing),
                 true,
                 black_box(&mut single_scratch),
+            ));
+        });
+    });
+    parity.bench_function("dense_single_holds_hash_legacy", |b| {
+        b.iter(|| {
+            black_box(rssp::step_parity::analyze_timing_rows_hash_for_bench(
+                black_box(&single_hold_rows),
+                black_box(&single_beats),
+                black_box(&parity_timing),
+                true,
+                true,
+                black_box(&mut legacy_hash_scratch),
+            ));
+        });
+    });
+    parity.bench_function("dense_single_holds_hash_folded", |b| {
+        b.iter(|| {
+            black_box(rssp::step_parity::analyze_timing_rows_hash_for_bench(
+                black_box(&single_hold_rows),
+                black_box(&single_beats),
+                black_box(&parity_timing),
+                true,
+                false,
+                black_box(&mut folded_hash_scratch),
             ));
         });
     });

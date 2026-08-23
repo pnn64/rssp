@@ -117,6 +117,8 @@ struct RowStateMap {
     entries: Vec<RowMapEntry>,
     epoch: u32,
     mask: usize,
+    #[cfg(feature = "bench-support")]
+    legacy_hash: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -154,9 +156,23 @@ enum RowMapProbe {
 #[inline(always)]
 const fn row_map_hash_for_key<const COLS: usize>(key: u32) -> usize {
     let hash = row_map_hash(key);
-    if COLS == MAX_COLUMNS && key >> 28 == 0 {
+    if COLS == SINGLE_COLS {
+        // The minimum table mask selects the low product byte. Fold the upper
+        // byte into it so column 4 and moved/holding flags affect every size.
+        hash ^ (hash >> 24)
+    } else if COLS == MAX_COLUMNS && key >> 28 == 0 {
         // Dance-double column bits extend above the low bits selected by the
         // power-of-two table. Fold them down for states without active holds.
+        hash ^ (hash >> 16)
+    } else {
+        hash
+    }
+}
+
+#[cfg(feature = "bench-support")]
+const fn row_map_hash_legacy<const COLS: usize>(key: u32) -> usize {
+    let hash = row_map_hash(key);
+    if COLS == MAX_COLUMNS && key >> 28 == 0 {
         hash ^ (hash >> 16)
     } else {
         hash
@@ -168,6 +184,8 @@ const fn row_map_new() -> RowStateMap {
         entries: Vec::new(),
         epoch: 1,
         mask: 0,
+        #[cfg(feature = "bench-support")]
+        legacy_hash: false,
     }
 }
 
@@ -204,7 +222,15 @@ fn row_map_probe<const COLS: usize, const LAYER_LOCAL: bool>(
     key: u32,
 ) -> RowMapProbe {
     debug_assert!(map.mask != 0);
-    let mut idx = row_map_hash_for_key::<COLS>(key) & map.mask;
+    #[cfg(feature = "bench-support")]
+    let hash = if map.legacy_hash {
+        row_map_hash_legacy::<COLS>(key)
+    } else {
+        row_map_hash_for_key::<COLS>(key)
+    };
+    #[cfg(not(feature = "bench-support"))]
+    let hash = row_map_hash_for_key::<COLS>(key);
+    let mut idx = hash & map.mask;
     loop {
         let entry = &map.entries[idx];
         let meta = entry.meta;
@@ -4124,6 +4150,21 @@ pub fn analyze_timing_rows_tap_path_for_bench<const LANES: usize>(
     analyze_timing_rows_known_holds(rows, row_to_beat, timing, has_holds, scratch)
 }
 
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn analyze_timing_rows_hash_for_bench<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    has_holds: bool,
+    legacy_hash: bool,
+    scratch: &mut TimingRowsScratch<LANES>,
+) -> TechCounts {
+    scratch.generator.state_map.legacy_hash = legacy_hash;
+    analyze_timing_rows_known_holds(rows, row_to_beat, timing, has_holds, scratch)
+}
+
 pub fn analyze_and_annotate_timing_rows<const LANES: usize>(
     rows: &[[u8; LANES]],
     row_to_beat: &[f32],
@@ -4331,6 +4372,18 @@ mod tests {
             row_map_probe::<4, true>(&map, 7),
             RowMapProbe::Vacant(_)
         ));
+    }
+
+    #[test]
+    fn single_row_hash_uses_all_state_regions() {
+        const MASK: usize = ROW_MAP_MIN_CAP - 1;
+        let keys = [0x19, 0x0100_0019, 0x1000_0019, 0x1100_0019, 0x619];
+        let buckets = keys.map(|key| row_map_hash_for_key::<4>(key) & MASK);
+        for i in 0..buckets.len() {
+            for &other in &buckets[i + 1..] {
+                assert_ne!(buckets[i], other);
+            }
+        }
     }
 
     #[test]

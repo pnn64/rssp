@@ -1072,6 +1072,40 @@ fn run_parity_alloc<const LANES: usize>(
         }
     }
 
+    if LANES == 4 {
+        for (phase, legacy_hash) in [
+            ("row-hash-legacy-reused", true),
+            ("row-hash-folded-reused", false),
+        ] {
+            let mut hash_scratch =
+                rssp::step_parity::timing_rows_scratch::<LANES>().expect("supported parity layout");
+            black_box(rssp::step_parity::analyze_timing_rows_hash_for_bench(
+                &rows,
+                &beats,
+                &timing,
+                has_holds,
+                legacy_hash,
+                &mut hash_scratch,
+            ));
+            reset_counters();
+            let before = Counters::read();
+            let start = Instant::now();
+            for _ in 0..iterations {
+                black_box(rssp::step_parity::analyze_timing_rows_hash_for_bench(
+                    black_box(&rows),
+                    black_box(&beats),
+                    black_box(&timing),
+                    has_holds,
+                    legacy_hash,
+                    black_box(&mut hash_scratch),
+                ));
+            }
+            let elapsed = start.elapsed();
+            let after = Counters::read();
+            print_parity_alloc(mode, phase, iterations, row_count, elapsed, before, after);
+        }
+    }
+
     let mut annotation_scratch =
         rssp::step_parity::timing_rows_scratch::<LANES>().expect("supported parity layout");
     drop(
