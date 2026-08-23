@@ -127,12 +127,20 @@ const fn row_map_hash(x: u32) -> usize {
     x.wrapping_mul(0x9E3779B9) as usize
 }
 
-// Eight columns can encode at most 3,393 distinct placements of four labeled
-// feet. Including every moved/holding mask gives 868,608 keys, so a deduped
-// row index fits in 20 bits; the remaining 12 bits are a bounded reset epoch.
-const ROW_MAP_VAL_BITS: u32 = 20;
-const ROW_MAP_VAL_MASK: u32 = (1 << ROW_MAP_VAL_BITS) - 1;
-const ROW_MAP_EPOCH_MAX: u32 = (1 << (u32::BITS - ROW_MAP_VAL_BITS)) - 1;
+// Dance-single has at most 625 states per layer; dance-double can encode at
+// most 868,608 moved/holding placements. The narrower single value leaves a
+// 22-bit epoch, avoiding periodic table clears on long charts.
+const fn row_map_val_bits<const COLS: usize, const LAYER_LOCAL: bool>() -> u32 {
+    if COLS == 4 && LAYER_LOCAL { 10 } else { 20 }
+}
+
+const fn row_map_val_mask<const COLS: usize, const LAYER_LOCAL: bool>() -> u32 {
+    (1 << row_map_val_bits::<COLS, LAYER_LOCAL>()) - 1
+}
+
+const fn row_map_epoch_max<const COLS: usize, const LAYER_LOCAL: bool>() -> u32 {
+    (1 << (u32::BITS - row_map_val_bits::<COLS, LAYER_LOCAL>())) - 1
+}
 
 #[derive(Clone, Copy)]
 enum RowMapProbe {
@@ -169,14 +177,17 @@ fn row_map_cap(expected: usize) -> usize {
     cap
 }
 
-fn row_map_reset(map: &mut RowStateMap, expected: usize) {
+fn row_map_reset<const COLS: usize, const LAYER_LOCAL: bool>(
+    map: &mut RowStateMap,
+    expected: usize,
+) {
     let need = row_map_cap(expected);
     if need > map.entries.len() {
         map.entries.resize(need, RowMapEntry::default());
         map.mask = need - 1;
     }
     map.epoch += 1;
-    if map.epoch > ROW_MAP_EPOCH_MAX {
+    if map.epoch > row_map_epoch_max::<COLS, LAYER_LOCAL>() {
         for entry in &mut map.entries {
             entry.meta = 0;
         }
@@ -185,29 +196,37 @@ fn row_map_reset(map: &mut RowStateMap, expected: usize) {
 }
 
 #[inline(always)]
-fn row_map_probe<const COLS: usize>(map: &RowStateMap, key: u32) -> RowMapProbe {
+fn row_map_probe<const COLS: usize, const LAYER_LOCAL: bool>(
+    map: &RowStateMap,
+    key: u32,
+) -> RowMapProbe {
     debug_assert!(map.mask != 0);
     let mut idx = row_map_hash_for_key::<COLS>(key) & map.mask;
     loop {
         let entry = &map.entries[idx];
         let meta = entry.meta;
-        if meta >> ROW_MAP_VAL_BITS != map.epoch {
+        if meta >> row_map_val_bits::<COLS, LAYER_LOCAL>() != map.epoch {
             return RowMapProbe::Vacant(idx);
         }
         if entry.key == key {
-            return RowMapProbe::Found((meta & ROW_MAP_VAL_MASK) as usize);
+            return RowMapProbe::Found((meta & row_map_val_mask::<COLS, LAYER_LOCAL>()) as usize);
         }
         idx = (idx + 1) & map.mask;
     }
 }
 
 #[inline(always)]
-fn row_map_insert_at(map: &mut RowStateMap, idx: usize, key: u32, val: usize) {
+fn row_map_insert_at<const COLS: usize, const LAYER_LOCAL: bool>(
+    map: &mut RowStateMap,
+    idx: usize,
+    key: u32,
+    val: usize,
+) {
     debug_assert!(idx < map.entries.len());
-    debug_assert!(val <= ROW_MAP_VAL_MASK as usize);
+    debug_assert!(val <= row_map_val_mask::<COLS, LAYER_LOCAL>() as usize);
     let entry = &mut map.entries[idx];
     entry.key = key;
-    entry.meta = (map.epoch << ROW_MAP_VAL_BITS) | val as u32;
+    entry.meta = (map.epoch << row_map_val_bits::<COLS, LAYER_LOCAL>()) | val as u32;
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -527,7 +546,6 @@ const START_BASE4: StateBase4 = StateBase4 {
 };
 
 const SINGLE_STATE_COUNT: usize = 1 << 12;
-#[cfg(test)]
 const SINGLE_LAYER_MAX: usize = 625;
 const SINGLE_STATE_MASK: u32 = 0xff00_0fff;
 const SINGLE_PRED_SHIFT: u32 = 12;
@@ -1895,14 +1913,14 @@ fn parity_tap_row4(
 
         for perm in perms {
             let key = parity_result_tap_key4(init_key, perm, tap_col);
-            let cost_idx = match row_map_probe::<4>(&g.state_map, key) {
+            let cost_idx = match row_map_probe::<4, true>(&g.state_map, key) {
                 RowMapProbe::Found(index) => index,
                 RowMapProbe::Vacant(slot) => {
                     let id = parity_add_node::<4>(g, key);
                     let index = g.next_links.len();
                     debug_assert_eq!(id, next_start + index);
                     g.next_links.push(LayerLink { cost: f32::MAX });
-                    row_map_insert_at(&mut g.state_map, slot, key, index);
+                    row_map_insert_at::<4, true>(&mut g.state_map, slot, key, index);
                     index
                 }
             };
@@ -1967,14 +1985,14 @@ fn parity_jump_row4(
 
         for perm in perms {
             let (hit, key) = parity_result_key4::<false>(&init_state, perm, 0, row_ctx.active_mask);
-            let cost_idx = match row_map_probe::<4>(&g.state_map, key) {
+            let cost_idx = match row_map_probe::<4, true>(&g.state_map, key) {
                 RowMapProbe::Found(index) => index,
                 RowMapProbe::Vacant(slot) => {
                     let id = parity_add_node::<4>(g, key);
                     let index = g.next_links.len();
                     debug_assert_eq!(id, next_start + index);
                     g.next_links.push(LayerLink { cost: f32::MAX });
-                    row_map_insert_at(&mut g.state_map, slot, key, index);
+                    row_map_insert_at::<4, true>(&mut g.state_map, slot, key, index);
                     index
                 }
             };
@@ -2033,10 +2051,15 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
 
         let perms = parity_perms_for_row(g, i);
         let estimate = g.prev_links.len().saturating_mul(perms.len());
+        let layer_estimate = if COLS == 4 {
+            estimate.min(SINGLE_LAYER_MAX)
+        } else {
+            estimate
+        };
         let next_start = parity_node_len::<COLS>(g);
         g.next_links.clear();
-        row_map_reset(&mut g.state_map, estimate);
-        g.next_links.reserve(estimate);
+        row_map_reset::<COLS, true>(&mut g.state_map, layer_estimate);
+        g.next_links.reserve(layer_estimate);
         let row = g.rows[i];
         let row_ctx = row_cost_ctx(&row, g.layout);
         let layout = g.layout;
@@ -2118,14 +2141,14 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                         };
                         (Some(result), hit, key)
                     };
-                    let cost_idx = match row_map_probe::<COLS>(&g.state_map, key) {
+                    let cost_idx = match row_map_probe::<COLS, true>(&g.state_map, key) {
                         RowMapProbe::Found(index) => index,
                         RowMapProbe::Vacant(slot) => {
                             let id = parity_add_node::<COLS>(g, key);
                             let index = g.next_links.len();
                             debug_assert_eq!(id, next_start + index);
                             g.next_links.push(LayerLink { cost: f32::MAX });
-                            row_map_insert_at(&mut g.state_map, slot, key, index);
+                            row_map_insert_at::<COLS, true>(&mut g.state_map, slot, key, index);
                             index
                         }
                     };
@@ -2280,7 +2303,7 @@ fn legacy_dp_rows<const COLS: usize>(
         let perms = parity_perms_for_row(g, i);
         let estimate = dp.prev_ids.len().saturating_mul(perms.len());
         dp.next_ids.clear();
-        row_map_reset(&mut dp.state_map, estimate);
+        row_map_reset::<COLS, false>(&mut dp.state_map, estimate);
         dp.next_ids.reserve(estimate);
         let row = g.rows[i];
         let row_ctx = row_cost_ctx(&row, g.layout);
@@ -2302,12 +2325,12 @@ fn legacy_dp_rows<const COLS: usize>(
                 } else {
                     parity_result_state::<COLS>(&init_state, perm, hold_mask, active_mask)
                 };
-                let res_id = match row_map_probe::<COLS>(&dp.state_map, key) {
+                let res_id = match row_map_probe::<COLS, false>(&dp.state_map, key) {
                     RowMapProbe::Found(id) => id,
                     RowMapProbe::Vacant(slot) => {
                         let id = legacy_add_node(dp, key);
                         dp.next_ids.push(id);
-                        row_map_insert_at(&mut dp.state_map, slot, key, id);
+                        row_map_insert_at::<COLS, false>(&mut dp.state_map, slot, key, id);
                         id
                     }
                 };
@@ -4057,21 +4080,21 @@ mod tests {
     #[test]
     fn row_map_epoch_wrap_forgets_entries() {
         let mut map = row_map_new();
-        row_map_reset(&mut map, 1);
-        let RowMapProbe::Vacant(slot) = row_map_probe::<4>(&map, 7) else {
+        row_map_reset::<4, true>(&mut map, 1);
+        let RowMapProbe::Vacant(slot) = row_map_probe::<4, true>(&map, 7) else {
             panic!("new map entry should be vacant");
         };
-        row_map_insert_at(&mut map, slot, 7, ROW_MAP_VAL_MASK as usize);
+        row_map_insert_at::<4, true>(&mut map, slot, 7, row_map_val_mask::<4, true>() as usize);
         assert!(matches!(
-            row_map_probe::<4>(&map, 7),
-            RowMapProbe::Found(value) if value == ROW_MAP_VAL_MASK as usize
+            row_map_probe::<4, true>(&map, 7),
+            RowMapProbe::Found(value) if value == row_map_val_mask::<4, true>() as usize
         ));
 
-        map.epoch = ROW_MAP_EPOCH_MAX;
-        row_map_reset(&mut map, 1);
+        map.epoch = row_map_epoch_max::<4, true>();
+        row_map_reset::<4, true>(&mut map, 1);
         assert_eq!(map.epoch, 1);
         assert!(matches!(
-            row_map_probe::<4>(&map, 7),
+            row_map_probe::<4, true>(&map, 7),
             RowMapProbe::Vacant(_)
         ));
     }
