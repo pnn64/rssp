@@ -3378,6 +3378,10 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     );
     let mut single_scratch =
         rssp::step_parity::timing_rows_scratch::<4>().expect("dance-single parity layout");
+    let mut legacy_tap_scratch =
+        rssp::step_parity::timing_rows_scratch::<4>().expect("dance-single parity layout");
+    let mut current_tap_scratch =
+        rssp::step_parity::timing_rows_scratch::<4>().expect("dance-single parity layout");
     let mut double_scratch =
         rssp::step_parity::timing_rows_scratch::<8>().expect("dance-double parity layout");
     let mut legacy_single =
@@ -3395,6 +3399,23 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         &mut annotation_scratch,
         &mut reused_annotations,
     );
+    let legacy_tap_counts = rssp::step_parity::analyze_timing_rows_tap_path_for_bench(
+        &single_rows,
+        &single_beats,
+        &parity_timing,
+        false,
+        true,
+        &mut legacy_tap_scratch,
+    );
+    let current_tap_counts = rssp::step_parity::analyze_timing_rows_tap_path_for_bench(
+        &single_rows,
+        &single_beats,
+        &parity_timing,
+        false,
+        false,
+        &mut current_tap_scratch,
+    );
+    assert_eq!(current_tap_counts, legacy_tap_counts);
 
     let mut parity = c.benchmark_group("cycles/step_parity");
     parity.sample_size(50);
@@ -3421,6 +3442,30 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
                 black_box(&parity_timing),
                 false,
                 black_box(&mut single_scratch),
+            ));
+        });
+    });
+    parity.bench_function("dense_single_tap_path_legacy", |b| {
+        b.iter(|| {
+            black_box(rssp::step_parity::analyze_timing_rows_tap_path_for_bench(
+                black_box(&single_rows),
+                black_box(&single_beats),
+                black_box(&parity_timing),
+                false,
+                true,
+                black_box(&mut legacy_tap_scratch),
+            ));
+        });
+    });
+    parity.bench_function("dense_single_tap_path_specialized", |b| {
+        b.iter(|| {
+            black_box(rssp::step_parity::analyze_timing_rows_tap_path_for_bench(
+                black_box(&single_rows),
+                black_box(&single_beats),
+                black_box(&parity_timing),
+                false,
+                false,
+                black_box(&mut current_tap_scratch),
             ));
         });
     });
