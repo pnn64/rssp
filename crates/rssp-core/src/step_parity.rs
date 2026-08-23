@@ -1218,7 +1218,8 @@ struct StepParityGenerator {
     single_nodes: Vec<SingleParityNode>,
     double_nodes: Vec<StepParityNode>,
     rows: Vec<Row>,
-    result_columns: Vec<FootPlacement>,
+    // Chosen packed state per row; decoded only at the columns classification reads.
+    result_keys: Vec<u32>,
     prev_links: Vec<LayerLink>,
     next_links: Vec<LayerLink>,
     state_map: RowStateMap,
@@ -1266,7 +1267,7 @@ fn parity_gen(cache: &'static LayoutCache) -> StepParityGenerator {
         single_nodes: Vec::new(),
         double_nodes: Vec::new(),
         rows: Vec::new(),
-        result_columns: Vec::new(),
+        result_keys: Vec::new(),
         prev_links: Vec::new(),
         next_links: Vec::new(),
         state_map: row_map_new(),
@@ -1280,7 +1281,7 @@ fn parity_reset(g: &mut StepParityGenerator, cols: usize) {
     g.single_nodes.clear();
     g.double_nodes.clear();
     g.rows.clear();
-    g.result_columns.clear();
+    g.result_keys.clear();
     g.active_hold_ends.fill(HOLD_END_NONE);
 }
 
@@ -1322,7 +1323,7 @@ fn parity_reserve(g: &mut StepParityGenerator) {
     } else {
         g.double_nodes.reserve(node_floor);
     }
-    g.result_columns.reserve(g.rows.len());
+    g.result_keys.reserve(g.rows.len());
 }
 
 fn parity_create_rows(g: &mut StepParityGenerator, notes: Vec<IntermediateNoteData>) {
@@ -1850,20 +1851,6 @@ fn parity_set_pred<const COLS: usize>(g: &mut StepParityGenerator, id: usize, pr
     }
 }
 
-#[inline(always)]
-fn parity_pred<const COLS: usize>(g: &StepParityGenerator, id: usize) -> u32 {
-    if COLS == 4 {
-        let delta = (g.single_nodes[id] >> SINGLE_PRED_SHIFT) & SINGLE_PRED_MASK;
-        if delta == 0 {
-            u32::MAX
-        } else {
-            id as u32 - delta
-        }
-    } else {
-        g.double_nodes[id].pred
-    }
-}
-
 fn parity_perms_for_row(g: &mut StepParityGenerator, row_idx: usize) -> &'static [FootPlacement] {
     let row = &g.rows[row_idx];
     let union = g.perm_table.get(row.note_mask | row.hold_mask);
@@ -2375,26 +2362,21 @@ fn legacy_dp_rows<const COLS: usize>(
 }
 
 #[cfg(feature = "bench-support")]
-fn legacy_backtrack<const COLS: usize>(
-    g: &mut StepParityGenerator,
-    dp: &LegacyDp,
-    mut cur: usize,
-) -> bool {
+fn legacy_backtrack(g: &mut StepParityGenerator, dp: &LegacyDp, mut cur: usize) -> bool {
     let rows = g.rows.len();
-    g.result_columns.resize(rows, [Foot::None; MAX_COLUMNS]);
+    g.result_keys.resize(rows, 0);
     for write in (0..rows).rev() {
-        g.result_columns[write] =
-            state_from_key_scalar::<COLS>(dp.nodes[cur].state_key).combined_columns;
+        g.result_keys[write] = dp.nodes[cur].state_key;
         let pred = dp.nodes[cur].pred;
         if pred == u32::MAX {
-            g.result_columns.clear();
+            g.result_keys.clear();
             return false;
         }
         cur = pred as usize;
     }
     let ok = cur == 0;
     if !ok {
-        g.result_columns.clear();
+        g.result_keys.clear();
     }
     ok
 }
@@ -2410,8 +2392,7 @@ fn legacy_finish(g: &mut StepParityGenerator, dp: &mut LegacyDp) -> bool {
         _ => None,
     };
     match (g.column_count, best) {
-        (4, Some(best)) => legacy_backtrack::<4>(g, dp, best),
-        (8, Some(best)) => legacy_backtrack::<8>(g, dp, best),
+        (4 | 8, Some(best)) => legacy_backtrack(g, dp, best),
         _ => false,
     }
 }
@@ -2635,20 +2616,31 @@ fn parity_result_key4<const HAS_HOLDS: bool>(
 
 fn parity_backtrack<const COLS: usize>(g: &mut StepParityGenerator, mut cur: usize) -> bool {
     let rows = g.rows.len();
-    if g.result_columns.len() < rows {
-        g.result_columns.resize(rows, [Foot::None; MAX_COLUMNS]);
+    if g.result_keys.len() < rows {
+        g.result_keys.resize(rows, 0);
     } else {
-        g.result_columns.truncate(rows);
+        g.result_keys.truncate(rows);
     }
 
     let mut write = rows;
     while write > 0 {
         write -= 1;
-        g.result_columns[write] =
-            state_from_key::<COLS>(parity_state_key::<COLS>(g, cur)).combined_columns;
-        let prev = parity_pred::<COLS>(g, cur);
+        let (key, prev) = if COLS == 4 {
+            let node = g.single_nodes[cur];
+            let delta = (node >> SINGLE_PRED_SHIFT) & SINGLE_PRED_MASK;
+            let prev = if delta == 0 {
+                u32::MAX
+            } else {
+                cur as u32 - delta
+            };
+            (node & SINGLE_STATE_MASK, prev)
+        } else {
+            let node = &g.double_nodes[cur];
+            (node.state_key, node.pred)
+        };
+        g.result_keys[write] = key;
         if prev == u32::MAX {
-            g.result_columns.clear();
+            g.result_keys.clear();
             return false;
         }
         cur = prev as usize;
@@ -2656,7 +2648,7 @@ fn parity_backtrack<const COLS: usize>(g: &mut StepParityGenerator, mut cur: usi
 
     let ok = cur == 0;
     if !ok {
-        g.result_columns.clear();
+        g.result_keys.clear();
     }
     ok
 }
@@ -2824,13 +2816,14 @@ impl core::ops::AddAssign for TechCounts {
     }
 }
 
-fn calculate_tech_counts(
-    rows: &[Row],
-    placements: &[FootPlacement],
-    layout: &StageLayout,
-) -> TechCounts {
+#[inline(always)]
+const fn key_foot(key: u32, column: usize) -> Foot {
+    FOOT_FROM_KEY_BITS[((key >> (column * 3)) & 0b111) as usize]
+}
+
+fn calculate_tech_counts(rows: &[Row], keys: &[u32], layout: &StageLayout) -> TechCounts {
     let mut out = TechCounts::default();
-    if rows.len() < 2 || placements.len() != rows.len() {
+    if rows.len() < 2 || keys.len() != rows.len() {
         return out;
     }
 
@@ -2838,13 +2831,13 @@ fn calculate_tech_counts(
     let col_mask = u8::MAX >> (MAX_COLUMNS - cols);
     debug_assert!(rows.iter().all(|row| row.tech_mask & !col_mask == 0));
 
-    let hit_positions = |combined: &FootPlacement, row: &Row| -> [i8; NUM_FEET] {
+    let hit_positions = |key: u32, row: &Row| -> [i8; NUM_FEET] {
         let mut pos = [INVALID_COLUMN; NUM_FEET];
         let mut m = row.tech_mask;
         if cols == 4 && row.note_count == 1 {
             debug_assert!(m.is_power_of_two());
             let c = m.trailing_zeros() as usize;
-            let foot = combined[c];
+            let foot = key_foot(key, c);
             if foot != Foot::None {
                 pos[foot_idx(foot)] = c as i8;
             }
@@ -2853,7 +2846,7 @@ fn calculate_tech_counts(
         while m != 0 {
             let c = m.trailing_zeros() as usize;
             m &= m - 1;
-            let foot = combined[c];
+            let foot = key_foot(key, c);
             if foot != Foot::None {
                 pos[foot_idx(foot)] = c as i8;
             }
@@ -2862,13 +2855,14 @@ fn calculate_tech_counts(
     };
 
     let mut prev_prev_pos = [INVALID_COLUMN; NUM_FEET];
-    let mut prev_pos = hit_positions(&placements[0], &rows[0]);
+    let mut prev_key = keys[0];
+    let mut prev_pos = hit_positions(prev_key, &rows[0]);
 
     for i in 1..rows.len() {
         let (curr, prev) = (&rows[i], &rows[i - 1]);
-        let (curr_combined, prev_combined) = (&placements[i], &placements[i - 1]);
+        let curr_key = keys[i];
 
-        let curr_pos = hit_positions(curr_combined, curr);
+        let curr_pos = hit_positions(curr_key, curr);
 
         // Per-row tech is computed by the shared classifier so the aggregate
         // counts here and the per-row annotation flags never drift.
@@ -2876,8 +2870,8 @@ fn calculate_tech_counts(
             layout,
             curr,
             prev,
-            curr_combined,
-            prev_combined,
+            curr_key,
+            prev_key,
             &curr_pos,
             &prev_pos,
             &prev_prev_pos,
@@ -2887,6 +2881,7 @@ fn calculate_tech_counts(
 
         prev_prev_pos = prev_pos;
         prev_pos = curr_pos;
+        prev_key = curr_key;
     }
     out
 }
@@ -2902,8 +2897,8 @@ fn classify_row_tech(
     layout: &StageLayout,
     curr: &Row,
     prev: &Row,
-    curr_combined: &FootPlacement,
-    prev_combined: &FootPlacement,
+    curr_key: u32,
+    prev_key: u32,
     curr_pos: &[i8; NUM_FEET],
     prev_pos: &[i8; NUM_FEET],
     prev_prev_pos: &[i8; NUM_FEET],
@@ -2916,7 +2911,7 @@ fn classify_row_tech(
     if curr.note_count == 1 && prev.note_count == 1 {
         if layout.cols == 4 {
             let cc = curr.tech_mask.trailing_zeros() as i8;
-            let foot = curr_combined[cc as usize];
+            let foot = key_foot(curr_key, cc as usize);
             if foot != Foot::None {
                 let pc = prev_pos[foot_idx(foot)];
                 if cc == pc && elapsed < JACK_CUTOFF {
@@ -2957,7 +2952,7 @@ fn classify_row_tech(
         while mask != 0 {
             let c = mask.trailing_zeros() as usize;
             mask &= mask - 1;
-            if is_footswitch(prev_combined[c], curr_combined[c]) {
+            if is_footswitch(key_foot(prev_key, c), key_foot(curr_key, c)) {
                 out.up_footswitches += 1;
                 out.footswitches += 1;
             }
@@ -2966,7 +2961,7 @@ fn classify_row_tech(
         while mask != 0 {
             let c = mask.trailing_zeros() as usize;
             mask &= mask - 1;
-            if is_footswitch(prev_combined[c], curr_combined[c]) {
+            if is_footswitch(key_foot(prev_key, c), key_foot(curr_key, c)) {
                 out.down_footswitches += 1;
                 out.footswitches += 1;
             }
@@ -2975,7 +2970,7 @@ fn classify_row_tech(
         while mask != 0 {
             let c = mask.trailing_zeros() as usize;
             mask &= mask - 1;
-            if is_footswitch(prev_combined[c], curr_combined[c]) {
+            if is_footswitch(key_foot(prev_key, c), key_foot(curr_key, c)) {
                 out.sideswitches += 1;
             }
         }
@@ -3119,13 +3114,13 @@ impl RowAnnotation {
 
 fn collect_annotations_in(
     rows: &[Row],
-    placements: &[FootPlacement],
+    keys: &[u32],
     layout: &StageLayout,
     out: &mut Vec<RowAnnotation>,
 ) -> TechCounts {
     let n = rows.len();
     out.clear();
-    if n == 0 || placements.len() != n {
+    if n == 0 || keys.len() != n {
         return TechCounts::default();
     }
     out.reserve(n);
@@ -3135,13 +3130,13 @@ fn collect_annotations_in(
     let col_mask = u8::MAX >> (MAX_COLUMNS - cols);
     debug_assert!(rows.iter().all(|row| row.tech_mask & !col_mask == 0));
 
-    let hit_positions = |combined: &FootPlacement, row: &Row| -> [i8; NUM_FEET] {
+    let hit_positions = |key: u32, row: &Row| -> [i8; NUM_FEET] {
         let mut pos = [INVALID_COLUMN; NUM_FEET];
         let mut m = row.tech_mask;
         if cols == 4 && row.note_count == 1 {
             debug_assert!(m.is_power_of_two());
             let c = m.trailing_zeros() as usize;
-            let foot = combined[c];
+            let foot = key_foot(key, c);
             if foot != Foot::None {
                 pos[foot_idx(foot)] = c as i8;
             }
@@ -3150,7 +3145,7 @@ fn collect_annotations_in(
         while m != 0 {
             let c = m.trailing_zeros() as usize;
             m &= m - 1;
-            let foot = combined[c];
+            let foot = key_foot(key, c);
             if foot != Foot::None {
                 pos[foot_idx(foot)] = c as i8;
             }
@@ -3159,40 +3154,41 @@ fn collect_annotations_in(
     };
 
     // Foot assigned to each foot-bearing column (`Foot::None` elsewhere).
-    let feet_of = |combined: &FootPlacement, mask: u8| -> [Foot; MAX_COLUMNS] {
+    let feet_of = |key: u32, mask: u8| -> [Foot; MAX_COLUMNS] {
         let mut feet = [Foot::None; MAX_COLUMNS];
         let mut m = mask;
         while m != 0 {
             let c = m.trailing_zeros() as usize;
             m &= m - 1;
-            feet[c] = combined[c];
+            feet[c] = key_foot(key, c);
         }
         feet
     };
 
+    let mut prev_key = keys[0];
     out.push(RowAnnotation {
         beat: rows[0].beat,
         second: rows[0].second,
         column_mask: rows[0].tech_mask,
-        feet: feet_of(&placements[0], rows[0].tech_mask),
+        feet: feet_of(prev_key, rows[0].tech_mask),
         row_tech: TechCounts::default(),
     });
 
     let mut prev_prev_pos = [INVALID_COLUMN; NUM_FEET];
-    let mut prev_pos = hit_positions(&placements[0], &rows[0]);
+    let mut prev_pos = hit_positions(prev_key, &rows[0]);
 
     for i in 1..n {
         let (curr, prev) = (&rows[i], &rows[i - 1]);
-        let (curr_combined, prev_combined) = (&placements[i], &placements[i - 1]);
-        let curr_pos = hit_positions(curr_combined, curr);
+        let curr_key = keys[i];
+        let curr_pos = hit_positions(curr_key, curr);
 
         let mut tech = TechCounts::default();
         classify_row_tech(
             layout,
             curr,
             prev,
-            curr_combined,
-            prev_combined,
+            curr_key,
+            prev_key,
             &curr_pos,
             &prev_pos,
             &prev_prev_pos,
@@ -3205,12 +3201,13 @@ fn collect_annotations_in(
             beat: curr.beat,
             second: curr.second,
             column_mask: curr.tech_mask,
-            feet: feet_of(curr_combined, curr.tech_mask),
+            feet: feet_of(curr_key, curr.tech_mask),
             row_tech: tech,
         });
 
         prev_prev_pos = prev_pos;
         prev_pos = curr_pos;
+        prev_key = curr_key;
     }
 
     counts
@@ -3720,7 +3717,7 @@ where
     if !parity_analyze(&mut generator, notes, cols) {
         return TechCounts::default();
     }
-    calculate_tech_counts(&generator.rows, &generator.result_columns, generator.layout)
+    calculate_tech_counts(&generator.rows, &generator.result_keys, generator.layout)
 }
 
 #[must_use]
@@ -3849,7 +3846,7 @@ pub fn analyze_timing_rows_legacy_for_bench<const LANES: usize>(
     }
     calculate_tech_counts(
         &scratch.generator.rows,
-        &scratch.generator.result_columns,
+        &scratch.generator.result_keys,
         scratch.generator.layout,
     )
 }
@@ -3885,7 +3882,7 @@ pub fn analyze_timing_rows_known_holds<const LANES: usize>(
     }
     calculate_tech_counts(
         &scratch.generator.rows,
-        &scratch.generator.result_columns,
+        &scratch.generator.result_keys,
         scratch.generator.layout,
     )
 }
@@ -3965,7 +3962,7 @@ pub fn analyze_and_annotate_timing_rows_known_holds_in<const LANES: usize>(
     }
     collect_annotations_in(
         &scratch.generator.rows,
-        &scratch.generator.result_columns,
+        &scratch.generator.result_keys,
         scratch.generator.layout,
         out,
     )
@@ -4314,20 +4311,28 @@ mod tests {
             placement(&[(1, Foot::LeftHeel)]),
             placement(&[(0, Foot::LeftHeel), (1, Foot::LeftToe)]),
         ];
+        let keys = placements.map(|placement| {
+            placement
+                .iter()
+                .enumerate()
+                .fold(0u32, |key, (column, &foot)| {
+                    key | (foot as u32) << (column * 3)
+                })
+        });
         let layout = dance_single_layout();
 
-        let counts = calculate_tech_counts(&rows, &placements, &layout);
+        let counts = calculate_tech_counts(&rows, &keys, &layout);
         assert_eq!(counts.jacks, 1);
         assert_eq!(counts.doublesteps, 1);
         assert_eq!(counts.brackets, 1);
         assert_eq!(
-            calculate_tech_counts(&rows, &placements, &dance_double_layout()),
+            calculate_tech_counts(&rows, &keys, &dance_double_layout()),
             counts
         );
 
         let mut annotations = Vec::new();
         assert_eq!(
-            collect_annotations_in(&rows, &placements, &layout, &mut annotations),
+            collect_annotations_in(&rows, &keys, &layout, &mut annotations),
             counts
         );
         assert_eq!(annotations[1].row_tech.jacks, 1);
