@@ -2916,7 +2916,7 @@ fn classify_row_tech(
                 let pc = prev_pos[foot_idx(foot)];
                 if cc == pc && elapsed < JACK_CUTOFF {
                     out.jacks += 1;
-                } else if pc != INVALID_COLUMN && elapsed < DOUBLESTEP_CUTOFF {
+                } else if cc != pc && pc != INVALID_COLUMN && elapsed < DOUBLESTEP_CUTOFF {
                     out.doublesteps += 1;
                 }
             }
@@ -4303,11 +4303,13 @@ mod tests {
             row(0.0, 0b0001),
             row(0.1, 0b0001),
             row(0.3, 0b0010),
+            row(0.5, 0b0010),
             row(1.0, 0b0011),
         ];
         let placements = [
             placement(&[(0, Foot::LeftHeel)]),
             placement(&[(0, Foot::LeftHeel)]),
+            placement(&[(1, Foot::LeftHeel)]),
             placement(&[(1, Foot::LeftHeel)]),
             placement(&[(0, Foot::LeftHeel), (1, Foot::LeftToe)]),
         ];
@@ -4337,7 +4339,8 @@ mod tests {
         );
         assert_eq!(annotations[1].row_tech.jacks, 1);
         assert_eq!(annotations[2].row_tech.doublesteps, 1);
-        assert_eq!(annotations[3].row_tech.brackets, 1);
+        assert_eq!(annotations[3].row_tech, TechCounts::default());
+        assert_eq!(annotations[4].row_tech.brackets, 1);
     }
 
     #[test]
