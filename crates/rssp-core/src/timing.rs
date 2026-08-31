@@ -197,7 +197,7 @@ fn parse_f64_fast(s: &str) -> Option<f64> {
 }
 
 // --- Unified parsing ---
-fn parse_segments(s: &str) -> Vec<Segment> {
+fn parse_segments_impl<const LEGACY_COUNT: bool>(s: &str) -> Vec<Segment> {
     const ESTIMATED_COMPONENT_BYTES: usize = 9;
     const LARGE_MAP_BYTES: usize = 32 * 1_024;
     const MAX_INITIAL_COMPONENTS: usize = 4_096;
@@ -209,8 +209,10 @@ fn parse_segments(s: &str) -> Vec<Segment> {
         s.len()
             .div_ceil(ESTIMATED_COMPONENT_BYTES)
             .min(MAX_INITIAL_COMPONENTS)
-    } else {
+    } else if LEGACY_COUNT {
         s.bytes().filter(|&byte| byte == b',').count() + 1
+    } else {
+        crate::stats::count_byte(s.as_bytes(), b',') + 1
     };
     let mut segments = Vec::with_capacity(capacity);
     for part in s.trim().split(',') {
@@ -231,6 +233,20 @@ fn parse_segments(s: &str) -> Vec<Segment> {
         }
     }
     segments
+}
+
+fn parse_segments(s: &str) -> Vec<Segment> {
+    parse_segments_impl::<false>(s)
+}
+
+#[cfg(any(test, feature = "bench-support"))]
+#[doc(hidden)]
+pub fn parse_segments_for_bench(s: &str, legacy_count: bool) -> Vec<Segment> {
+    if legacy_count {
+        parse_segments_impl::<true>(s)
+    } else {
+        parse_segments_impl::<false>(s)
+    }
 }
 
 fn parse_segments_positive(s: &str) -> Vec<Segment> {
@@ -2340,6 +2356,37 @@ mod tests {
         assert_eq!(
             (segments[4_095].beat, segments[4_095].value),
             (16_380.0, 255.0)
+        );
+    }
+
+    #[test]
+    fn chunked_segment_capacity_scan_matches_scalar_path() {
+        use std::fmt::Write;
+
+        let cases = [
+            "",
+            ",",
+            "0=.5",
+            " ,0=1,missing,4=2,=3,8=nope,96r=-0.5,12=NaN,16=inf, ",
+        ];
+        for map in cases {
+            assert_segment_bits_eq(
+                &parse_segments_for_bench(map, false),
+                &parse_segments_for_bench(map, true),
+            );
+        }
+
+        let mut map = String::with_capacity(32 * 1_024);
+        for idx in 0..3_840 {
+            if idx != 0 {
+                map.push(',');
+            }
+            write!(&mut map, "{}=.5", idx * 4).expect("writing to a String cannot fail");
+        }
+        assert!(map.len() < 32 * 1_024);
+        assert_segment_bits_eq(
+            &parse_segments_for_bench(&map, false),
+            &parse_segments_for_bench(&map, true),
         );
     }
 

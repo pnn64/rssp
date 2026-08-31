@@ -81,6 +81,9 @@ mod timing_borrow_bench;
 #[path = "support/timing_merge.rs"]
 mod timing_merge_bench;
 #[cfg(windows)]
+#[path = "support/timing_segments.rs"]
+mod timing_segments_bench;
+#[cfg(windows)]
 #[path = "support/timing_sort.rs"]
 mod timing_sort_bench;
 #[cfg(windows)]
@@ -569,6 +572,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     timing_borrow_bench::assert_behavior(&timing_maps);
     let timing_sort_fixture = timing_sort_bench::fixture();
     timing_sort_bench::assert_behavior(&timing_sort_fixture);
+    let timing_segments_fixture = timing_segments_bench::fixture();
+    timing_segments_bench::assert_behavior(&timing_segments_fixture);
     let legacy_metadata = cp1252_metadata(ENTRIES);
     let (valid_tech, valid_description) = tech_prefix_bench::valid_input();
     let invalid_tech = tech_prefix_bench::invalid_input();
@@ -624,6 +629,28 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     parsing.finish();
+
+    let mut segment_parse = c.benchmark_group("cycles/timing_segments_3840");
+    segment_parse.throughput(Throughput::Bytes(timing_segments_fixture.len() as u64));
+    segment_parse.sample_size(100);
+    segment_parse.measurement_time(Duration::from_secs(3));
+    segment_parse.bench_function("scalar_capacity_scan", |b| {
+        b.iter(|| {
+            black_box(timing_segments_bench::parse(
+                black_box(&timing_segments_fixture),
+                true,
+            ));
+        });
+    });
+    segment_parse.bench_function("chunked_capacity_scan", |b| {
+        b.iter(|| {
+            black_box(timing_segments_bench::parse(
+                black_box(&timing_segments_fixture),
+                false,
+            ));
+        });
+    });
+    segment_parse.finish();
 
     let mut parse_dispatch = c.benchmark_group("cycles/parse_dispatch_128_charts");
     parse_dispatch.throughput(Throughput::Bytes(parse_dispatch_fixture.len() as u64));

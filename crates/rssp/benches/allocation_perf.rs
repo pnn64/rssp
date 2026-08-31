@@ -53,6 +53,8 @@ mod text_report_bench;
 mod timing_borrow_bench;
 #[path = "support/timing_merge.rs"]
 mod timing_merge_bench;
+#[path = "support/timing_segments.rs"]
+mod timing_segments_bench;
 #[path = "support/timing_sort.rs"]
 mod timing_sort_bench;
 #[path = "support/translate.rs"]
@@ -3803,7 +3805,51 @@ fn timing_build_checksum(timing: &rssp::timing::TimingData) -> u64 {
     checksum
 }
 
+fn run_segment_parse_phase(map: &str, phase: &str, iterations: usize, legacy: bool) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0u64;
+    for _ in 0..iterations {
+        let output = timing_segments_bench::parse(black_box(map), legacy);
+        checksum = checksum
+            .wrapping_add(output.len() as u64)
+            .wrapping_add(output.last().map_or(0, |segment| segment.beat.to_bits()));
+        black_box(output);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=timing-segments phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_mib_s={:.3} throughput_segments_s={:.3} ",
+            "alloc_calls_per_iter={:.1} dealloc_calls_per_iter={:.1} ",
+            "realloc_calls_per_iter={:.1} alloc_bytes_per_iter={:.1} ",
+            "realloc_bytes_per_iter={:.1} live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        map.len() as f64 * divisor / elapsed.as_secs_f64() / (1024.0 * 1024.0),
+        timing_segments_bench::ENTRY_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
 fn run_timing_build_alloc(iterations: usize) {
+    let segment_map = timing_segments_bench::fixture();
+    timing_segments_bench::assert_behavior(&segment_map);
+    run_segment_parse_phase(&segment_map, "scalar-capacity-scan", iterations, true);
+    run_segment_parse_phase(&segment_map, "chunked-capacity-scan", iterations, false);
+
     let (bpms, stops, speeds) = timing_build_fixture();
     let build = || {
         rssp::timing::timing_data_from_chart_data(
