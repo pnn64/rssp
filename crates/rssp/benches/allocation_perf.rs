@@ -939,6 +939,63 @@ fn run_perm_build_alloc(lanes: usize, iterations: usize) {
     );
 }
 
+fn run_wide_hold_alloc<const LANES: usize>(
+    mode: &str,
+    rows: &[[u8; LANES]],
+    beats: &[f32],
+    timing: &rssp::timing::TimingData,
+    iterations: usize,
+) -> rssp::TechCounts {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut scratch = rssp::step_parity::wide_hold_timing_rows_scratch::<LANES>()
+        .expect("supported parity layout");
+    let counts = black_box(rssp::step_parity::analyze_timing_rows_wide_holds_for_bench(
+        black_box(rows),
+        black_box(beats),
+        black_box(timing),
+        true,
+        black_box(&mut scratch),
+    ));
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    print_parity_alloc(
+        mode,
+        "hold-heads-wide-cold",
+        1,
+        rows.len(),
+        elapsed,
+        before,
+        after,
+    );
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    for _ in 0..iterations {
+        black_box(rssp::step_parity::analyze_timing_rows_wide_holds_for_bench(
+            black_box(rows),
+            black_box(beats),
+            black_box(timing),
+            true,
+            black_box(&mut scratch),
+        ));
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    print_parity_alloc(
+        mode,
+        "hold-heads-wide-reused",
+        iterations,
+        rows.len(),
+        elapsed,
+        before,
+        after,
+    );
+    counts
+}
+
 fn run_parity_alloc<const LANES: usize>(
     mode: &str,
     row_count: usize,
@@ -998,18 +1055,24 @@ fn run_parity_alloc<const LANES: usize>(
         after,
     );
 
+    let wide_counts =
+        has_holds.then(|| run_wide_hold_alloc(mode, &rows, &beats, &timing, iterations));
+
     reset_counters();
     let before = Counters::read();
     let start = Instant::now();
     let mut scratch =
         rssp::step_parity::timing_rows_scratch::<LANES>().expect("supported parity layout");
-    black_box(rssp::step_parity::analyze_timing_rows_known_holds(
+    let compact_counts = black_box(rssp::step_parity::analyze_timing_rows_known_holds(
         black_box(&rows),
         black_box(&beats),
         black_box(&timing),
         has_holds,
         black_box(&mut scratch),
     ));
+    if let Some(wide_counts) = wide_counts {
+        assert_eq!(compact_counts, wide_counts);
+    }
     let elapsed = start.elapsed();
     let after = Counters::read();
     print_parity_alloc(mode, "compact-cold", 1, row_count, elapsed, before, after);

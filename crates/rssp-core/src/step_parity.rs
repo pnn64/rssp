@@ -1566,18 +1566,19 @@ fn row_nonzero_mask<const LANES: usize>(row: &[u8; LANES], cols: usize) -> u8 {
     mask
 }
 
-fn fill_hold_heads_from_arrays<const LANES: usize>(
+fn fill_hold_heads_from_arrays<const LANES: usize, const HOLD_COLS: usize>(
     rows: &[[u8; LANES]],
     row_to_beat: &[f32],
     cols: usize,
-    out: &mut Vec<[f32; MAX_COLUMNS]>,
+    out: &mut Vec<[f32; HOLD_COLS]>,
 ) {
     out.clear();
     if cols == 0 || cols > 8 {
         return;
     }
     let copy_len = cols.min(LANES);
-    out.resize(rows.len(), [HOLD_END_NONE; MAX_COLUMNS]);
+    debug_assert!(copy_len <= HOLD_COLS);
+    out.resize(rows.len(), [HOLD_END_NONE; HOLD_COLS]);
     let mut hold_start_idx = [usize::MAX; MAX_COLUMNS];
     let mut hold_start_row = [0i32; MAX_COLUMNS];
     let mut hold_start_beat = [0.0f32; MAX_COLUMNS];
@@ -1691,9 +1692,9 @@ fn parity_push_note(
     }
 }
 
-fn parity_create_rows_from_arrays<const LANES: usize>(
+fn parity_create_rows_from_arrays<const LANES: usize, const HOLD_COLS: usize>(
     g: &mut StepParityGenerator,
-    hold_heads: &mut Vec<[f32; MAX_COLUMNS]>,
+    hold_heads: &mut Vec<[f32; HOLD_COLS]>,
     rows: &[[u8; LANES]],
     row_to_beat: &[f32],
     timing: &TimingData,
@@ -1716,9 +1717,23 @@ fn parity_create_rows_from_arrays<const LANES: usize>(
     }
 
     if timing_fakes(timing).is_empty() {
-        parity_create_rows_holds::<LANES, false>(g, hold_heads, rows, row_to_beat, timing, cols);
+        parity_create_rows_holds::<LANES, HOLD_COLS, false>(
+            g,
+            hold_heads,
+            rows,
+            row_to_beat,
+            timing,
+            cols,
+        );
     } else {
-        parity_create_rows_holds::<LANES, true>(g, hold_heads, rows, row_to_beat, timing, cols);
+        parity_create_rows_holds::<LANES, HOLD_COLS, true>(
+            g,
+            hold_heads,
+            rows,
+            row_to_beat,
+            timing,
+            cols,
+        );
     }
 }
 
@@ -1766,9 +1781,9 @@ fn parity_create_tap_rows_fixed<const LANES: usize>(
     true
 }
 
-fn parity_create_rows_holds<const LANES: usize, const HAS_FAKES: bool>(
+fn parity_create_rows_holds<const LANES: usize, const HOLD_COLS: usize, const HAS_FAKES: bool>(
     g: &mut StepParityGenerator,
-    hold_heads: &mut Vec<[f32; MAX_COLUMNS]>,
+    hold_heads: &mut Vec<[f32; HOLD_COLS]>,
     rows: &[[u8; LANES]],
     row_to_beat: &[f32],
     timing: &TimingData,
@@ -1886,9 +1901,9 @@ fn rows_have_holds<const LANES: usize>(rows: &[[u8; LANES]], cols: usize) -> boo
     })
 }
 
-fn parity_analyze_rows<const LANES: usize>(
+fn parity_analyze_rows<const LANES: usize, const HOLD_COLS: usize>(
     g: &mut StepParityGenerator,
-    hold_heads: &mut Vec<[f32; MAX_COLUMNS]>,
+    hold_heads: &mut Vec<[f32; HOLD_COLS]>,
     rows: &[[u8; LANES]],
     row_to_beat: &[f32],
     timing: &TimingData,
@@ -4038,6 +4053,13 @@ pub fn analyze_timing_lanes(
 
 pub struct TimingRowsScratch<const LANES: usize> {
     generator: StepParityGenerator,
+    hold_heads: Vec<[f32; LANES]>,
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub struct WideHoldTimingRowsScratch<const LANES: usize> {
+    generator: StepParityGenerator,
     hold_heads: Vec<[f32; MAX_COLUMNS]>,
 }
 
@@ -4052,6 +4074,17 @@ pub struct LegacyTimingRowsScratch<const LANES: usize> {
 pub fn timing_rows_scratch<const LANES: usize>() -> Option<TimingRowsScratch<LANES>> {
     let cache = layout_for_lanes(LANES)?;
     Some(TimingRowsScratch {
+        generator: parity_gen(cache),
+        hold_heads: Vec::new(),
+    })
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn wide_hold_timing_rows_scratch<const LANES: usize>()
+-> Option<WideHoldTimingRowsScratch<LANES>> {
+    let cache = layout_for_lanes(LANES)?;
+    Some(WideHoldTimingRowsScratch {
         generator: parity_gen(cache),
         hold_heads: Vec::new(),
     })
@@ -4090,6 +4123,35 @@ pub fn analyze_timing_rows_legacy_for_bench<const LANES: usize>(
         has_holds,
     );
     if !legacy_finish(&mut scratch.generator, &mut scratch.dp) {
+        return TechCounts::default();
+    }
+    calculate_tech_counts(
+        &scratch.generator.rows,
+        &scratch.generator.result_keys,
+        scratch.generator.layout,
+    )
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn analyze_timing_rows_wide_holds_for_bench<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    has_holds: bool,
+    scratch: &mut WideHoldTimingRowsScratch<LANES>,
+) -> TechCounts {
+    let cols = layout_cols(scratch.generator.layout);
+    if !parity_analyze_rows(
+        &mut scratch.generator,
+        &mut scratch.hold_heads,
+        rows,
+        row_to_beat,
+        timing,
+        cols,
+        has_holds,
+    ) {
         return TechCounts::default();
     }
     calculate_tech_counts(
@@ -4489,6 +4551,27 @@ mod tests {
         assert_eq!(
             analyze_timing_rows_known_holds(&rows, &beats, &timing, false, &mut compact),
             analyze_timing_rows_legacy_for_bench(&rows, &beats, &timing, false, &mut legacy),
+        );
+    }
+
+    #[cfg(feature = "bench-support")]
+    #[test]
+    fn lane_sized_hold_storage_matches_wide() {
+        let rows = [
+            [b'2', b'0', b'2', b'0'],
+            [b'0', b'1', b'0', b'0'],
+            [b'3', b'0', b'0', b'1'],
+            [b'0', b'2', b'3', b'0'],
+            [b'1', b'3', b'0', b'0'],
+        ];
+        let beats = [0.0, 0.25, 0.5, 0.75, 1.0];
+        let timing = basic_timing();
+        let mut narrow = timing_rows_scratch::<4>().expect("dance-single layout");
+        let mut wide = wide_hold_timing_rows_scratch::<4>().expect("dance-single layout");
+
+        assert_eq!(
+            analyze_timing_rows_known_holds(&rows, &beats, &timing, true, &mut narrow),
+            analyze_timing_rows_wide_holds_for_bench(&rows, &beats, &timing, true, &mut wide),
         );
     }
 

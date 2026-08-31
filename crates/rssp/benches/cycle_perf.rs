@@ -3442,6 +3442,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     );
     let mut single_scratch =
         rssp::step_parity::timing_rows_scratch::<4>().expect("dance-single parity layout");
+    let mut wide_hold_scratch = rssp::step_parity::wide_hold_timing_rows_scratch::<4>()
+        .expect("dance-single parity layout");
     let mut legacy_tap_scratch =
         rssp::step_parity::timing_rows_scratch::<4>().expect("dance-single parity layout");
     let mut current_tap_scratch =
@@ -3501,6 +3503,22 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         &mut folded_hash_scratch,
     );
     assert_eq!(folded_hash_counts, legacy_hash_counts);
+    assert_eq!(
+        rssp::step_parity::analyze_timing_rows_wide_holds_for_bench(
+            &single_hold_rows,
+            &single_beats,
+            &parity_timing,
+            true,
+            &mut wide_hold_scratch,
+        ),
+        rssp::step_parity::analyze_timing_rows_known_holds(
+            &single_hold_rows,
+            &single_beats,
+            &parity_timing,
+            true,
+            &mut single_scratch,
+        ),
+    );
     if std::env::args().any(|arg| arg.contains("dense_single_holds_hash")) {
         print_hash_pairs(
             &single_hold_rows,
@@ -3611,6 +3629,17 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
                 black_box(&parity_timing),
                 true,
                 black_box(&mut legacy_single),
+            ));
+        });
+    });
+    parity.bench_function("dense_single_holds_wide_storage", |b| {
+        b.iter(|| {
+            black_box(rssp::step_parity::analyze_timing_rows_wide_holds_for_bench(
+                black_box(&single_hold_rows),
+                black_box(&single_beats),
+                black_box(&parity_timing),
+                true,
+                black_box(&mut wide_hold_scratch),
             ));
         });
     });
