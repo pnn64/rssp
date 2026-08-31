@@ -378,7 +378,8 @@ fn scan_hold_ends<const L: usize>(rows: &[[u8; L]]) -> Vec<[usize; L]> {
     track_holds_core::<L>(rows.iter().map(<[u8; L]>::as_slice), rows.len())
 }
 
-fn match_hold_ends<const L: usize>(rows: &[[u8; L]]) -> Vec<[Option<usize>; L]> {
+#[cfg(any(test, feature = "bench-support"))]
+fn match_hold_ends_legacy<const L: usize>(rows: &[[u8; L]]) -> Vec<[Option<usize>; L]> {
     scan_hold_ends(rows)
         .into_iter()
         .map(|r| r.map(|e| (e != HOLD_END_NONE).then_some(e)))
@@ -696,7 +697,23 @@ fn count_tap_mask<const L: usize>(
     }
 }
 
-fn recalc_without_phantoms<const L: usize>(
+fn recalc_without_phantoms<const L: usize>(rows: &[[u8; L]], ends: &[[usize; L]]) -> ArrowStats {
+    let mut stats = ArrowStats::default();
+    for (i, line) in rows.iter().enumerate() {
+        let phantom_mask = ends[i].iter().enumerate().fold(0u16, |m, (c, &e)| {
+            if e == HOLD_END_NONE {
+                m | (1u16 << c)
+            } else {
+                m
+            }
+        });
+        count_line_masked(line, &mut stats, phantom_mask);
+    }
+    stats
+}
+
+#[cfg(any(test, feature = "bench-support"))]
+fn recalc_without_phantoms_legacy<const L: usize>(
     rows: &[[u8; L]],
     ends: &[[Option<usize>; L]],
 ) -> ArrowStats {
@@ -712,6 +729,14 @@ fn recalc_without_phantoms<const L: usize>(
         count_line_masked(line, &mut stats, phantom_mask);
     }
     stats
+}
+
+fn recalc_phantom_stats<const L: usize, const LEGACY: bool>(rows: &[[u8; L]]) -> ArrowStats {
+    #[cfg(any(test, feature = "bench-support"))]
+    if LEGACY {
+        return recalc_without_phantoms_legacy(rows, &match_hold_ends_legacy(rows));
+    }
+    recalc_without_phantoms(rows, &scan_hold_ends(rows))
 }
 
 #[inline(always)]
@@ -1025,9 +1050,8 @@ where
     // Fix phantom holds
     if holds > 0 && (holds != ends || has_phantom) {
         let rows = parse_minimized_rows::<L>(&output);
-        let hold_ends = match_hold_ends(&rows);
         let step_count = stats.total_steps;
-        stats = recalc_without_phantoms(&rows, &hold_ends);
+        stats = recalc_phantom_stats::<L, false>(&rows);
         stats.total_steps = step_count;
     }
 
@@ -1062,6 +1086,21 @@ pub fn minimize_chart_count_rows(
         8 => minimize_rows_direct::<8, true>(data),
         10 => minimize_rows_direct::<10, true>(data),
         _ => minimize_rows_direct::<4, true>(data),
+    }
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn minimize_chart_count_rows_hold_ends_for_bench(
+    data: &[u8],
+    lanes: usize,
+    legacy_options: bool,
+) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
+    if legacy_options {
+        dispatch_lanes!(lanes, minimize_rows_direct_legacy_hold_ends(data))
+    } else {
+        minimize_chart_count_rows(data, lanes)
     }
 }
 
@@ -1137,7 +1176,7 @@ fn minimize_rows_direct<const L: usize, const BEATS: bool>(
     data: &[u8],
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
     let mut chart_notes = ChartNotesScratch::default();
-    minimize_rows_direct_impl::<L, BEATS, false>(data, &mut chart_notes)
+    minimize_rows_direct_impl::<L, BEATS, false, false>(data, &mut chart_notes)
 }
 
 fn minimize_rows_direct_notes<const L: usize, const BEATS: bool>(
@@ -1145,10 +1184,23 @@ fn minimize_rows_direct_notes<const L: usize, const BEATS: bool>(
     chart_notes: &mut ChartNotesScratch,
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
     chart_notes.begin(L, data.len() / (L + 1));
-    minimize_rows_direct_impl::<L, BEATS, true>(data, chart_notes)
+    minimize_rows_direct_impl::<L, BEATS, true, false>(data, chart_notes)
 }
 
-fn minimize_rows_direct_impl<const L: usize, const BEATS: bool, const NOTES: bool>(
+#[cfg(feature = "bench-support")]
+fn minimize_rows_direct_legacy_hold_ends<const L: usize>(
+    data: &[u8],
+) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
+    let mut chart_notes = ChartNotesScratch::default();
+    minimize_rows_direct_impl::<L, true, false, true>(data, &mut chart_notes)
+}
+
+fn minimize_rows_direct_impl<
+    const L: usize,
+    const BEATS: bool,
+    const NOTES: bool,
+    const LEGACY_HOLD_ENDS: bool,
+>(
     data: &[u8],
     chart_notes: &mut ChartNotesScratch,
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
@@ -1251,9 +1303,8 @@ fn minimize_rows_direct_impl<const L: usize, const BEATS: bool, const NOTES: boo
     has_phantom |= phantom_depths.iter().any(|&depth| depth != 0);
     if holds > 0 && (holds != ends || has_phantom) {
         let rows = parse_minimized_rows::<L>(&output);
-        let hold_ends = match_hold_ends(&rows);
         let step_count = stats.total_steps;
-        stats = recalc_without_phantoms(&rows, &hold_ends);
+        stats = recalc_phantom_stats::<L, LEGACY_HOLD_ENDS>(&rows);
         stats.total_steps = step_count;
     }
 
@@ -2510,6 +2561,14 @@ mod tests {
         assert_eq!(scratch.row_capacity(), capacity);
     }
 
+    fn assert_sentinel_hold_ends_match_options<const L: usize>(data: &[u8]) {
+        let expected = {
+            let mut scratch = ChartNotesScratch::default();
+            minimize_rows_direct_impl::<L, true, false, true>(data, &mut scratch)
+        };
+        assert_eq!(minimize_chart_count_rows(data, L), expected);
+    }
+
     #[test]
     fn in_place_typed_rows_match_owned_and_reuse_capacity() {
         assert_typed_in_matches_owned::<4>(&generated_chart::<4>());
@@ -2524,6 +2583,15 @@ mod tests {
         assert_direct_matches_typed::<10>(&generated_chart::<10>());
         assert_direct_matches_typed::<4>(b"\n,\n;\n");
         assert_direct_matches_typed::<4>(b" // comment\n 1000 trailing\n0000\r\n");
+    }
+
+    #[test]
+    fn sentinel_hold_ends_match_option_table() {
+        assert_sentinel_hold_ends_match_options::<4>(&generated_chart::<4>());
+        assert_sentinel_hold_ends_match_options::<5>(&generated_chart::<5>());
+        assert_sentinel_hold_ends_match_options::<8>(&generated_chart::<8>());
+        assert_sentinel_hold_ends_match_options::<10>(&generated_chart::<10>());
+        assert_sentinel_hold_ends_match_options::<4>(b"2000\n0200\n1000\n0030\n0040\n0001\n;");
     }
 
     #[test]
@@ -2648,7 +2716,7 @@ mod tests {
     fn phantom_recalc_supports_pump_double_lanes() {
         let mut row = [b'0'; 10];
         row[9] = b'1';
-        let stats = recalc_without_phantoms(&[row], &[[None; 10]]);
+        let stats = recalc_without_phantoms(&[row], &[[HOLD_END_NONE; 10]]);
 
         assert_eq!(stats.total_arrows, 1);
         assert_eq!(stats.total_steps, 1);

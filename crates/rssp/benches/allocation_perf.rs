@@ -3038,6 +3038,7 @@ fn run_minimize_alloc(iterations: usize, corpus: &[SimInput]) {
     });
     run_typed_rows_alloc(iterations, &inputs);
     run_invalid_notes_alloc(iterations);
+    run_phantom_hold_ends_alloc(iterations);
 }
 
 fn invalid_notes_checksum(
@@ -3069,16 +3070,10 @@ fn invalid_notes_checksum(
 }
 
 fn run_invalid_notes_alloc(iterations: usize) {
-    let mut raw = Vec::with_capacity(4096 * 5 + 1);
-    for row in 0usize..4096 {
-        raw.extend_from_slice(if row.is_multiple_of(2) {
-            b"2000\n"
-        } else {
-            b"1000\n"
-        });
-    }
-    raw.push(b';');
-    let input = MinimizeInput { lanes: 4, raw };
+    let input = MinimizeInput {
+        lanes: 4,
+        raw: phantom_hold_rows(),
+    };
     let base_live_bytes = LIVE_BYTES.load(Ordering::Relaxed);
 
     for (phase, legacy) in [
@@ -3108,6 +3103,52 @@ fn run_invalid_notes_alloc(iterations: usize) {
         base_live_bytes,
         |data| invalid_notes_checksum(data, false, &mut marked),
     );
+}
+
+fn phantom_hold_rows() -> Vec<u8> {
+    let mut raw = Vec::with_capacity(4096 * 5 + 1);
+    for row in 0usize..4096 {
+        raw.extend_from_slice(if row.is_multiple_of(2) {
+            b"2000\n"
+        } else {
+            b"1000\n"
+        });
+    }
+    raw.push(b';');
+    raw
+}
+
+fn phantom_hold_ends_checksum(data: &[u8], legacy_options: bool) -> usize {
+    let (chart, stats, densities, beats, last) =
+        rssp::stats::minimize_chart_count_rows_hold_ends_for_bench(data, 4, legacy_options);
+    let checksum = chart
+        .len()
+        .wrapping_add(stats.total_arrows as usize)
+        .wrapping_add(densities.len())
+        .wrapping_add(beats.len())
+        .wrapping_add(last.to_bits() as usize);
+    black_box((chart, stats, densities, beats, last));
+    checksum
+}
+
+fn run_phantom_hold_ends_alloc(iterations: usize) {
+    let input = MinimizeInput {
+        lanes: 4,
+        raw: phantom_hold_rows(),
+    };
+    assert_eq!(
+        phantom_hold_ends_checksum(&input.raw, true),
+        phantom_hold_ends_checksum(&input.raw, false),
+    );
+    let base_live_bytes = LIVE_BYTES.load(Ordering::Relaxed);
+    for (phase, legacy_options) in [
+        ("phantom-hold-option-table", true),
+        ("phantom-hold-sentinel-table", false),
+    ] {
+        run_typed_rows_phase(phase, iterations, &input, base_live_bytes, |data| {
+            phantom_hold_ends_checksum(data, legacy_options)
+        });
+    }
 }
 
 fn run_typed_rows_phase(

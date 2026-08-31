@@ -281,6 +281,20 @@ fn invalid_chart_notes(
 }
 
 #[cfg(windows)]
+fn phantom_hold_ends(data: &[u8], legacy_options: bool) -> usize {
+    let (chart, stats, densities, beats, last) =
+        rssp::stats::minimize_chart_count_rows_hold_ends_for_bench(data, 4, legacy_options);
+    let checksum = chart
+        .len()
+        .wrapping_add(stats.total_arrows as usize)
+        .wrapping_add(densities.len())
+        .wrapping_add(beats.len())
+        .wrapping_add(last.to_bits() as usize);
+    black_box((chart, stats, densities, beats, last));
+    checksum
+}
+
+#[cfg(windows)]
 fn large_pair_map(entries: usize) -> String {
     use std::fmt::Write;
 
@@ -2033,6 +2047,32 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     invalid_notes.finish();
+
+    assert_eq!(
+        phantom_hold_ends(&invalid_note_rows, true),
+        phantom_hold_ends(&invalid_note_rows, false),
+    );
+    let mut phantom_ends = c.benchmark_group("cycles/phantom_hold_ends_4096");
+    phantom_ends.sample_size(50);
+    phantom_ends.measurement_time(Duration::from_secs(3));
+    phantom_ends.throughput(Throughput::Bytes(invalid_note_rows.len() as u64));
+    phantom_ends.bench_function("option_table", |b| {
+        b.iter(|| {
+            black_box(phantom_hold_ends(
+                black_box(&invalid_note_rows),
+                black_box(true),
+            ));
+        });
+    });
+    phantom_ends.bench_function("sentinel_table", |b| {
+        b.iter(|| {
+            black_box(phantom_hold_ends(
+                black_box(&invalid_note_rows),
+                black_box(false),
+            ));
+        });
+    });
+    phantom_ends.finish();
 
     nps_stats_bench::assert_behavior();
     let owned_nps = nps_stats_bench::values();
