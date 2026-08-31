@@ -283,8 +283,8 @@ fn parse_speeds(s: &str) -> Vec<SpeedSegment> {
 }
 
 // --- Row builders ---
-fn build_segment_rows(segments: &[Segment], require_positive: bool) -> Vec<i32> {
-    let mut rows = Vec::with_capacity(segments.len());
+fn append_segment_rows(rows: &mut Vec<i32>, segments: &[Segment], require_positive: bool) {
+    let start = rows.len();
     let mut ordered = true;
     let mut previous_row = i32::MIN;
     for segment in segments {
@@ -297,12 +297,79 @@ fn build_segment_rows(segments: &[Segment], require_positive: bool) -> Vec<i32> 
         rows.push(row);
     }
     if !ordered {
-        rows.sort_unstable();
+        rows[start..].sort_unstable();
     }
     if require_positive {
-        rows.dedup();
+        let mut write = start;
+        for read in start..rows.len() {
+            if write == start || rows[read] != rows[write - 1] {
+                rows[write] = rows[read];
+                write += 1;
+            }
+        }
+        rows.truncate(write);
     }
+}
+
+#[cfg(any(test, feature = "bench-support"))]
+fn build_segment_rows(segments: &[Segment], require_positive: bool) -> Vec<i32> {
+    let mut rows = Vec::with_capacity(segments.len());
+    append_segment_rows(&mut rows, segments, require_positive);
     rows
+}
+
+fn build_segment_row_storage(
+    stops: &[Segment],
+    delays: &[Segment],
+    warps: &[Segment],
+    fakes: &[Segment],
+) -> (Vec<i32>, [usize; 5]) {
+    let capacity = stops
+        .len()
+        .saturating_add(delays.len())
+        .saturating_add(warps.len())
+        .saturating_add(fakes.len());
+    let mut rows = Vec::with_capacity(capacity);
+    let mut offsets = [0usize; 5];
+    append_segment_rows(&mut rows, stops, true);
+    offsets[1] = rows.len();
+    append_segment_rows(&mut rows, delays, true);
+    offsets[2] = rows.len();
+    append_segment_rows(&mut rows, warps, false);
+    offsets[3] = rows.len();
+    append_segment_rows(&mut rows, fakes, false);
+    offsets[4] = rows.len();
+    (rows, offsets)
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub enum SegmentRowsForBench {
+    Split([Vec<i32>; 4]),
+    Packed { rows: Vec<i32>, offsets: [usize; 5] },
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn build_segment_rows_for_bench(
+    stops: &[Segment],
+    delays: &[Segment],
+    warps: &[Segment],
+    fakes: &[Segment],
+    packed: bool,
+) -> SegmentRowsForBench {
+    if packed {
+        let (rows, offsets) = build_segment_row_storage(stops, delays, warps, fakes);
+        SegmentRowsForBench::Packed { rows, offsets }
+    } else {
+        SegmentRowsForBench::Split([
+            build_segment_rows(stops, true),
+            build_segment_rows(delays, true),
+            build_segment_rows(warps, false),
+            build_segment_rows(fakes, false),
+        ])
+    }
 }
 
 #[inline]
@@ -1370,20 +1437,35 @@ enum TimingEvent {
 pub struct TimingData {
     beat_to_time: Vec<BeatTimePoint>,
     stops: Vec<Segment>,
-    stop_rows: Vec<i32>,
     delays: Vec<Segment>,
-    delay_rows: Vec<i32>,
     warps: Vec<Segment>,
-    warp_start_rows: Vec<i32>,
     speeds: Vec<SpeedSegment>,
     scrolls: Vec<Segment>,
     fakes: Vec<Segment>,
-    fake_start_rows: Vec<i32>,
+    segment_rows: Vec<i32>,
+    segment_row_offsets: [usize; 5],
     speed_runtime: Vec<SpeedRuntime>,
     scroll_prefix: Vec<ScrollPrefix>,
     beat0_offset_sec: f64,
     global_offset_sec: f64,
     max_bpm: f64,
+}
+
+#[repr(usize)]
+#[derive(Clone, Copy)]
+enum SegmentRowSet {
+    Stops,
+    Delays,
+    Warps,
+    Fakes,
+}
+
+impl TimingData {
+    #[inline(always)]
+    fn segment_rows(&self, set: SegmentRowSet) -> &[i32] {
+        let index = set as usize;
+        &self.segment_rows[self.segment_row_offsets[index]..self.segment_row_offsets[index + 1]]
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -1561,23 +1643,19 @@ fn timing_data_build(
         }
     }
 
-    let stop_rows = build_segment_rows(&stops, true);
-    let delay_rows = build_segment_rows(&delays, true);
-    let warp_start_rows = build_segment_rows(&warps, false);
-    let fake_start_rows = build_segment_rows(&fakes, false);
+    let (segment_rows, segment_row_offsets) =
+        build_segment_row_storage(&stops, &delays, &warps, &fakes);
 
     let mut timing = TimingData {
         beat_to_time,
         stops,
-        stop_rows,
         delays,
-        delay_rows,
         warps,
-        warp_start_rows,
         speeds,
         scrolls,
         fakes,
-        fake_start_rows,
+        segment_rows,
+        segment_row_offsets,
         speed_runtime: Vec::new(),
         scroll_prefix: Vec::new(),
         beat0_offset_sec: song_offset,
@@ -1690,13 +1768,17 @@ pub fn bpm_segments(t: &TimingData) -> Vec<(f64, f64)> {
 #[inline(always)]
 #[must_use]
 pub fn is_fake_at_beat(t: &TimingData, beat: f64) -> bool {
-    is_in_range_segment(&t.fakes, &t.fake_start_rows, beat)
+    is_in_range_segment(&t.fakes, t.segment_rows(SegmentRowSet::Fakes), beat)
 }
 
 #[inline(always)]
 #[must_use]
 pub fn is_fake_at_row(t: &TimingData, row: i32) -> bool {
-    is_in_range_segment(&t.fakes, &t.fake_start_rows, note_row_to_beat(row))
+    is_in_range_segment(
+        &t.fakes,
+        t.segment_rows(SegmentRowSet::Fakes),
+        note_row_to_beat(row),
+    )
 }
 
 #[inline(always)]
@@ -1708,7 +1790,7 @@ pub fn is_warp_at_beat(t: &TimingData, beat: f64) -> bool {
 #[inline(always)]
 #[must_use]
 pub fn is_warp_at_row(t: &TimingData, row: i32) -> bool {
-    let Some(idx) = segment_index_at_row(&t.warp_start_rows, row) else {
+    let Some(idx) = segment_index_at_row(t.segment_rows(SegmentRowSet::Warps), row) else {
         return false;
     };
     let seg = t.warps[idx];
@@ -1720,7 +1802,8 @@ pub fn is_warp_at_row(t: &TimingData, row: i32) -> bool {
     if !(seg_beat <= beat_row && beat_row < seg_beat + seg.value as f32) {
         return false;
     }
-    !(has_row(&t.stop_rows, row) || has_row(&t.delay_rows, row))
+    !(has_row(t.segment_rows(SegmentRowSet::Stops), row)
+        || has_row(t.segment_rows(SegmentRowSet::Delays), row))
 }
 
 fn is_in_range_segment(segs: &[Segment], rows: &[i32], beat: f64) -> bool {
@@ -1779,7 +1862,7 @@ impl<'a> FakeRowCursor<'a> {
     pub(crate) fn new(timing: &'a TimingData) -> Self {
         Self {
             timing,
-            segments: SegmentRowCursor::new(&timing.fake_start_rows),
+            segments: SegmentRowCursor::new(timing.segment_rows(SegmentRowSet::Fakes)),
         }
     }
 
@@ -1803,8 +1886,8 @@ impl<'a> JudgableRowCursor<'a> {
     pub(crate) fn new(timing: &'a TimingData) -> Self {
         Self {
             timing,
-            warps: SegmentRowCursor::new(&timing.warp_start_rows),
-            fakes: SegmentRowCursor::new(&timing.fake_start_rows),
+            warps: SegmentRowCursor::new(timing.segment_rows(SegmentRowSet::Warps)),
+            fakes: SegmentRowCursor::new(timing.segment_rows(SegmentRowSet::Fakes)),
         }
     }
 
@@ -1817,8 +1900,8 @@ impl<'a> JudgableRowCursor<'a> {
                 let seg_beat = seg.beat as f32;
                 if seg_beat <= beat_row
                     && beat_row < seg_beat + seg.value as f32
-                    && !(has_row(&self.timing.stop_rows, row)
-                        || has_row(&self.timing.delay_rows, row))
+                    && !(has_row(self.timing.segment_rows(SegmentRowSet::Stops), row)
+                        || has_row(self.timing.segment_rows(SegmentRowSet::Delays), row))
                 {
                     return false;
                 }
@@ -2811,6 +2894,30 @@ mod tests {
                     "{segments:?}, require_positive={require_positive}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn packed_segment_rows_match_independent_vectors() {
+        let segments = TimingSegments {
+            bpms: vec![(0.0, 120.0)],
+            stops: vec![(8.0, 0.5), (4.0, -1.0), (8.0, 0.25)],
+            delays: vec![(2.0, 0.125), (6.0, f32::NAN), (10.0, 0.25)],
+            warps: vec![(12.0, 4.0), (1.0, 2.0)],
+            fakes: vec![(16.0, 1.0), (3.0, 0.5)],
+            ..TimingSegments::default()
+        };
+        let timing = timing_data_from_segments(0.0, 0.0, &segments);
+        for (set, values, require_positive) in [
+            (SegmentRowSet::Stops, timing.stops.as_slice(), true),
+            (SegmentRowSet::Delays, timing.delays.as_slice(), true),
+            (SegmentRowSet::Warps, timing.warps.as_slice(), false),
+            (SegmentRowSet::Fakes, timing.fakes.as_slice(), false),
+        ] {
+            assert_eq!(
+                timing.segment_rows(set),
+                build_segment_rows_sorted(values, require_positive)
+            );
         }
     }
 

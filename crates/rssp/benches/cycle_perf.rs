@@ -84,6 +84,9 @@ mod timing_borrow_bench;
 #[path = "support/timing_merge.rs"]
 mod timing_merge_bench;
 #[cfg(windows)]
+#[path = "support/timing_rows.rs"]
+mod timing_rows_bench;
+#[cfg(windows)]
 #[path = "support/timing_segments.rs"]
 mod timing_segments_bench;
 #[cfg(windows)]
@@ -1189,6 +1192,27 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     timing_build.finish();
+
+    let timing_rows_fixture = timing_rows_bench::TimingRowsFixture::new();
+    timing_rows_bench::assert_behavior(&timing_rows_fixture);
+    let mut timing_rows = c.benchmark_group("cycles/timing_segment_rows_256");
+    timing_rows.throughput(Throughput::Elements(timing_rows_bench::INPUT_COUNT));
+    timing_rows.sample_size(100);
+    timing_rows.measurement_time(Duration::from_secs(3));
+    for (name, packed) in [("split", false), ("packed", true)] {
+        timing_rows.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(rssp::timing::build_segment_rows_for_bench(
+                    black_box(&timing_rows_fixture.stops),
+                    black_box(&timing_rows_fixture.delays),
+                    black_box(&timing_rows_fixture.warps),
+                    black_box(&timing_rows_fixture.fakes),
+                    packed,
+                ));
+            });
+        });
+    }
+    timing_rows.finish();
 
     sm_timing_bench::assert_behavior();
     let sm_timing_fixture = sm_timing_bench::SmTimingFixture::new();
