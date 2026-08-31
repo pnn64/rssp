@@ -515,10 +515,35 @@ pub fn get_nps_stats_in_place(nps: &mut [f64]) -> (f64, f64) {
 #[must_use]
 pub fn measure_equally_spaced(data: &[u8], lanes: usize) -> Vec<bool> {
     match lanes {
-        5 => equally_spaced_impl::<5>(data),
-        8 => equally_spaced_impl::<8>(data),
-        10 => equally_spaced_impl::<10>(data),
-        _ => equally_spaced_impl::<4>(data),
+        5 => equally_spaced_impl::<5, false>(data),
+        8 => equally_spaced_impl::<8, false>(data),
+        10 => equally_spaced_impl::<10, false>(data),
+        _ => equally_spaced_impl::<4, false>(data),
+    }
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn measure_equally_spaced_for_bench(
+    data: &[u8],
+    lanes: usize,
+    legacy_count: bool,
+) -> Vec<bool> {
+    macro_rules! measure {
+        ($lanes:literal) => {
+            if legacy_count {
+                equally_spaced_impl::<$lanes, true>(data)
+            } else {
+                equally_spaced_impl::<$lanes, false>(data)
+            }
+        };
+    }
+    match lanes {
+        5 => measure!(5),
+        8 => measure!(8),
+        10 => measure!(10),
+        _ => measure!(4),
     }
 }
 
@@ -527,8 +552,13 @@ const fn is_note(ch: u8) -> bool {
     matches!(ch, b'1' | b'2' | b'4')
 }
 
-fn equally_spaced_impl<const L: usize>(data: &[u8]) -> Vec<bool> {
-    let mut results = Vec::with_capacity(data.iter().filter(|&&byte| byte == b',').count() + 1);
+fn equally_spaced_impl<const L: usize, const LEGACY_COUNT: bool>(data: &[u8]) -> Vec<bool> {
+    let measure_count = if LEGACY_COUNT {
+        data.iter().filter(|&&byte| byte == b',').count() + 1
+    } else {
+        crate::stats::count_byte(data, b',') + 1
+    };
+    let mut results = Vec::with_capacity(measure_count);
     crate::stats::for_each_minimized_measure::<L, _>(data, |_, rows, _| {
         results.push(rows.iter().all(|row| row.iter().copied().any(is_note)));
     });
@@ -539,7 +569,7 @@ fn equally_spaced_impl<const L: usize>(data: &[u8]) -> Vec<bool> {
 mod tests {
     use super::{
         NPS_MEDIAN_SCAN_MIN, compute_measure_nps_vec_with_timing, compute_peak_nps_with_timing,
-        get_nps_stats, get_nps_stats_with_scratch, measure_equally_spaced,
+        equally_spaced_impl, get_nps_stats, get_nps_stats_with_scratch, measure_equally_spaced,
     };
     use crate::timing::{TimingFormat, compute_timing_segments, timing_data_from_segments};
 
@@ -568,6 +598,15 @@ mod tests {
         }
         results.push(notes == rows);
         results
+    }
+
+    #[test]
+    fn chunked_measure_count_matches_scalar_prepass() {
+        let data = b"1000\n0100\n0010\n0001\n,\n1100\n0000\n0011\n0000\n,comment\n;";
+        assert_eq!(
+            equally_spaced_impl::<4, false>(data),
+            equally_spaced_impl::<4, true>(data)
+        );
     }
 
     #[test]

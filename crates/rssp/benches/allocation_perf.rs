@@ -3037,6 +3037,7 @@ fn run_minimize_alloc(iterations: usize, corpus: &[SimInput]) {
         rssp::stats::minimize_chart_count_rows(data, lanes)
     });
     run_typed_rows_alloc(iterations, &inputs);
+    run_spacing_count_alloc(iterations);
     run_invalid_notes_alloc(iterations);
     run_phantom_hold_ends_alloc(iterations);
 }
@@ -3067,6 +3068,42 @@ fn invalid_notes_checksum(
         .wrapping_add(note_checksum);
     black_box((chart, stats, densities, beats, last));
     checksum
+}
+
+fn spacing_count_rows() -> Vec<u8> {
+    let mut raw = Vec::with_capacity(16_384 * 27);
+    for measure in 0usize..16_384 {
+        raw.extend_from_slice(b"1000\n0100\n0010\n0001\n");
+        raw.extend_from_slice(if measure + 1 == 16_384 { b";" } else { b",\n" });
+    }
+    raw
+}
+
+fn spacing_count_checksum(data: &[u8], legacy_count: bool) -> usize {
+    let values = rssp::nps::measure_equally_spaced_for_bench(data, 4, legacy_count);
+    let checksum = values.len() + values.iter().filter(|value| **value).count();
+    black_box(values);
+    checksum
+}
+
+fn run_spacing_count_alloc(iterations: usize) {
+    let input = MinimizeInput {
+        lanes: 4,
+        raw: spacing_count_rows(),
+    };
+    assert_eq!(
+        spacing_count_checksum(&input.raw, true),
+        spacing_count_checksum(&input.raw, false),
+    );
+    let base_live_bytes = LIVE_BYTES.load(Ordering::Relaxed);
+    for (phase, legacy_count) in [
+        ("equally-spaced-scalar-count", true),
+        ("equally-spaced-chunked-count", false),
+    ] {
+        run_typed_rows_phase(phase, iterations, &input, base_live_bytes, |data| {
+            spacing_count_checksum(data, legacy_count)
+        });
+    }
 }
 
 fn run_invalid_notes_alloc(iterations: usize) {

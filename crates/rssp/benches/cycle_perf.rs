@@ -295,6 +295,14 @@ fn phantom_hold_ends(data: &[u8], legacy_options: bool) -> usize {
 }
 
 #[cfg(windows)]
+fn equally_spaced_count(data: &[u8], legacy_count: bool) -> usize {
+    let values = rssp::nps::measure_equally_spaced_for_bench(data, 4, legacy_count);
+    let checksum = values.len() + values.iter().filter(|value| **value).count();
+    black_box(values);
+    checksum
+}
+
+#[cfg(windows)]
 fn large_pair_map(entries: usize) -> String {
     use std::fmt::Write;
 
@@ -1375,6 +1383,11 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     }
     invalid_note_rows.push(b';');
+    let mut spaced_rows = Vec::with_capacity(16_384 * 27);
+    for measure in 0usize..16_384 {
+        spaced_rows.extend_from_slice(b"1000\n0100\n0010\n0001\n");
+        spaced_rows.extend_from_slice(if measure + 1 == 16_384 { b";" } else { b",\n" });
+    }
     let analysis_options = rssp::AnalysisOptions::default();
     let mut allocating_analysis_scratch = rssp::AnalysisScratch::default();
     let mut owned_timing_scratch = rssp::AnalysisScratch::default();
@@ -2073,6 +2086,32 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     phantom_ends.finish();
+
+    assert_eq!(
+        equally_spaced_count(&spaced_rows, true),
+        equally_spaced_count(&spaced_rows, false),
+    );
+    let mut spacing_count = c.benchmark_group("cycles/equally_spaced_count_16384");
+    spacing_count.sample_size(50);
+    spacing_count.measurement_time(Duration::from_secs(3));
+    spacing_count.throughput(Throughput::Bytes(spaced_rows.len() as u64));
+    spacing_count.bench_function("scalar_prepass", |b| {
+        b.iter(|| {
+            black_box(equally_spaced_count(
+                black_box(&spaced_rows),
+                black_box(true),
+            ));
+        });
+    });
+    spacing_count.bench_function("chunked_prepass", |b| {
+        b.iter(|| {
+            black_box(equally_spaced_count(
+                black_box(&spaced_rows),
+                black_box(false),
+            ));
+        });
+    });
+    spacing_count.finish();
 
     nps_stats_bench::assert_behavior();
     let owned_nps = nps_stats_bench::values();

@@ -300,6 +300,25 @@ fn byte_hits(word: u64, byte: u8) -> u64 {
 }
 
 #[inline(always)]
+fn byte_match_mask(word: u64, byte: u8) -> u64 {
+    const LOW: u64 = 0x7f7f_7f7f_7f7f_7f7f;
+    const HI: u64 = 0x8080_8080_8080_8080;
+    let x = word ^ (u64::from(byte) * 0x0101_0101_0101_0101);
+    // Lower-seven-bit addition cannot carry between bytes, so every set high bit is exact.
+    !((x & LOW).wrapping_add(LOW) | x | LOW) & HI
+}
+
+#[inline]
+pub(crate) fn count_byte(slice: &[u8], needle: u8) -> usize {
+    let (chunks, rem) = slice.as_chunks::<8>();
+    let chunks = chunks
+        .iter()
+        .map(|chunk| byte_match_mask(u64::from_le_bytes(*chunk), needle).count_ones() as usize)
+        .sum::<usize>();
+    chunks + rem.iter().filter(|&&byte| byte == needle).count()
+}
+
+#[inline(always)]
 fn find_byte(slice: &[u8], needle: u8) -> Option<usize> {
     let mut i = 0usize;
     let (chunks, rem) = slice.as_chunks::<8>();
@@ -2459,6 +2478,17 @@ mod tests {
             assert_eq!((counts >> 6) & 0x03, (mask & 0b0010_0010).count_ones());
             assert_eq!((counts >> 8) & 0x03, (mask & 0b0100_0100).count_ones());
             assert_eq!((counts >> 10) & 0x03, (mask & 0b1000_1000).count_ones());
+        }
+    }
+
+    #[test]
+    fn chunked_byte_count_matches_scalar() {
+        let data: Vec<_> = (0u8..=u8::MAX).cycle().take(1027).collect();
+        for needle in 0u8..=u8::MAX {
+            assert_eq!(
+                count_byte(&data, needle),
+                data.iter().filter(|&&byte| byte == needle).count()
+            );
         }
     }
 
