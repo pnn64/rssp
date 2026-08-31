@@ -561,6 +561,64 @@ fn print_hash_pairs(
 }
 
 #[cfg(windows)]
+fn note_data_cycles(data: &[u8], fused: bool, analyze: bool) -> u64 {
+    let start = platform::read_cycles();
+    if analyze {
+        black_box(rssp::step_parity::analyze_note_data_for_bench(
+            black_box(data),
+            4,
+            fused,
+        ));
+    } else {
+        black_box(rssp::step_parity::parse_notes_for_bench(
+            black_box(data),
+            4,
+            fused,
+        ));
+    }
+    platform::read_cycles() - start
+}
+
+#[cfg(windows)]
+#[allow(clippy::cast_precision_loss)]
+fn print_note_data_pairs(data: &[u8], analyze: bool) {
+    const SAMPLES: usize = 31;
+    let mut materialized = [0u64; SAMPLES];
+    let mut fused = [0u64; SAMPLES];
+    let mut ratios = [0.0f64; SAMPLES];
+    for sample in 0..SAMPLES {
+        let (materialized_cycles, fused_cycles) = if sample.is_multiple_of(2) {
+            (
+                note_data_cycles(data, false, analyze),
+                note_data_cycles(data, true, analyze),
+            )
+        } else {
+            let fused_cycles = note_data_cycles(data, true, analyze);
+            let materialized_cycles = note_data_cycles(data, false, analyze);
+            (materialized_cycles, fused_cycles)
+        };
+        materialized[sample] = materialized_cycles;
+        fused[sample] = fused_cycles;
+        ratios[sample] = fused_cycles as f64 / materialized_cycles as f64;
+    }
+    materialized.sort_unstable();
+    fused.sort_unstable();
+    ratios.sort_by(f64::total_cmp);
+    let mid = SAMPLES / 2;
+    eprintln!(
+        concat!(
+            "parity_note_data stage={} paired_samples={} materialized_median_cycles={} ",
+            "fused_median_cycles={} median_change={:+.3}%"
+        ),
+        if analyze { "analysis" } else { "parse" },
+        SAMPLES,
+        materialized[mid],
+        fused[mid],
+        (ratios[mid] - 1.0) * 100.0,
+    );
+}
+
+#[cfg(windows)]
 fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     const ENTRIES: usize = 4_096;
     let cpu = platform::stabilize_thread();
@@ -3633,6 +3691,48 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     timing_pipelines.finish();
+
+    let note_data = step_parity_bench::note_data();
+    step_parity_bench::assert_note_data_behavior(&note_data);
+    print_note_data_pairs(&note_data, false);
+    print_note_data_pairs(&note_data, true);
+    let mut note_parse = c.benchmark_group("cycles/parity_note_parse_2048");
+    note_parse.sample_size(100);
+    note_parse.measurement_time(Duration::from_secs(3));
+    note_parse.throughput(Throughput::Elements(
+        step_parity_bench::NOTE_DATA_ROW_COUNT as u64,
+    ));
+    for (name, fused) in [("materialized", false), ("fused", true)] {
+        note_parse.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(rssp::step_parity::parse_notes_for_bench(
+                    black_box(&note_data),
+                    4,
+                    fused,
+                ));
+            });
+        });
+    }
+    note_parse.finish();
+
+    let mut note_analysis = c.benchmark_group("cycles/parity_note_analysis_2048");
+    note_analysis.sample_size(30);
+    note_analysis.measurement_time(Duration::from_secs(3));
+    note_analysis.throughput(Throughput::Elements(
+        step_parity_bench::NOTE_DATA_ROW_COUNT as u64,
+    ));
+    for (name, fused) in [("materialized", false), ("fused", true)] {
+        note_analysis.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(rssp::step_parity::analyze_note_data_for_bench(
+                    black_box(&note_data),
+                    4,
+                    fused,
+                ));
+            });
+        });
+    }
+    note_analysis.finish();
 
     assert!(rssp::step_parity::perm_builds_match_for_bench(4));
     assert!(rssp::step_parity::perm_builds_match_for_bench(8));

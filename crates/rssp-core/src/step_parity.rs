@@ -486,7 +486,7 @@ enum TapNoteType {
     Fake,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 struct IntermediateNoteData {
     note_type: TapNoteType,
     col: usize,
@@ -4089,6 +4089,7 @@ fn is_footswitch(prev: Foot, curr: Foot) -> bool {
 
 // --- Parsing ---
 
+#[cfg(any(test, feature = "bench-support"))]
 #[derive(Clone)]
 struct ParsedRow {
     chars: [u8; 8],
@@ -4370,6 +4371,7 @@ fn obj_mask(line: &[u8]) -> u8 {
     mask
 }
 
+#[cfg(any(test, feature = "bench-support"))]
 fn parse_rows<F>(data: &[u8], cols: usize, mut get_second: F) -> Vec<ParsedRow>
 where
     F: FnMut(f32) -> f32,
@@ -4524,6 +4526,7 @@ fn parse_note_char(
     }
 }
 
+#[cfg(any(test, feature = "bench-support"))]
 fn build_notes(rows: &[ParsedRow], timing: Option<&TimingData>) -> Vec<IntermediateNoteData> {
     let cols = rows.first().map_or(0, |r| r.columns as usize);
     if cols == 0 {
@@ -4564,7 +4567,102 @@ fn build_notes(rows: &[ParsedRow], timing: Option<&TimingData>) -> Vec<Intermedi
     notes
 }
 
+fn build_notes_fused<F>(
+    data: &[u8],
+    cols: usize,
+    timing: Option<&TimingData>,
+    mut get_second: F,
+) -> Vec<IntermediateNoteData>
+where
+    F: FnMut(f32) -> f32,
+{
+    let mut notes = Vec::new();
+    if cols == 0 || cols > MAX_COLUMNS {
+        return notes;
+    }
+
+    let mut hold_idx = [usize::MAX; MAX_COLUMNS];
+    let mut hold_row = [0i32; MAX_COLUMNS];
+    let mut fake_cursor = timing.map(FakeRowCursor::new);
+    let row_capacity = data.len() / (cols + 1);
+    // Singles and jumps stay within 1.5 emitted notes per encoded row in the
+    // common case; denser charts retain Vec's normal growth fallback.
+    let note_capacity = row_capacity.saturating_add(row_capacity / 2).max(1);
+
+    for (measure_idx, measure) in data.split(|&b| b == b',').enumerate() {
+        // Beat spacing depends on the number of non-empty lines. Rescanning the
+        // contiguous measure avoids materializing a temporary Vec of line refs.
+        let num = measure
+            .split(|&b| b == b'\n')
+            .filter(|line| !trim_ws(line).is_empty())
+            .count();
+        if num == 0 {
+            continue;
+        }
+
+        let start = measure_idx as f32 * 4.0;
+        let step = 4.0 / num as f32;
+        let mut row_idx = 0usize;
+        for line in measure.split(|&b| b == b'\n') {
+            let line = trim_ws(line);
+            if line.is_empty() {
+                continue;
+            }
+            let current_row = row_idx;
+            row_idx += 1;
+            let copy = line.len().min(cols);
+            let mut mask = obj_mask(&line[..copy]);
+            if mask == 0 {
+                continue;
+            }
+            if notes.capacity() == 0 {
+                notes.reserve(note_capacity);
+            }
+
+            let beat = (current_row as f32).mul_add(step, start);
+            let row = beat_to_note_row_f32(beat);
+            let beat = row as f32 / ROWS_PER_BEAT as f32;
+            let second = get_second(beat);
+            let row_fake = fake_cursor
+                .as_mut()
+                .is_some_and(|cursor| cursor.is_fake(row));
+            while mask != 0 {
+                let col = mask.trailing_zeros() as usize;
+                mask &= mask - 1;
+                parse_note_char(
+                    &mut notes,
+                    &mut hold_idx,
+                    &mut hold_row,
+                    line[col],
+                    col,
+                    row,
+                    beat,
+                    second,
+                    row_fake,
+                );
+            }
+        }
+    }
+
+    for col in 0..cols {
+        invalidate_hold(&mut notes, &mut hold_idx, col);
+    }
+    notes
+}
+
 // --- Public API ---
+
+fn analyze_notes(
+    cache: &'static LayoutCache,
+    notes: Vec<IntermediateNoteData>,
+    cols: usize,
+) -> TechCounts {
+    let mut generator = parity_gen(cache, true);
+    if !parity_analyze(&mut generator, notes, cols) {
+        return TechCounts::default();
+    }
+    calculate_tech_counts(&generator.rows, &generator.result_keys, generator.layout)
+}
 
 fn analyze_core<F>(
     cache: &'static LayoutCache,
@@ -4576,14 +4674,58 @@ fn analyze_core<F>(
 where
     F: FnMut(f32) -> f32,
 {
-    let rows = parse_rows(data, cols, get_second);
-    let notes = build_notes(&rows, timing);
+    analyze_notes(
+        cache,
+        build_notes_fused(data, cols, timing, get_second),
+        cols,
+    )
+}
 
-    let mut generator = parity_gen(cache, true);
-    if !parity_analyze(&mut generator, notes, cols) {
+#[cfg(feature = "bench-support")]
+fn note_fingerprint(notes: &[IntermediateNoteData]) -> (usize, u64) {
+    let hash = notes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, note| {
+        [
+            note.note_type as u64,
+            note.col as u64,
+            u64::from(note.beat.to_bits()),
+            u64::from(note.hold_length.to_bits()),
+            note.fake as u64,
+            u64::from(note.second.to_bits()),
+        ]
+        .into_iter()
+        .fold(hash, |hash, value| {
+            (hash ^ value).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    });
+    (notes.len(), hash)
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn parse_notes_for_bench(data: &[u8], lanes: usize, fused: bool) -> (usize, u64) {
+    let notes = if fused {
+        build_notes_fused(data, lanes, None, |beat| beat * 0.4)
+    } else {
+        build_notes(&parse_rows(data, lanes, |beat| beat * 0.4), None)
+    };
+    note_fingerprint(&notes)
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn analyze_note_data_for_bench(data: &[u8], lanes: usize, fused: bool) -> TechCounts {
+    let Some(cache) = layout_for_lanes(lanes) else {
         return TechCounts::default();
-    }
-    calculate_tech_counts(&generator.rows, &generator.result_keys, generator.layout)
+    };
+    let cols = layout_cols(&cache.layout);
+    let notes = if fused {
+        build_notes_fused(data, cols, None, |beat| beat * 0.4)
+    } else {
+        build_notes(&parse_rows(data, cols, |beat| beat * 0.4), None)
+    };
+    analyze_notes(cache, notes, cols)
 }
 
 #[must_use]
@@ -5162,6 +5304,41 @@ mod tests {
             TimingFormat::Ssc,
             true,
         )
+    }
+
+    #[test]
+    fn fused_note_build_matches_materialized_rows() {
+        let timing = timing_data_from_chart_data(
+            0.0,
+            0.0,
+            None,
+            "0.000=120.000",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "",
+            None,
+            "1.000=1.000",
+            TimingFormat::Ssc,
+            true,
+        );
+        let data = b"2000\n0100\n3001\n0000\n,\n000M\nL000\n0011\nF000\n,\n0200\n0001\n";
+        let materialized = build_notes(&parse_rows(data, 4, |beat| beat * 0.4), Some(&timing));
+        let fused = build_notes_fused(data, 4, Some(&timing), |beat| beat * 0.4);
+        assert_eq!(fused, materialized);
+        assert!(fused.iter().any(|note| note.fake));
+        assert!(
+            fused
+                .iter()
+                .any(|note| note.note_type == TapNoteType::HoldHead)
+        );
+        assert!(fused.iter().any(|note| note.note_type == TapNoteType::Mine));
     }
 
     #[test]

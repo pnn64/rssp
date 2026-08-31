@@ -885,6 +885,54 @@ fn print_parity_alloc(
     );
 }
 
+fn run_note_parse_phase(data: &[u8], phase: &str, iterations: usize, fused: bool) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0u64;
+    for _ in 0..iterations {
+        let (count, hash) = black_box(rssp::step_parity::parse_notes_for_bench(
+            black_box(data),
+            4,
+            fused,
+        ));
+        checksum = checksum.wrapping_add(hash ^ count as u64);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=parity-note-parse phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_mrows_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        step_parity_bench::NOTE_DATA_ROW_COUNT as f64 * divisor
+            / elapsed.as_secs_f64()
+            / 1_000_000.0,
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_note_parse_alloc(iterations: usize) {
+    let data = step_parity_bench::note_data();
+    step_parity_bench::assert_note_data_behavior(&data);
+    run_note_parse_phase(&data, "materialized", iterations, false);
+    run_note_parse_phase(&data, "fused", iterations, true);
+}
+
 fn run_perm_build_phase(
     lanes: usize,
     phase: &str,
@@ -6786,6 +6834,7 @@ fn main() {
             return;
         }
         Mode::ParitySingle => {
+            run_note_parse_alloc(iterations);
             run_parity_alloc::<4>(
                 mode_name(mode),
                 step_parity_bench::SINGLE_ROW_COUNT,

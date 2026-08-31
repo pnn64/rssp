@@ -1,5 +1,6 @@
 pub const SINGLE_ROW_COUNT: usize = 2_048;
 pub const DOUBLE_ROW_COUNT: usize = 512;
+pub const NOTE_DATA_ROW_COUNT: usize = 2_048;
 
 pub const SINGLE_MASKS: &[u8] = &[
     0b0001, 0b0100, 0b1000, 0b0010, 0b0011, 0b1100, 0b0101, 0b1010, 0b0010, 0b1000, 0b0100, 0b0001,
@@ -66,6 +67,30 @@ pub fn hold_rows<const LANES: usize>(count: usize, masks: &[u8]) -> Vec<[u8; LAN
 
 pub fn beats(count: usize) -> Vec<f32> {
     (0..count).map(|idx| idx as f32 * 0.25).collect()
+}
+
+pub fn note_data() -> Vec<u8> {
+    const MEASURE_ROWS: usize = 16;
+    let rows = hold_rows::<4>(NOTE_DATA_ROW_COUNT, SINGLE_MASKS);
+    let mut data = Vec::with_capacity(NOTE_DATA_ROW_COUNT * 5 + NOTE_DATA_ROW_COUNT / 16);
+    for (index, row) in rows.iter().enumerate() {
+        data.extend_from_slice(row);
+        data.push(b'\n');
+        if (index + 1) % MEASURE_ROWS == 0 && index + 1 != rows.len() {
+            data.push(b',');
+        }
+    }
+    data
+}
+
+pub fn assert_note_data_behavior(data: &[u8]) {
+    let materialized = rssp::step_parity::parse_notes_for_bench(data, 4, false);
+    let fused = rssp::step_parity::parse_notes_for_bench(data, 4, true);
+    assert_eq!(fused, materialized);
+    assert_eq!(
+        rssp::step_parity::analyze_note_data_for_bench(data, 4, true),
+        rssp::step_parity::analyze_note_data_for_bench(data, 4, false)
+    );
 }
 
 pub fn timing() -> rssp::timing::TimingData {
