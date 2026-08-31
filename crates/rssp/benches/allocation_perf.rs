@@ -1266,6 +1266,45 @@ fn run_double_tap_key_alloc<const LANES: usize>(
     counts
 }
 
+fn run_double_tap_cost_alloc<const LANES: usize>(
+    mode: &str,
+    phase: &str,
+    rows: &[[u8; LANES]],
+    beats: &[f32],
+    timing: &rssp::timing::TimingData,
+    has_holds: bool,
+    legacy_cost: bool,
+    iterations: usize,
+) -> rssp::TechCounts {
+    let mut scratch =
+        rssp::step_parity::timing_rows_scratch::<LANES>().expect("supported parity layout");
+    let counts = black_box(rssp::step_parity::analyze_double_tap_cost_for_bench(
+        black_box(rows),
+        black_box(beats),
+        black_box(timing),
+        has_holds,
+        legacy_cost,
+        black_box(&mut scratch),
+    ));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    for _ in 0..iterations {
+        black_box(rssp::step_parity::analyze_double_tap_cost_for_bench(
+            black_box(rows),
+            black_box(beats),
+            black_box(timing),
+            has_holds,
+            legacy_cost,
+            black_box(&mut scratch),
+        ));
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    print_parity_alloc(mode, phase, iterations, rows.len(), elapsed, before, after);
+    counts
+}
+
 fn run_parity_alloc<const LANES: usize>(
     mode: &str,
     row_count: usize,
@@ -1425,6 +1464,30 @@ fn run_parity_alloc<const LANES: usize>(
         assert_eq!(direct, general);
         direct
     });
+    let double_tap_cost_counts = (LANES == 8).then(|| {
+        let general = run_double_tap_cost_alloc(
+            mode,
+            "double-tap-cost-general",
+            &rows,
+            &beats,
+            &timing,
+            has_holds,
+            true,
+            iterations,
+        );
+        let direct = run_double_tap_cost_alloc(
+            mode,
+            "double-tap-cost-direct",
+            &rows,
+            &beats,
+            &timing,
+            has_holds,
+            false,
+            iterations,
+        );
+        assert_eq!(direct, general);
+        direct
+    });
 
     reset_counters();
     let before = Counters::read();
@@ -1458,6 +1521,9 @@ fn run_parity_alloc<const LANES: usize>(
     }
     if let Some(double_tap_key_counts) = double_tap_key_counts {
         assert_eq!(compact_counts, double_tap_key_counts);
+    }
+    if let Some(double_tap_cost_counts) = double_tap_cost_counts {
+        assert_eq!(compact_counts, double_tap_cost_counts);
     }
     let elapsed = start.elapsed();
     let after = Counters::read();
