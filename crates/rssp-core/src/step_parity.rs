@@ -1397,6 +1397,8 @@ struct StepParityGenerator {
     legacy_double_decode: bool,
     #[cfg(feature = "bench-support")]
     legacy_double_result: bool,
+    #[cfg(feature = "bench-support")]
+    legacy_double_tap_key: bool,
 }
 
 #[cfg(feature = "bench-support")]
@@ -1463,6 +1465,8 @@ fn parity_gen(cache: &'static LayoutCache, reserve_single: bool) -> StepParityGe
         legacy_double_decode: false,
         #[cfg(feature = "bench-support")]
         legacy_double_result: false,
+        #[cfg(feature = "bench-support")]
+        legacy_double_tap_key: false,
     }
 }
 
@@ -2644,22 +2648,40 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                             );
                             (Some(result), hit, key)
                         } else {
-                            let (hit, key) = parity_result_key8_no_holds(
-                                &init_state,
-                                init_key,
-                                perm,
-                                active_mask,
-                            );
+                            let (hit, key) = if simple_tap && !g.legacy_double_tap_key {
+                                let foot = if tap_col < MAX_COLUMNS {
+                                    perm[tap_col]
+                                } else {
+                                    Foot::None
+                                };
+                                parity_result_tap_key8(&init_state, init_key, foot, tap_col)
+                            } else {
+                                parity_result_key8_no_holds(
+                                    &init_state,
+                                    init_key,
+                                    perm,
+                                    active_mask,
+                                )
+                            };
                             (None, hit, key)
                         }
                         #[cfg(not(feature = "bench-support"))]
                         {
-                            let (hit, key) = parity_result_key8_no_holds(
-                                &init_state,
-                                init_key,
-                                perm,
-                                active_mask,
-                            );
+                            let (hit, key) = if simple_tap {
+                                let foot = if tap_col < MAX_COLUMNS {
+                                    perm[tap_col]
+                                } else {
+                                    Foot::None
+                                };
+                                parity_result_tap_key8(&init_state, init_key, foot, tap_col)
+                            } else {
+                                parity_result_key8_no_holds(
+                                    &init_state,
+                                    init_key,
+                                    perm,
+                                    active_mask,
+                                )
+                            };
                             (None, hit, key)
                         }
                     } else {
@@ -3138,6 +3160,36 @@ fn parity_result_key8_no_holds(
     }
 
     (hit, combined | u32::from(moved_mask) << 24)
+}
+
+#[inline(always)]
+fn parity_result_tap_key8(
+    initial: &State,
+    initial_key: u32,
+    foot: Foot,
+    tap_col: usize,
+) -> ([i8; NUM_FEET], u32) {
+    let mut hit = [INVALID_COLUMN; NUM_FEET];
+    let mut combined = initial_key & 0x00ff_ffff;
+    if foot == Foot::None || tap_col >= MAX_COLUMNS {
+        return (hit, combined);
+    }
+
+    let fi = foot_idx(foot);
+    let clear_col = |key: &mut u32, column: i8| {
+        if column != INVALID_COLUMN {
+            *key &= !(0b111 << (column as usize * 3));
+        }
+    };
+    clear_col(&mut combined, initial.where_the_feet_are[fi]);
+    if matches!(foot, Foot::LeftHeel | Foot::RightHeel) {
+        clear_col(&mut combined, initial.where_the_feet_are[fi + 1]);
+    }
+
+    let shift = tap_col * 3;
+    combined = (combined & !(0b111 << shift)) | (foot as u32) << shift;
+    hit[fi] = tap_col as i8;
+    (hit, combined | u32::from(FOOT_MASKS[fi]) << 24)
 }
 
 #[inline(always)]
@@ -4776,6 +4828,21 @@ pub fn analyze_double_result_for_bench<const LANES: usize>(
     analyze_timing_rows_known_holds(rows, row_to_beat, timing, has_holds, scratch)
 }
 
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn analyze_double_tap_key_for_bench<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    has_holds: bool,
+    legacy_key: bool,
+    scratch: &mut TimingRowsScratch<LANES>,
+) -> TechCounts {
+    scratch.generator.legacy_double_tap_key = legacy_key;
+    analyze_timing_rows_known_holds(rows, row_to_beat, timing, has_holds, scratch)
+}
+
 pub fn analyze_and_annotate_timing_rows<const LANES: usize>(
     rows: &[[u8; LANES]],
     row_to_beat: &[f32],
@@ -5282,6 +5349,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn double_tap_key_matches_general_key() {
+        let cache = dance_double_cache();
+        let mut initial_states = vec![(state_new(), 0u32)];
+        for active_mask in [1u8, 8, 16, 128, 17, 36, 66, 129, 136] {
+            for placement in cache.perm_table.get(active_mask) {
+                let (state, _, key) =
+                    parity_result_state_no_holds::<8>(&state_new(), placement, active_mask);
+                initial_states.push((state, key));
+            }
+        }
+
+        for (initial, initial_key) in initial_states {
+            for tap_col in 0..=MAX_COLUMNS {
+                for foot in [
+                    Foot::None,
+                    Foot::LeftHeel,
+                    Foot::LeftToe,
+                    Foot::RightHeel,
+                    Foot::RightToe,
+                ] {
+                    let mut placement = NO_PERMS[0];
+                    let active_mask = if tap_col < MAX_COLUMNS {
+                        placement[tap_col] = foot;
+                        1 << tap_col
+                    } else {
+                        0
+                    };
+                    assert_eq!(
+                        parity_result_tap_key8(&initial, initial_key, foot, tap_col),
+                        parity_result_key8_no_holds(&initial, initial_key, &placement, active_mask,),
+                    );
+                }
+            }
+        }
+    }
+
     #[cfg(feature = "bench-support")]
     #[test]
     fn packed_double_solver_matches_materialized_results() {
@@ -5336,6 +5440,55 @@ mod tests {
                 true,
                 false,
                 &mut packed,
+            ),
+        );
+    }
+
+    #[cfg(feature = "bench-support")]
+    #[test]
+    fn double_tap_solver_matches_general_key() {
+        const MASKS: [u8; 6] = [1, 16, 128, 8, 17, 136];
+        let rows: Vec<[u8; 8]> = (0..96)
+            .map(|idx| {
+                let mask = MASKS[idx % MASKS.len()];
+                std::array::from_fn(|col| if mask & (1 << col) == 0 { b'0' } else { b'1' })
+            })
+            .collect();
+        let beats: Vec<_> = (0..96).map(|idx| idx as f32 * 0.25).collect();
+        let timing = basic_timing();
+        let mut general = timing_rows_scratch::<8>().expect("dance-double layout");
+        let mut direct = timing_rows_scratch::<8>().expect("dance-double layout");
+
+        assert_eq!(
+            analyze_double_tap_key_for_bench(&rows, &beats, &timing, false, true, &mut general,),
+            analyze_double_tap_key_for_bench(&rows, &beats, &timing, false, false, &mut direct,),
+        );
+
+        let hold_rows = [
+            *b"20000000",
+            *b"00001000",
+            *b"01000010",
+            *b"00010001",
+            *b"30000000",
+            *b"10000001",
+        ];
+        let hold_beats = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25];
+        assert_eq!(
+            analyze_double_tap_key_for_bench(
+                &hold_rows,
+                &hold_beats,
+                &timing,
+                true,
+                true,
+                &mut general,
+            ),
+            analyze_double_tap_key_for_bench(
+                &hold_rows,
+                &hold_beats,
+                &timing,
+                true,
+                false,
+                &mut direct,
             ),
         );
     }
