@@ -161,8 +161,9 @@ fn ac_finalize_output<T: Copy>(
     output_lens[state] = (flat_outputs.len() - output_start) as u32;
 }
 
-fn ac_build<T, P>(
+fn ac_build_with_capacity<T, P>(
     patterns: impl IntoIterator<Item = (T, P)>,
+    state_capacity: usize,
     mut pattern_symbol: impl FnMut(u8) -> u8,
 ) -> AcDfa<T>
 where
@@ -170,8 +171,10 @@ where
     P: AsRef<[u8]>,
 {
     let patterns = patterns.into_iter();
-    let mut goto: Vec<[u32; AC_ALPHA]> = vec![[u32::MAX; AC_ALPHA]];
-    let mut direct_heads = vec![AC_OUTPUT_NONE];
+    let mut goto: Vec<[u32; AC_ALPHA]> = Vec::with_capacity(state_capacity.max(1));
+    goto.push([u32::MAX; AC_ALPHA]);
+    let mut direct_heads = Vec::with_capacity(state_capacity.max(1));
+    direct_heads.push(AC_OUTPUT_NONE);
     let mut direct_outputs = Vec::with_capacity(patterns.size_hint().0.min(256));
 
     for (id, pat) in patterns {
@@ -271,6 +274,17 @@ where
         output_lens,
         flat_outputs,
     }
+}
+
+fn ac_build<T, P>(
+    patterns: impl IntoIterator<Item = (T, P)>,
+    pattern_symbol: impl FnMut(u8) -> u8,
+) -> AcDfa<T>
+where
+    T: Copy,
+    P: AsRef<[u8]>,
+{
+    ac_build_with_capacity(patterns, 1, pattern_symbol)
 }
 
 /// Specialized search returning a fixed-size array for `PatternVariant`
@@ -741,7 +755,9 @@ fn pattern_hash_ci(pattern: &str) -> u64 {
     hash ^ (hash >> 32)
 }
 
-pub fn compile_custom_patterns(patterns: &[String]) -> CompiledCustomPatterns {
+fn compile_custom_patterns_impl<const GROW_DFA: bool>(
+    patterns: &[String],
+) -> CompiledCustomPatterns {
     if patterns.is_empty() {
         return compiled_custom_empty();
     }
@@ -779,11 +795,19 @@ pub fn compile_custom_patterns(patterns: &[String]) -> CompiledCustomPatterns {
     }
     compiled.shrink_to_fit();
 
-    let dfa = ac_build(
+    let state_capacity = if GROW_DFA {
+        1
+    } else {
+        compiled.iter().fold(1usize, |capacity, pattern| {
+            capacity.saturating_add(pattern.pattern.len())
+        })
+    };
+    let dfa = ac_build_with_capacity(
         compiled
             .iter()
             .enumerate()
             .map(|(index, pattern)| (index, pattern.pattern.as_bytes())),
+        state_capacity,
         pattern_bit,
     );
 
@@ -791,6 +815,18 @@ pub fn compile_custom_patterns(patterns: &[String]) -> CompiledCustomPatterns {
         dfa,
         patterns: compiled,
     }
+}
+
+pub fn compile_custom_patterns(patterns: &[String]) -> CompiledCustomPatterns {
+    compile_custom_patterns_impl::<false>(patterns)
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn compile_custom_patterns_growing_dfa_for_bench(
+    patterns: &[String],
+) -> CompiledCustomPatterns {
+    compile_custom_patterns_impl::<true>(patterns)
 }
 
 #[cfg(feature = "bench-support")]
@@ -1249,8 +1285,8 @@ mod tests {
     use super::{
         AC_ALPHA, CompiledCustomPatterns, CompiledPattern, CustomPatternSummary, ac_build,
         ac_output_slice, ac_search_vec, analyze_patterns_from_rows, compile_custom_patterns,
-        count_anchors, count_facing_steps, detect_custom_patterns_compiled,
-        detect_default_patterns, note_mask4, pattern_bit,
+        compile_custom_patterns_impl, count_anchors, count_facing_steps,
+        detect_custom_patterns_compiled, detect_default_patterns, note_mask4, pattern_bit,
     };
     use std::collections::HashSet;
 
@@ -1434,6 +1470,32 @@ mod tests {
 
         let expected_compiled = compile_custom_patterns_materialized(&patterns);
         let actual_compiled = compile_custom_patterns(&patterns);
+        let growing_compiled = compile_custom_patterns_impl::<true>(&patterns);
+        assert_eq!(actual_compiled.dfa.goto, growing_compiled.dfa.goto);
+        assert_eq!(
+            actual_compiled.dfa.output_starts,
+            growing_compiled.dfa.output_starts
+        );
+        assert_eq!(
+            actual_compiled.dfa.output_lens,
+            growing_compiled.dfa.output_lens
+        );
+        assert_eq!(
+            actual_compiled.dfa.flat_outputs,
+            growing_compiled.dfa.flat_outputs
+        );
+        assert_eq!(
+            actual_compiled
+                .patterns
+                .iter()
+                .map(|pattern| pattern.pattern.as_str())
+                .collect::<Vec<_>>(),
+            growing_compiled
+                .patterns
+                .iter()
+                .map(|pattern| pattern.pattern.as_str())
+                .collect::<Vec<_>>()
+        );
         assert_eq!(actual_compiled.dfa.goto, expected_compiled.dfa.goto);
         assert_eq!(
             actual_compiled.dfa.output_starts,

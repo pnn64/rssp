@@ -169,7 +169,14 @@ fn bench_custom_patterns(c: &mut Criterion) {
             ));
         });
     });
-    compile_group.bench_function("open_addressed", |b| {
+    compile_group.bench_function("open_addressed_growing_dfa", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::patterns::compile_custom_patterns_growing_dfa_for_bench(black_box(&patterns)),
+            );
+        });
+    });
+    compile_group.bench_function("open_addressed_presized_dfa", |b| {
         b.iter(|| {
             black_box(rssp::patterns::compile_custom_patterns(black_box(
                 &patterns,

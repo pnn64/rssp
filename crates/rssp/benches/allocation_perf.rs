@@ -1885,7 +1885,10 @@ fn run_custom_pattern_alloc(iterations: usize) {
     run_custom_pattern_alloc_phase("legacy", iterations, &patterns, |patterns| {
         rssp::patterns::compile_custom_patterns_legacy_for_bench(patterns)
     });
-    run_custom_pattern_alloc_phase("open-addressed", iterations, &patterns, |patterns| {
+    run_custom_pattern_alloc_phase("growing-dfa", iterations, &patterns, |patterns| {
+        rssp::patterns::compile_custom_patterns_growing_dfa_for_bench(patterns)
+    });
+    run_custom_pattern_alloc_phase("presized-dfa", iterations, &patterns, |patterns| {
         rssp::patterns::compile_custom_patterns(patterns)
     });
     let compiled = rssp::patterns::compile_custom_patterns(&patterns);

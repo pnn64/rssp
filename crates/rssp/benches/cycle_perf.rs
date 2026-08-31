@@ -1878,7 +1878,16 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             ));
         });
     });
-    optimizations.bench_function("custom_patterns_open_addressed", |b| {
+    optimizations.bench_function("custom_patterns_growing_dfa", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::patterns::compile_custom_patterns_growing_dfa_for_bench(black_box(
+                    &custom_patterns,
+                )),
+            );
+        });
+    });
+    optimizations.bench_function("custom_patterns_presized_dfa", |b| {
         b.iter(|| {
             black_box(rssp::patterns::compile_custom_patterns(black_box(
                 &custom_patterns,
