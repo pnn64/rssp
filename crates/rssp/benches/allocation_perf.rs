@@ -1111,6 +1111,44 @@ fn run_growing_alloc<const LANES: usize>(
     counts
 }
 
+fn run_arena_transition<const LANES: usize>(
+    mode: &str,
+    phase: &str,
+    rows: &[[u8; LANES]],
+    beats: &[f32],
+    timing: &rssp::timing::TimingData,
+    has_holds: bool,
+    legacy_growth: bool,
+) -> rssp::TechCounts {
+    let mut scratch =
+        rssp::step_parity::timing_rows_scratch::<LANES>().expect("supported parity layout");
+    let warm_len = (rows.len() / 8).max(1);
+    black_box(rssp::step_parity::analyze_arena_for_bench(
+        black_box(&rows[..warm_len]),
+        black_box(&beats[..warm_len]),
+        black_box(timing),
+        has_holds,
+        legacy_growth,
+        black_box(&mut scratch),
+    ));
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let counts = black_box(rssp::step_parity::analyze_arena_for_bench(
+        black_box(rows),
+        black_box(beats),
+        black_box(timing),
+        has_holds,
+        legacy_growth,
+        black_box(&mut scratch),
+    ));
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    print_parity_alloc(mode, phase, 1, rows.len(), elapsed, before, after);
+    counts
+}
+
 fn run_parity_alloc<const LANES: usize>(
     mode: &str,
     row_count: usize,
@@ -1176,6 +1214,28 @@ fn run_parity_alloc<const LANES: usize>(
         has_holds.then(|| run_dense_hold_alloc(mode, &rows, &beats, &timing, iterations));
     let growing_counts = (LANES == 4)
         .then(|| run_growing_alloc(mode, &rows, &beats, &timing, has_holds, iterations));
+    let arena_counts = (LANES == 4).then(|| {
+        let sampled = run_arena_transition(
+            mode,
+            "arena-sampled-growth",
+            &rows,
+            &beats,
+            &timing,
+            has_holds,
+            true,
+        );
+        let learned = run_arena_transition(
+            mode,
+            "arena-learned-rebuild",
+            &rows,
+            &beats,
+            &timing,
+            has_holds,
+            false,
+        );
+        assert_eq!(learned, sampled);
+        learned
+    });
 
     reset_counters();
     let before = Counters::read();
@@ -1197,6 +1257,9 @@ fn run_parity_alloc<const LANES: usize>(
     }
     if let Some(growing_counts) = growing_counts {
         assert_eq!(compact_counts, growing_counts);
+    }
+    if let Some(arena_counts) = arena_counts {
+        assert_eq!(compact_counts, arena_counts);
     }
     let elapsed = start.elapsed();
     let after = Counters::read();

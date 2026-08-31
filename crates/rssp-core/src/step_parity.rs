@@ -625,6 +625,8 @@ const SINGLE_LAYER_MAX: usize = 625;
 // Covers common tap/jump layers without retaining the 625-state worst case;
 // hold-heavy charts can still grow to the hard limit.
 const SINGLE_WORK_CAP: usize = 192;
+const SINGLE_NODE_DENSITY_MAX: usize = 16;
+const SINGLE_NODE_WARM_MAX: usize = 32 * 1024;
 const SINGLE_STATE_MASK: u32 = 0xff00_0fff;
 const SINGLE_PRED_SHIFT: u32 = 12;
 const SINGLE_PRED_MASK: u32 = 0x0fff;
@@ -1362,10 +1364,13 @@ struct StepParityGenerator {
     prev_links: Vec<LayerLink>,
     next_links: Vec<LayerLink>,
     state_map: RowStateMap,
+    single_node_density: usize,
     // Row-build state shared by every row instead of 32 endpoint bytes per row.
     active_hold_ends: [f32; MAX_COLUMNS],
     #[cfg(feature = "bench-support")]
     legacy_tap_path: bool,
+    #[cfg(feature = "bench-support")]
+    legacy_arena_growth: bool,
 }
 
 #[cfg(feature = "bench-support")]
@@ -1422,9 +1427,12 @@ fn parity_gen(cache: &'static LayoutCache, reserve_single: bool) -> StepParityGe
         } else {
             row_map_with_capacity(single_cap)
         },
+        single_node_density: 0,
         active_hold_ends: [HOLD_END_NONE; MAX_COLUMNS],
         #[cfg(feature = "bench-support")]
         legacy_tap_path: false,
+        #[cfg(feature = "bench-support")]
+        legacy_arena_growth: false,
     }
 }
 
@@ -1472,7 +1480,22 @@ fn parity_analyze(
 fn parity_reserve(g: &mut StepParityGenerator) {
     let node_floor = g.rows.len().saturating_add(1);
     if g.column_count == 4 {
-        g.single_nodes.reserve(node_floor);
+        let mut target = g
+            .rows
+            .len()
+            .saturating_mul(g.single_node_density)
+            .min(SINGLE_NODE_WARM_MAX)
+            .max(node_floor);
+        #[cfg(feature = "bench-support")]
+        if g.legacy_arena_growth {
+            target = node_floor;
+        }
+        if target > g.single_nodes.capacity() && g.single_node_density != 0 {
+            g.single_nodes = Vec::new();
+            g.single_nodes.reserve_exact(target);
+        } else {
+            g.single_nodes.reserve(node_floor);
+        }
     } else {
         g.double_nodes.reserve(node_floor);
     }
@@ -2681,11 +2704,23 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
         }
     }
 
-    g.prev_links
+    let best = g
+        .prev_links
         .iter()
         .enumerate()
         .min_by(|(_, a), (_, b)| a.cost.total_cmp(&b.cost))
-        .map(|(index, _)| prev_start + index)
+        .map(|(index, _)| prev_start + index);
+    if COLS == 4 && !g.rows.is_empty() {
+        let density = g
+            .single_nodes
+            .len()
+            .div_ceil(g.rows.len())
+            .saturating_add(1);
+        g.single_node_density = g
+            .single_node_density
+            .max(density.min(SINGLE_NODE_DENSITY_MAX));
+    }
+    best
 }
 
 #[cfg(feature = "bench-support")]
@@ -4504,6 +4539,21 @@ pub fn analyze_timing_rows_hash_for_bench<const LANES: usize>(
     analyze_timing_rows_known_holds(rows, row_to_beat, timing, has_holds, scratch)
 }
 
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn analyze_arena_for_bench<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    has_holds: bool,
+    legacy_growth: bool,
+    scratch: &mut TimingRowsScratch<LANES>,
+) -> TechCounts {
+    scratch.generator.legacy_arena_growth = legacy_growth;
+    analyze_timing_rows_known_holds(rows, row_to_beat, timing, has_holds, scratch)
+}
+
 pub fn analyze_and_annotate_timing_rows<const LANES: usize>(
     rows: &[[u8; LANES]],
     row_to_beat: &[f32],
@@ -4882,6 +4932,43 @@ mod tests {
         assert_eq!(
             analyze_timing_rows_known_holds(&rows, &beats, &timing, false, &mut reserved),
             analyze_growing_for_bench(&rows, &beats, &timing, false, &mut growing),
+        );
+    }
+
+    #[cfg(feature = "bench-support")]
+    #[test]
+    fn primed_arena_matches_sampled_growth() {
+        const MASKS: [u8; 6] = [0b0001, 0b0100, 0b0011, 0b1000, 0b0010, 0b1100];
+        let rows: Vec<[u8; 4]> = (0..96)
+            .map(|idx| {
+                let mask = MASKS[idx % MASKS.len()];
+                std::array::from_fn(|col| if mask & (1 << col) == 0 { b'0' } else { b'1' })
+            })
+            .collect();
+        let beats: Vec<_> = (0..96).map(|idx| idx as f32 * 0.25).collect();
+        let timing = basic_timing();
+        let mut sampled = timing_rows_scratch::<4>().expect("dance-single layout");
+        let mut primed = timing_rows_scratch::<4>().expect("dance-single layout");
+        let _ = analyze_arena_for_bench(
+            &rows[..24],
+            &beats[..24],
+            &timing,
+            false,
+            true,
+            &mut sampled,
+        );
+        let _ = analyze_arena_for_bench(
+            &rows[..24],
+            &beats[..24],
+            &timing,
+            false,
+            false,
+            &mut primed,
+        );
+
+        assert_eq!(
+            analyze_arena_for_bench(&rows, &beats, &timing, false, true, &mut sampled),
+            analyze_arena_for_bench(&rows, &beats, &timing, false, false, &mut primed),
         );
     }
 

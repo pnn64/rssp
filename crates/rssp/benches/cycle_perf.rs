@@ -3505,6 +3505,45 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         &mut folded_hash_scratch,
     );
     assert_eq!(folded_hash_counts, legacy_hash_counts);
+    let arena_warm_len = step_parity_bench::SINGLE_ROW_COUNT / 8;
+    let mut sampled_arena =
+        rssp::step_parity::timing_rows_scratch::<4>().expect("dance-single parity layout");
+    let mut learned_arena =
+        rssp::step_parity::timing_rows_scratch::<4>().expect("dance-single parity layout");
+    let _ = rssp::step_parity::analyze_arena_for_bench(
+        &single_rows[..arena_warm_len],
+        &single_beats[..arena_warm_len],
+        &parity_timing,
+        false,
+        true,
+        &mut sampled_arena,
+    );
+    let _ = rssp::step_parity::analyze_arena_for_bench(
+        &single_rows[..arena_warm_len],
+        &single_beats[..arena_warm_len],
+        &parity_timing,
+        false,
+        false,
+        &mut learned_arena,
+    );
+    assert_eq!(
+        rssp::step_parity::analyze_arena_for_bench(
+            &single_rows,
+            &single_beats,
+            &parity_timing,
+            false,
+            true,
+            &mut sampled_arena,
+        ),
+        rssp::step_parity::analyze_arena_for_bench(
+            &single_rows,
+            &single_beats,
+            &parity_timing,
+            false,
+            false,
+            &mut learned_arena,
+        ),
+    );
     let mut growing_scratch =
         rssp::step_parity::growing_timing_scratch::<4>().expect("dance-single parity layout");
     assert_eq!(
@@ -3657,6 +3696,72 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             ));
         });
     });
+    for (name, legacy_growth) in [
+        ("dense_single_growth_sampled", true),
+        ("dense_single_growth_learned", false),
+    ] {
+        parity.bench_function(name, |b| {
+            b.iter_batched(
+                || {
+                    let mut scratch = rssp::step_parity::timing_rows_scratch::<4>()
+                        .expect("dance-single parity layout");
+                    let _ = rssp::step_parity::analyze_arena_for_bench(
+                        &single_rows[..arena_warm_len],
+                        &single_beats[..arena_warm_len],
+                        &parity_timing,
+                        false,
+                        legacy_growth,
+                        &mut scratch,
+                    );
+                    scratch
+                },
+                |mut scratch| {
+                    black_box(rssp::step_parity::analyze_arena_for_bench(
+                        black_box(&single_rows),
+                        black_box(&single_beats),
+                        black_box(&parity_timing),
+                        false,
+                        legacy_growth,
+                        black_box(&mut scratch),
+                    ));
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    for (name, legacy_growth) in [
+        ("dense_single_holds_growth_sampled", true),
+        ("dense_single_holds_growth_learned", false),
+    ] {
+        parity.bench_function(name, |b| {
+            b.iter_batched(
+                || {
+                    let mut scratch = rssp::step_parity::timing_rows_scratch::<4>()
+                        .expect("dance-single parity layout");
+                    let _ = rssp::step_parity::analyze_arena_for_bench(
+                        &single_hold_rows[..arena_warm_len],
+                        &single_beats[..arena_warm_len],
+                        &parity_timing,
+                        true,
+                        legacy_growth,
+                        &mut scratch,
+                    );
+                    scratch
+                },
+                |mut scratch| {
+                    black_box(rssp::step_parity::analyze_arena_for_bench(
+                        black_box(&single_hold_rows),
+                        black_box(&single_beats),
+                        black_box(&parity_timing),
+                        true,
+                        legacy_growth,
+                        black_box(&mut scratch),
+                    ));
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
     parity.bench_function("dense_single_cold", |b| {
         b.iter(|| {
             let mut scratch =
