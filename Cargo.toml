@@ -7,7 +7,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.4.221"
+version = "0.4.222"
 
 [workspace.dependencies]
 rssp = { path = "crates/rssp" }

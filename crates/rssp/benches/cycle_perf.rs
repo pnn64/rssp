@@ -3464,6 +3464,14 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         rssp::step_parity::timing_rows_scratch::<8>().expect("dance-double parity layout");
     let mut chunked_double_holds =
         rssp::step_parity::timing_rows_scratch::<8>().expect("dance-double parity layout");
+    let mut materialized_double =
+        rssp::step_parity::timing_rows_scratch::<8>().expect("dance-double parity layout");
+    let mut packed_double =
+        rssp::step_parity::timing_rows_scratch::<8>().expect("dance-double parity layout");
+    let mut materialized_double_holds =
+        rssp::step_parity::timing_rows_scratch::<8>().expect("dance-double parity layout");
+    let mut packed_double_holds =
+        rssp::step_parity::timing_rows_scratch::<8>().expect("dance-double parity layout");
     let mut legacy_single =
         rssp::step_parity::legacy_timing_rows_scratch::<4>().expect("dance-single parity layout");
     let mut legacy_double =
@@ -3547,6 +3555,42 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             true,
             false,
             &mut chunked_double_holds,
+        ),
+    );
+    assert_eq!(
+        rssp::step_parity::analyze_double_result_for_bench(
+            &double_rows,
+            &double_beats,
+            &parity_timing,
+            false,
+            true,
+            &mut materialized_double,
+        ),
+        rssp::step_parity::analyze_double_result_for_bench(
+            &double_rows,
+            &double_beats,
+            &parity_timing,
+            false,
+            false,
+            &mut packed_double,
+        ),
+    );
+    assert_eq!(
+        rssp::step_parity::analyze_double_result_for_bench(
+            &double_hold_rows,
+            &double_beats,
+            &parity_timing,
+            true,
+            true,
+            &mut materialized_double_holds,
+        ),
+        rssp::step_parity::analyze_double_result_for_bench(
+            &double_hold_rows,
+            &double_beats,
+            &parity_timing,
+            true,
+            false,
+            &mut packed_double_holds,
         ),
     );
     let arena_warm_len = step_parity_bench::SINGLE_ROW_COUNT / 8;
@@ -3936,6 +3980,30 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             ));
         });
     });
+    parity.bench_function("dense_double_result_materialized", |b| {
+        b.iter(|| {
+            black_box(rssp::step_parity::analyze_double_result_for_bench(
+                black_box(&double_rows),
+                black_box(&double_beats),
+                black_box(&parity_timing),
+                false,
+                true,
+                black_box(&mut materialized_double),
+            ));
+        });
+    });
+    parity.bench_function("dense_double_result_packed", |b| {
+        b.iter(|| {
+            black_box(rssp::step_parity::analyze_double_result_for_bench(
+                black_box(&double_rows),
+                black_box(&double_beats),
+                black_box(&parity_timing),
+                false,
+                false,
+                black_box(&mut packed_double),
+            ));
+        });
+    });
     parity.bench_function("dense_double_holds_legacy", |b| {
         b.iter(|| {
             black_box(rssp::step_parity::analyze_timing_rows_legacy_for_bench(
@@ -3979,6 +4047,30 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
                 true,
                 false,
                 black_box(&mut chunked_double_holds),
+            ));
+        });
+    });
+    parity.bench_function("dense_double_holds_result_materialized", |b| {
+        b.iter(|| {
+            black_box(rssp::step_parity::analyze_double_result_for_bench(
+                black_box(&double_hold_rows),
+                black_box(&double_beats),
+                black_box(&parity_timing),
+                true,
+                true,
+                black_box(&mut materialized_double_holds),
+            ));
+        });
+    });
+    parity.bench_function("dense_double_holds_result_packed", |b| {
+        b.iter(|| {
+            black_box(rssp::step_parity::analyze_double_result_for_bench(
+                black_box(&double_hold_rows),
+                black_box(&double_beats),
+                black_box(&parity_timing),
+                true,
+                false,
+                black_box(&mut packed_double_holds),
             ));
         });
     });

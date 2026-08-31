@@ -1188,6 +1188,45 @@ fn run_double_decode_alloc<const LANES: usize>(
     counts
 }
 
+fn run_double_result_alloc<const LANES: usize>(
+    mode: &str,
+    phase: &str,
+    rows: &[[u8; LANES]],
+    beats: &[f32],
+    timing: &rssp::timing::TimingData,
+    has_holds: bool,
+    legacy_result: bool,
+    iterations: usize,
+) -> rssp::TechCounts {
+    let mut scratch =
+        rssp::step_parity::timing_rows_scratch::<LANES>().expect("supported parity layout");
+    let counts = black_box(rssp::step_parity::analyze_double_result_for_bench(
+        black_box(rows),
+        black_box(beats),
+        black_box(timing),
+        has_holds,
+        legacy_result,
+        black_box(&mut scratch),
+    ));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    for _ in 0..iterations {
+        black_box(rssp::step_parity::analyze_double_result_for_bench(
+            black_box(rows),
+            black_box(beats),
+            black_box(timing),
+            has_holds,
+            legacy_result,
+            black_box(&mut scratch),
+        ));
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    print_parity_alloc(mode, phase, iterations, rows.len(), elapsed, before, after);
+    counts
+}
+
 fn run_parity_alloc<const LANES: usize>(
     mode: &str,
     row_count: usize,
@@ -1299,6 +1338,30 @@ fn run_parity_alloc<const LANES: usize>(
         assert_eq!(chunked, scalar);
         chunked
     });
+    let double_result_counts = (LANES == 8).then(|| {
+        let materialized = run_double_result_alloc(
+            mode,
+            "double-result-materialized",
+            &rows,
+            &beats,
+            &timing,
+            has_holds,
+            true,
+            iterations,
+        );
+        let packed = run_double_result_alloc(
+            mode,
+            "double-result-packed",
+            &rows,
+            &beats,
+            &timing,
+            has_holds,
+            false,
+            iterations,
+        );
+        assert_eq!(packed, materialized);
+        packed
+    });
 
     reset_counters();
     let before = Counters::read();
@@ -1326,6 +1389,9 @@ fn run_parity_alloc<const LANES: usize>(
     }
     if let Some(double_decode_counts) = double_decode_counts {
         assert_eq!(compact_counts, double_decode_counts);
+    }
+    if let Some(double_result_counts) = double_result_counts {
+        assert_eq!(compact_counts, double_result_counts);
     }
     let elapsed = start.elapsed();
     let after = Counters::read();
