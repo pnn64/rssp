@@ -711,6 +711,28 @@ fn state_from_key<const COLS: usize>(key: u32) -> State {
             holding_mask: ((key >> 28) & 0x0f) as u8,
         };
     }
+    if COLS == 8 {
+        let lower = STATE_BASE4[key as usize & (SINGLE_STATE_COUNT - 1)];
+        let upper = STATE_BASE4[(key as usize >> 12) & (SINGLE_STATE_COUNT - 1)];
+        let mut combined_columns = [Foot::None; MAX_COLUMNS];
+        combined_columns[..4].copy_from_slice(&lower.combined_columns);
+        combined_columns[4..].copy_from_slice(&upper.combined_columns);
+        let mut where_the_feet_are = lower.where_the_feet_are;
+        let mut foot = 0;
+        while foot < NUM_FEET {
+            if upper.where_the_feet_are[foot] != INVALID_COLUMN {
+                where_the_feet_are[foot] = upper.where_the_feet_are[foot] + 4;
+            }
+            foot += 1;
+        }
+        return State {
+            combined_columns,
+            where_the_feet_are,
+            occupied_mask: lower.occupied_mask | upper.occupied_mask << 4,
+            moved_mask: ((key >> 24) & 0x0f) as u8,
+            holding_mask: ((key >> 28) & 0x0f) as u8,
+        };
+    }
 
     state_from_key_scalar::<COLS>(key)
 }
@@ -1371,6 +1393,8 @@ struct StepParityGenerator {
     legacy_tap_path: bool,
     #[cfg(feature = "bench-support")]
     legacy_arena_growth: bool,
+    #[cfg(feature = "bench-support")]
+    legacy_double_decode: bool,
 }
 
 #[cfg(feature = "bench-support")]
@@ -1433,6 +1457,8 @@ fn parity_gen(cache: &'static LayoutCache, reserve_single: bool) -> StepParityGe
         legacy_tap_path: false,
         #[cfg(feature = "bench-support")]
         legacy_arena_growth: false,
+        #[cfg(feature = "bench-support")]
+        legacy_double_decode: false,
     }
 }
 
@@ -1480,16 +1506,18 @@ fn parity_analyze(
 fn parity_reserve(g: &mut StepParityGenerator) {
     let node_floor = g.rows.len().saturating_add(1);
     if g.column_count == 4 {
-        let mut target = g
+        let target = g
             .rows
             .len()
             .saturating_mul(g.single_node_density)
             .min(SINGLE_NODE_WARM_MAX)
             .max(node_floor);
         #[cfg(feature = "bench-support")]
-        if g.legacy_arena_growth {
-            target = node_floor;
-        }
+        let target = if g.legacy_arena_growth {
+            node_floor
+        } else {
+            target
+        };
         if target > g.single_nodes.capacity() && g.single_node_density != 0 {
             g.single_nodes = Vec::new();
             g.single_nodes.reserve_exact(target);
@@ -2194,6 +2222,15 @@ fn parity_state_key<const COLS: usize>(g: &StepParityGenerator, id: usize) -> u3
 }
 
 #[inline(always)]
+fn parity_decode_state<const COLS: usize>(_g: &StepParityGenerator, key: u32) -> State {
+    #[cfg(feature = "bench-support")]
+    if COLS == 8 && _g.legacy_double_decode {
+        return state_from_key_scalar::<COLS>(key);
+    }
+    state_from_key::<COLS>(key)
+}
+
+#[inline(always)]
 fn parity_set_pred<const COLS: usize>(g: &mut StepParityGenerator, id: usize, pred: u32) {
     if COLS == 4 {
         debug_assert!(id > pred as usize);
@@ -2580,7 +2617,7 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                 let init_state = if init_id == start_id {
                     state_new()
                 } else {
-                    state_from_key::<COLS>(init_key)
+                    parity_decode_state::<COLS>(g, init_key)
                 };
                 let init_cost = g.prev_links[j].cost;
                 let left_moved_not_holding = foot_moved_not_holding(&init_state, &LEFT_PAIR);
@@ -4554,6 +4591,21 @@ pub fn analyze_arena_for_bench<const LANES: usize>(
     analyze_timing_rows_known_holds(rows, row_to_beat, timing, has_holds, scratch)
 }
 
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn analyze_double_decode_for_bench<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    has_holds: bool,
+    legacy_decode: bool,
+    scratch: &mut TimingRowsScratch<LANES>,
+) -> TechCounts {
+    scratch.generator.legacy_double_decode = legacy_decode;
+    analyze_timing_rows_known_holds(rows, row_to_beat, timing, has_holds, scratch)
+}
+
 pub fn analyze_and_annotate_timing_rows<const LANES: usize>(
     rows: &[[u8; LANES]],
     row_to_beat: &[f32],
@@ -4969,6 +5021,39 @@ mod tests {
         assert_eq!(
             analyze_arena_for_bench(&rows, &beats, &timing, false, true, &mut sampled),
             analyze_arena_for_bench(&rows, &beats, &timing, false, false, &mut primed),
+        );
+    }
+
+    #[test]
+    fn chunked_double_decode_matches_scalar() {
+        let mut key = 0x9e37_79b9u32;
+        for _ in 0..65_536 {
+            assert_eq!(state_from_key::<8>(key), state_from_key_scalar::<8>(key));
+            key = key.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        }
+    }
+
+    #[cfg(feature = "bench-support")]
+    #[test]
+    fn chunked_double_solver_matches_scalar_decode() {
+        let rows = [
+            *b"10000000",
+            *b"00001000",
+            *b"01000010",
+            *b"20000000",
+            *b"00010001",
+            *b"00000100",
+            *b"30000000",
+            *b"10000001",
+        ];
+        let beats = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75];
+        let timing = basic_timing();
+        let mut scalar = timing_rows_scratch::<8>().expect("dance-double layout");
+        let mut chunked = timing_rows_scratch::<8>().expect("dance-double layout");
+
+        assert_eq!(
+            analyze_double_decode_for_bench(&rows, &beats, &timing, true, true, &mut scalar),
+            analyze_double_decode_for_bench(&rows, &beats, &timing, true, false, &mut chunked),
         );
     }
 
