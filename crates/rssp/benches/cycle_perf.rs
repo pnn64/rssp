@@ -252,6 +252,35 @@ fn typed_rows_reused(data: &[u8], scratch: &mut rssp::stats::TypedRowsScratch<4>
 }
 
 #[cfg(windows)]
+fn invalid_chart_notes(
+    data: &[u8],
+    legacy_invalid_heads: bool,
+    scratch: &mut rssp::stats::ChartNotesScratch,
+) -> usize {
+    let (chart, stats, densities, beats, last) =
+        rssp::stats::minimize_chart_count_rows_notes_for_bench(
+            data,
+            4,
+            legacy_invalid_heads,
+            scratch,
+        );
+    let note_checksum = scratch.drain().fold(0usize, |sum, note| {
+        sum.wrapping_add(note.row_index)
+            .wrapping_add(note.column)
+            .wrapping_add(note.tail_row_index.unwrap_or(0))
+    });
+    let checksum = chart
+        .len()
+        .wrapping_add(stats.total_arrows as usize)
+        .wrapping_add(densities.len())
+        .wrapping_add(beats.len())
+        .wrapping_add(last.to_bits() as usize)
+        .wrapping_add(note_checksum);
+    black_box((chart, stats, densities, beats, last));
+    checksum
+}
+
+#[cfg(windows)]
 fn large_pair_map(entries: usize) -> String {
     use std::fmt::Write;
 
@@ -1323,6 +1352,15 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         .expect("minimizer cycle fixture should contain a 4-lane chart");
     let mut typed_rows = rssp::stats::TypedRowsScratch::<4>::default();
     rssp::stats::minimize_rows_typed_in::<4>(minimize_typed_chart, &mut typed_rows);
+    let mut invalid_note_rows = Vec::with_capacity(4096 * 5 + 1);
+    for row in 0usize..4096 {
+        invalid_note_rows.extend_from_slice(if row.is_multiple_of(2) {
+            b"2000\n"
+        } else {
+            b"1000\n"
+        });
+    }
+    invalid_note_rows.push(b';');
     let analysis_options = rssp::AnalysisOptions::default();
     let mut allocating_analysis_scratch = rssp::AnalysisScratch::default();
     let mut owned_timing_scratch = rssp::AnalysisScratch::default();
@@ -1965,6 +2003,36 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     optimizations.finish();
+
+    let mut legacy_invalid_notes = rssp::stats::ChartNotesScratch::default();
+    let mut marked_invalid_notes = rssp::stats::ChartNotesScratch::default();
+    assert_eq!(
+        invalid_chart_notes(&invalid_note_rows, true, &mut legacy_invalid_notes),
+        invalid_chart_notes(&invalid_note_rows, false, &mut marked_invalid_notes),
+    );
+    let mut invalid_notes = c.benchmark_group("cycles/invalid_chart_notes_4096");
+    invalid_notes.sample_size(50);
+    invalid_notes.measurement_time(Duration::from_secs(3));
+    invalid_notes.throughput(Throughput::Bytes(invalid_note_rows.len() as u64));
+    invalid_notes.bench_function("index_vec_sort", |b| {
+        b.iter(|| {
+            black_box(invalid_chart_notes(
+                black_box(&invalid_note_rows),
+                true,
+                black_box(&mut legacy_invalid_notes),
+            ));
+        });
+    });
+    invalid_notes.bench_function("in_place_mark", |b| {
+        b.iter(|| {
+            black_box(invalid_chart_notes(
+                black_box(&invalid_note_rows),
+                false,
+                black_box(&mut marked_invalid_notes),
+            ));
+        });
+    });
+    invalid_notes.finish();
 
     nps_stats_bench::assert_behavior();
     let owned_nps = nps_stats_bench::values();

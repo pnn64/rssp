@@ -56,6 +56,7 @@ pub struct ParsedChartNote {
 }
 
 const NO_TAIL_ROW: u32 = u32::MAX;
+const INVALID_NOTE_ROW: u32 = u32::MAX - 1;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -83,7 +84,11 @@ impl From<RawChartNote> for ParsedChartNote {
 #[derive(Default)]
 pub struct ChartNotesScratch {
     notes: Vec<RawChartNote>,
+    #[cfg(any(test, feature = "bench-support"))]
     invalid_heads: Vec<usize>,
+    has_invalid: bool,
+    #[cfg(any(test, feature = "bench-support"))]
+    legacy_invalid_heads: bool,
     hold_heads: [Option<usize>; 10],
     lanes: usize,
     row_index: usize,
@@ -93,7 +98,9 @@ impl ChartNotesScratch {
     fn begin(&mut self, lanes: usize, capacity: usize) {
         self.notes.clear();
         self.notes.reserve(capacity);
+        #[cfg(any(test, feature = "bench-support"))]
         self.invalid_heads.clear();
+        self.has_invalid = false;
         self.hold_heads.fill(None);
         self.lanes = lanes;
         self.row_index = 0;
@@ -101,7 +108,13 @@ impl ChartNotesScratch {
 
     fn invalidate_hold(&mut self, column: usize) {
         if let Some(note_index) = self.hold_heads[column].take() {
-            self.invalid_heads.push(note_index);
+            #[cfg(any(test, feature = "bench-support"))]
+            if self.legacy_invalid_heads {
+                self.invalid_heads.push(note_index);
+                return;
+            }
+            self.notes[note_index].tail_row_index = INVALID_NOTE_ROW;
+            self.has_invalid = true;
         }
     }
 
@@ -145,21 +158,28 @@ impl ChartNotesScratch {
         for column in 0..self.lanes {
             self.invalidate_hold(column);
         }
-        if self.invalid_heads.is_empty() {
+        #[cfg(any(test, feature = "bench-support"))]
+        if self.legacy_invalid_heads {
+            if self.invalid_heads.is_empty() {
+                return;
+            }
+            self.invalid_heads.sort_unstable();
+            let mut invalid = self.invalid_heads.iter().copied().peekable();
+            let mut note_index = 0usize;
+            self.notes.retain(|_| {
+                let keep = invalid.peek().copied() != Some(note_index);
+                if !keep {
+                    invalid.next();
+                }
+                note_index += 1;
+                keep
+            });
             return;
         }
-
-        self.invalid_heads.sort_unstable();
-        let mut invalid = self.invalid_heads.iter().copied().peekable();
-        let mut note_index = 0usize;
-        self.notes.retain(|_| {
-            let keep = invalid.peek().copied() != Some(note_index);
-            if !keep {
-                invalid.next();
-            }
-            note_index += 1;
-            keep
-        });
+        if self.has_invalid {
+            self.notes
+                .retain(|note| note.tail_row_index != INVALID_NOTE_ROW);
+        }
     }
 
     /// Drains resolved events while retaining their allocation.
@@ -1057,6 +1077,18 @@ pub fn minimize_chart_count_rows_notes(
         10 => minimize_rows_direct_notes::<10, true>(data, chart_notes),
         _ => minimize_rows_direct_notes::<4, true>(data, chart_notes),
     }
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn minimize_chart_count_rows_notes_for_bench(
+    data: &[u8],
+    lanes: usize,
+    legacy_invalid_heads: bool,
+    chart_notes: &mut ChartNotesScratch,
+) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
+    chart_notes.legacy_invalid_heads = legacy_invalid_heads;
+    minimize_chart_count_rows_notes(data, lanes, chart_notes)
 }
 
 fn reduce_output_measure<const L: usize>(output: &mut Vec<u8>, start: usize, rows: usize) -> usize {
@@ -2344,6 +2376,27 @@ mod tests {
     #[test]
     fn raw_chart_notes_remain_compact() {
         assert_eq!(std::mem::size_of::<RawChartNote>(), 12);
+    }
+
+    #[test]
+    fn in_place_invalid_notes_match_index_cleanup() {
+        let data = b"2000\n1000\n0200\n0300\n0040\n0001\n;";
+        let run = |legacy_invalid_heads| {
+            let mut scratch = ChartNotesScratch {
+                legacy_invalid_heads,
+                ..ChartNotesScratch::default()
+            };
+            let result = minimize_chart_count_rows_notes(data, 4, &mut scratch);
+            let notes: Vec<_> = scratch.drain().collect();
+            (result, notes)
+        };
+
+        let (legacy_result, legacy_notes) = run(true);
+        let (result, notes) = run(false);
+        assert_eq!(result, legacy_result);
+        assert_eq!(notes, legacy_notes);
+        assert_eq!(notes.len(), 3);
+        assert!(notes.iter().all(|note| note.row_index < 6));
     }
 
     #[test]
