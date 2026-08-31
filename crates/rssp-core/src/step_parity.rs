@@ -189,6 +189,14 @@ const fn row_map_new() -> RowStateMap {
     }
 }
 
+fn row_map_with_capacity(expected: usize) -> RowStateMap {
+    let mut map = row_map_new();
+    let cap = row_map_cap(expected);
+    map.entries.resize(cap, RowMapEntry::default());
+    map.mask = cap - 1;
+    map
+}
+
 fn row_map_cap(expected: usize) -> usize {
     let target = expected.saturating_mul(2).max(ROW_MAP_MIN_CAP);
     let mut cap = ROW_MAP_MIN_CAP;
@@ -614,6 +622,9 @@ const START_BASE4: StateBase4 = StateBase4 {
 
 const SINGLE_STATE_COUNT: usize = 1 << 12;
 const SINGLE_LAYER_MAX: usize = 625;
+// Covers common tap/jump layers without retaining the 625-state worst case;
+// hold-heavy charts can still grow to the hard limit.
+const SINGLE_WORK_CAP: usize = 192;
 const SINGLE_STATE_MASK: u32 = 0xff00_0fff;
 const SINGLE_PRED_SHIFT: u32 = 12;
 const SINGLE_PRED_MASK: u32 = 0x0fff;
@@ -1385,11 +1396,17 @@ impl Default for LegacyDp {
     }
 }
 
-fn parity_gen(cache: &'static LayoutCache) -> StepParityGenerator {
-    let facing_cost4 = (layout_cols(&cache.layout) == 4).then(|| facing_cost4(&cache.layout));
-    let spin_class4 = (layout_cols(&cache.layout) == 4).then(|| spin_class4(&cache.layout));
+fn parity_gen(cache: &'static LayoutCache, reserve_single: bool) -> StepParityGenerator {
+    let column_count = layout_cols(&cache.layout);
+    let facing_cost4 = (column_count == 4).then(|| facing_cost4(&cache.layout));
+    let spin_class4 = (column_count == 4).then(|| spin_class4(&cache.layout));
+    let single_cap = if reserve_single && column_count == 4 {
+        SINGLE_WORK_CAP
+    } else {
+        0
+    };
     StepParityGenerator {
-        column_count: layout_cols(&cache.layout),
+        column_count,
         layout: &cache.layout,
         perm_table: &cache.perm_table,
         facing_cost4,
@@ -1398,9 +1415,13 @@ fn parity_gen(cache: &'static LayoutCache) -> StepParityGenerator {
         double_nodes: Vec::new(),
         rows: Vec::new(),
         result_keys: Vec::new(),
-        prev_links: Vec::new(),
-        next_links: Vec::new(),
-        state_map: row_map_new(),
+        prev_links: Vec::with_capacity(single_cap),
+        next_links: Vec::with_capacity(single_cap),
+        state_map: if single_cap == 0 {
+            row_map_new()
+        } else {
+            row_map_with_capacity(single_cap)
+        },
         active_hold_ends: [HOLD_END_NONE; MAX_COLUMNS],
         #[cfg(feature = "bench-support")]
         legacy_tap_path: false,
@@ -3976,7 +3997,7 @@ where
     let rows = parse_rows(data, cols, get_second);
     let notes = build_notes(&rows, timing);
 
-    let mut generator = parity_gen(cache);
+    let mut generator = parity_gen(cache, true);
     if !parity_analyze(&mut generator, notes, cols) {
         return TechCounts::default();
     }
@@ -4058,6 +4079,13 @@ pub struct TimingRowsScratch<const LANES: usize> {
 
 #[cfg(feature = "bench-support")]
 #[doc(hidden)]
+pub struct GrowingTimingScratch<const LANES: usize> {
+    generator: StepParityGenerator,
+    hold_heads: Vec<[f32; LANES]>,
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
 pub struct WideHoldTimingRowsScratch<const LANES: usize> {
     generator: StepParityGenerator,
     hold_heads: Vec<[f32; MAX_COLUMNS]>,
@@ -4074,7 +4102,17 @@ pub struct LegacyTimingRowsScratch<const LANES: usize> {
 pub fn timing_rows_scratch<const LANES: usize>() -> Option<TimingRowsScratch<LANES>> {
     let cache = layout_for_lanes(LANES)?;
     Some(TimingRowsScratch {
-        generator: parity_gen(cache),
+        generator: parity_gen(cache, true),
+        hold_heads: Vec::new(),
+    })
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn growing_timing_scratch<const LANES: usize>() -> Option<GrowingTimingScratch<LANES>> {
+    let cache = layout_for_lanes(LANES)?;
+    Some(GrowingTimingScratch {
+        generator: parity_gen(cache, false),
         hold_heads: Vec::new(),
     })
 }
@@ -4085,7 +4123,7 @@ pub fn wide_hold_timing_rows_scratch<const LANES: usize>()
 -> Option<WideHoldTimingRowsScratch<LANES>> {
     let cache = layout_for_lanes(LANES)?;
     Some(WideHoldTimingRowsScratch {
-        generator: parity_gen(cache),
+        generator: parity_gen(cache, true),
         hold_heads: Vec::new(),
     })
 }
@@ -4095,7 +4133,7 @@ pub fn wide_hold_timing_rows_scratch<const LANES: usize>()
 pub fn legacy_timing_rows_scratch<const LANES: usize>() -> Option<LegacyTimingRowsScratch<LANES>> {
     let cache = layout_for_lanes(LANES)?;
     Some(LegacyTimingRowsScratch {
-        generator: parity_gen(cache),
+        generator: parity_gen(cache, true),
         hold_heads: Vec::new(),
         dp: LegacyDp::default(),
     })
@@ -4141,6 +4179,35 @@ pub fn analyze_timing_rows_wide_holds_for_bench<const LANES: usize>(
     timing: &TimingData,
     has_holds: bool,
     scratch: &mut WideHoldTimingRowsScratch<LANES>,
+) -> TechCounts {
+    let cols = layout_cols(scratch.generator.layout);
+    if !parity_analyze_rows(
+        &mut scratch.generator,
+        &mut scratch.hold_heads,
+        rows,
+        row_to_beat,
+        timing,
+        cols,
+        has_holds,
+    ) {
+        return TechCounts::default();
+    }
+    calculate_tech_counts(
+        &scratch.generator.rows,
+        &scratch.generator.result_keys,
+        scratch.generator.layout,
+    )
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn analyze_growing_for_bench<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    has_holds: bool,
+    scratch: &mut GrowingTimingScratch<LANES>,
 ) -> TechCounts {
     let cols = layout_cols(scratch.generator.layout);
     if !parity_analyze_rows(
@@ -4572,6 +4639,33 @@ mod tests {
         assert_eq!(
             analyze_timing_rows_known_holds(&rows, &beats, &timing, true, &mut narrow),
             analyze_timing_rows_wide_holds_for_bench(&rows, &beats, &timing, true, &mut wide),
+        );
+    }
+
+    #[cfg(feature = "bench-support")]
+    #[test]
+    fn primed_workspace_matches_growth() {
+        let rows = [
+            [b'1', b'0', b'0', b'0'],
+            [b'0', b'0', b'1', b'0'],
+            [b'1', b'1', b'0', b'0'],
+            [b'0', b'0', b'1', b'1'],
+            [b'0', b'1', b'0', b'0'],
+        ];
+        let beats = [0.0, 0.25, 0.5, 0.75, 1.0];
+        let timing = basic_timing();
+        let mut reserved = timing_rows_scratch::<4>().expect("dance-single layout");
+        let mut growing = growing_timing_scratch::<4>().expect("dance-single layout");
+
+        assert_eq!(reserved.generator.prev_links.capacity(), SINGLE_WORK_CAP);
+        assert_eq!(reserved.generator.next_links.capacity(), SINGLE_WORK_CAP);
+        assert_eq!(
+            reserved.generator.state_map.entries.len(),
+            row_map_cap(SINGLE_WORK_CAP)
+        );
+        assert_eq!(
+            analyze_timing_rows_known_holds(&rows, &beats, &timing, false, &mut reserved),
+            analyze_growing_for_bench(&rows, &beats, &timing, false, &mut growing),
         );
     }
 

@@ -3503,6 +3503,24 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         &mut folded_hash_scratch,
     );
     assert_eq!(folded_hash_counts, legacy_hash_counts);
+    let mut growing_scratch =
+        rssp::step_parity::growing_timing_scratch::<4>().expect("dance-single parity layout");
+    assert_eq!(
+        rssp::step_parity::analyze_growing_for_bench(
+            &single_rows,
+            &single_beats,
+            &parity_timing,
+            false,
+            &mut growing_scratch,
+        ),
+        rssp::step_parity::analyze_timing_rows_known_holds(
+            &single_rows,
+            &single_beats,
+            &parity_timing,
+            false,
+            &mut single_scratch,
+        ),
+    );
     assert_eq!(
         rssp::step_parity::analyze_timing_rows_wide_holds_for_bench(
             &single_hold_rows,
@@ -3606,6 +3624,19 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
                     black_box(&mut reused_annotations),
                 ),
             );
+        });
+    });
+    parity.bench_function("dense_single_cold_growing_workspace", |b| {
+        b.iter(|| {
+            let mut scratch = rssp::step_parity::growing_timing_scratch::<4>()
+                .expect("dance-single parity layout");
+            black_box(rssp::step_parity::analyze_growing_for_bench(
+                black_box(&single_rows),
+                black_box(&single_beats),
+                black_box(&parity_timing),
+                false,
+                black_box(&mut scratch),
+            ));
         });
     });
     parity.bench_function("dense_single_cold", |b| {
