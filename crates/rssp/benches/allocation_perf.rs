@@ -37,6 +37,8 @@ mod report_nps_bench;
 mod report_patterns_bench;
 #[path = "support/report_timing.rs"]
 mod report_timing_bench;
+#[path = "support/row_to_beat.rs"]
+mod row_to_beat_bench;
 #[path = "support/selectable.rs"]
 mod selectable_bench;
 #[path = "support/serialize.rs"]
@@ -3847,7 +3849,50 @@ fn run_segment_parse_phase(map: &str, phase: &str, iterations: usize, legacy: bo
     );
 }
 
+fn run_row_to_beat_phase(data: &[u8], phase: &str, iterations: usize, legacy: bool) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0u64;
+    for _ in 0..iterations {
+        let output = row_to_beat_bench::compute(black_box(data), legacy);
+        checksum = checksum
+            .wrapping_add(output.len() as u64)
+            .wrapping_add(output.last().map_or(0, |beat| u64::from(beat.to_bits())));
+        black_box(output);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=row-to-beat phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_rows_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        row_to_beat_bench::ROW_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
 fn run_timing_build_alloc(iterations: usize) {
+    let row_data = row_to_beat_bench::fixture();
+    row_to_beat_bench::assert_behavior(&row_data);
+    run_row_to_beat_phase(&row_data, "growing", iterations, true);
+    run_row_to_beat_phase(&row_data, "preallocated", iterations, false);
+
     let segment_map = timing_segments_bench::fixture();
     timing_segments_bench::assert_behavior(&segment_map);
     run_segment_parse_phase(&segment_map, "scalar-capacity-scan", iterations, true);

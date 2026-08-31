@@ -2,10 +2,32 @@ use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
+#[path = "support/row_to_beat.rs"]
+mod row_to_beat_bench;
 #[path = "support/sm_timing.rs"]
 mod sm_timing_bench;
 #[path = "support/timing_segments.rs"]
 mod timing_segments_bench;
+
+fn bench_row_to_beat(c: &mut Criterion) {
+    let fixture = row_to_beat_bench::fixture();
+    row_to_beat_bench::assert_behavior(&fixture);
+    let mut group = c.benchmark_group("row_to_beat_26624_rows");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(row_to_beat_bench::ROW_COUNT as u64));
+    group.bench_function("growing", |b| {
+        b.iter(|| {
+            black_box(row_to_beat_bench::compute(black_box(&fixture), true));
+        });
+    });
+    group.bench_function("preallocated", |b| {
+        b.iter(|| {
+            black_box(row_to_beat_bench::compute(black_box(&fixture), false));
+        });
+    });
+    group.finish();
+}
 
 fn bench_segment_parse(c: &mut Criterion) {
     let fixture = timing_segments_bench::fixture();
@@ -55,5 +77,10 @@ fn bench_sm_timing(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_segment_parse, bench_sm_timing);
+criterion_group!(
+    benches,
+    bench_row_to_beat,
+    bench_segment_parse,
+    bench_sm_timing
+);
 criterion_main!(benches);

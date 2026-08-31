@@ -57,6 +57,9 @@ mod report_patterns_bench;
 #[path = "support/report_timing.rs"]
 mod report_timing_bench;
 #[cfg(windows)]
+#[path = "support/row_to_beat.rs"]
+mod row_to_beat_bench;
+#[cfg(windows)]
 #[path = "support/selectable.rs"]
 mod selectable_bench;
 #[cfg(windows)]
@@ -574,6 +577,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     timing_sort_bench::assert_behavior(&timing_sort_fixture);
     let timing_segments_fixture = timing_segments_bench::fixture();
     timing_segments_bench::assert_behavior(&timing_segments_fixture);
+    let row_to_beat_fixture = row_to_beat_bench::fixture();
+    row_to_beat_bench::assert_behavior(&row_to_beat_fixture);
     let legacy_metadata = cp1252_metadata(ENTRIES);
     let (valid_tech, valid_description) = tech_prefix_bench::valid_input();
     let invalid_tech = tech_prefix_bench::invalid_input();
@@ -651,6 +656,28 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     segment_parse.finish();
+
+    let mut row_to_beat = c.benchmark_group("cycles/row_to_beat_26624_rows");
+    row_to_beat.throughput(Throughput::Elements(row_to_beat_bench::ROW_COUNT as u64));
+    row_to_beat.sample_size(100);
+    row_to_beat.measurement_time(Duration::from_secs(3));
+    row_to_beat.bench_function("growing", |b| {
+        b.iter(|| {
+            black_box(row_to_beat_bench::compute(
+                black_box(&row_to_beat_fixture),
+                true,
+            ));
+        });
+    });
+    row_to_beat.bench_function("preallocated", |b| {
+        b.iter(|| {
+            black_box(row_to_beat_bench::compute(
+                black_box(&row_to_beat_fixture),
+                false,
+            ));
+        });
+    });
+    row_to_beat.finish();
 
     let mut parse_dispatch = c.benchmark_group("cycles/parse_dispatch_128_charts");
     parse_dispatch.throughput(Throughput::Bytes(parse_dispatch_fixture.len() as u64));

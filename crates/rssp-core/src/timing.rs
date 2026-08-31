@@ -872,7 +872,37 @@ fn format_bpm_segments_iter(
 
 #[must_use]
 pub fn compute_row_to_beat(minimized_note_data: &[u8]) -> Vec<f32> {
-    let mut row_to_beat = Vec::new();
+    compute_row_to_beat_impl::<true>(minimized_note_data)
+}
+
+fn first_row_capacity(data: &[u8]) -> usize {
+    // Minimized rows have one fixed lane width plus a newline. Inspecting only
+    // the first row keeps the estimate O(row width) instead of adding a prepass.
+    let end = data
+        .iter()
+        .position(|&byte| matches!(byte, b'\n' | b','))
+        .unwrap_or(data.len());
+    let mut row = &data[..end];
+    while row.first().is_some_and(u8::is_ascii_whitespace) {
+        row = &row[1..];
+    }
+    while row.last().is_some_and(u8::is_ascii_whitespace) {
+        row = &row[..row.len() - 1];
+    }
+    if row.is_empty() {
+        0
+    } else {
+        data.len().div_ceil(row.len() + 1)
+    }
+}
+
+fn compute_row_to_beat_impl<const PREALLOC: bool>(minimized_note_data: &[u8]) -> Vec<f32> {
+    let capacity = if PREALLOC {
+        first_row_capacity(minimized_note_data)
+    } else {
+        0
+    };
+    let mut row_to_beat = Vec::with_capacity(capacity);
     for (measure_index, measure_bytes) in minimized_note_data.split(|&b| b == b',').enumerate() {
         let num_rows = count_measure_rows(measure_bytes);
         if num_rows == 0 {
@@ -886,6 +916,17 @@ pub fn compute_row_to_beat(minimized_note_data: &[u8]) -> Vec<f32> {
         }
     }
     row_to_beat
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn compute_row_to_beat_for_bench(minimized_note_data: &[u8], legacy: bool) -> Vec<f32> {
+    if legacy {
+        compute_row_to_beat_impl::<false>(minimized_note_data)
+    } else {
+        compute_row_to_beat_impl::<true>(minimized_note_data)
+    }
 }
 
 #[inline(always)]
@@ -2388,6 +2429,26 @@ mod tests {
             &parse_segments_for_bench(&map, false),
             &parse_segments_for_bench(&map, true),
         );
+    }
+
+    #[test]
+    fn preallocated_row_beats_match_growing_path() {
+        let cases: &[&[u8]] = &[
+            b"",
+            b",\n,",
+            b"1000",
+            b" 1000 \n0100\n,\n0010\n0001\n",
+            b"10000000\n01000000\n,\n00100000\n00010000\n",
+            b"\n1000\n0100\n",
+        ];
+        for &data in cases {
+            let growing = compute_row_to_beat_impl::<false>(data);
+            let preallocated = compute_row_to_beat_impl::<true>(data);
+            assert_eq!(preallocated.len(), growing.len());
+            for (actual, expected) in preallocated.iter().zip(growing) {
+                assert_eq!(actual.to_bits(), expected.to_bits());
+            }
+        }
     }
 
     #[test]
