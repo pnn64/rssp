@@ -996,6 +996,63 @@ fn run_wide_hold_alloc<const LANES: usize>(
     counts
 }
 
+fn run_dense_hold_alloc<const LANES: usize>(
+    mode: &str,
+    rows: &[[u8; LANES]],
+    beats: &[f32],
+    timing: &rssp::timing::TimingData,
+    iterations: usize,
+) -> rssp::TechCounts {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut scratch =
+        rssp::step_parity::dense_hold_timing_scratch::<LANES>().expect("supported parity layout");
+    let counts = black_box(rssp::step_parity::analyze_dense_holds_for_bench(
+        black_box(rows),
+        black_box(beats),
+        black_box(timing),
+        true,
+        black_box(&mut scratch),
+    ));
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    print_parity_alloc(
+        mode,
+        "hold-heads-dense-cold",
+        1,
+        rows.len(),
+        elapsed,
+        before,
+        after,
+    );
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    for _ in 0..iterations {
+        black_box(rssp::step_parity::analyze_dense_holds_for_bench(
+            black_box(rows),
+            black_box(beats),
+            black_box(timing),
+            true,
+            black_box(&mut scratch),
+        ));
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    print_parity_alloc(
+        mode,
+        "hold-heads-dense-reused",
+        iterations,
+        rows.len(),
+        elapsed,
+        before,
+        after,
+    );
+    counts
+}
+
 fn run_growing_alloc<const LANES: usize>(
     mode: &str,
     rows: &[[u8; LANES]],
@@ -1115,6 +1172,8 @@ fn run_parity_alloc<const LANES: usize>(
 
     let wide_counts =
         has_holds.then(|| run_wide_hold_alloc(mode, &rows, &beats, &timing, iterations));
+    let dense_counts =
+        has_holds.then(|| run_dense_hold_alloc(mode, &rows, &beats, &timing, iterations));
     let growing_counts = (LANES == 4)
         .then(|| run_growing_alloc(mode, &rows, &beats, &timing, has_holds, iterations));
 
@@ -1132,6 +1191,9 @@ fn run_parity_alloc<const LANES: usize>(
     ));
     if let Some(wide_counts) = wide_counts {
         assert_eq!(compact_counts, wide_counts);
+    }
+    if let Some(dense_counts) = dense_counts {
+        assert_eq!(compact_counts, dense_counts);
     }
     if let Some(growing_counts) = growing_counts {
         assert_eq!(compact_counts, growing_counts);

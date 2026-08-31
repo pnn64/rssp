@@ -1640,6 +1640,88 @@ fn fill_hold_heads_from_arrays<const LANES: usize, const HOLD_COLS: usize>(
     }
 }
 
+#[derive(Clone, Copy)]
+struct SparseHoldHead {
+    row: usize,
+    end: f32,
+    col: u8,
+}
+
+fn fill_sparse_hold_heads<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    cols: usize,
+    out: &mut Vec<SparseHoldHead>,
+) {
+    out.clear();
+    if cols == 0 || cols > 8 {
+        return;
+    }
+    let copy_len = cols.min(LANES);
+    if out.capacity() == 0 {
+        let head_count = rows
+            .iter()
+            .flat_map(|row| row.iter().take(copy_len))
+            .filter(|&&ch| matches!(ch, b'2' | b'4'))
+            .count();
+        out.reserve(head_count);
+    }
+    let mut hold_start_idx = [usize::MAX; MAX_COLUMNS];
+    let mut hold_start_row = [0i32; MAX_COLUMNS];
+    let mut hold_start_beat = [0.0f32; MAX_COLUMNS];
+
+    for (idx, row) in rows.iter().enumerate() {
+        let mut nonzero_mask = row_nonzero_mask(row, copy_len);
+        if nonzero_mask == 0 {
+            continue;
+        }
+        let (row_i32, beat) = row_quantized(row_to_beat[idx]);
+        while nonzero_mask != 0 {
+            let c = nonzero_mask.trailing_zeros() as usize;
+            nonzero_mask &= nonzero_mask - 1;
+            match row[c] {
+                b'1' | b'L' | b'M' | b'F' => hold_start_idx[c] = usize::MAX,
+                b'2' | b'4' => {
+                    hold_start_idx[c] = out.len();
+                    hold_start_row[c] = row_i32;
+                    hold_start_beat[c] = beat;
+                    out.push(SparseHoldHead {
+                        row: idx,
+                        end: HOLD_END_NONE,
+                        col: c as u8,
+                    });
+                }
+                b'3' => {
+                    let start_idx = hold_start_idx[c];
+                    if start_idx != usize::MAX {
+                        let len = (row_i32 - hold_start_row[c]) as f32 / ROWS_PER_BEAT as f32;
+                        out[start_idx].end = hold_start_beat[c] + len;
+                        hold_start_idx[c] = usize::MAX;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+#[inline(always)]
+fn sparse_hold_end(heads: &[SparseHoldHead], cursor: &mut usize, row: usize, col: usize) -> f32 {
+    while let Some(head) = heads.get(*cursor) {
+        let key = (head.row, usize::from(head.col));
+        if key < (row, col) {
+            *cursor += 1;
+            continue;
+        }
+        if key == (row, col) {
+            *cursor += 1;
+            return head.end;
+        }
+        break;
+    }
+    HOLD_END_NONE
+}
+
 #[inline(always)]
 fn parity_push_mine(
     g: &mut StepParityGenerator,
@@ -1713,6 +1795,25 @@ fn parity_push_note(
     }
 }
 
+fn parity_create_no_hold_rows<const LANES: usize>(
+    g: &mut StepParityGenerator,
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    cols: usize,
+) {
+    if timing_fakes(timing).is_empty() {
+        if let Some(fixed) = fixed_timing_parts(timing)
+            && parity_create_tap_rows_fixed(g, rows, row_to_beat, cols, fixed)
+        {
+            return;
+        }
+        parity_create_rows_no_holds::<LANES, false>(g, rows, row_to_beat, timing, cols);
+    } else {
+        parity_create_rows_no_holds::<LANES, true>(g, rows, row_to_beat, timing, cols);
+    }
+}
+
 fn parity_create_rows_from_arrays<const LANES: usize, const HOLD_COLS: usize>(
     g: &mut StepParityGenerator,
     hold_heads: &mut Vec<[f32; HOLD_COLS]>,
@@ -1724,16 +1825,7 @@ fn parity_create_rows_from_arrays<const LANES: usize, const HOLD_COLS: usize>(
 ) {
     if !has_holds {
         hold_heads.clear();
-        if timing_fakes(timing).is_empty() {
-            if let Some(fixed) = fixed_timing_parts(timing)
-                && parity_create_tap_rows_fixed(g, rows, row_to_beat, cols, fixed)
-            {
-                return;
-            }
-            parity_create_rows_no_holds::<LANES, false>(g, rows, row_to_beat, timing, cols);
-        } else {
-            parity_create_rows_no_holds::<LANES, true>(g, rows, row_to_beat, timing, cols);
-        }
+        parity_create_no_hold_rows(g, rows, row_to_beat, timing, cols);
         return;
     }
 
@@ -1810,8 +1902,64 @@ fn parity_create_rows_holds<const LANES: usize, const HOLD_COLS: usize, const HA
     timing: &TimingData,
     cols: usize,
 ) {
-    let mut counter = row_counter_new();
     fill_hold_heads_from_arrays(rows, row_to_beat, cols, hold_heads);
+    parity_create_rows_holds_with::<LANES, HAS_FAKES>(
+        g,
+        rows,
+        row_to_beat,
+        timing,
+        cols,
+        |idx, col| hold_heads[idx][col],
+    );
+}
+
+fn parity_create_rows_sparse<const LANES: usize>(
+    g: &mut StepParityGenerator,
+    hold_heads: &mut Vec<SparseHoldHead>,
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    cols: usize,
+    has_holds: bool,
+) {
+    if !has_holds {
+        hold_heads.clear();
+        parity_create_no_hold_rows(g, rows, row_to_beat, timing, cols);
+        return;
+    }
+
+    fill_sparse_hold_heads(rows, row_to_beat, cols, hold_heads);
+    let mut cursor = 0;
+    if timing_fakes(timing).is_empty() {
+        parity_create_rows_holds_with::<LANES, false>(
+            g,
+            rows,
+            row_to_beat,
+            timing,
+            cols,
+            |idx, col| sparse_hold_end(hold_heads, &mut cursor, idx, col),
+        );
+    } else {
+        parity_create_rows_holds_with::<LANES, true>(
+            g,
+            rows,
+            row_to_beat,
+            timing,
+            cols,
+            |idx, col| sparse_hold_end(hold_heads, &mut cursor, idx, col),
+        );
+    }
+}
+
+fn parity_create_rows_holds_with<const LANES: usize, const HAS_FAKES: bool>(
+    g: &mut StepParityGenerator,
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    cols: usize,
+    mut get_hold_end: impl FnMut(usize, usize) -> f32,
+) {
+    let mut counter = row_counter_new();
     let copy_len = cols.min(LANES);
     let fixed = fixed_timing_parts(timing);
     let mut time_cursor = BeatTimeCursorF32::new(timing);
@@ -1842,7 +1990,7 @@ fn parity_create_rows_holds<const LANES: usize, const HOLD_COLS: usize, const HA
                     parity_push_note(g, &mut counter, c, beat, second, HOLD_END_NONE, false)
                 }
                 b'2' | b'4' => {
-                    let hold_end = hold_heads[idx][c];
+                    let hold_end = get_hold_end(idx, c);
                     if !row_fake && hold_end != HOLD_END_NONE {
                         parity_push_note(g, &mut counter, c, beat, second, hold_end, true);
                     }
@@ -1934,6 +2082,22 @@ fn parity_analyze_rows<const LANES: usize, const HOLD_COLS: usize>(
     parity_reset(g, cols);
     g.rows.reserve(rows.len());
     parity_create_rows_from_arrays(g, hold_heads, rows, row_to_beat, timing, cols, has_holds);
+    parity_reserve(g);
+    parity_finish(g)
+}
+
+fn parity_analyze_sparse<const LANES: usize>(
+    g: &mut StepParityGenerator,
+    hold_heads: &mut Vec<SparseHoldHead>,
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    cols: usize,
+    has_holds: bool,
+) -> bool {
+    parity_reset(g, cols);
+    g.rows.reserve(rows.len());
+    parity_create_rows_sparse(g, hold_heads, rows, row_to_beat, timing, cols, has_holds);
     parity_reserve(g);
     parity_finish(g)
 }
@@ -4074,12 +4238,19 @@ pub fn analyze_timing_lanes(
 
 pub struct TimingRowsScratch<const LANES: usize> {
     generator: StepParityGenerator,
-    hold_heads: Vec<[f32; LANES]>,
+    hold_heads: Vec<SparseHoldHead>,
 }
 
 #[cfg(feature = "bench-support")]
 #[doc(hidden)]
 pub struct GrowingTimingScratch<const LANES: usize> {
+    generator: StepParityGenerator,
+    hold_heads: Vec<SparseHoldHead>,
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub struct DenseHoldTimingScratch<const LANES: usize> {
     generator: StepParityGenerator,
     hold_heads: Vec<[f32; LANES]>,
 }
@@ -4113,6 +4284,16 @@ pub fn growing_timing_scratch<const LANES: usize>() -> Option<GrowingTimingScrat
     let cache = layout_for_lanes(LANES)?;
     Some(GrowingTimingScratch {
         generator: parity_gen(cache, false),
+        hold_heads: Vec::new(),
+    })
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn dense_hold_timing_scratch<const LANES: usize>() -> Option<DenseHoldTimingScratch<LANES>> {
+    let cache = layout_for_lanes(LANES)?;
+    Some(DenseHoldTimingScratch {
+        generator: parity_gen(cache, true),
         hold_heads: Vec::new(),
     })
 }
@@ -4202,6 +4383,35 @@ pub fn analyze_timing_rows_wide_holds_for_bench<const LANES: usize>(
 #[cfg(feature = "bench-support")]
 #[doc(hidden)]
 #[must_use]
+pub fn analyze_dense_holds_for_bench<const LANES: usize>(
+    rows: &[[u8; LANES]],
+    row_to_beat: &[f32],
+    timing: &TimingData,
+    has_holds: bool,
+    scratch: &mut DenseHoldTimingScratch<LANES>,
+) -> TechCounts {
+    let cols = layout_cols(scratch.generator.layout);
+    if !parity_analyze_rows(
+        &mut scratch.generator,
+        &mut scratch.hold_heads,
+        rows,
+        row_to_beat,
+        timing,
+        cols,
+        has_holds,
+    ) {
+        return TechCounts::default();
+    }
+    calculate_tech_counts(
+        &scratch.generator.rows,
+        &scratch.generator.result_keys,
+        scratch.generator.layout,
+    )
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
 pub fn analyze_growing_for_bench<const LANES: usize>(
     rows: &[[u8; LANES]],
     row_to_beat: &[f32],
@@ -4210,7 +4420,7 @@ pub fn analyze_growing_for_bench<const LANES: usize>(
     scratch: &mut GrowingTimingScratch<LANES>,
 ) -> TechCounts {
     let cols = layout_cols(scratch.generator.layout);
-    if !parity_analyze_rows(
+    if !parity_analyze_sparse(
         &mut scratch.generator,
         &mut scratch.hold_heads,
         rows,
@@ -4246,7 +4456,7 @@ pub fn analyze_timing_rows_known_holds<const LANES: usize>(
     scratch: &mut TimingRowsScratch<LANES>,
 ) -> TechCounts {
     let cols = layout_cols(scratch.generator.layout);
-    if !parity_analyze_rows(
+    if !parity_analyze_sparse(
         &mut scratch.generator,
         &mut scratch.hold_heads,
         rows,
@@ -4356,7 +4566,7 @@ pub fn analyze_and_annotate_timing_rows_known_holds_in<const LANES: usize>(
 ) -> TechCounts {
     out.clear();
     let cols = layout_cols(scratch.generator.layout);
-    if !parity_analyze_rows(
+    if !parity_analyze_sparse(
         &mut scratch.generator,
         &mut scratch.hold_heads,
         rows,
@@ -4623,7 +4833,7 @@ mod tests {
 
     #[cfg(feature = "bench-support")]
     #[test]
-    fn lane_sized_hold_storage_matches_wide() {
+    fn sparse_and_dense_hold_storage_match() {
         let rows = [
             [b'2', b'0', b'2', b'0'],
             [b'0', b'1', b'0', b'0'],
@@ -4633,11 +4843,17 @@ mod tests {
         ];
         let beats = [0.0, 0.25, 0.5, 0.75, 1.0];
         let timing = basic_timing();
-        let mut narrow = timing_rows_scratch::<4>().expect("dance-single layout");
+        let mut sparse = timing_rows_scratch::<4>().expect("dance-single layout");
+        let mut dense = dense_hold_timing_scratch::<4>().expect("dance-single layout");
         let mut wide = wide_hold_timing_rows_scratch::<4>().expect("dance-single layout");
 
+        let dense_counts = analyze_dense_holds_for_bench(&rows, &beats, &timing, true, &mut dense);
         assert_eq!(
-            analyze_timing_rows_known_holds(&rows, &beats, &timing, true, &mut narrow),
+            analyze_timing_rows_known_holds(&rows, &beats, &timing, true, &mut sparse),
+            dense_counts,
+        );
+        assert_eq!(
+            dense_counts,
             analyze_timing_rows_wide_holds_for_bench(&rows, &beats, &timing, true, &mut wide),
         );
     }
