@@ -30,6 +30,7 @@ zstd = "0.13.3"
 criterion = "0.8.1"
 pretty_assertions = "1.4.1"
 ctrlc = "3.5.2"
+tokio = { version = "1.53.1", features = ["rt"] }
 
 [[test]]
 name = "hash_parity"

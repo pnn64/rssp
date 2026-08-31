@@ -11,6 +11,9 @@ use rssp::patterns::{BoxCounts, PatternVariant, compute_box_counts, count_patter
 use rssp::report::format_json_float;
 use rssp::{AnalysisOptions, ChartSummary, analyze};
 
+#[path = "support/parity.rs"]
+mod parity_harness;
+
 const DEFAULT_MONO_THRESHOLD: usize = 6;
 
 #[derive(Debug, Deserialize)]
@@ -512,18 +515,17 @@ fn main() {
 
     println!("running {} tests", tests.len());
 
+    let results = parity_harness::run(tests, args.test_threads, move |test: TestCase| {
+        let result = check_file(&test.path, &test.extension, &baseline_dir);
+        (test, result)
+    });
     let mut num_passed = 0u64;
     let mut num_failed = 0u64;
     let mut failures: Vec<Failure> = Vec::new();
 
-    for test in tests {
-        let TestCase {
-            name,
-            path,
-            extension,
-        } = test;
+    for (test, res) in results {
+        let TestCase { name, .. } = test;
 
-        let res = check_file(&path, &extension, &baseline_dir);
         match res {
             Ok(()) => {
                 println!("test {name} ... ok");

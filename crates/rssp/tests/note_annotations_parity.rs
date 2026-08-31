@@ -35,6 +35,9 @@ use walkdir::WalkDir;
 
 use rssp::{AnalysisOptions, RowAnnotation, TechCounts, analyze, normalize_difficulty_label};
 
+#[path = "support/parity.rs"]
+mod parity_harness;
+
 #[derive(Debug, Default, Deserialize, PartialEq)]
 struct GoldenTechCounts {
     #[serde(default)]
@@ -473,18 +476,18 @@ fn main() {
 
     println!("running {} tests", tests.len());
 
+    let results = parity_harness::run(tests, args.test_threads, move |test: TestCase| {
+        let result = check_file(&test.path, &test.extension, &baseline_dir);
+        (test, result)
+    });
     let mut num_passed = 0u64;
     let mut num_failed = 0u64;
     let mut failures: Vec<Failure> = Vec::new();
 
-    for test in tests {
-        let TestCase {
-            name,
-            path,
-            extension,
-        } = test;
+    for (test, result) in results {
+        let TestCase { name, .. } = test;
 
-        match check_file(&path, &extension, &baseline_dir) {
+        match result {
             Ok(()) => {
                 num_passed += 1;
             }

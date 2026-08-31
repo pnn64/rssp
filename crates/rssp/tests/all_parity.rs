@@ -4,6 +4,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use libtest_mimic::Arguments;
 use serde::Deserialize;
@@ -12,6 +13,9 @@ use walkdir::WalkDir;
 use rssp::math::round_sig_figs_itg;
 use rssp::report::{OutputMode, format_json_float, write_reports};
 use rssp::{AnalysisOptions, analyze, display_metadata, normalize_difficulty_label};
+
+#[path = "support/parity.rs"]
+mod parity_harness;
 
 #[derive(Debug, Clone, PartialEq)]
 struct ExpectedMetadata {
@@ -2375,6 +2379,8 @@ fn run_assp_json(
     file_hash: &str,
     exe: &Path,
 ) -> Result<RsspJsonFile, String> {
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
     if !exe.exists() {
         return Err(format!(
             "ASSP executable was not found at {}. Build it with `..\\..\\..\\assp\\build.ps1` or set ASSP_EXE.",
@@ -2383,8 +2389,9 @@ fn run_assp_json(
     }
 
     let temp_path = env::temp_dir().join(format!(
-        "rssp-all-parity-assp-{}-{file_hash}.{extension}",
-        std::process::id()
+        "rssp-all-parity-assp-{}-{}-{file_hash}.{extension}",
+        std::process::id(),
+        NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed)
     ));
     fs::write(&temp_path, raw_bytes)
         .map_err(|e| format!("Failed to write temporary simfile for ASSP: {e}"))?;
@@ -2684,18 +2691,17 @@ fn main() {
 
     println!("running {} tests with {:?}", tests.len(), backend);
 
+    let results = parity_harness::run(tests, args.test_threads, move |test: TestCase| {
+        let result = check_file(&test.path, &test.extension, &baseline_dir, &backend);
+        (test, result)
+    });
     let mut num_passed = 0u64;
     let mut num_failed = 0u64;
     let mut failures: Vec<Failure> = Vec::new();
 
-    for test in tests {
-        let TestCase {
-            name,
-            path,
-            extension,
-        } = test;
+    for (test, res) in results {
+        let TestCase { name, .. } = test;
 
-        let res = check_file(&path, &extension, &baseline_dir, &backend);
         match res {
             Ok(()) => {
                 println!("test {name} ... ok");

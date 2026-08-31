@@ -14,6 +14,9 @@ use rssp::stats::RADAR_CATEGORY_COUNT;
 use rssp::timing::{SpeedUnit, TimingSegments};
 use rssp::{AnalysisOptions, ChartSummary, SimfileSummary, analyze};
 
+#[path = "support/parity.rs"]
+mod parity_harness;
+
 // These are identical to the serialized defaults,
 // but truncated from 6-decimal to 3-decimal.
 pub const NORM_DEFAULT_BPMS: &[u8] = b"0.000=60.000";
@@ -841,22 +844,23 @@ fn main() {
 
     println!("running {} tests", tests.len());
 
+    let task_interrupt = Arc::clone(&interrupt);
+    let results = parity_harness::run(tests, args.test_threads, move |test: TestCase| {
+        let result = (!task_interrupt.load(Ordering::SeqCst))
+            .then(|| check_file(&test.path, &test.extension));
+        (test, result)
+    });
     let mut num_passed = 0u64;
     let mut num_failed = 0u64;
     let mut failures: Vec<Failure> = Vec::new();
 
-    for test in tests {
-        if interrupt.load(Ordering::SeqCst) {
+    for (test, res) in results {
+        let Some(res) = res else {
             break;
-        }
+        };
 
-        let TestCase {
-            name,
-            path,
-            extension,
-        } = test;
+        let TestCase { name, path, .. } = test;
 
-        let res = check_file(&path, &extension);
         match res {
             Ok(()) => {
                 println!("test {name} ... ok");

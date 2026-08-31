@@ -6,6 +6,9 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+#[path = "support/parity.rs"]
+mod parity_harness;
+
 #[derive(Debug, Deserialize)]
 struct GoldenChart {
     difficulty: String,
@@ -106,21 +109,20 @@ fn main() {
         return;
     }
 
-    // 4. Run tests (serially; one simfile must fully validate before the next starts).
+    // 4. Run tests.
     println!("running {} tests", tests.len());
 
+    let results = parity_harness::run(tests, args.test_threads, move |test: TestCase| {
+        let result = check_file(&test.path, &test.extension, &baseline_dir);
+        (test, result)
+    });
     let mut num_passed = 0u64;
     let mut num_failed = 0u64;
     let mut failures: Vec<Failure> = Vec::new();
 
-    for test in tests {
-        let TestCase {
-            name,
-            path,
-            extension,
-        } = test;
+    for (test, res) in results {
+        let TestCase { name, .. } = test;
 
-        let res = check_file(&path, &extension, &baseline_dir);
         match res {
             Ok(()) => {
                 println!("test {name} ... ok");
