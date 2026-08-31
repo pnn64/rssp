@@ -2663,9 +2663,34 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                             (None, hit, key)
                         }
                     } else {
-                        let (result, hit, key) =
-                            parity_result_state::<COLS>(&init_state, perm, hold_mask, active_mask);
-                        (Some(result), hit, key)
+                        #[cfg(feature = "bench-support")]
+                        if g.legacy_double_result {
+                            let (result, hit, key) = parity_result_state::<COLS>(
+                                &init_state,
+                                perm,
+                                hold_mask,
+                                active_mask,
+                            );
+                            (Some(result), hit, key)
+                        } else {
+                            let (hit, key) = parity_result_key8_with_holds(
+                                &init_state,
+                                perm,
+                                hold_mask,
+                                active_mask,
+                            );
+                            (None, hit, key)
+                        }
+                        #[cfg(not(feature = "bench-support"))]
+                        {
+                            let (hit, key) = parity_result_key8_with_holds(
+                                &init_state,
+                                perm,
+                                hold_mask,
+                                active_mask,
+                            );
+                            (None, hit, key)
+                        }
                     };
                     let cost_idx = match row_map_probe::<COLS, true>(&g.state_map, key) {
                         RowMapProbe::Found(index) => index,
@@ -3113,6 +3138,66 @@ fn parity_result_key8_no_holds(
     }
 
     (hit, combined | u32::from(moved_mask) << 24)
+}
+
+#[inline(always)]
+fn parity_result_key8_with_holds(
+    initial: &State,
+    cols: &FootPlacement,
+    hold_mask: u8,
+    active_mask: u8,
+) -> ([i8; NUM_FEET], u32) {
+    let mut hit = [INVALID_COLUMN; NUM_FEET];
+    let (mut moved_mask, mut holding_mask) = (0u8, 0u8);
+    let mut mask = active_mask;
+    while mask != 0 {
+        let column = mask.trailing_zeros() as usize;
+        mask &= mask - 1;
+        let foot = cols[column];
+        if foot == Foot::None {
+            continue;
+        }
+        let fi = foot_idx(foot);
+        hit[fi] = column as i8;
+        let foot_mask = FOOT_MASKS[fi];
+        let held = hold_mask & (1u8 << column) != 0;
+        holding_mask |= foot_mask * u8::from(held);
+        if !held || initial.combined_columns[column] != foot {
+            moved_mask |= foot_mask;
+        }
+    }
+
+    let moved_left = moved_mask & LEFT_FOOT_MASK != 0;
+    let moved_right = moved_mask & RIGHT_FOOT_MASK != 0;
+    let mut combined = 0u32;
+    for column in 0..MAX_COLUMNS {
+        let placed = if active_mask & (1u8 << column) != 0 {
+            cols[column]
+        } else {
+            Foot::None
+        };
+        let foot = if placed != Foot::None {
+            placed
+        } else {
+            let previous = initial.combined_columns[column];
+            match previous {
+                Foot::LeftHeel | Foot::RightHeel
+                    if moved_mask & FOOT_MASKS[foot_idx(previous)] == 0 =>
+                {
+                    previous
+                }
+                Foot::LeftToe if !moved_left => previous,
+                Foot::RightToe if !moved_right => previous,
+                _ => Foot::None,
+            }
+        };
+        combined |= (foot as u32) << (column * 3);
+    }
+
+    (
+        hit,
+        combined | (u32::from(moved_mask) << 24) | (u32::from(holding_mask) << 28),
+    )
 }
 
 #[inline(always)]
@@ -5151,6 +5236,12 @@ mod tests {
                 let (state, _, key) =
                     parity_result_state_no_holds::<8>(&state_new(), placement, active_mask);
                 initial_states.push((state, key));
+                let hold_mask = active_mask & 0b0101_0101;
+                if hold_mask != 0 {
+                    let (state, _, key) =
+                        parity_result_state::<8>(&state_new(), placement, hold_mask, active_mask);
+                    initial_states.push((state, key));
+                }
             }
         }
 
@@ -5169,6 +5260,23 @@ mod tests {
                         parity_result_key8_no_holds(&initial, initial_key, placement, active_mask);
                     assert_eq!((hit, key), (expected_hit, expected_key));
                     assert_eq!(state_from_key::<8>(key), state);
+
+                    for hold_mask in [
+                        active_mask,
+                        active_mask & 0b0101_0101,
+                        active_mask & 0b1010_1010,
+                    ] {
+                        let (state, expected_hit, expected_key) =
+                            parity_result_state::<8>(&initial, placement, hold_mask, active_mask);
+                        let (hit, key) = parity_result_key8_with_holds(
+                            &initial,
+                            placement,
+                            hold_mask,
+                            active_mask,
+                        );
+                        assert_eq!((hit, key), (expected_hit, expected_key));
+                        assert_eq!(state_from_key::<8>(key), state);
+                    }
                 }
             }
         }
@@ -5199,6 +5307,36 @@ mod tests {
         assert_eq!(
             analyze_double_result_for_bench(&rows, &beats, &timing, false, true, &mut materialized,),
             analyze_double_result_for_bench(&rows, &beats, &timing, false, false, &mut packed),
+        );
+
+        let hold_rows = [
+            *b"10000000",
+            *b"00001000",
+            *b"01000010",
+            *b"20000000",
+            *b"00010001",
+            *b"00000100",
+            *b"30000000",
+            *b"10000001",
+        ];
+        let hold_beats = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75];
+        assert_eq!(
+            analyze_double_result_for_bench(
+                &hold_rows,
+                &hold_beats,
+                &timing,
+                true,
+                true,
+                &mut materialized,
+            ),
+            analyze_double_result_for_bench(
+                &hold_rows,
+                &hold_beats,
+                &timing,
+                true,
+                false,
+                &mut packed,
+            ),
         );
     }
 
