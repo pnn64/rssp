@@ -4352,6 +4352,84 @@ fn timing_build_checksum(timing: &rssp::timing::TimingData) -> u64 {
     checksum
 }
 
+fn timing_storage_fixture() -> rssp::timing::TimingSegments {
+    const COUNT: usize = 16;
+    rssp::timing::TimingSegments {
+        beat0_offset_adjust: 0.0,
+        bpms: vec![(0.0, 120.0)],
+        stops: (0..COUNT)
+            .map(|index| (index as f32 * 16.0 + 2.0, 0.125))
+            .collect(),
+        delays: (0..COUNT)
+            .map(|index| (index as f32 * 16.0 + 4.0, 0.0625))
+            .collect(),
+        warps: (0..COUNT)
+            .map(|index| (index as f32 * 16.0 + 6.0, 0.5))
+            .collect(),
+        speeds: Vec::new(),
+        scrolls: Vec::new(),
+        fakes: (0..COUNT)
+            .map(|index| (index as f32 * 16.0 + 8.0, 1.0))
+            .collect(),
+    }
+}
+
+fn timing_storage_checksum(timing: &rssp::timing::TimingData) -> u64 {
+    let mut checksum = 0u64;
+    for segments in [
+        rssp::timing::stops(timing),
+        rssp::timing::delays(timing),
+        rssp::timing::warps(timing),
+        rssp::timing::fakes(timing),
+    ] {
+        checksum = checksum.rotate_left(9) ^ segments.len() as u64;
+        checksum ^= segments.last().map_or(0, |segment| segment.beat.to_bits());
+    }
+    checksum ^ rssp::timing::get_time_for_beat(timing, 255.0).to_bits()
+}
+
+fn run_timing_storage_alloc(iterations: usize) {
+    const SEGMENT_COUNT: f64 = 64.0;
+    let fixture = timing_storage_fixture();
+    let build = || rssp::timing::timing_data_from_segments(0.0, 0.0, black_box(&fixture));
+    let expected = timing_storage_checksum(&build());
+
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0u64;
+    for _ in 0..iterations {
+        let timing = build();
+        let actual = timing_storage_checksum(black_box(&timing));
+        assert_eq!(actual, expected);
+        checksum = checksum.wrapping_add(actual);
+        black_box(timing);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=timing-build phase=mixed-segment-storage iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_segments_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        SEGMENT_COUNT * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
 fn run_segment_parse_phase(map: &str, phase: &str, iterations: usize, legacy: bool) {
     reset_counters();
     let before = Counters::read();
@@ -4551,6 +4629,8 @@ fn run_timing_build_alloc(iterations: usize) {
         after.live_bytes as isize - before.live_bytes as isize,
         after.peak_live_bytes.saturating_sub(before.live_bytes),
     );
+
+    run_timing_storage_alloc(iterations);
 }
 
 fn run_timing_sort_phase(

@@ -1179,6 +1179,20 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         scrolls: Vec::new(),
         fakes: Vec::new(),
     };
+    let mixed_row_segments = rssp::timing::TimingSegments {
+        beat0_offset_adjust: 0.0,
+        bpms: vec![(0.0, 120.0)],
+        stops: (0..16)
+            .map(|idx| (idx as f32 * 16.0 + 2.0, 0.125))
+            .collect(),
+        delays: (0..16)
+            .map(|idx| (idx as f32 * 16.0 + 4.0, 0.0625))
+            .collect(),
+        warps: (0..16).map(|idx| (idx as f32 * 16.0 + 6.0, 0.5)).collect(),
+        speeds: Vec::new(),
+        scrolls: Vec::new(),
+        fakes: (0..16).map(|idx| (idx as f32 * 16.0 + 8.0, 1.0)).collect(),
+    };
     let bpm_segments = rssp::timing::TimingSegments {
         beat0_offset_adjust: 0.0,
         bpms: (0..ENTRIES)
@@ -1761,6 +1775,21 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     cleanup.finish();
+
+    let mut timing_storage = c.benchmark_group("cycles/timing_storage_64");
+    timing_storage.throughput(Throughput::Elements(64));
+    timing_storage.sample_size(100);
+    timing_storage.measurement_time(Duration::from_secs(3));
+    timing_storage.bench_function("mixed_segments", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::timing_data_from_segments(
+                0.0,
+                0.0,
+                black_box(&mixed_row_segments),
+            ));
+        });
+    });
+    timing_storage.finish();
 
     let mut timing_build = c.benchmark_group("cycles/timing_build_ssc");
     timing_build.throughput(Throughput::Elements(1_280));
