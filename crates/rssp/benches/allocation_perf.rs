@@ -2681,15 +2681,20 @@ fn run_tech_prefix_phase(
     description: &str,
     phase: &str,
     iterations: usize,
-    legacy: bool,
+    mode: u8,
 ) {
-    black_box(tech_prefix_bench::parse(credit, description, legacy));
+    let parse = |credit, description| match mode {
+        0 => tech_prefix_bench::parse(credit, description, true),
+        1 => tech_prefix_bench::parse_unicode(credit, description),
+        _ => tech_prefix_bench::parse(credit, description, false),
+    };
+    black_box(parse(credit, description));
     reset_counters();
     let before = Counters::read();
     let start = Instant::now();
     let mut checksum = 0usize;
     for _ in 0..iterations {
-        let notation = tech_prefix_bench::parse(black_box(credit), black_box(description), legacy);
+        let notation = parse(black_box(credit), black_box(description));
         checksum = checksum.wrapping_add(notation.len());
         black_box(notation);
     }
@@ -2725,8 +2730,9 @@ fn run_tech_prefix_alloc(iterations: usize) {
     run_tech_prefix_startup("runtime-index", true);
     tech_prefix_bench::assert_behavior();
     let (credit, description) = tech_prefix_bench::valid_input();
-    run_tech_prefix_phase(&credit, &description, "runtime-index", iterations, true);
-    run_tech_prefix_phase(&credit, &description, "const-index", iterations, false);
+    run_tech_prefix_phase(&credit, &description, "runtime-index", iterations, 0);
+    run_tech_prefix_phase(&credit, &description, "const-index-unicode", iterations, 1);
+    run_tech_prefix_phase(&credit, &description, "const-index-ascii", iterations, 2);
 }
 
 fn run_clean_map_alloc(iterations: usize) {

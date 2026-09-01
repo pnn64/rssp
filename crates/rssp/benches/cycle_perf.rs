@@ -938,14 +938,29 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         group.sample_size(100);
         group.measurement_time(Duration::from_secs(2));
         group.throughput(Throughput::Bytes((credit.len() + description.len()) as u64));
-        for (phase, legacy) in [("runtime_index", true), ("const_index", false)] {
+        for (phase, mode) in [
+            ("runtime_index", 0),
+            ("const_index_unicode", 1),
+            ("const_index_ascii", 2),
+        ] {
             group.bench_function(phase, |b| {
                 b.iter(|| {
-                    black_box(tech_prefix_bench::parse(
-                        black_box(credit),
-                        black_box(description),
-                        legacy,
-                    ));
+                    black_box(match mode {
+                        0 => tech_prefix_bench::parse(
+                            black_box(credit),
+                            black_box(description),
+                            true,
+                        ),
+                        1 => tech_prefix_bench::parse_unicode(
+                            black_box(credit),
+                            black_box(description),
+                        ),
+                        _ => tech_prefix_bench::parse(
+                            black_box(credit),
+                            black_box(description),
+                            false,
+                        ),
+                    });
                 });
             });
         }

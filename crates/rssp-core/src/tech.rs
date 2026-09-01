@@ -136,7 +136,7 @@ fn append_chunk_as_tech(chunk: &str, out: &mut String, reserve: usize, table: &T
 }
 
 #[inline(always)]
-fn append_single_tech(input: &str, out: &mut String, reserve: usize, table: &TechTable) {
+fn append_single_unicode(input: &str, out: &mut String, reserve: usize, table: &TechTable) {
     let mut chunks = input
         .split(|c: char| c.is_whitespace() || c == ',')
         .filter(|s| !s.is_empty())
@@ -156,6 +156,46 @@ fn append_single_tech(input: &str, out: &mut String, reserve: usize, table: &Tec
     }
 }
 
+#[inline(always)]
+fn next_ascii_chunk<'a>(input: &'a str, offset: &mut usize) -> Option<&'a str> {
+    let bytes = input.as_bytes();
+    while *offset < bytes.len() && (bytes[*offset].is_ascii_whitespace() || bytes[*offset] == b',')
+    {
+        *offset += 1;
+    }
+    let start = *offset;
+    while *offset < bytes.len() && !bytes[*offset].is_ascii_whitespace() && bytes[*offset] != b',' {
+        *offset += 1;
+    }
+    (start != *offset).then(|| &input[start..*offset])
+}
+
+#[inline(always)]
+fn append_single_ascii(input: &str, out: &mut String, reserve: usize, table: &TechTable) {
+    let mut offset = 0usize;
+    while let Some(chunk) = next_ascii_chunk(input, &mut offset) {
+        if chunk == "No" {
+            let saved = offset;
+            if next_ascii_chunk(input, &mut offset) == Some("Tech") {
+                continue;
+            }
+            offset = saved;
+        }
+        if !is_measure_data(chunk) {
+            append_chunk_as_tech(chunk, out, reserve, table);
+        }
+    }
+}
+
+#[inline(always)]
+fn append_single_tech(input: &str, out: &mut String, reserve: usize, table: &TechTable) {
+    if input.is_ascii() {
+        append_single_ascii(input, out, reserve, table);
+    } else {
+        append_single_unicode(input, out, reserve, table);
+    }
+}
+
 /// Parses credit and description into a formatted tech notation string.
 #[must_use]
 pub fn parse_tech_notation(credit: &str, description: &str) -> String {
@@ -167,6 +207,21 @@ pub fn parse_tech_notation(credit: &str, description: &str) -> String {
     let table = tech_prefixes();
     append_single_tech(credit, &mut out, reserve, table);
     append_single_tech(description, &mut out, reserve, table);
+    out
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn parse_tech_notation_unicode_for_bench(credit: &str, description: &str) -> String {
+    let reserve = credit
+        .len()
+        .saturating_add(description.len())
+        .saturating_add(1);
+    let mut out = String::new();
+    let table = tech_prefixes();
+    append_single_unicode(credit, &mut out, reserve, table);
+    append_single_unicode(description, &mut out, reserve, table);
     out
 }
 
@@ -219,6 +274,8 @@ mod tests {
             ("BXF-BR+ 1.2.3", "WA+ unknown B+X-F"),
             ("BR+FS-XO+SKT-WA+BXF-", ""),
             ("BR+ BR+garbage", "Hard"),
+            ("BR+\u{2003}FS-", "XO+\u{00a0}SKT-"),
+            ("é BR+", "FS-"),
         ];
         for (credit, description) in cases {
             assert_eq!(

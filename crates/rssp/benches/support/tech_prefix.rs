@@ -171,6 +171,10 @@ pub fn parse(credit: &str, description: &str, legacy: bool) -> String {
     }
 }
 
+pub fn parse_unicode(credit: &str, description: &str) -> String {
+    rssp::tech::parse_tech_notation_unicode_for_bench(credit, description)
+}
+
 fn assert_pair(credit: &str, description: &str) {
     assert_eq!(
         parse(credit, description, false),
@@ -186,6 +190,8 @@ pub fn assert_behavior() {
         ("No Tech 16/24 BR+garbage", "32nds,DS++ JA-"),
         ("BXF-BR+ 1.2.3", "WA+ unknown B+X-F"),
         ("BR+FS-XO+SKT-WA+BXF-", ""),
+        ("BR+\u{2003}FS-", "XO+\u{00a0}SKT-"),
+        ("é BR+", "FS-"),
     ] {
         assert_pair(credit, description);
     }
@@ -194,5 +200,9 @@ pub fn assert_behavior() {
     }
     let (credit, description) = valid_input();
     assert_pair(&credit, &description);
+    assert_eq!(
+        parse(&credit, &description, false),
+        parse_unicode(&credit, &description)
+    );
     assert_pair(&invalid_input(), "");
 }
