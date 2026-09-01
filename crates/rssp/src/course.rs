@@ -1770,7 +1770,7 @@ pub fn analyze_crs_path(
     course_difficulty: &str,
     options: AnalysisOptions,
 ) -> Result<CourseSummary, String> {
-    analyze_crs_path_impl::<true, true, true, true>(
+    analyze_crs_path_impl::<true, true, true, true, true>(
         course_path,
         songs_dir,
         target_step_type,
@@ -1789,7 +1789,7 @@ pub fn analyze_crs_path_cache_all_for_bench(
     course_difficulty: &str,
     options: AnalysisOptions,
 ) -> Result<CourseSummary, String> {
-    analyze_crs_path_impl::<true, true, true, true>(
+    analyze_crs_path_impl::<true, true, true, true, true>(
         course_path,
         songs_dir,
         target_step_type,
@@ -1810,7 +1810,7 @@ pub fn profile_analyze_crs(
     song_key_cache: bool,
 ) -> Result<CourseSummary, String> {
     if song_key_cache {
-        analyze_crs_path_impl::<true, false, false, false>(
+        analyze_crs_path_impl::<true, false, false, false, true>(
             course_path,
             songs_dir,
             target_step_type,
@@ -1819,7 +1819,7 @@ pub fn profile_analyze_crs(
             false,
         )
     } else {
-        analyze_crs_path_impl::<false, false, false, false>(
+        analyze_crs_path_impl::<false, false, false, false, true>(
             course_path,
             songs_dir,
             target_step_type,
@@ -1841,7 +1841,7 @@ pub fn profile_analyze_groups(
     group_cache: bool,
 ) -> Result<CourseSummary, String> {
     if group_cache {
-        analyze_crs_path_impl::<true, true, false, false>(
+        analyze_crs_path_impl::<true, true, false, false, true>(
             course_path,
             songs_dir,
             target_step_type,
@@ -1850,7 +1850,7 @@ pub fn profile_analyze_groups(
             false,
         )
     } else {
-        analyze_crs_path_impl::<true, false, false, false>(
+        analyze_crs_path_impl::<true, false, false, false, true>(
             course_path,
             songs_dir,
             target_step_type,
@@ -1872,7 +1872,7 @@ pub fn profile_analyze_catalog(
     group_catalog: bool,
 ) -> Result<CourseSummary, String> {
     if group_catalog {
-        analyze_crs_path_impl::<true, true, true, false>(
+        analyze_crs_path_impl::<true, true, true, false, true>(
             course_path,
             songs_dir,
             target_step_type,
@@ -1881,7 +1881,7 @@ pub fn profile_analyze_catalog(
             false,
         )
     } else {
-        analyze_crs_path_impl::<true, true, false, false>(
+        analyze_crs_path_impl::<true, true, false, false, true>(
             course_path,
             songs_dir,
             target_step_type,
@@ -1903,7 +1903,7 @@ pub fn profile_catalog_dirs(
     trust_catalog: bool,
 ) -> Result<CourseSummary, String> {
     if trust_catalog {
-        analyze_crs_path_impl::<true, true, true, true>(
+        analyze_crs_path_impl::<true, true, true, true, true>(
             course_path,
             songs_dir,
             target_step_type,
@@ -1912,7 +1912,38 @@ pub fn profile_catalog_dirs(
             false,
         )
     } else {
-        analyze_crs_path_impl::<true, true, true, false>(
+        analyze_crs_path_impl::<true, true, true, false, true>(
+            course_path,
+            songs_dir,
+            target_step_type,
+            course_difficulty,
+            options,
+            false,
+        )
+    }
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+pub fn profile_course_nps(
+    course_path: &Path,
+    songs_dir: Option<&Path>,
+    target_step_type: &str,
+    course_difficulty: &str,
+    options: AnalysisOptions,
+    prealloc_nps: bool,
+) -> Result<CourseSummary, String> {
+    if prealloc_nps {
+        analyze_crs_path_impl::<true, true, true, true, true>(
+            course_path,
+            songs_dir,
+            target_step_type,
+            course_difficulty,
+            options,
+            false,
+        )
+    } else {
+        analyze_crs_path_impl::<true, true, true, true, false>(
             course_path,
             songs_dir,
             target_step_type,
@@ -2034,6 +2065,7 @@ fn analyze_crs_path_impl<
     const GROUP_CACHE: bool,
     const GROUP_CATALOG: bool,
     const TRUST_CATALOG: bool,
+    const PREALLOC_NPS: bool,
 >(
     course_path: &Path,
     songs_dir: Option<&Path>,
@@ -2228,6 +2260,11 @@ fn analyze_crs_path_impl<
         }
 
         meters.push(parse_meter(&chart.rating_str));
+        if PREALLOC_NPS && measure_nps_all.capacity() == 0 {
+            // Worker-local and single-course: estimate the final measure count from
+            // the first chart, then release this buffer before returning to gameplay.
+            measure_nps_all.reserve_exact(chart.measure_nps_vec.len().saturating_mul(entry_count));
+        }
         measure_nps_all.extend_from_slice(&chart.measure_nps_vec);
 
         entries.push(CourseEntrySummary {
@@ -2553,7 +2590,7 @@ mod tests {
             compute_tech_counts: false,
             ..crate::AnalysisOptions::default()
         };
-        let path_cached = analyze_crs_path_impl::<false, false, false, false>(
+        let path_cached = analyze_crs_path_impl::<false, false, false, false, true>(
             &course_path,
             Some(&songs_dir),
             "dance-single",
@@ -2562,7 +2599,7 @@ mod tests {
             false,
         )
         .expect("path-key cache should analyze");
-        let group_uncached = analyze_crs_path_impl::<true, false, false, false>(
+        let group_uncached = analyze_crs_path_impl::<true, false, false, false, true>(
             &course_path,
             Some(&songs_dir),
             "dance-single",
@@ -2571,7 +2608,7 @@ mod tests {
             false,
         )
         .expect("uncached group lookup should analyze");
-        let catalog_checked = analyze_crs_path_impl::<true, true, true, false>(
+        let catalog_checked = analyze_crs_path_impl::<true, true, true, false, true>(
             &course_path,
             Some(&songs_dir),
             "dance-single",
@@ -2580,6 +2617,15 @@ mod tests {
             false,
         )
         .expect("rechecked group catalog should analyze");
+        let nps_growing = analyze_crs_path_impl::<true, true, true, true, false>(
+            &course_path,
+            Some(&songs_dir),
+            "dance-single",
+            "Medium",
+            options.clone(),
+            false,
+        )
+        .expect("growing NPS buffer should analyze");
         let summary = analyze_crs_path(
             &course_path,
             Some(&songs_dir),
@@ -2609,6 +2655,7 @@ mod tests {
         let mut expected_json = Vec::new();
         let mut uncached_json = Vec::new();
         let mut checked_json = Vec::new();
+        let mut growing_json = Vec::new();
         let mut actual_json = Vec::new();
         crate::report::write_course_reports(
             &path_cached,
@@ -2629,12 +2676,19 @@ mod tests {
         )
         .expect("rechecked catalog summary should serialize");
         crate::report::write_course_reports(
+            &nps_growing,
+            crate::report::OutputMode::JSON,
+            &mut growing_json,
+        )
+        .expect("growing NPS summary should serialize");
+        crate::report::write_course_reports(
             &summary,
             crate::report::OutputMode::JSON,
             &mut actual_json,
         )
         .expect("repeated-only cache summary should serialize");
         assert_eq!(actual_json, checked_json);
+        assert_eq!(actual_json, growing_json);
         assert_eq!(actual_json, uncached_json);
         assert_eq!(actual_json, expected_json);
     }

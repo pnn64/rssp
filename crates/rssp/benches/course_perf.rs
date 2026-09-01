@@ -55,6 +55,7 @@ fn bench_course_analysis(c: &mut Criterion) {
     fixture.assert_group_catalog();
     fixture.assert_catalog_dirs();
     repeated.assert_song_cache();
+    repeated.assert_nps_capacity();
 
     let mut group = c.benchmark_group("course_analysis");
     group.sample_size(20);
@@ -100,6 +101,29 @@ fn bench_course_analysis(c: &mut Criterion) {
                         trust_catalog,
                     )
                     .expect("catalog directory benchmark course should analyze"),
+                );
+            });
+        });
+    }
+    group.finish();
+
+    let mut group = c.benchmark_group("course_nps_capacity");
+    group.sample_size(20);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(course_bench::SONG_COUNT as u64));
+    for (name, prealloc_nps) in [("growing", false), ("preallocated", true)] {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(
+                    rssp::course::profile_course_nps(
+                        black_box(repeated.course_path()),
+                        Some(black_box(repeated.songs_dir())),
+                        black_box("dance-single"),
+                        black_box("Medium"),
+                        black_box(fast_options.clone()),
+                        prealloc_nps,
+                    )
+                    .expect("NPS capacity benchmark course should analyze"),
                 );
             });
         });

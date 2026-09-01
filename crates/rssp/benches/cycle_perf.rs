@@ -1698,6 +1698,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     course_fixture.assert_group_catalog();
     course_fixture.assert_catalog_dirs();
     repeated_course.assert_song_cache();
+    repeated_course.assert_nps_capacity();
     let course_hashes = course_bench::hash_values();
     course_bench::assert_hash_dedup_behavior(&course_hashes);
     let course_summary_hashes = course_bench::course_hash_values();
@@ -2705,6 +2706,29 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     course.finish();
+
+    let mut course_nps = c.benchmark_group("cycles/course_nps_capacity");
+    course_nps.sample_size(20);
+    course_nps.measurement_time(Duration::from_secs(3));
+    course_nps.throughput(Throughput::Elements(course_bench::SONG_COUNT as u64));
+    for (name, prealloc_nps) in [("growing", false), ("preallocated", true)] {
+        course_nps.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(
+                    rssp::course::profile_course_nps(
+                        black_box(repeated_course.course_path()),
+                        Some(black_box(repeated_course.songs_dir())),
+                        black_box("dance-single"),
+                        black_box("Medium"),
+                        black_box(course_options.clone()),
+                        prealloc_nps,
+                    )
+                    .expect("NPS capacity benchmark course should analyze"),
+                );
+            });
+        });
+    }
+    course_nps.finish();
 
     let mut course_dir_check = c.benchmark_group("cycles/course_catalog_dir_check");
     course_dir_check.sample_size(20);

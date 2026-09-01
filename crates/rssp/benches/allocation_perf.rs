@@ -3665,6 +3665,7 @@ fn run_course_analyze_alloc(iterations: usize) {
     fixture.assert_group_catalog();
     fixture.assert_catalog_dirs();
     repeated.assert_song_cache();
+    repeated.assert_nps_capacity();
     run_course_analyze_phase(
         "cache-all",
         iterations,
@@ -3755,6 +3756,25 @@ fn run_course_analyze_alloc(iterations: usize) {
                     song_key_cache,
                 )
                 .expect("repeated benchmark course should analyze")
+            },
+        );
+    }
+    for (phase, prealloc_nps) in [("nps-growing", false), ("nps-preallocated", true)] {
+        run_course_analyze_phase(
+            phase,
+            iterations,
+            &repeated,
+            &options,
+            |fixture, options| {
+                rssp::course::profile_course_nps(
+                    fixture.course_path(),
+                    Some(fixture.songs_dir()),
+                    "dance-single",
+                    "Medium",
+                    options,
+                    prealloc_nps,
+                )
+                .expect("NPS capacity benchmark course should analyze")
             },
         );
     }

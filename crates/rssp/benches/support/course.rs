@@ -379,6 +379,32 @@ impl CourseFixture {
             .expect("trusted catalog summary should serialize");
         assert_eq!(actual, expected);
     }
+
+    pub fn assert_nps_capacity(&self) {
+        let analyze = |prealloc_nps| {
+            rssp::course::profile_course_nps(
+                &self.course_path,
+                Some(&self.songs_dir),
+                "dance-single",
+                "Medium",
+                fast_options(),
+                prealloc_nps,
+            )
+            .expect("course NPS capacity fixture should analyze")
+        };
+        let growing = analyze(false);
+        let preallocated = analyze(true);
+        let (mut expected, mut actual) = (Vec::new(), Vec::new());
+        rssp::report::write_course_reports(&growing, rssp::report::OutputMode::JSON, &mut expected)
+            .expect("growing NPS summary should serialize");
+        rssp::report::write_course_reports(
+            &preallocated,
+            rssp::report::OutputMode::JSON,
+            &mut actual,
+        )
+        .expect("preallocated NPS summary should serialize");
+        assert_eq!(actual, expected);
+    }
 }
 
 impl Drop for CourseFixture {
