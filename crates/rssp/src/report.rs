@@ -841,22 +841,24 @@ fn chart_or_global<'a>(
     }
 }
 
-#[inline(always)]
-fn segment_index_at_row<T>(segments: &[(f64, T)], row: i32) -> usize {
-    let pos = segments.partition_point(|(beat, _)| beat_to_note_row(*beat) <= row);
-    if pos == 0 { 0 } else { pos - 1 }
-}
-
-fn add_indefinite_segment<T: PartialEq>(segments: &mut Vec<(f64, T)>, beat: f64, value: T) {
-    let row = beat_to_note_row(beat);
+fn add_segment_by<T>(
+    segments: &mut Vec<T>,
+    mut segment: T,
+    get_beat: impl Fn(&T) -> f64,
+    same_value: impl Fn(&T, &T) -> bool,
+    set_beat: impl Fn(&mut T, f64),
+) {
+    let row = beat_to_note_row(get_beat(&segment));
     let beat = note_row_to_beat(row);
+    set_beat(&mut segment, beat);
     if segments.is_empty() {
-        segments.push((beat, value));
+        segments.push(segment);
         return;
     }
 
-    let idx = segment_index_at_row(segments, row);
-    let b_on_same_row = beat_to_note_row(segments[idx].0) == row;
+    let pos = segments.partition_point(|item| beat_to_note_row(get_beat(item)) <= row);
+    let idx = if pos == 0 { 0 } else { pos - 1 };
+    let b_on_same_row = beat_to_note_row(get_beat(&segments[idx])) == row;
     let prev_idx = if b_on_same_row && idx > 0 {
         idx - 1
     } else {
@@ -865,43 +867,53 @@ fn add_indefinite_segment<T: PartialEq>(segments: &mut Vec<(f64, T)>, beat: f64,
 
     if idx + 1 < segments.len() {
         let next_idx = idx + 1;
-        if segments[next_idx].1 == value {
-            if segments[prev_idx].1 == value {
+        if same_value(&segments[next_idx], &segment) {
+            if same_value(&segments[prev_idx], &segment) {
                 segments.remove(next_idx);
                 if prev_idx != idx {
                     segments.remove(idx);
                 }
                 return;
             }
-            segments[next_idx].0 = beat;
+            set_beat(&mut segments[next_idx], beat);
             if prev_idx != idx {
                 segments.remove(idx);
             }
             return;
         }
-        if segments[prev_idx].1 == value {
+        if same_value(&segments[prev_idx], &segment) {
             if prev_idx != idx {
                 segments.remove(idx);
             }
             return;
         }
-    } else if segments[prev_idx].1 == value {
+    } else if same_value(&segments[prev_idx], &segment) {
         if prev_idx != idx {
             segments.remove(idx);
         }
         return;
     }
 
-    if b_on_same_row && segments[idx].1 == value {
+    if b_on_same_row && same_value(&segments[idx], &segment) {
         return;
     }
 
     if b_on_same_row {
-        segments[idx] = (beat, value);
+        segments[idx] = segment;
     } else {
-        let insert_pos = segments.partition_point(|(b, _)| beat_to_note_row(*b) <= row);
-        segments.insert(insert_pos, (beat, value));
+        let insert_pos = segments.partition_point(|item| beat_to_note_row(get_beat(item)) <= row);
+        segments.insert(insert_pos, segment);
     }
+}
+
+fn add_indefinite_segment<T: PartialEq>(segments: &mut Vec<(f64, T)>, beat: f64, value: T) {
+    add_segment_by(
+        segments,
+        (beat, value),
+        |segment| segment.0,
+        |left, right| left.1 == right.1,
+        |segment, beat| segment.0 = beat,
+    );
 }
 
 #[cfg(any(test, feature = "profile"))]
@@ -913,7 +925,7 @@ fn tidy_segments_old<T: PartialEq>(segments: Vec<(f64, T)>) -> Vec<(f64, T)> {
     out
 }
 
-fn tidy_indefinite_segments<T: PartialEq>(mut segments: Vec<(f64, T)>) -> Vec<(f64, T)> {
+fn tidy_in_place<T>(mut segments: Vec<T>, mut add: impl FnMut(&mut Vec<T>, T)) -> Vec<T> {
     let input_len = segments.len();
     let input = segments.as_mut_ptr();
     // SAFETY: Each consumed entry adds at most one output, so before reading
@@ -925,12 +937,31 @@ fn tidy_indefinite_segments<T: PartialEq>(mut segments: Vec<(f64, T)>) -> Vec<(f
         debug_assert!(segments.len() <= index);
         // SAFETY: `index` addresses an initialized, unread element from the
         // original length. It is read before output may overwrite this slot.
-        let (beat, value) = unsafe { input.add(index).read() };
-        add_indefinite_segment(&mut segments, beat, value);
+        let segment = unsafe { input.add(index).read() };
+        add(&mut segments, segment);
     }
     segments
 }
 
+fn tidy_indefinite_segments<T: PartialEq>(segments: Vec<(f64, T)>) -> Vec<(f64, T)> {
+    tidy_in_place(segments, |out, (beat, value)| {
+        add_indefinite_segment(out, beat, value);
+    })
+}
+
+fn tidy_timing_triples(segments: Vec<(f64, i32, i32)>) -> Vec<(f64, i32, i32)> {
+    tidy_in_place(segments, |out, segment| {
+        add_segment_by(
+            out,
+            segment,
+            |segment| segment.0,
+            |left, right| left.1 == right.1 && left.2 == right.2,
+            |segment, beat| segment.0 = beat,
+        );
+    })
+}
+
+#[cfg(any(test, feature = "profile"))]
 fn parse_time_signatures_with<const PREALLOC: bool>(
     opt: Option<&str>,
     capacity: usize,
@@ -1029,6 +1060,7 @@ fn parse_tickcounts_with<const PREALLOC: bool>(
     tidy(raw)
 }
 
+#[cfg(any(test, feature = "profile"))]
 fn parse_combos_with<const PREALLOC: bool>(
     opt: Option<&str>,
     capacity: usize,
@@ -1084,9 +1116,51 @@ fn estimate_text_segments(text: &str, bytes_per_segment: usize) -> usize {
     text.len().div_ceil(bytes_per_segment).clamp(4, 4_096)
 }
 
+fn parse_timing_triples(
+    opt: Option<&str>,
+    capacity: usize,
+    default: (f64, i32, i32),
+    prefix_default: bool,
+) -> Vec<(f64, i32, i32)> {
+    let Some(text) = opt else {
+        return vec![default];
+    };
+
+    let mut raw = Vec::new();
+    for segment in text
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        let mut parts = segment.split('=');
+        let (Some(beat), Some(first), Some(second)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        let (Ok(beat), Ok(first), Ok(second)) = (
+            beat.trim().parse::<f64>(),
+            first.trim().parse::<i32>(),
+            second.trim().parse::<i32>(),
+        ) else {
+            continue;
+        };
+        if raw.is_empty() {
+            raw.reserve(capacity);
+        }
+        raw.push((beat, first, second));
+    }
+    if raw.is_empty() {
+        return vec![default];
+    }
+    if prefix_default && beat_to_note_row(raw[0].0) > 0 {
+        raw.insert(0, default);
+    }
+    tidy_timing_triples(raw)
+}
+
 fn parse_time_signatures(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
     let capacity = opt.map_or(0, |text| estimate_text_segments(text, 7) + 1);
-    parse_time_signatures_with::<true>(opt, capacity, tidy_indefinite_segments)
+    parse_timing_triples(opt, capacity, (0.0, 4, 4), true)
 }
 
 fn parse_tickcounts(opt: Option<&str>) -> Vec<(f64, i32)> {
@@ -1095,6 +1169,18 @@ fn parse_tickcounts(opt: Option<&str>) -> Vec<(f64, i32)> {
 }
 
 fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
+    let capacity = opt.map_or(0, |text| estimate_text_segments(text, 8));
+    parse_timing_triples(opt, capacity, (0.0, 1, 1), false)
+}
+
+#[cfg(any(test, feature = "profile"))]
+fn parse_time_signatures_staged(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
+    let capacity = opt.map_or(0, |text| estimate_text_segments(text, 7) + 1);
+    parse_time_signatures_with::<true>(opt, capacity, tidy_indefinite_segments)
+}
+
+#[cfg(any(test, feature = "profile"))]
+fn parse_combos_staged(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
     let capacity = opt.map_or(0, |text| estimate_text_segments(text, 8));
     parse_combos_with::<true>(opt, capacity, tidy_indefinite_segments)
 }
@@ -1298,11 +1384,11 @@ mod tests {
     use super::{
         CourseEntrySummary, CourseSummary, CsvRow, SpeedUnit, build_timing_snapshot,
         chart_or_global, format_duration, normalize_scrolls_like_itg, normalize_speeds_like_itg,
-        parse_combos, parse_labels, parse_tickcounts, parse_time_signatures, push_bpm_range,
-        push_duration, push_num, push_str, steps_timing_allowed, timing_fixed_6, write_csv_course,
-        write_csv_course_materialized, write_json_all, write_json_all_materialized,
-        write_json_all_with, write_json_course, write_json_course_materialized,
-        write_json_native_bpms, write_json_stream_sequences,
+        parse_combos, parse_combos_staged, parse_labels, parse_tickcounts, parse_time_signatures,
+        parse_time_signatures_staged, push_bpm_range, push_duration, push_num, push_str,
+        steps_timing_allowed, timing_fixed_6, write_csv_course, write_csv_course_materialized,
+        write_json_all, write_json_all_materialized, write_json_all_with, write_json_course,
+        write_json_course_materialized, write_json_native_bpms, write_json_stream_sequences,
     };
 
     fn timing_fixed_6_materialized(value: f64) -> f64 {
@@ -1317,6 +1403,28 @@ mod tests {
         assert_eq!(timing_fixed_6(4231.5625), 4231.5625);
         assert_eq!(timing_fixed_6(171.39500427246094), 171.395004);
         assert_eq!(timing_fixed_6(159.7899932861328), 159.789993);
+    }
+
+    #[test]
+    fn flat_timing_triples_preserve_staged_normalization() {
+        for input in [
+            None,
+            Some(""),
+            Some("0=4=4"),
+            Some("8=3=4,invalid,0=4=4,8=7=8,4=4=4"),
+            Some("-0.001=2=3,0.001=5=7,16=5=7,8=6=8"),
+        ] {
+            assert_eq!(
+                parse_time_signatures(input),
+                parse_time_signatures_staged(input),
+                "time signatures: {input:?}"
+            );
+            assert_eq!(
+                parse_combos(input),
+                parse_combos_staged(input),
+                "combos: {input:?}"
+            );
+        }
     }
 
     #[test]
@@ -1877,6 +1985,30 @@ pub(crate) fn profile_timing_text(
             parse_combos(Some(combos)),
         )
     }
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_timing_triples(
+    time_signatures: &str,
+    labels: &str,
+    tickcounts: &str,
+    combos: &str,
+    staged: bool,
+) -> ProfileTimingText {
+    (
+        if staged {
+            parse_time_signatures_staged(Some(time_signatures))
+        } else {
+            parse_time_signatures(Some(time_signatures))
+        },
+        parse_labels(Some(labels)),
+        parse_tickcounts(Some(tickcounts)),
+        if staged {
+            parse_combos_staged(Some(combos))
+        } else {
+            parse_combos(Some(combos))
+        },
+    )
 }
 
 fn count_timing_segments_from_str(s: &str) -> u32 {

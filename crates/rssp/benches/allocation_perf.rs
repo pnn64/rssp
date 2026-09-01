@@ -4573,15 +4573,15 @@ fn run_timing_text_phase(
     fixture: &report_timing_bench::TimingTextFixture,
     phase: &str,
     iterations: usize,
-    legacy: bool,
+    staged: bool,
 ) {
     let parse = || {
-        rssp::profile::timing_text(
+        rssp::profile::timing_triples(
             &fixture.time_signatures,
             &fixture.labels,
             &fixture.tickcounts,
             &fixture.combos,
-            legacy,
+            staged,
         )
     };
     black_box(parse());
@@ -4634,7 +4634,14 @@ fn run_timing_text_alloc(iterations: usize) {
         &fixture.combos,
         true,
     );
-    let current = rssp::profile::timing_text(
+    let staged = rssp::profile::timing_triples(
+        &fixture.time_signatures,
+        &fixture.labels,
+        &fixture.tickcounts,
+        &fixture.combos,
+        true,
+    );
+    let current = rssp::profile::timing_triples(
         &fixture.time_signatures,
         &fixture.labels,
         &fixture.tickcounts,
@@ -4642,14 +4649,15 @@ fn run_timing_text_alloc(iterations: usize) {
         false,
     );
     assert_eq!(current, legacy, "timing text behavior must not change");
+    assert_eq!(current, staged, "flat triples must match staging");
     let [time_signatures, labels, tickcounts, combos] = report_timing_bench::TIMING_TEXT_EDGE;
     assert_eq!(
-        rssp::profile::timing_text(time_signatures, labels, tickcounts, combos, false),
-        rssp::profile::timing_text(time_signatures, labels, tickcounts, combos, true),
+        rssp::profile::timing_triples(time_signatures, labels, tickcounts, combos, false),
+        rssp::profile::timing_triples(time_signatures, labels, tickcounts, combos, true),
         "timing text edge behavior must not change"
     );
-    run_timing_text_phase(&fixture, "legacy-staged", iterations, true);
-    run_timing_text_phase(&fixture, "streamed-presized", iterations, false);
+    run_timing_text_phase(&fixture, "presized-staged", iterations, true);
+    run_timing_text_phase(&fixture, "flat-in-place", iterations, false);
 }
 
 fn run_serialize_phase(

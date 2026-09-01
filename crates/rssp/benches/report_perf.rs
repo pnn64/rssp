@@ -306,24 +306,28 @@ fn bench_hash_bpms_json(c: &mut Criterion) {
 
 fn bench_timing_text(c: &mut Criterion) {
     let fixture = report_timing_bench::timing_text();
-    let parse = |legacy| {
-        rssp::profile::timing_text(
+    let parse = |staged| {
+        rssp::profile::timing_triples(
             &fixture.time_signatures,
             &fixture.labels,
             &fixture.tickcounts,
             &fixture.combos,
-            legacy,
+            staged,
         )
     };
-    assert_eq!(
-        parse(false),
-        parse(true),
-        "timing text behavior must not change"
+    let legacy = rssp::profile::timing_text(
+        &fixture.time_signatures,
+        &fixture.labels,
+        &fixture.tickcounts,
+        &fixture.combos,
+        true,
     );
+    assert_eq!(parse(false), legacy, "timing text behavior must not change");
+    assert_eq!(parse(false), parse(true), "flat triples must match staging");
     let [time_signatures, labels, tickcounts, combos] = report_timing_bench::TIMING_TEXT_EDGE;
     assert_eq!(
-        rssp::profile::timing_text(time_signatures, labels, tickcounts, combos, false),
-        rssp::profile::timing_text(time_signatures, labels, tickcounts, combos, true),
+        rssp::profile::timing_triples(time_signatures, labels, tickcounts, combos, false),
+        rssp::profile::timing_triples(time_signatures, labels, tickcounts, combos, true),
         "timing text edge behavior must not change"
     );
 
@@ -333,10 +337,10 @@ fn bench_timing_text(c: &mut Criterion) {
     group.throughput(Throughput::Elements(
         (report_timing_bench::SEGMENT_COUNT * 4) as u64,
     ));
-    group.bench_function("legacy_staged", |b| {
+    group.bench_function("presized_staged", |b| {
         b.iter(|| black_box(parse(black_box(true))));
     });
-    group.bench_function("streamed_presized", |b| {
+    group.bench_function("flat_in_place", |b| {
         b.iter(|| black_box(parse(black_box(false))));
     });
     group.finish();

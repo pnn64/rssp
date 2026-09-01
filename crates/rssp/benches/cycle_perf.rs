@@ -824,6 +824,63 @@ fn print_select_list_pairs(input: &[u8]) {
 }
 
 #[cfg(windows)]
+fn timing_triple_cycles(fixture: &report_timing_bench::TimingTextFixture, staged: bool) -> u64 {
+    const ITERATIONS: usize = 32;
+    let start = platform::read_cycles();
+    for _ in 0..ITERATIONS {
+        black_box(rssp::profile::timing_triples(
+            black_box(&fixture.time_signatures),
+            black_box(&fixture.labels),
+            black_box(&fixture.tickcounts),
+            black_box(&fixture.combos),
+            staged,
+        ));
+    }
+    platform::read_cycles() - start
+}
+
+#[cfg(windows)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "paired cycle ratios need floating-point division"
+)]
+fn print_timing_triple_pairs(fixture: &report_timing_bench::TimingTextFixture) {
+    const SAMPLES: usize = 31;
+    let mut staged = [0u64; SAMPLES];
+    let mut flat = [0u64; SAMPLES];
+    let mut ratios = [0.0f64; SAMPLES];
+    for sample in 0..SAMPLES {
+        let (staged_cycles, flat_cycles) = if sample.is_multiple_of(2) {
+            (
+                timing_triple_cycles(fixture, true),
+                timing_triple_cycles(fixture, false),
+            )
+        } else {
+            let flat_cycles = timing_triple_cycles(fixture, false);
+            let staged_cycles = timing_triple_cycles(fixture, true);
+            (staged_cycles, flat_cycles)
+        };
+        staged[sample] = staged_cycles;
+        flat[sample] = flat_cycles;
+        ratios[sample] = flat_cycles as f64 / staged_cycles as f64;
+    }
+    staged.sort_unstable();
+    flat.sort_unstable();
+    ratios.sort_by(f64::total_cmp);
+    let mid = SAMPLES / 2;
+    eprintln!(
+        concat!(
+            "timing_triples paired_samples={} staged_median_cycles={} ",
+            "flat_median_cycles={} median_change={:+.3}%"
+        ),
+        SAMPLES,
+        staged[mid],
+        flat[mid],
+        (ratios[mid] - 1.0) * 100.0,
+    );
+}
+
+#[cfg(windows)]
 fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     const ENTRIES: usize = 4_096;
     let cpu = platform::stabilize_thread();
@@ -1993,10 +2050,25 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         false,
     );
     assert_eq!(current_timing_text, legacy_timing_text);
+    let staged_timing_triples = rssp::profile::timing_triples(
+        &timing_text_fixture.time_signatures,
+        &timing_text_fixture.labels,
+        &timing_text_fixture.tickcounts,
+        &timing_text_fixture.combos,
+        true,
+    );
+    let flat_timing_triples = rssp::profile::timing_triples(
+        &timing_text_fixture.time_signatures,
+        &timing_text_fixture.labels,
+        &timing_text_fixture.tickcounts,
+        &timing_text_fixture.combos,
+        false,
+    );
+    assert_eq!(flat_timing_triples, staged_timing_triples);
     let [time_signatures, labels, tickcounts, combos] = report_timing_bench::TIMING_TEXT_EDGE;
     assert_eq!(
-        rssp::profile::timing_text(time_signatures, labels, tickcounts, combos, false),
-        rssp::profile::timing_text(time_signatures, labels, tickcounts, combos, true),
+        rssp::profile::timing_triples(time_signatures, labels, tickcounts, combos, false),
+        rssp::profile::timing_triples(time_signatures, labels, tickcounts, combos, true),
         "timing text edge behavior must not change"
     );
     let serialize_fixture = serialize_bench::SerializeFixture::new();
@@ -4018,14 +4090,15 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     custom_patterns_full.finish();
 
     let mut timing_text = c.benchmark_group("cycles/timing_text_2048");
+    print_timing_triple_pairs(&timing_text_fixture);
     timing_text.sample_size(100);
     timing_text.measurement_time(Duration::from_secs(3));
     timing_text.throughput(Throughput::Elements(
         (report_timing_bench::SEGMENT_COUNT * 4) as u64,
     ));
-    timing_text.bench_function("legacy_staged", |b| {
+    timing_text.bench_function("presized_staged", |b| {
         b.iter(|| {
-            black_box(rssp::profile::timing_text(
+            black_box(rssp::profile::timing_triples(
                 black_box(&timing_text_fixture.time_signatures),
                 black_box(&timing_text_fixture.labels),
                 black_box(&timing_text_fixture.tickcounts),
@@ -4034,9 +4107,9 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             ))
         });
     });
-    timing_text.bench_function("streamed_presized", |b| {
+    timing_text.bench_function("flat_in_place", |b| {
         b.iter(|| {
-            black_box(rssp::profile::timing_text(
+            black_box(rssp::profile::timing_triples(
                 black_box(&timing_text_fixture.time_signatures),
                 black_box(&timing_text_fixture.labels),
                 black_box(&timing_text_fixture.tickcounts),
