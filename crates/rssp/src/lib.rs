@@ -306,6 +306,22 @@ pub mod profile {
         crate::analysis::profile_analyze_owned(simfile_data, extension, options, scratch)
     }
 
+    pub fn analyze_timing_cache(
+        simfile_data: &[u8],
+        extension: &str,
+        options: &crate::AnalysisOptions,
+        scratch: &mut crate::AnalysisScratch,
+        cache: bool,
+    ) -> Result<crate::SimfileSummary, String> {
+        crate::analysis::profile_analyze_timing_cache(
+            simfile_data,
+            extension,
+            options,
+            scratch,
+            cache,
+        )
+    }
+
     #[must_use]
     pub fn selectable(tag: Option<&[u8]>, legacy: bool) -> bool {
         crate::analysis::profile_selectable(tag, legacy)

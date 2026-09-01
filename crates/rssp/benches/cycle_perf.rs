@@ -10,6 +10,9 @@ use std::hint::black_box;
 use std::time::Duration;
 
 #[cfg(windows)]
+#[path = "support/analysis_timing_cache.rs"]
+mod analysis_timing_cache_bench;
+#[cfg(windows)]
 #[allow(dead_code)]
 #[path = "support/assets.rs"]
 mod assets_bench;
@@ -1014,6 +1017,69 @@ fn print_hash_scratch_pairs(data: &[u8]) {
 }
 
 #[cfg(windows)]
+fn analysis_timing_cache_cycles(data: &[u8], options: &rssp::AnalysisOptions, cache: bool) -> u64 {
+    const ITERATIONS: usize = 4;
+    let mut scratch = rssp::AnalysisScratch::default();
+    black_box(analysis_timing_cache_bench::compute(
+        data,
+        options,
+        &mut scratch,
+        cache,
+    ));
+    let start = platform::read_cycles();
+    for _ in 0..ITERATIONS {
+        black_box(analysis_timing_cache_bench::compute(
+            data,
+            options,
+            &mut scratch,
+            cache,
+        ));
+    }
+    platform::read_cycles() - start
+}
+
+#[cfg(windows)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "paired cycle ratios need floating-point division"
+)]
+fn print_analysis_timing_cache_pairs(data: &[u8], options: &rssp::AnalysisOptions) {
+    const SAMPLES: usize = 31;
+    let mut uncached = [0u64; SAMPLES];
+    let mut cached = [0u64; SAMPLES];
+    let mut ratios = [0.0f64; SAMPLES];
+    for sample in 0..SAMPLES {
+        let (uncached_cycles, cached_cycles) = if sample.is_multiple_of(2) {
+            (
+                analysis_timing_cache_cycles(data, options, false),
+                analysis_timing_cache_cycles(data, options, true),
+            )
+        } else {
+            let cached_cycles = analysis_timing_cache_cycles(data, options, true);
+            let uncached_cycles = analysis_timing_cache_cycles(data, options, false);
+            (uncached_cycles, cached_cycles)
+        };
+        uncached[sample] = uncached_cycles;
+        cached[sample] = cached_cycles;
+        ratios[sample] = cached_cycles as f64 / uncached_cycles as f64;
+    }
+    uncached.sort_unstable();
+    cached.sort_unstable();
+    ratios.sort_by(f64::total_cmp);
+    let mid = SAMPLES / 2;
+    eprintln!(
+        concat!(
+            "analysis_timing_cache paired_samples={} uncached_median_cycles={} ",
+            "cached_median_cycles={} median_change={:+.3}%"
+        ),
+        SAMPLES,
+        uncached[mid],
+        cached[mid],
+        (ratios[mid] - 1.0) * 100.0,
+    );
+}
+
+#[cfg(windows)]
 fn duration_cache_cycles(data: &[u8], cache: bool) -> u64 {
     const ITERATIONS: usize = 8;
     let start = platform::read_cycles();
@@ -1073,6 +1139,16 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let pair_map = large_pair_map(ENTRIES);
     let control_pair_map = control_pair_map(ENTRIES);
     let control_normalize_map = control_normalize_map(ENTRIES);
+    let analysis_timing_cache_fixture = analysis_timing_cache_bench::fixture();
+    let analysis_timing_cache_options = analysis_timing_cache_bench::options();
+    analysis_timing_cache_bench::assert_behavior(
+        analysis_timing_cache_fixture.as_bytes(),
+        &analysis_timing_cache_options,
+    );
+    print_analysis_timing_cache_pairs(
+        analysis_timing_cache_fixture.as_bytes(),
+        &analysis_timing_cache_options,
+    );
     let duration_cache_fixture = duration_cache_bench::fixture();
     duration_cache_bench::assert_behavior(duration_cache_fixture.as_bytes());
     print_duration_cache_pairs(duration_cache_fixture.as_bytes());
@@ -4727,6 +4803,33 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     timing_pipelines.finish();
+
+    let mut analysis_timing_cache = c.benchmark_group("cycles/analysis_chart_timing_cache");
+    analysis_timing_cache.sample_size(20);
+    analysis_timing_cache.measurement_time(Duration::from_secs(3));
+    analysis_timing_cache.throughput(Throughput::Elements(
+        analysis_timing_cache_bench::CHART_COUNT as u64,
+    ));
+    for (name, cache) in [("uncached", false), ("cached", true)] {
+        let mut scratch = rssp::AnalysisScratch::default();
+        black_box(analysis_timing_cache_bench::compute(
+            analysis_timing_cache_fixture.as_bytes(),
+            &analysis_timing_cache_options,
+            &mut scratch,
+            cache,
+        ));
+        analysis_timing_cache.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(analysis_timing_cache_bench::compute(
+                    black_box(analysis_timing_cache_fixture.as_bytes()),
+                    &analysis_timing_cache_options,
+                    &mut scratch,
+                    cache,
+                ));
+            });
+        });
+    }
+    analysis_timing_cache.finish();
 
     let mut duration_cache = c.benchmark_group("cycles/duration_chart_timing_cache");
     duration_cache.sample_size(20);

@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
+#[path = "support/analysis_timing_cache.rs"]
+mod analysis_timing_cache_bench;
 #[allow(dead_code)]
 #[path = "support/assets.rs"]
 mod assets_bench;
@@ -135,6 +137,7 @@ enum Mode {
     Fast,
     Full,
     AnalysisReuse,
+    AnalysisTimingCache,
     StreamOutputs,
     Matrix,
     Annotations,
@@ -263,6 +266,7 @@ fn parse_args() -> (Mode, usize) {
                     "parse-reserve" => Mode::ParseReserve,
                     "fast" => Mode::Fast,
                     "analysis-reuse" => Mode::AnalysisReuse,
+                    "analysis-timing-cache" => Mode::AnalysisTimingCache,
                     "stream-outputs" => Mode::StreamOutputs,
                     "matrix" => Mode::Matrix,
                     "annotations" => Mode::Annotations,
@@ -391,7 +395,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         | Mode::Serialize
         | Mode::NpsStats
         | Mode::NpsCursor => rssp::AnalysisOptions::default(),
-        Mode::Full | Mode::AnalysisReuse => rssp::AnalysisOptions {
+        Mode::Full | Mode::AnalysisReuse | Mode::AnalysisTimingCache => rssp::AnalysisOptions {
             mono_threshold: 6,
             ..rssp::AnalysisOptions::default()
         },
@@ -525,6 +529,7 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::Matrix
             | Mode::AnalysisReuse
+            | Mode::AnalysisTimingCache
             | Mode::StreamOutputs
             | Mode::Serialize
             | Mode::NpsStats
@@ -796,6 +801,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Fast => "fast",
         Mode::Full => "full",
         Mode::AnalysisReuse => "analysis-reuse",
+        Mode::AnalysisTimingCache => "analysis-timing-cache",
         Mode::StreamOutputs => "stream-outputs",
         Mode::Matrix => "matrix",
         Mode::Annotations => "annotations",
@@ -3148,6 +3154,129 @@ fn run_nps_alloc(iterations: usize, corpus: &[SimInput]) {
     run_chart_alloc_phase("nps", "reused-borrowed-timing", iterations, corpus, |sim| {
         rssp::compute_chart_peak_nps(&sim.raw, sim.extension).expect("fixture NPS should compute")
     });
+}
+
+fn analysis_timing_cache_elapsed(
+    data: &[u8],
+    options: &rssp::AnalysisOptions,
+    cache: bool,
+) -> u128 {
+    const ITERATIONS: usize = 4;
+    let mut scratch = rssp::AnalysisScratch::default();
+    black_box(analysis_timing_cache_bench::compute(
+        data,
+        options,
+        &mut scratch,
+        cache,
+    ));
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        black_box(analysis_timing_cache_bench::compute(
+            data,
+            options,
+            &mut scratch,
+            cache,
+        ));
+    }
+    start.elapsed().as_nanos()
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "paired wall-time ratios need floating-point division"
+)]
+fn print_analysis_timing_cache_pairs(data: &[u8], options: &rssp::AnalysisOptions) {
+    const SAMPLES: usize = 31;
+    let mut uncached = [0u128; SAMPLES];
+    let mut cached = [0u128; SAMPLES];
+    let mut ratios = [0.0f64; SAMPLES];
+    for sample in 0..SAMPLES {
+        let (uncached_ns, cached_ns) = if sample.is_multiple_of(2) {
+            (
+                analysis_timing_cache_elapsed(data, options, false),
+                analysis_timing_cache_elapsed(data, options, true),
+            )
+        } else {
+            let cached_ns = analysis_timing_cache_elapsed(data, options, true);
+            let uncached_ns = analysis_timing_cache_elapsed(data, options, false);
+            (uncached_ns, cached_ns)
+        };
+        uncached[sample] = uncached_ns;
+        cached[sample] = cached_ns;
+        ratios[sample] = cached_ns as f64 / uncached_ns as f64;
+    }
+    uncached.sort_unstable();
+    cached.sort_unstable();
+    ratios.sort_by(f64::total_cmp);
+    let mid = SAMPLES / 2;
+    println!(
+        concat!(
+            "mode=analysis-timing-cache paired_samples={} uncached_median_ns={} ",
+            "cached_median_ns={} median_change={:+.3}%"
+        ),
+        SAMPLES,
+        uncached[mid],
+        cached[mid],
+        (ratios[mid] - 1.0) * 100.0,
+    );
+}
+
+fn run_analysis_timing_cache_phase(
+    data: &[u8],
+    options: &rssp::AnalysisOptions,
+    phase: &str,
+    iterations: usize,
+    cache: bool,
+) {
+    let mut scratch = rssp::AnalysisScratch::default();
+    black_box(analysis_timing_cache_bench::compute(
+        data,
+        options,
+        &mut scratch,
+        cache,
+    ));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let summary = analysis_timing_cache_bench::compute(data, options, &mut scratch, cache);
+        checksum = checksum.wrapping_add(summary.charts.len());
+        black_box(summary);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=analysis-timing-cache phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_charts_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        analysis_timing_cache_bench::CHART_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_analysis_timing_cache_alloc(iterations: usize) {
+    let fixture = analysis_timing_cache_bench::fixture();
+    let options = analysis_timing_cache_bench::options();
+    analysis_timing_cache_bench::assert_behavior(fixture.as_bytes(), &options);
+    print_analysis_timing_cache_pairs(fixture.as_bytes(), &options);
+    run_analysis_timing_cache_phase(fixture.as_bytes(), &options, "uncached", iterations, false);
+    run_analysis_timing_cache_phase(fixture.as_bytes(), &options, "cached", iterations, true);
 }
 
 fn duration_cache_elapsed(data: &[u8], cache: bool) -> u128 {
@@ -7542,6 +7671,10 @@ fn main() {
         }
         Mode::ElapsedEvents => {
             run_elapsed_alloc(iterations);
+            return;
+        }
+        Mode::AnalysisTimingCache => {
+            run_analysis_timing_cache_alloc(iterations);
             return;
         }
         Mode::CleanMap => {

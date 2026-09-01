@@ -109,6 +109,44 @@ impl std::fmt::Debug for AnalysisScratch {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ChartTimingKey<'a> {
+    offset: Option<&'a [u8]>,
+    bpms: Option<&'a [u8]>,
+    stops: Option<&'a [u8]>,
+    delays: Option<&'a [u8]>,
+    warps: Option<&'a [u8]>,
+    speeds: Option<&'a [u8]>,
+    scrolls: Option<&'a [u8]>,
+    fakes: Option<&'a [u8]>,
+}
+
+// Caller-thread-owned, single-thread-only cache lasting one analysis call. It
+// holds one chart's segments and runtime timing, warms on the first chart with
+// local timing, and replaces the entry in O(1) on a miss. It performs no I/O,
+// pruning, or background work and is destroyed on the caller thread at return.
+// Targeted wall/cycle/allocation benches instrument it; the worst-case hit
+// check is eight raw-slice comparisons, while a miss retains the normal build.
+#[derive(Default)]
+struct ChartTimingCache<'a> {
+    key: Option<ChartTimingKey<'a>>,
+    segments: Option<Arc<TimingSegments>>,
+    timing: Option<TimingData>,
+}
+
+fn chart_timing_key<'a>(entry: &'a ParsedChartEntry<'_>) -> ChartTimingKey<'a> {
+    ChartTimingKey {
+        offset: entry.chart_offset.as_deref(),
+        bpms: entry.chart_bpms.as_deref(),
+        stops: entry.chart_stops.as_deref(),
+        delays: entry.chart_delays.as_deref(),
+        warps: entry.chart_warps.as_deref(),
+        speeds: entry.chart_speeds.as_deref(),
+        scrolls: entry.chart_scrolls.as_deref(),
+        fakes: entry.chart_fakes.as_deref(),
+    }
+}
+
 /// Analysis options with reusable custom-pattern automata.
 ///
 /// Construct this once for a batch of simfiles. Unlike [`AnalysisOptions`],
@@ -594,8 +632,8 @@ pub fn profile_chart_metadata_strings(
 }
 
 /// Processes a single chart's data to produce a `ChartSummary`.
-fn build_chart_summary<const REUSE_BPMS: bool>(
-    entry: &ParsedChartEntry<'_>,
+fn build_chart_summary<'a, const REUSE_BPMS: bool, const CACHE_TIMING: bool>(
+    entry: &'a ParsedChartEntry<'_>,
     global_attacks_opt: Option<&[u8]>,
     global_bpms_raw: &str,
     global_stops_raw: &str,
@@ -607,6 +645,7 @@ fn build_chart_summary<const REUSE_BPMS: bool>(
     global_bpms_norm: &str,
     global_timing_segments: &Arc<TimingSegments>,
     global_timing: &mut Option<TimingData>,
+    chart_timing_cache: &mut ChartTimingCache<'a>,
     global_bpm_map: &[(f64, f64)],
     song_offset: f64,
     extension: &str,
@@ -830,25 +869,41 @@ fn build_chart_summary<const REUSE_BPMS: bool>(
         parse_radar_values_bytes(chart_radar_values_opt, true)
     };
     let chart_has_own_timing = timing_src.chart_has_own_timing;
+    let timing_key = chart_has_own_timing.then(|| chart_timing_key(entry));
     let timing_segments = if chart_has_own_timing {
-        Arc::new(compute_timing_segments(
-            chart_bpms_timing,
-            timing_src.global_bpms,
-            chart_stops_timing,
-            timing_src.global_stops,
-            chart_delays_timing,
-            timing_src.global_delays,
-            chart_warps_timing,
-            timing_src.global_warps,
-            chart_speeds_timing,
-            timing_src.global_speeds,
-            chart_scrolls_timing,
-            timing_src.global_scrolls,
-            chart_fakes_timing,
-            timing_src.global_fakes,
-            timing_format,
-            true,
-        ))
+        if CACHE_TIMING && chart_timing_cache.key == timing_key {
+            Arc::clone(
+                chart_timing_cache
+                    .segments
+                    .as_ref()
+                    .expect("a cached chart timing key has timing segments"),
+            )
+        } else {
+            let segments = Arc::new(compute_timing_segments(
+                chart_bpms_timing,
+                timing_src.global_bpms,
+                chart_stops_timing,
+                timing_src.global_stops,
+                chart_delays_timing,
+                timing_src.global_delays,
+                chart_warps_timing,
+                timing_src.global_warps,
+                chart_speeds_timing,
+                timing_src.global_speeds,
+                chart_scrolls_timing,
+                timing_src.global_scrolls,
+                chart_fakes_timing,
+                timing_src.global_fakes,
+                timing_format,
+                true,
+            ));
+            if CACHE_TIMING {
+                chart_timing_cache.key = timing_key;
+                chart_timing_cache.segments = Some(Arc::clone(&segments));
+                chart_timing_cache.timing = None;
+            }
+            segments
+        }
     } else {
         Arc::clone(global_timing_segments)
     };
@@ -904,10 +959,16 @@ fn build_chart_summary<const REUSE_BPMS: bool>(
     let custom_patterns =
         pattern_analysis.map_or_else(Vec::new, |analysis| analysis.custom_patterns);
 
-    let chart_timing;
+    let uncached_chart_timing;
     let timing = if chart_has_own_timing {
-        chart_timing = timing_data_from_segments(chart_offset, 0.0, &timing_segments);
-        &chart_timing
+        if CACHE_TIMING {
+            chart_timing_cache.timing.get_or_insert_with(|| {
+                timing_data_from_segments(chart_offset, 0.0, &timing_segments)
+            })
+        } else {
+            uncached_chart_timing = timing_data_from_segments(chart_offset, 0.0, &timing_segments);
+            &uncached_chart_timing
+        }
     } else {
         global_timing.get_or_insert_with(|| {
             timing_data_from_segments(song_offset, 0.0, global_timing_segments)
@@ -1118,7 +1179,7 @@ pub fn analyze_with_scratch(
     options: &AnalysisOptions,
     scratch: &mut AnalysisScratch,
 ) -> Result<SimfileSummary, String> {
-    analyze_with_scratch_impl::<true, true, (), fn(ParsedChartNote)>(
+    analyze_with_scratch_impl::<true, true, true, (), fn(ParsedChartNote)>(
         simfile_data,
         extension,
         options,
@@ -1141,7 +1202,7 @@ pub fn analyze_prepared_in(
     prepared: &PreparedAnalysis,
     scratch: &mut AnalysisScratch,
 ) -> Result<SimfileSummary, String> {
-    analyze_with_scratch_impl::<true, true, (), fn(ParsedChartNote)>(
+    analyze_with_scratch_impl::<true, true, true, (), fn(ParsedChartNote)>(
         simfile_data,
         extension,
         &prepared.options,
@@ -1170,7 +1231,7 @@ pub fn analyze_prepared_in_with_notes<T>(
     chart_notes: &mut Vec<Vec<T>>,
     mut map_note: impl FnMut(ParsedChartNote) -> T,
 ) -> Result<SimfileSummary, String> {
-    analyze_with_scratch_impl::<true, true, T, _>(
+    analyze_with_scratch_impl::<true, true, true, T, _>(
         simfile_data,
         extension,
         &prepared.options,
@@ -1188,7 +1249,7 @@ pub(crate) fn profile_analyze_with_allocating_bpms(
     options: &AnalysisOptions,
     scratch: &mut AnalysisScratch,
 ) -> Result<SimfileSummary, String> {
-    analyze_with_scratch_impl::<false, true, (), fn(ParsedChartNote)>(
+    analyze_with_scratch_impl::<false, true, true, (), fn(ParsedChartNote)>(
         simfile_data,
         extension,
         options,
@@ -1206,7 +1267,7 @@ pub(crate) fn profile_analyze_owned(
     options: &AnalysisOptions,
     scratch: &mut AnalysisScratch,
 ) -> Result<SimfileSummary, String> {
-    analyze_with_scratch_impl::<true, false, (), fn(ParsedChartNote)>(
+    analyze_with_scratch_impl::<true, false, true, (), fn(ParsedChartNote)>(
         simfile_data,
         extension,
         options,
@@ -1217,9 +1278,41 @@ pub(crate) fn profile_analyze_owned(
     )
 }
 
+#[cfg(feature = "profile")]
+pub(crate) fn profile_analyze_timing_cache(
+    simfile_data: &[u8],
+    extension: &str,
+    options: &AnalysisOptions,
+    scratch: &mut AnalysisScratch,
+    cache: bool,
+) -> Result<SimfileSummary, String> {
+    if cache {
+        analyze_with_scratch_impl::<true, true, true, (), fn(ParsedChartNote)>(
+            simfile_data,
+            extension,
+            options,
+            scratch,
+            None,
+            None,
+            None,
+        )
+    } else {
+        analyze_with_scratch_impl::<true, true, false, (), fn(ParsedChartNote)>(
+            simfile_data,
+            extension,
+            options,
+            scratch,
+            None,
+            None,
+            None,
+        )
+    }
+}
+
 fn analyze_with_scratch_impl<
     const REUSE_BPMS: bool,
     const BORROW_TIMING: bool,
+    const CACHE_TIMING: bool,
     T,
     MapNote: FnMut(ParsedChartNote) -> T,
 >(
@@ -1502,11 +1595,12 @@ fn analyze_with_scratch_impl<
     }
     let mut total_length = 0i32;
     let mut global_timing = None;
+    let mut chart_timing_cache = ChartTimingCache::default();
     let options_ref = &options;
     let compiled_custom_patterns_ref = compiled_custom_patterns;
-    for entry in entries {
-        if let Some((summary, chart_length)) = build_chart_summary::<REUSE_BPMS>(
-            &entry,
+    for entry in &entries {
+        if let Some((summary, chart_length)) = build_chart_summary::<REUSE_BPMS, CACHE_TIMING>(
+            entry,
             global_attacks_opt,
             &cleaned_global_bpms,
             &cleaned_global_stops,
@@ -1518,6 +1612,7 @@ fn analyze_with_scratch_impl<
             &normalized_global_bpms,
             &global_timing_segments,
             &mut global_timing,
+            &mut chart_timing_cache,
             global_bpm_map,
             offset,
             extension,
@@ -1737,7 +1832,7 @@ mod tests {
             ..AnalysisOptions::default()
         };
         let mut legacy_scratch = AnalysisScratch::default();
-        let expected = analyze_with_scratch_impl::<false, false, (), fn(ParsedChartNote)>(
+        let expected = analyze_with_scratch_impl::<false, false, false, (), fn(ParsedChartNote)>(
             FIXTURE,
             "ssc",
             &options,
@@ -1783,7 +1878,7 @@ mod tests {
             "#BPMS:0=150,4=200;\n#NOTES:\n1000\n0100\n0010\n0001\n;\n"
         )
         .as_bytes();
-        let expected = analyze_with_scratch_impl::<false, false, (), fn(ParsedChartNote)>(
+        let expected = analyze_with_scratch_impl::<false, false, false, (), fn(ParsedChartNote)>(
             LOCAL_TIMING,
             "ssc",
             &options,
@@ -1802,6 +1897,62 @@ mod tests {
         assert_eq!(json(&second), json(&expected));
         assert!(chart_capacity > 0);
         assert_eq!(scratch.chart_bpm_map.capacity(), chart_capacity);
+    }
+
+    #[test]
+    fn repeated_chart_timing_cache_preserves_output() {
+        const REPEATED_TIMING: &[u8] = concat!(
+            "#VERSION:0.83;\n#TITLE:Repeated Timing;\n#BPMS:0=120;\n",
+            "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DESCRIPTION:first;\n",
+            "#DIFFICULTY:Easy;\n#METER:5;\n#CREDIT:;\n#OFFSET:0.125;\n",
+            "#BPMS:0=150,4=180;\n#STOPS:2=0.125;\n#DELAYS:3=0.0625;\n",
+            "#WARPS:8=1;\n#SPEEDS:0=1=0=0,4=1.5=2=0;\n",
+            "#SCROLLS:0=1,8=0.5;\n#FAKES:12=1;\n",
+            "#NOTES:\n1000\n0100\n0010\n0001\n;\n",
+            "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DESCRIPTION:second;\n",
+            "#DIFFICULTY:Hard;\n#METER:9;\n#CREDIT:;\n#OFFSET:0.125;\n",
+            "#BPMS:0=150,4=180;\n#STOPS:2=0.125;\n#DELAYS:3=0.0625;\n",
+            "#WARPS:8=1;\n#SPEEDS:0=1=0=0,4=1.5=2=0;\n",
+            "#SCROLLS:0=1,8=0.5;\n#FAKES:12=1;\n",
+            "#NOTES:\n0001\n0010\n0100\n1000\n;\n",
+            "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DESCRIPTION:changed;\n",
+            "#DIFFICULTY:Challenge;\n#METER:12;\n#CREDIT:;\n#OFFSET:0.25;\n",
+            "#BPMS:0=160,4=200;\n#STOPS:2=0.25;\n#DELAYS:3=0.125;\n",
+            "#WARPS:8=2;\n#SPEEDS:0=1=0=0,4=2=2=0;\n",
+            "#SCROLLS:0=1,8=0.75;\n#FAKES:12=2;\n",
+            "#NOTES:\n1000\n0010\n0100\n0001\n;\n",
+        )
+        .as_bytes();
+        let options = AnalysisOptions {
+            compute_tech_counts: false,
+            compute_pattern_counts: false,
+            ..AnalysisOptions::default()
+        };
+        let mut uncached_scratch = AnalysisScratch::default();
+        let expected = analyze_with_scratch_impl::<true, true, false, (), fn(ParsedChartNote)>(
+            REPEATED_TIMING,
+            "ssc",
+            &options,
+            &mut uncached_scratch,
+            None,
+            None,
+            None,
+        )
+        .expect("uncached repeated timing analysis should succeed");
+        let mut cached_scratch = AnalysisScratch::default();
+        let actual = analyze_with_scratch(REPEATED_TIMING, "ssc", &options, &mut cached_scratch)
+            .expect("cached repeated timing analysis should succeed");
+
+        assert_eq!(json(&actual), json(&expected));
+        assert_eq!(actual.charts.len(), 3);
+        assert!(std::sync::Arc::ptr_eq(
+            &actual.charts[0].timing_segments,
+            &actual.charts[1].timing_segments,
+        ));
+        assert!(!std::sync::Arc::ptr_eq(
+            &actual.charts[1].timing_segments,
+            &actual.charts[2].timing_segments,
+        ));
     }
 
     #[test]
