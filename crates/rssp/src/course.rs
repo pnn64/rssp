@@ -1770,7 +1770,7 @@ pub fn analyze_crs_path(
     course_difficulty: &str,
     options: AnalysisOptions,
 ) -> Result<CourseSummary, String> {
-    analyze_crs_path_impl::<true, true>(
+    analyze_crs_path_impl::<true, true, true>(
         course_path,
         songs_dir,
         target_step_type,
@@ -1789,7 +1789,7 @@ pub fn analyze_crs_path_cache_all_for_bench(
     course_difficulty: &str,
     options: AnalysisOptions,
 ) -> Result<CourseSummary, String> {
-    analyze_crs_path_impl::<true, true>(
+    analyze_crs_path_impl::<true, true, true>(
         course_path,
         songs_dir,
         target_step_type,
@@ -1810,7 +1810,7 @@ pub fn profile_analyze_crs(
     song_key_cache: bool,
 ) -> Result<CourseSummary, String> {
     if song_key_cache {
-        analyze_crs_path_impl::<true, false>(
+        analyze_crs_path_impl::<true, false, false>(
             course_path,
             songs_dir,
             target_step_type,
@@ -1819,7 +1819,7 @@ pub fn profile_analyze_crs(
             false,
         )
     } else {
-        analyze_crs_path_impl::<false, false>(
+        analyze_crs_path_impl::<false, false, false>(
             course_path,
             songs_dir,
             target_step_type,
@@ -1841,7 +1841,7 @@ pub fn profile_analyze_groups(
     group_cache: bool,
 ) -> Result<CourseSummary, String> {
     if group_cache {
-        analyze_crs_path_impl::<true, true>(
+        analyze_crs_path_impl::<true, true, false>(
             course_path,
             songs_dir,
             target_step_type,
@@ -1850,7 +1850,38 @@ pub fn profile_analyze_groups(
             false,
         )
     } else {
-        analyze_crs_path_impl::<true, false>(
+        analyze_crs_path_impl::<true, false, false>(
+            course_path,
+            songs_dir,
+            target_step_type,
+            course_difficulty,
+            options,
+            false,
+        )
+    }
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+pub fn profile_analyze_catalog(
+    course_path: &Path,
+    songs_dir: Option<&Path>,
+    target_step_type: &str,
+    course_difficulty: &str,
+    options: AnalysisOptions,
+    group_catalog: bool,
+) -> Result<CourseSummary, String> {
+    if group_catalog {
+        analyze_crs_path_impl::<true, true, true>(
+            course_path,
+            songs_dir,
+            target_step_type,
+            course_difficulty,
+            options,
+            false,
+        )
+    } else {
+        analyze_crs_path_impl::<true, true, false>(
             course_path,
             songs_dir,
             target_step_type,
@@ -1887,14 +1918,73 @@ fn resolve_course_song<'a, const GROUP_CACHE: bool>(
     resolve_group_song(&last_group.as_ref()?.1, song)
 }
 
-fn resolve_course_simfile<'a, const GROUP_CACHE: bool>(
+struct GroupCatalog<'a> {
+    key: &'a str,
+    dir: PathBuf,
+    songs: Vec<OsString>,
+}
+
+fn catalog_group(dir: &Path) -> Option<Vec<OsString>> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut songs = Vec::with_capacity(64);
+    for entry in entries.flatten() {
+        if assets::entry_is_dir(&entry) {
+            songs.push(entry.file_name());
+        }
+    }
+    Some(songs)
+}
+
+fn resolve_catalog_song<'a>(
+    songs_dir: &Path,
+    group: Option<&'a str>,
+    song: &str,
+    catalog: &mut Option<GroupCatalog<'a>>,
+) -> Option<PathBuf> {
+    let song = song.trim();
+    if song.is_empty() {
+        return None;
+    }
+    let Some(group) = group.map(str::trim).filter(|group| !group.is_empty()) else {
+        return resolve_song_dir(songs_dir, None, song);
+    };
+    if !catalog.as_ref().is_some_and(|cached| cached.key == group) {
+        let dir = find_named_dir(songs_dir, group)?;
+        let Some(songs) = catalog_group(&dir) else {
+            return resolve_group_song(&dir, song);
+        };
+        *catalog = Some(GroupCatalog {
+            key: group,
+            dir,
+            songs,
+        });
+    }
+
+    let cached = catalog.as_ref()?;
+    for name in &cached.songs {
+        if !name.to_string_lossy().starts_with("._") && assets::name_eq_ci(name, song) {
+            let path = cached.dir.join(name);
+            if path.is_dir() {
+                return Some(path);
+            }
+        }
+    }
+    resolve_group_song(&cached.dir, song)
+}
+
+fn resolve_course_simfile<'a, const GROUP_CACHE: bool, const GROUP_CATALOG: bool>(
     songs_dir: &Path,
     group: Option<&'a str>,
     song: &str,
     last_group: &mut Option<(&'a str, PathBuf)>,
+    group_catalog: &mut Option<GroupCatalog<'a>>,
 ) -> Result<(PathBuf, PathBuf), String> {
-    let song_dir = resolve_course_song::<GROUP_CACHE>(songs_dir, group, song, last_group)
-        .ok_or_else(|| format!("Song not found: {song}"))?;
+    let song_dir = if GROUP_CATALOG {
+        resolve_catalog_song(songs_dir, group, song, group_catalog)
+    } else {
+        resolve_course_song::<GROUP_CACHE>(songs_dir, group, song, last_group)
+    }
+    .ok_or_else(|| format!("Song not found: {song}"))?;
     let scan = pack::scan_song_dir(&song_dir, pack::ScanOpt::default())
         .map_err(|e| format!("Failed scanning {}: {e:?}", song_dir.display()))?;
     let simfile = scan
@@ -1903,7 +1993,11 @@ fn resolve_course_simfile<'a, const GROUP_CACHE: bool>(
     Ok((song_dir, simfile))
 }
 
-fn analyze_crs_path_impl<const SONG_KEY_CACHE: bool, const GROUP_CACHE: bool>(
+fn analyze_crs_path_impl<
+    const SONG_KEY_CACHE: bool,
+    const GROUP_CACHE: bool,
+    const GROUP_CATALOG: bool,
+>(
     course_path: &Path,
     songs_dir: Option<&Path>,
     target_step_type: &str,
@@ -1961,6 +2055,13 @@ fn analyze_crs_path_impl<const SONG_KEY_CACHE: bool, const GROUP_CACHE: bool>(
     // scan. It drops after load-time analysis, so no miss or destruction reaches
     // gameplay; allocation benchmarks instrument its peak and worst-case cost.
     let mut last_group = None;
+    // - Owner/thread safety/lifetime: worker-local, unshared, one course analysis.
+    // - Capacity/warmup: one group's child-directory names, loaded on first use.
+    // - Miss/overflow: use the exact resolver; directory size bounds stored names.
+    // - Eviction/destruction: a group change replaces it; return drops it off-gameplay.
+    // - Instrumentation: allocation/cycle benches track peak, churn, and lookup work.
+    // - Worst-frame cost: none; load-time hits scan O(group directories) names.
+    let mut group_catalog = None;
     let mut entries = Vec::with_capacity(entry_count);
     let mut hash_list = Vec::new();
     let mut hash_seen = CourseHashSet::default();
@@ -2004,11 +2105,12 @@ fn analyze_crs_path_impl<const SONG_KEY_CACHE: bool, const GROUP_CACHE: bool>(
                     (&cached.1, dir_name)
                 }
                 Entry::Vacant(entry) if cache_has_room => {
-                    let (dir, path) = resolve_course_simfile::<GROUP_CACHE>(
+                    let (dir, path) = resolve_course_simfile::<GROUP_CACHE, GROUP_CATALOG>(
                         &base_songs_dir,
                         song_key.0,
                         song_key.1,
                         &mut last_group,
+                        &mut group_catalog,
                     )?;
                     let dir_name = song_dir_name(&dir);
                     let summary = analyze_course_song(&path, &prepared, &mut analysis_scratch)?;
@@ -2017,22 +2119,24 @@ fn analyze_crs_path_impl<const SONG_KEY_CACHE: bool, const GROUP_CACHE: bool>(
                 }
                 Entry::Vacant(entry) => {
                     drop(entry);
-                    let (dir, path) = resolve_course_simfile::<GROUP_CACHE>(
+                    let (dir, path) = resolve_course_simfile::<GROUP_CACHE, GROUP_CATALOG>(
                         &base_songs_dir,
                         song_key.0,
                         song_key.1,
                         &mut last_group,
+                        &mut group_catalog,
                     )?;
                     uncached_sim = analyze_course_song(&path, &prepared, &mut analysis_scratch)?;
                     (&uncached_sim, song_dir_name(&dir))
                 }
             }
         } else if cache_song {
-            let (dir, path) = resolve_course_simfile::<GROUP_CACHE>(
+            let (dir, path) = resolve_course_simfile::<GROUP_CACHE, GROUP_CATALOG>(
                 &base_songs_dir,
                 song_key.0,
                 song_key.1,
                 &mut last_group,
+                &mut group_catalog,
             )?;
             let dir_name = song_dir_name(&dir);
             match path_cache.entry(path) {
@@ -2049,11 +2153,12 @@ fn analyze_crs_path_impl<const SONG_KEY_CACHE: bool, const GROUP_CACHE: bool>(
                 }
             }
         } else {
-            let (dir, path) = resolve_course_simfile::<GROUP_CACHE>(
+            let (dir, path) = resolve_course_simfile::<GROUP_CACHE, GROUP_CATALOG>(
                 &base_songs_dir,
                 song_key.0,
                 song_key.1,
                 &mut last_group,
+                &mut group_catalog,
             )?;
             uncached_sim = analyze_course_song(&path, &prepared, &mut analysis_scratch)?;
             (&uncached_sim, song_dir_name(&dir))
@@ -2397,7 +2502,7 @@ mod tests {
                 "#COURSE:Optimization Test;\n",
                 "#SONG:Group/SongA:Challenge:;\n",
                 "#SONG:Group/SongB:Challenge:;\n",
-                "#SONG:Other/SongC:Challenge:;\n",
+                "#SONG:Other/RSSP Hash Perf Fixture Benchmark:Challenge:;\n",
                 "#SONG:Group/SongA:Challenge:;\n",
             ),
         )
@@ -2409,7 +2514,7 @@ mod tests {
             compute_tech_counts: false,
             ..crate::AnalysisOptions::default()
         };
-        let path_cached = analyze_crs_path_impl::<false, false>(
+        let path_cached = analyze_crs_path_impl::<false, false, false>(
             &course_path,
             Some(&songs_dir),
             "dance-single",
@@ -2418,7 +2523,7 @@ mod tests {
             false,
         )
         .expect("path-key cache should analyze");
-        let group_uncached = analyze_crs_path_impl::<true, false>(
+        let group_uncached = analyze_crs_path_impl::<true, false, false>(
             &course_path,
             Some(&songs_dir),
             "dance-single",

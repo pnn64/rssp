@@ -1695,6 +1695,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     course_bench::assert_step_norm_behavior();
     course_bench::assert_title_match_behavior();
     course_fixture.assert_group_cache();
+    course_fixture.assert_group_catalog();
     repeated_course.assert_song_cache();
     let course_hashes = course_bench::hash_values();
     course_bench::assert_hash_dedup_behavior(&course_hashes);
@@ -2703,6 +2704,29 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     course.finish();
+
+    let mut course_catalog = c.benchmark_group("cycles/course_group_catalog");
+    course_catalog.sample_size(20);
+    course_catalog.measurement_time(Duration::from_secs(3));
+    course_catalog.throughput(Throughput::Elements(course_bench::SONG_COUNT as u64));
+    for (name, group_catalog) in [("catalog_off", false), ("catalog_on", true)] {
+        course_catalog.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(
+                    rssp::course::profile_analyze_catalog(
+                        black_box(course_fixture.course_path()),
+                        Some(black_box(course_fixture.songs_dir())),
+                        black_box("dance-single"),
+                        black_box("Medium"),
+                        black_box(course_options.clone()),
+                        group_catalog,
+                    )
+                    .expect("group catalog benchmark course should analyze"),
+                );
+            });
+        });
+    }
+    course_catalog.finish();
 
     let mut course_groups = c.benchmark_group("cycles/course_group_cache");
     course_groups.sample_size(20);

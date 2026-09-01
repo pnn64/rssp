@@ -327,6 +327,32 @@ impl CourseFixture {
             .expect("cached group summary should serialize");
         assert_eq!(actual, expected);
     }
+
+    pub fn assert_group_catalog(&self) {
+        let analyze = |group_catalog| {
+            rssp::course::profile_analyze_catalog(
+                &self.course_path,
+                Some(&self.songs_dir),
+                "dance-single",
+                "Medium",
+                fast_options(),
+                group_catalog,
+            )
+            .expect("course group catalog fixture should analyze")
+        };
+        let uncached = analyze(false);
+        let cached = analyze(true);
+        let (mut expected, mut actual) = (Vec::new(), Vec::new());
+        rssp::report::write_course_reports(
+            &uncached,
+            rssp::report::OutputMode::JSON,
+            &mut expected,
+        )
+        .expect("uncataloged group summary should serialize");
+        rssp::report::write_course_reports(&cached, rssp::report::OutputMode::JSON, &mut actual)
+            .expect("cataloged group summary should serialize");
+        assert_eq!(actual, expected);
+    }
 }
 
 impl Drop for CourseFixture {
