@@ -154,6 +154,11 @@ pub fn assert_behavior() {
     assert_eq!(reused.len(), WARP_COUNT + 1);
 
     let (bpms, stops) = warp_inputs();
+    let growing = rssp::timing::process_sm_warp_capacity_for_bench(&bpms, &stops, false);
+    let preallocated = rssp::timing::process_sm_warp_capacity_for_bench(&bpms, &stops, true);
+    assert_output_eq(&preallocated, &growing);
+    assert_eq!(preallocated.2.len(), WARP_COUNT);
+
     let copied = rssp::timing::process_sm_warp_merge_for_bench(&bpms, &stops, false);
     let reused = rssp::timing::process_sm_warp_merge_for_bench(&bpms, &stops, true);
     assert_output_eq(&reused, &copied);

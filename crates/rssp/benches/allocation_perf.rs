@@ -4355,8 +4355,38 @@ fn run_sm_timing_alloc(iterations: usize) {
     run_warp_merge_phase(&extra_warps, "copy-into-empty", iterations, false);
     run_warp_merge_phase(&extra_warps, "reuse-generated", iterations, true);
     let (bpms, stops) = sm_timing_bench::warp_inputs();
-    run_warp_pipeline_phase(&bpms, &stops, "copy-into-empty", iterations, false);
-    run_warp_pipeline_phase(&bpms, &stops, "reuse-generated", iterations, true);
+    run_warp_phase(
+        "sm-generated-warp-capacity",
+        &bpms,
+        &stops,
+        "growing",
+        iterations,
+        |bpms, stops| rssp::timing::process_sm_warp_capacity_for_bench(bpms, stops, false),
+    );
+    run_warp_phase(
+        "sm-generated-warp-capacity",
+        &bpms,
+        &stops,
+        "preallocated",
+        iterations,
+        |bpms, stops| rssp::timing::process_sm_warp_capacity_for_bench(bpms, stops, true),
+    );
+    run_warp_phase(
+        "sm-warp-pipeline",
+        &bpms,
+        &stops,
+        "copy-into-empty",
+        iterations,
+        |bpms, stops| rssp::timing::process_sm_warp_merge_for_bench(bpms, stops, false),
+    );
+    run_warp_phase(
+        "sm-warp-pipeline",
+        &bpms,
+        &stops,
+        "reuse-generated",
+        iterations,
+        |bpms, stops| rssp::timing::process_sm_warp_merge_for_bench(bpms, stops, true),
+    );
 }
 
 fn run_warp_merge_phase(
@@ -4406,23 +4436,28 @@ fn run_warp_merge_phase(
     );
 }
 
-fn run_warp_pipeline_phase(
+fn run_warp_phase(
+    mode: &str,
     bpms: &[(f64, f64)],
     stops: &[rssp::timing::Segment],
     phase: &str,
     iterations: usize,
-    reuse_empty: bool,
+    process: impl Fn(
+        &[(f64, f64)],
+        &[rssp::timing::Segment],
+    ) -> (
+        Vec<(f64, f64)>,
+        Vec<rssp::timing::Segment>,
+        Vec<rssp::timing::Segment>,
+        f64,
+    ),
 ) {
     reset_counters();
     let before = Counters::read();
     let start = Instant::now();
     let mut checksum = 0usize;
     for _ in 0..iterations {
-        let output = rssp::timing::process_sm_warp_merge_for_bench(
-            black_box(bpms),
-            black_box(stops),
-            reuse_empty,
-        );
+        let output = process(black_box(bpms), black_box(stops));
         checksum = checksum
             .wrapping_add(output.0.len())
             .wrapping_add(output.1.len())
@@ -4435,12 +4470,13 @@ fn run_warp_pipeline_phase(
     let divisor = iterations as f64;
     println!(
         concat!(
-            "mode=sm-warp-pipeline phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "mode={} phase={} iters={} checksum={} elapsed_s={:.6} ",
             "throughput_warps_s={:.3} alloc_calls_per_iter={:.1} ",
             "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
             "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
             "live_growth_bytes={} peak_live_growth_bytes={}"
         ),
+        mode,
         phase,
         iterations,
         black_box(checksum),

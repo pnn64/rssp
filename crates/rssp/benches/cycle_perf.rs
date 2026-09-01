@@ -668,6 +668,63 @@ fn print_path_join_pairs(base: &std::path::Path) {
 }
 
 #[cfg(windows)]
+fn generated_warp_cycles(
+    bpms: &[(f64, f64)],
+    stops: &[rssp::timing::Segment],
+    preallocate: bool,
+) -> u64 {
+    const ITERATIONS: usize = 128;
+    let start = platform::read_cycles();
+    for _ in 0..ITERATIONS {
+        black_box(rssp::timing::process_sm_warp_capacity_for_bench(
+            black_box(bpms),
+            black_box(stops),
+            preallocate,
+        ));
+    }
+    platform::read_cycles() - start
+}
+
+#[cfg(windows)]
+#[allow(clippy::cast_precision_loss)]
+fn print_generated_warp_pairs(case: &str, bpms: &[(f64, f64)], stops: &[rssp::timing::Segment]) {
+    const SAMPLES: usize = 31;
+    let mut growing = [0u64; SAMPLES];
+    let mut preallocated = [0u64; SAMPLES];
+    let mut ratios = [0.0f64; SAMPLES];
+    for sample in 0..SAMPLES {
+        let (growing_cycles, preallocated_cycles) = if sample.is_multiple_of(2) {
+            (
+                generated_warp_cycles(bpms, stops, false),
+                generated_warp_cycles(bpms, stops, true),
+            )
+        } else {
+            let preallocated_cycles = generated_warp_cycles(bpms, stops, true);
+            let growing_cycles = generated_warp_cycles(bpms, stops, false);
+            (growing_cycles, preallocated_cycles)
+        };
+        growing[sample] = growing_cycles;
+        preallocated[sample] = preallocated_cycles;
+        ratios[sample] = preallocated_cycles as f64 / growing_cycles as f64;
+    }
+    growing.sort_unstable();
+    preallocated.sort_unstable();
+    ratios.sort_by(f64::total_cmp);
+    let mid = SAMPLES / 2;
+    eprintln!(
+        concat!(
+            "sm_generated_warp_capacity case={} paired_samples={} growing_median_cycles={} ",
+            "preallocated_median_cycles={} median_change={:+.3}%"
+        ),
+        case,
+        SAMPLES,
+        growing[mid],
+        preallocated[mid],
+        (ratios[mid] - 1.0) * 100.0,
+    );
+}
+
+#[cfg(windows)]
 fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     const ENTRIES: usize = 4_096;
     let cpu = platform::stabilize_thread();
@@ -1362,6 +1419,37 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     });
     sm_timing.finish();
 
+    print_generated_warp_pairs(
+        "no-warps",
+        &sm_timing_fixture.bpms,
+        &sm_timing_fixture.stops,
+    );
+
+    let mut warp_capacity_noop =
+        c.benchmark_group("cycles/sm_generated_warp_capacity_no_warps_6144");
+    warp_capacity_noop.throughput(Throughput::Elements(sm_timing_bench::INPUT_COUNT));
+    warp_capacity_noop.sample_size(50);
+    warp_capacity_noop.measurement_time(Duration::from_secs(3));
+    warp_capacity_noop.bench_function("growing", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::process_sm_warp_capacity_for_bench(
+                black_box(&sm_timing_fixture.bpms),
+                black_box(&sm_timing_fixture.stops),
+                false,
+            ));
+        });
+    });
+    warp_capacity_noop.bench_function("preallocated", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::process_sm_warp_capacity_for_bench(
+                black_box(&sm_timing_fixture.bpms),
+                black_box(&sm_timing_fixture.stops),
+                true,
+            ));
+        });
+    });
+    warp_capacity_noop.finish();
+
     let extra_warps = sm_timing_bench::extra_warps();
     let mut sm_warps = c.benchmark_group("cycles/sm_warp_merge_2048");
     sm_warps.throughput(Throughput::Elements(sm_timing_bench::WARP_COUNT as u64));
@@ -1396,6 +1484,31 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     sm_warps.finish();
 
     let (warp_bpms, warp_stops) = sm_timing_bench::warp_inputs();
+    print_generated_warp_pairs("2048-warps", &warp_bpms, &warp_stops);
+    let mut warp_capacity = c.benchmark_group("cycles/sm_generated_warp_capacity_2048");
+    warp_capacity.throughput(Throughput::Elements(sm_timing_bench::WARP_COUNT as u64));
+    warp_capacity.sample_size(50);
+    warp_capacity.measurement_time(Duration::from_secs(3));
+    warp_capacity.bench_function("growing", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::process_sm_warp_capacity_for_bench(
+                black_box(&warp_bpms),
+                black_box(&warp_stops),
+                false,
+            ));
+        });
+    });
+    warp_capacity.bench_function("preallocated", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::process_sm_warp_capacity_for_bench(
+                black_box(&warp_bpms),
+                black_box(&warp_stops),
+                true,
+            ));
+        });
+    });
+    warp_capacity.finish();
+
     let mut sm_warp_pipeline = c.benchmark_group("cycles/sm_warp_pipeline_2048");
     sm_warp_pipeline.throughput(Throughput::Elements(sm_timing_bench::WARP_COUNT as u64));
     sm_warp_pipeline.sample_size(50);

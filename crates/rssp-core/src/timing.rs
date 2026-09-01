@@ -1023,7 +1023,7 @@ fn process_bpms_and_stops(
     stops: Vec<Segment>,
 ) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
     match format {
-        TimingFormat::Sm => process_bpms_and_stops_sm::<false>(&bpms, &stops),
+        TimingFormat::Sm => process_bpms_and_stops_sm::<false, true>(&bpms, &stops),
         TimingFormat::Ssc => process_bpms_and_stops_ssc(bpms, stops),
     }
 }
@@ -1130,7 +1130,37 @@ fn push_sm_bpm<const LEGACY: bool>(
     }
 }
 
-fn process_bpms_and_stops_sm<const LEGACY: bool>(
+#[cold]
+fn reserve_sm_warps(
+    warps: &mut Vec<Segment>,
+    bpm_changes: &[(f32, f32)],
+    stop_changes: &[(f32, f32)],
+) {
+    let capacity = bpm_changes
+        .iter()
+        .filter(|(beat, value)| *beat > 0.0 && !(0.0..=FAST_BPM_WARP_F32).contains(value))
+        .count()
+        + stop_changes
+            .iter()
+            .filter(|(beat, value)| *beat >= 0.0 && *value < 0.0)
+            .count();
+    warps.reserve(capacity.max(1));
+}
+
+#[inline(always)]
+fn push_sm_warp<const PREALLOC: bool>(
+    warps: &mut Vec<Segment>,
+    bpm_changes: &[(f32, f32)],
+    stop_changes: &[(f32, f32)],
+    warp: Segment,
+) {
+    if PREALLOC && warps.capacity() == 0 {
+        reserve_sm_warps(warps, bpm_changes, stop_changes);
+    }
+    warps.push(warp);
+}
+
+fn process_bpms_and_stops_sm<const LEGACY: bool, const PREALLOC_WARPS: bool>(
     bpms: &[(f64, f64)],
     stops: &[Segment],
 ) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
@@ -1205,10 +1235,15 @@ fn process_bpms_and_stops_sm<const LEGACY: bool>(
             {
                 let warp_end = change_beat - (time_offset * bpm / 60.0);
                 if warp_end > start {
-                    out_warps.push(Segment {
-                        beat: f64::from(quantize_beat_f32(start)),
-                        value: f64::from(quantize_beat_f32(warp_end - start)),
-                    });
+                    push_sm_warp::<PREALLOC_WARPS>(
+                        &mut out_warps,
+                        &bpm_changes,
+                        &stop_changes,
+                        Segment {
+                            beat: f64::from(quantize_beat_f32(start)),
+                            value: f64::from(quantize_beat_f32(warp_end - start)),
+                        },
+                    );
                 }
                 if bpm != prewarp_bpm {
                     push_sm_bpm::<LEGACY>(&mut legacy_bpms, &mut out_bpms, start, bpm);
@@ -1245,10 +1280,15 @@ fn process_bpms_and_stops_sm<const LEGACY: bool>(
                     && let Some(start) = warp_start
                 {
                     if change_beat > start {
-                        out_warps.push(Segment {
-                            beat: f64::from(quantize_beat_f32(start)),
-                            value: f64::from(quantize_beat_f32(change_beat - start)),
-                        });
+                        push_sm_warp::<PREALLOC_WARPS>(
+                            &mut out_warps,
+                            &bpm_changes,
+                            &stop_changes,
+                            Segment {
+                                beat: f64::from(quantize_beat_f32(start)),
+                                value: f64::from(quantize_beat_f32(change_beat - start)),
+                            },
+                        );
                     }
                     out_stops.push(Segment {
                         beat: f64::from(quantize_beat_f32(change_beat)),
@@ -1276,10 +1316,15 @@ fn process_bpms_and_stops_sm<const LEGACY: bool>(
             99_999_999.0_f32
         };
         if warp_end > start {
-            out_warps.push(Segment {
-                beat: f64::from(quantize_beat_f32(start)),
-                value: f64::from(quantize_beat_f32(warp_end - start)),
-            });
+            push_sm_warp::<PREALLOC_WARPS>(
+                &mut out_warps,
+                &bpm_changes,
+                &stop_changes,
+                Segment {
+                    beat: f64::from(quantize_beat_f32(start)),
+                    value: f64::from(quantize_beat_f32(warp_end - start)),
+                },
+            );
         }
         if bpm != prewarp_bpm {
             push_sm_bpm::<LEGACY>(&mut legacy_bpms, &mut out_bpms, start, bpm);
@@ -1310,9 +1355,24 @@ pub fn process_sm_timing_for_bench(
     legacy: bool,
 ) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
     if legacy {
-        process_bpms_and_stops_sm::<true>(bpms, stops)
+        process_bpms_and_stops_sm::<true, true>(bpms, stops)
     } else {
-        process_bpms_and_stops_sm::<false>(bpms, stops)
+        process_bpms_and_stops_sm::<false, true>(bpms, stops)
+    }
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn process_sm_warp_capacity_for_bench(
+    bpms: &[(f64, f64)],
+    stops: &[Segment],
+    preallocate: bool,
+) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
+    if preallocate {
+        process_bpms_and_stops_sm::<false, true>(bpms, stops)
+    } else {
+        process_bpms_and_stops_sm::<false, false>(bpms, stops)
     }
 }
 
@@ -1350,7 +1410,8 @@ pub fn process_sm_warp_merge_for_bench(
     stops: &[Segment],
     reuse_empty: bool,
 ) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
-    let (bpms, stops, extra_warps, beat0_offset) = process_bpms_and_stops_sm::<false>(bpms, stops);
+    let (bpms, stops, extra_warps, beat0_offset) =
+        process_bpms_and_stops_sm::<false, true>(bpms, stops);
     let warps = if reuse_empty {
         merge_extra_warps::<true>(Vec::new(), extra_warps)
     } else {
@@ -2733,6 +2794,33 @@ mod tests {
             let reused = merge_extra_warps::<true>(warps, extra_warps);
             assert_segment_bits_eq(&reused, &copied);
         }
+    }
+
+    #[test]
+    fn generated_warp_preallocation_preserves_output_and_empty_storage() {
+        let stops: Vec<_> = (0..64)
+            .map(|index| Segment {
+                beat: index as f64 * 4.0 + 2.0,
+                value: -0.5,
+            })
+            .collect();
+        let growing = process_bpms_and_stops_sm::<false, false>(&[(0.0, 120.0)], &stops);
+        let preallocated = process_bpms_and_stops_sm::<false, true>(&[(0.0, 120.0)], &stops);
+        assert_bpm_bits_eq(&preallocated.0, &growing.0);
+        assert_segment_bits_eq(&preallocated.1, &growing.1);
+        assert_segment_bits_eq(&preallocated.2, &growing.2);
+        assert_eq!(preallocated.3.to_bits(), growing.3.to_bits());
+        assert_eq!(preallocated.2.len(), stops.len());
+
+        let no_warps = process_bpms_and_stops_sm::<false, true>(
+            &[(0.0, 120.0), (4.0, 180.0)],
+            &[Segment {
+                beat: 2.0,
+                value: 0.25,
+            }],
+        );
+        assert!(no_warps.2.is_empty());
+        assert_eq!(no_warps.2.capacity(), 0);
     }
 
     fn assert_bpm_bits_eq(actual: &[(f64, f64)], expected: &[(f64, f64)]) {

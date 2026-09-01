@@ -76,6 +76,30 @@ fn bench_sm_timing(c: &mut Criterion) {
     });
     group.finish();
 
+    let mut group = c.benchmark_group("sm_generated_warp_capacity_no_warps_6144");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(sm_timing_bench::INPUT_COUNT));
+    group.bench_function("growing", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::process_sm_warp_capacity_for_bench(
+                black_box(&fixture.bpms),
+                black_box(&fixture.stops),
+                false,
+            ));
+        });
+    });
+    group.bench_function("preallocated", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::process_sm_warp_capacity_for_bench(
+                black_box(&fixture.bpms),
+                black_box(&fixture.stops),
+                true,
+            ));
+        });
+    });
+    group.finish();
+
     let extra_warps = sm_timing_bench::extra_warps();
     let mut group = c.benchmark_group("sm_warp_merge_2048");
     group.sample_size(100);
@@ -110,6 +134,30 @@ fn bench_sm_timing(c: &mut Criterion) {
     group.finish();
 
     let (bpms, stops) = sm_timing_bench::warp_inputs();
+    let mut group = c.benchmark_group("sm_generated_warp_capacity_2048");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(sm_timing_bench::WARP_COUNT as u64));
+    group.bench_function("growing", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::process_sm_warp_capacity_for_bench(
+                black_box(&bpms),
+                black_box(&stops),
+                false,
+            ));
+        });
+    });
+    group.bench_function("preallocated", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::process_sm_warp_capacity_for_bench(
+                black_box(&bpms),
+                black_box(&stops),
+                true,
+            ));
+        });
+    });
+    group.finish();
+
     let mut group = c.benchmark_group("sm_warp_pipeline_2048");
     group.sample_size(100);
     group.measurement_time(Duration::from_secs(3));
