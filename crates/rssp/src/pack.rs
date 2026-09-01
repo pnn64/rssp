@@ -217,19 +217,22 @@ fn parse_sync_pref(s: &str) -> SyncPref {
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
-struct PackIniRaw {
-    version: String,
-    display_title: String,
-    sort_title: String,
-    translit_title: String,
-    series: String,
-    banner: String,
-    background: String,
-    sync_offset: String,
-    year: String,
+struct PackIniRaw<T> {
+    version: T,
+    display_title: T,
+    sort_title: T,
+    translit_title: T,
+    series: T,
+    banner: T,
+    background: T,
+    sync_offset: T,
+    year: T,
 }
 
-fn parse_pack_ini(text: &str) -> PackIniRaw {
+fn parse_pack_ini_with<'a, T: Default>(
+    text: &'a str,
+    mut take_value: impl FnMut(&'a str) -> T,
+) -> PackIniRaw<T> {
     let mut out = PackIniRaw::default();
     let mut in_group = false;
 
@@ -252,39 +255,66 @@ fn parse_pack_ini(text: &str) -> PackIniRaw {
         let key = k.trim();
         let value = v.trim();
         if key.eq_ignore_ascii_case("version") {
-            out.version = value.to_string();
+            out.version = take_value(value);
         } else if key.eq_ignore_ascii_case("displaytitle") {
-            out.display_title = value.to_string();
+            out.display_title = take_value(value);
         } else if key.eq_ignore_ascii_case("sorttitle") {
-            out.sort_title = value.to_string();
+            out.sort_title = take_value(value);
         } else if key.eq_ignore_ascii_case("translittitle") {
-            out.translit_title = value.to_string();
+            out.translit_title = take_value(value);
         } else if key.eq_ignore_ascii_case("series") {
-            out.series = value.to_string();
+            out.series = take_value(value);
         } else if key.eq_ignore_ascii_case("banner") {
-            out.banner = value.to_string();
+            out.banner = take_value(value);
         } else if key.eq_ignore_ascii_case("background") {
-            out.background = value.to_string();
+            out.background = take_value(value);
         } else if key.eq_ignore_ascii_case("syncoffset") {
-            out.sync_offset = value.to_string();
+            out.sync_offset = take_value(value);
         } else if key.eq_ignore_ascii_case("year") {
-            out.year = value.to_string();
+            out.year = take_value(value);
         }
     }
 
     out
 }
 
-fn read_pack_ini(pack_dir: &Path) -> (PackIniRaw, bool) {
-    let path = pack_ini_path(pack_dir);
-    let Ok(text) = fs::read_to_string(path) else {
-        return (PackIniRaw::default(), false);
-    };
-    let raw = parse_pack_ini(&text);
-    if raw.version.trim().is_empty() {
-        return (PackIniRaw::default(), false);
+fn parse_pack_ini(text: &str) -> PackIniRaw<&str> {
+    parse_pack_ini_with(text, |value| value)
+}
+
+#[cfg(any(test, feature = "profile"))]
+fn parse_pack_ini_owned(text: &str) -> PackIniRaw<String> {
+    parse_pack_ini_with(text, str::to_string)
+}
+
+#[cfg(feature = "profile")]
+fn pack_ini_len<T: AsRef<str>>(raw: &PackIniRaw<T>) -> usize {
+    raw.version.as_ref().len()
+        + raw.display_title.as_ref().len()
+        + raw.sort_title.as_ref().len()
+        + raw.translit_title.as_ref().len()
+        + raw.series.as_ref().len()
+        + raw.banner.as_ref().len()
+        + raw.background.as_ref().len()
+        + raw.sync_offset.as_ref().len()
+        + raw.year.as_ref().len()
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+#[must_use]
+pub fn profile_parse_pack_ini(text: &str, owned: bool) -> usize {
+    if owned {
+        let raw = parse_pack_ini_owned(text);
+        let total = pack_ini_len(&raw);
+        std::hint::black_box(raw);
+        total
+    } else {
+        let raw = parse_pack_ini(text);
+        let total = pack_ini_len(&raw);
+        std::hint::black_box(raw);
+        total
     }
-    (raw, true)
 }
 
 fn pick_pack_parent_img(pack_dir: &Path, group_name: &str) -> Option<PathBuf> {
@@ -1124,7 +1154,9 @@ fn scan_pack_dir_valid(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, Sca
         return Err(ScanError::InvalidUtf8Path);
     };
 
-    let (ini, has_pack_ini) = read_pack_ini(dir);
+    let ini_text = fs::read_to_string(pack_ini_path(dir)).unwrap_or_default();
+    let ini = parse_pack_ini(&ini_text);
+    let has_pack_ini = !ini.version.trim().is_empty();
     let PackIniRaw {
         version,
         display_title,
@@ -1137,21 +1169,25 @@ fn scan_pack_dir_valid(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, Sca
         year,
     } = ini;
     let display_title = if has_pack_ini && !display_title.is_empty() {
-        display_title
+        display_title.to_string()
     } else {
         group_name.to_string()
     };
     let sort_title = if has_pack_ini && !sort_title.is_empty() {
-        sort_title
+        sort_title.to_string()
     } else {
         group_name.to_string()
     };
     let translit_title = if has_pack_ini && !translit_title.is_empty() {
-        translit_title
+        translit_title.to_string()
     } else {
         display_title.clone()
     };
-    let series = if has_pack_ini { series } else { String::new() };
+    let series = if has_pack_ini {
+        series.to_string()
+    } else {
+        String::new()
+    };
     let year = if has_pack_ini {
         year.parse().unwrap_or(0)
     } else {
@@ -1168,7 +1204,12 @@ fn scan_pack_dir_valid(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, Sca
         SyncPref::Default
     };
 
-    let root = scan_pack_root(dir, opt, &banner, &background)?;
+    let (banner, background) = if has_pack_ini {
+        (banner, background)
+    } else {
+        ("", "")
+    };
+    let root = scan_pack_root(dir, opt, banner, background)?;
     let auto_background = if root.background.is_none() {
         assets::resolve_song_assets(dir, "", "").1
     } else {
@@ -1308,8 +1349,9 @@ pub(crate) fn profile_find_simfiles_legacy(root: &Path, opt: ScanOpt) -> Vec<Pat
 mod tests {
     use super::{
         DupPolicy, PackIniRaw, ScanError, ScanOpt, find_simfiles, parse_pack_ini,
-        pick_pack_parent_img, profile_scan_song_dir_joined_paths, scan_pack_dir, scan_pack_root,
-        scan_pack_root_legacy, scan_song_dir, scan_songs_dir, sort_paths_ci,
+        parse_pack_ini_owned, pick_pack_parent_img, profile_scan_song_dir_joined_paths,
+        scan_pack_dir, scan_pack_root, scan_pack_root_legacy, scan_song_dir, scan_songs_dir,
+        sort_paths_ci,
     };
     use crate::assets;
     use std::fs;
@@ -1422,8 +1464,7 @@ mod tests {
 
     #[test]
     fn pack_ini_parsing_preserves_group_and_key_behavior() {
-        let parsed = parse_pack_ini(
-            "\
+        let input = "\
                 Version=ignored\n\
                 [Other]\n\
                 Version=also ignored\n\
@@ -1440,21 +1481,48 @@ mod tests {
                 SyncOffset = ITG\n\
                 Year = 2026\n\
                 [Other]\n\
-                Year=1900\n",
+                Year=1900\n";
+        let parsed = parse_pack_ini(input);
+        let owned = parse_pack_ini_owned(input);
+
+        assert_eq!(
+            [
+                parsed.version,
+                parsed.display_title,
+                parsed.sort_title,
+                parsed.translit_title,
+                parsed.series,
+                parsed.banner,
+                parsed.background,
+                parsed.sync_offset,
+                parsed.year,
+            ],
+            [
+                owned.version.as_str(),
+                owned.display_title.as_str(),
+                owned.sort_title.as_str(),
+                owned.translit_title.as_str(),
+                owned.series.as_str(),
+                owned.banner.as_str(),
+                owned.background.as_str(),
+                owned.sync_offset.as_str(),
+                owned.year.as_str(),
+            ],
+            "borrowed Pack.ini parsing changed owned parser behavior"
         );
 
         assert_eq!(
             parsed,
             PackIniRaw {
-                version: "2".to_string(),
-                display_title: "Final title".to_string(),
-                sort_title: "Sort me".to_string(),
-                translit_title: "Translit".to_string(),
-                series: "Series name".to_string(),
-                banner: "banner*.png".to_string(),
-                background: "background.jpg".to_string(),
-                sync_offset: "ITG".to_string(),
-                year: "2026".to_string(),
+                version: "2",
+                display_title: "Final title",
+                sort_title: "Sort me",
+                translit_title: "Translit",
+                series: "Series name",
+                banner: "banner*.png",
+                background: "background.jpg",
+                sync_offset: "ITG",
+                year: "2026",
             }
         );
     }

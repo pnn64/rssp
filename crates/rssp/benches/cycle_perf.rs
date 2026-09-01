@@ -1722,6 +1722,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let course_options = course_bench::fast_options();
     let pack_fixture = pack_bench::PackFixture::new();
     let pack_image_fixture = pack_bench::ImageHintFixture::new();
+    pack_bench::assert_pack_ini_behavior();
     pack_fixture.assert_root_behavior();
     pack_fixture.assert_song_behavior();
     pack_fixture.assert_tree_behavior();
@@ -2761,6 +2762,28 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     course_resolve.finish();
+
+    let mut pack_ini = c.benchmark_group("cycles/pack_ini_parse");
+    pack_ini.sample_size(100);
+    pack_ini.measurement_time(Duration::from_secs(3));
+    pack_ini.throughput(Throughput::Bytes(pack_bench::PACK_INI_INPUT.len() as u64));
+    pack_ini.bench_function("owned_fields", |b| {
+        b.iter(|| {
+            black_box(rssp::pack::profile_parse_pack_ini(
+                black_box(pack_bench::PACK_INI_INPUT),
+                true,
+            ))
+        });
+    });
+    pack_ini.bench_function("borrowed_fields", |b| {
+        b.iter(|| {
+            black_box(rssp::pack::profile_parse_pack_ini(
+                black_box(pack_bench::PACK_INI_INPUT),
+                false,
+            ))
+        });
+    });
+    pack_ini.finish();
 
     let mut pack = c.benchmark_group("cycles/pack_root_discovery");
     pack.sample_size(20);

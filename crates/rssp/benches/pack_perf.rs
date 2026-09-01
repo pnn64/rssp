@@ -814,6 +814,25 @@ fn bench_hint_normalize(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_pack_ini(c: &mut Criterion) {
+    pack_bench::assert_pack_ini_behavior();
+    let mut group = c.benchmark_group("pack_ini_parse");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Bytes(pack_bench::PACK_INI_INPUT.len() as u64));
+    for (name, owned) in [("owned_fields", true), ("borrowed_fields", false)] {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(rssp::pack::profile_parse_pack_ini(
+                    black_box(pack_bench::PACK_INI_INPUT),
+                    owned,
+                ))
+            });
+        });
+    }
+    group.finish();
+}
+
 fn bench_path_sort(c: &mut Criterion) {
     path_sort_bench::assert_behavior();
     let paths = path_sort_bench::paths();
@@ -852,6 +871,7 @@ criterion_group!(
     bench_relative_asset_components,
     bench_song_assets,
     bench_selection_algorithms,
+    bench_pack_ini,
     bench_hint_normalize,
     bench_path_sort
 );

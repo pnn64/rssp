@@ -182,6 +182,7 @@ enum Mode {
     CourseTitleMatch,
     CourseBanner,
     CourseResolve,
+    PackIni,
     PackHintNormalize,
     PackRoot,
     PackScan,
@@ -308,6 +309,7 @@ fn parse_args() -> (Mode, usize) {
                     "course-title" => Mode::CourseTitleMatch,
                     "course-banner" => Mode::CourseBanner,
                     "course-resolve" => Mode::CourseResolve,
+                    "pack-ini" => Mode::PackIni,
                     "pack-hint" => Mode::PackHintNormalize,
                     "pack-root" => Mode::PackRoot,
                     "pack-scan" => Mode::PackScan,
@@ -404,7 +406,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         | Mode::CourseTitleMatch
         | Mode::CourseBanner
         | Mode::CourseResolve => rssp::AnalysisOptions::default(),
-        Mode::PackHintNormalize => rssp::AnalysisOptions::default(),
+        Mode::PackIni | Mode::PackHintNormalize => rssp::AnalysisOptions::default(),
         Mode::PackRoot => rssp::AnalysisOptions::default(),
         Mode::PackScan => rssp::AnalysisOptions::default(),
         Mode::PathSort => rssp::AnalysisOptions::default(),
@@ -601,6 +603,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
             }
             Mode::CourseResolve => {
                 unreachable!("course resolve mode uses its dedicated allocation runner")
+            }
+            Mode::PackIni => {
+                unreachable!("Pack.ini mode uses its dedicated allocation runner")
             }
             Mode::PackHintNormalize => {
                 unreachable!("pack hint mode uses its dedicated allocation runner")
@@ -832,6 +837,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::CourseTitleMatch => "course-title",
         Mode::CourseBanner => "course-banner",
         Mode::CourseResolve => "course-resolve",
+        Mode::PackIni => "pack-ini",
         Mode::PackHintNormalize => "pack-hint",
         Mode::PackRoot => "pack-root",
         Mode::PackScan => "pack-scan",
@@ -4973,6 +4979,49 @@ fn run_course_resolve_alloc(iterations: usize) {
     run_course_resolve_phase(&fixture, "entry-types-names", iterations, false);
 }
 
+fn run_pack_ini_phase(phase: &str, iterations: usize, owned: bool) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        checksum = checksum.wrapping_add(rssp::pack::profile_parse_pack_ini(
+            black_box(pack_bench::PACK_INI_INPUT),
+            owned,
+        ));
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=pack-ini phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_bytes_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        pack_bench::PACK_INI_INPUT.len() as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_pack_ini_alloc(iterations: usize) {
+    pack_bench::assert_pack_ini_behavior();
+    run_pack_ini_phase("owned-fields", iterations, true);
+    run_pack_ini_phase("borrowed-fields", iterations, false);
+}
+
 fn run_pack_hint_phase(phase: &str, iterations: usize, legacy: bool) {
     reset_counters();
     let before = Counters::read();
@@ -6947,6 +6996,10 @@ fn main() {
         }
         Mode::CourseResolve => {
             run_course_resolve_alloc(iterations);
+            return;
+        }
+        Mode::PackIni => {
+            run_pack_ini_alloc(iterations);
             return;
         }
         Mode::PackHintNormalize => {

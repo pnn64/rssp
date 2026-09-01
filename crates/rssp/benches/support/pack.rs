@@ -18,6 +18,32 @@ pub const HINT_ENTRY_COUNT: usize = HINT_IMAGE_COUNT + HINT_OTHER_COUNT;
 pub const SUBDIR_HINT: &str = "Images/banner*.png";
 pub const HINT_NORM_BATCH: usize = 4_096;
 pub const HINT_NORM_INPUT: &str = "  Images/banner*.png  ";
+pub const PACK_INI_INPUT: &str = "\
+Version=ignored\n\
+[Other]\n\
+Version=also ignored\n\
+[gRoUp]\n\
+VERSION = 7\n\
+displayTITLE = First title\n\
+UnknownKey = ignored value\n\
+DisplayTitle = Performance Pack\n\
+SORTTITLE = Performance Sort\n\
+translittitle = Performance Translit\n\
+Series = Benchmark Series\n\
+Banner = banners/pack*.png\n\
+BACKGROUND = backgrounds/pack.jpg\n\
+SyncOffset = ITG\n\
+Year = 2026\n\
+[Other]\n\
+Year=1900\n";
+
+pub fn assert_pack_ini_behavior() {
+    assert_eq!(
+        rssp::pack::profile_parse_pack_ini(PACK_INI_INPUT, false),
+        rssp::pack::profile_parse_pack_ini(PACK_INI_INPUT, true),
+        "borrowed Pack.ini fields changed parser output"
+    );
+}
 
 pub fn assert_hint_norm_behavior() {
     for hint in [
