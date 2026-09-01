@@ -51,6 +51,18 @@ pub mod profile {
         crate::pack::profile_sort_paths_ci_in_place(paths, in_place);
     }
 
+    pub fn sort_paths_ci_direct(paths: &mut [PathBuf]) {
+        crate::pack::profile_sort_paths_ci_direct(paths);
+    }
+
+    pub fn sort_paths_ci_hybrid(paths: &mut [PathBuf]) {
+        crate::pack::profile_sort_paths_ci_hybrid(paths);
+    }
+
+    pub fn sort_packs_ci(packs: &mut [crate::pack::PackScan], direct_small: bool) {
+        crate::pack::profile_sort_packs_ci(packs, direct_small);
+    }
+
     pub fn sort_bg_files(files: &mut [String], in_place: bool) {
         crate::assets::profile_sort_bg_files(files, in_place);
     }

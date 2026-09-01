@@ -5408,6 +5408,47 @@ fn run_path_sort_alloc(iterations: usize) {
     run_path_sort_phase("cached-strings", iterations, 0);
     run_path_sort_phase("stable-contiguous-keys", iterations, 1);
     run_path_sort_phase("in-place-contiguous-keys", iterations, 2);
+    pack_bench::assert_pack_sort_behavior();
+    run_pack_sort_phase("compact-4", iterations, false);
+    run_pack_sort_phase("hybrid-4", iterations, true);
+}
+
+fn run_pack_sort_phase(phase: &str, iterations: usize, direct_small: bool) {
+    let mut packs = pack_bench::pack_scans(4);
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        packs.reverse();
+        rssp::profile::sort_packs_ci(black_box(&mut packs), direct_small);
+        checksum = checksum.wrapping_add(packs[0].group_name.len());
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=pack-sort phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_packs_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        4.0 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+    black_box(packs);
 }
 
 fn run_pack_scan_alloc(iterations: usize) {

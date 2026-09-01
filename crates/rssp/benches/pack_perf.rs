@@ -1,4 +1,4 @@
-use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::ffi::{OsStr, OsString};
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
@@ -82,6 +82,28 @@ fn bench_pack_scan(c: &mut Criterion) {
         });
     });
     group.finish();
+
+    pack_bench::assert_pack_sort_behavior();
+    let mut sort = c.benchmark_group("pack_sort_ci_small");
+    sort.sample_size(100);
+    sort.measurement_time(Duration::from_secs(2));
+    for count in [1, 2, 4, 5, 8] {
+        let packs = pack_bench::pack_scans(count);
+        sort.throughput(Throughput::Elements(count as u64));
+        for (name, direct_small) in [("compact", false), ("hybrid", true)] {
+            sort.bench_with_input(BenchmarkId::new(name, count), &packs, |b, packs| {
+                b.iter_batched(
+                    || packs.clone(),
+                    |mut packs| {
+                        rssp::profile::sort_packs_ci(black_box(&mut packs), direct_small);
+                        black_box(packs);
+                    },
+                    BatchSize::SmallInput,
+                );
+            });
+        }
+    }
+    sort.finish();
 }
 
 fn bench_songs_root(c: &mut Criterion) {
@@ -909,6 +931,31 @@ fn bench_path_sort(c: &mut Criterion) {
         });
     }
     group.finish();
+
+    let mut sizes = c.benchmark_group("path_sort_ci_sizes");
+    sizes.sample_size(100);
+    sizes.measurement_time(Duration::from_secs(2));
+    for count in [1, 2, 4, 8] {
+        let paths = path_sort_bench::paths_len(count);
+        sizes.throughput(Throughput::Elements(count as u64));
+        for (name, direct) in [("compact", false), ("direct", true)] {
+            sizes.bench_with_input(BenchmarkId::new(name, count), &paths, |b, paths| {
+                b.iter_batched(
+                    || paths.clone(),
+                    |mut paths| {
+                        if direct {
+                            rssp::profile::sort_paths_ci_direct(black_box(&mut paths));
+                        } else {
+                            rssp::profile::sort_paths_ci_in_place(black_box(&mut paths), true);
+                        }
+                        black_box(paths);
+                    },
+                    BatchSize::SmallInput,
+                );
+            });
+        }
+    }
+    sizes.finish();
 }
 
 criterion_group!(

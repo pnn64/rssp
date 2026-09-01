@@ -37,6 +37,50 @@ Year = 2026\n\
 [Other]\n\
 Year=1900\n";
 
+pub fn pack_scans(count: usize) -> Vec<rssp::pack::PackScan> {
+    let mut seed = 0x9e37_79b9u32;
+    (0..count)
+        .map(|index| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let group_name = format!("Pack-{:08x}-{index:02}", seed.rotate_left(11));
+            rssp::pack::PackScan {
+                dir: PathBuf::from("Songs").join(&group_name),
+                display_title: group_name.clone(),
+                group_name,
+                sort_title: String::new(),
+                translit_title: String::new(),
+                series: String::new(),
+                year: 0,
+                version: 0,
+                has_pack_ini: false,
+                sync_pref: rssp::pack::SyncPref::Default,
+                banner_path: None,
+                background_path: None,
+                songs: Vec::new(),
+            }
+        })
+        .collect()
+}
+
+pub fn assert_pack_sort_behavior() {
+    for count in [0, 1, 2, 4, 5, 8, 64] {
+        let mut compact = pack_scans(count);
+        let mut hybrid = pack_scans(count);
+        rssp::profile::sort_packs_ci(&mut compact, false);
+        rssp::profile::sort_packs_ci(&mut hybrid, true);
+        assert_eq!(
+            hybrid
+                .iter()
+                .map(|pack| pack.group_name.as_str())
+                .collect::<Vec<_>>(),
+            compact
+                .iter()
+                .map(|pack| pack.group_name.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
 pub fn assert_pack_ini_behavior() {
     assert_eq!(
         rssp::pack::profile_parse_pack_ini(PACK_INI_INPUT, false),

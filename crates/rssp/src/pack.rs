@@ -71,12 +71,21 @@ struct CompactKey {
     original: u32,
 }
 
-fn sort_compact_ci<T, const IN_PLACE: bool>(
+// Direct comparison avoids three scratch allocations for small roots. The
+// crossover is benchmarked by `path_sort_ci_sizes` and `pack_sort_ci_small`;
+// larger inputs still cache lowercase keys once to avoid repeated comparisons.
+const DIRECT_CI_SORT_MAX: usize = 4;
+
+fn sort_compact_ci<T, const IN_PLACE: bool, const DIRECT_SMALL: bool>(
     values: &mut [T],
     estimate: usize,
     mut append_key: impl FnMut(&T, &mut Vec<u8>),
     fallback: impl FnMut(&T, &T) -> std::cmp::Ordering,
 ) {
+    if DIRECT_SMALL && values.len() <= DIRECT_CI_SORT_MAX {
+        values.sort_by(fallback);
+        return;
+    }
     if u32::try_from(values.len()).is_err() {
         values.sort_by(fallback);
         return;
@@ -134,7 +143,12 @@ fn sort_paths_ci(paths: &mut [PathBuf]) {
 
 #[cfg(any(test, feature = "profile"))]
 fn sort_paths_ci_with<const IN_PLACE: bool>(paths: &mut [PathBuf]) {
-    sort_compact_ci::<_, IN_PLACE>(
+    sort_paths_ci_mode::<IN_PLACE, true>(paths);
+}
+
+#[cfg(any(test, feature = "profile"))]
+fn sort_paths_ci_mode<const IN_PLACE: bool, const DIRECT_SMALL: bool>(paths: &mut [PathBuf]) {
+    sort_compact_ci::<_, IN_PLACE, DIRECT_SMALL>(
         paths,
         24,
         |path, text| {
@@ -155,8 +169,8 @@ fn sort_names_ci(names: &mut [OsString]) {
     names.sort_by(|left, right| assets::cmp_os_ci(left, right));
 }
 
-fn sort_packs_ci(packs: &mut [PackScan]) {
-    sort_compact_ci::<_, true>(
+fn sort_packs_ci<const DIRECT_SMALL: bool>(packs: &mut [PackScan]) {
+    sort_compact_ci::<_, true, DIRECT_SMALL>(
         packs,
         24,
         |pack, text| {
@@ -172,6 +186,15 @@ fn sort_packs_ci(packs: &mut [PackScan]) {
 }
 
 #[cfg(feature = "profile")]
+pub(crate) fn profile_sort_packs_ci(packs: &mut [PackScan], direct_small: bool) {
+    if direct_small {
+        sort_packs_ci::<true>(packs);
+    } else {
+        sort_packs_ci::<false>(packs);
+    }
+}
+
+#[cfg(feature = "profile")]
 pub(crate) fn profile_sort_paths_ci(paths: &mut [PathBuf], legacy: bool) {
     if legacy {
         paths.sort_by_cached_key(|path| assets::lc_name(path));
@@ -183,10 +206,20 @@ pub(crate) fn profile_sort_paths_ci(paths: &mut [PathBuf], legacy: bool) {
 #[cfg(feature = "profile")]
 pub(crate) fn profile_sort_paths_ci_in_place(paths: &mut [PathBuf], in_place: bool) {
     if in_place {
-        sort_paths_ci_with::<true>(paths);
+        sort_paths_ci_mode::<true, false>(paths);
     } else {
-        sort_paths_ci_with::<false>(paths);
+        sort_paths_ci_mode::<false, false>(paths);
     }
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_sort_paths_ci_direct(paths: &mut [PathBuf]) {
+    paths.sort_by(|left, right| assets::cmp_name_ci(left, right));
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_sort_paths_ci_hybrid(paths: &mut [PathBuf]) {
+    sort_paths_ci_mode::<true, true>(paths);
 }
 
 #[cfg(any(test, feature = "profile"))]
@@ -1359,7 +1392,7 @@ pub fn scan_songs_dir(dir: &Path, opt: ScanOpt) -> Result<Vec<PackScan>, ScanErr
             packs.push(pack);
         }
     }
-    sort_packs_ci(&mut packs);
+    sort_packs_ci::<true>(&mut packs);
     Ok(packs)
 }
 
@@ -1448,10 +1481,11 @@ pub(crate) fn profile_find_simfiles_legacy(root: &Path, opt: ScanOpt) -> Vec<Pat
 #[cfg(test)]
 mod tests {
     use super::{
-        DupPolicy, PackIniKey, PackIniRaw, ScanError, ScanOpt, find_simfiles, pack_ini_key,
-        pack_ini_key_sequential, parse_pack_ini, parse_pack_ini_owned, parse_pack_ini_sequential,
-        pick_pack_parent_img, profile_scan_song_dir_joined_paths, scan_pack_dir, scan_pack_root,
-        scan_pack_root_legacy, scan_song_dir, scan_songs_dir, sort_paths_ci,
+        DupPolicy, PackIniKey, PackIniRaw, PackScan, ScanError, ScanOpt, SyncPref, find_simfiles,
+        pack_ini_key, pack_ini_key_sequential, parse_pack_ini, parse_pack_ini_owned,
+        parse_pack_ini_sequential, pick_pack_parent_img, profile_scan_song_dir_joined_paths,
+        scan_pack_dir, scan_pack_root, scan_pack_root_legacy, scan_song_dir, scan_songs_dir,
+        sort_packs_ci, sort_paths_ci,
     };
     use crate::assets;
     use std::fs;
@@ -1478,6 +1512,47 @@ mod tests {
         expected.sort_by_cached_key(|path| assets::lc_name(path));
         sort_paths_ci(&mut actual);
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn direct_small_pack_sort_matches_compact_keys() {
+        for names in [
+            &[][..],
+            &["Only"][..],
+            &["beta", "Alpha", "alpha", "Zulu"][..],
+            &["beta", "Alpha", "alpha", "Zulu", "fifth"][..],
+        ] {
+            let packs = || {
+                names
+                    .iter()
+                    .map(|name| PackScan {
+                        dir: PathBuf::from(name),
+                        group_name: (*name).to_string(),
+                        display_title: String::new(),
+                        sort_title: String::new(),
+                        translit_title: String::new(),
+                        series: String::new(),
+                        year: 0,
+                        version: 0,
+                        has_pack_ini: false,
+                        sync_pref: SyncPref::Default,
+                        banner_path: None,
+                        background_path: None,
+                        songs: Vec::new(),
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let mut compact = packs();
+            let mut hybrid = packs();
+            sort_packs_ci::<false>(&mut compact);
+            sort_packs_ci::<true>(&mut hybrid);
+            assert!(
+                compact
+                    .iter()
+                    .zip(&hybrid)
+                    .all(|(compact, hybrid)| compact.group_name == hybrid.group_name)
+            );
+        }
     }
 
     fn write_file(path: &Path) {

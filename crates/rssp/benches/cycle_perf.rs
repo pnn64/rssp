@@ -2380,6 +2380,26 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     });
     optimizations.finish();
 
+    pack_bench::assert_pack_sort_behavior();
+    let sort_packs = pack_bench::pack_scans(4);
+    let mut pack_sort = c.benchmark_group("cycles/pack_sort_ci_4");
+    pack_sort.sample_size(100);
+    pack_sort.measurement_time(Duration::from_secs(3));
+    pack_sort.throughput(Throughput::Elements(4));
+    for (name, direct_small) in [("compact", false), ("hybrid", true)] {
+        pack_sort.bench_function(name, |b| {
+            b.iter_batched(
+                || sort_packs.clone(),
+                |mut packs| {
+                    rssp::profile::sort_packs_ci(black_box(&mut packs), direct_small);
+                    black_box(packs);
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    pack_sort.finish();
+
     let mut legacy_invalid_notes = rssp::stats::ChartNotesScratch::default();
     let mut marked_invalid_notes = rssp::stats::ChartNotesScratch::default();
     assert_eq!(
