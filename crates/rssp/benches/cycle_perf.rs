@@ -24,6 +24,9 @@ mod bpm_summary_bench;
 #[path = "support/course.rs"]
 mod course_bench;
 #[cfg(windows)]
+#[path = "support/duration_cache.rs"]
+mod duration_cache_bench;
+#[cfg(windows)]
 #[path = "support/elapsed.rs"]
 mod elapsed_bench;
 #[cfg(windows)]
@@ -1011,6 +1014,57 @@ fn print_hash_scratch_pairs(data: &[u8]) {
 }
 
 #[cfg(windows)]
+fn duration_cache_cycles(data: &[u8], cache: bool) -> u64 {
+    const ITERATIONS: usize = 8;
+    let start = platform::read_cycles();
+    for _ in 0..ITERATIONS {
+        black_box(duration_cache_bench::compute(data, cache));
+    }
+    platform::read_cycles() - start
+}
+
+#[cfg(windows)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "paired cycle ratios need floating-point division"
+)]
+fn print_duration_cache_pairs(data: &[u8]) {
+    const SAMPLES: usize = 31;
+    let mut uncached = [0u64; SAMPLES];
+    let mut cached = [0u64; SAMPLES];
+    let mut ratios = [0.0f64; SAMPLES];
+    for sample in 0..SAMPLES {
+        let (uncached_cycles, cached_cycles) = if sample.is_multiple_of(2) {
+            (
+                duration_cache_cycles(data, false),
+                duration_cache_cycles(data, true),
+            )
+        } else {
+            let cached_cycles = duration_cache_cycles(data, true);
+            let uncached_cycles = duration_cache_cycles(data, false);
+            (uncached_cycles, cached_cycles)
+        };
+        uncached[sample] = uncached_cycles;
+        cached[sample] = cached_cycles;
+        ratios[sample] = cached_cycles as f64 / uncached_cycles as f64;
+    }
+    uncached.sort_unstable();
+    cached.sort_unstable();
+    ratios.sort_by(f64::total_cmp);
+    let mid = SAMPLES / 2;
+    eprintln!(
+        concat!(
+            "duration_cache paired_samples={} uncached_median_cycles={} ",
+            "cached_median_cycles={} median_change={:+.3}%"
+        ),
+        SAMPLES,
+        uncached[mid],
+        cached[mid],
+        (ratios[mid] - 1.0) * 100.0,
+    );
+}
+
+#[cfg(windows)]
 fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     const ENTRIES: usize = 4_096;
     let cpu = platform::stabilize_thread();
@@ -1019,6 +1073,9 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let pair_map = large_pair_map(ENTRIES);
     let control_pair_map = control_pair_map(ENTRIES);
     let control_normalize_map = control_normalize_map(ENTRIES);
+    let duration_cache_fixture = duration_cache_bench::fixture();
+    duration_cache_bench::assert_behavior(duration_cache_fixture.as_bytes());
+    print_duration_cache_pairs(duration_cache_fixture.as_bytes());
     let speed_map = large_speed_map(ENTRIES);
     let stop_map = large_stop_map(ENTRIES);
     let medium_pair_map = large_pair_map(512);
@@ -4670,6 +4727,24 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     timing_pipelines.finish();
+
+    let mut duration_cache = c.benchmark_group("cycles/duration_chart_timing_cache");
+    duration_cache.sample_size(20);
+    duration_cache.measurement_time(Duration::from_secs(3));
+    duration_cache.throughput(Throughput::Elements(
+        duration_cache_bench::CHART_COUNT as u64,
+    ));
+    for (name, cache) in [("uncached", false), ("cached", true)] {
+        duration_cache.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(duration_cache_bench::compute(
+                    black_box(duration_cache_fixture.as_bytes()),
+                    cache,
+                ));
+            });
+        });
+    }
+    duration_cache.finish();
 
     let note_data = step_parity_bench::note_data();
     step_parity_bench::assert_note_data_behavior(&note_data);

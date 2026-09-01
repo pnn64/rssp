@@ -15,6 +15,8 @@ mod bpm_display_bench;
 mod bpm_summary_bench;
 #[path = "support/course.rs"]
 mod course_bench;
+#[path = "support/duration_cache.rs"]
+mod duration_cache_bench;
 #[path = "support/elapsed.rs"]
 mod elapsed_bench;
 #[path = "support/last_beat.rs"]
@@ -3148,6 +3150,92 @@ fn run_nps_alloc(iterations: usize, corpus: &[SimInput]) {
     });
 }
 
+fn duration_cache_elapsed(data: &[u8], cache: bool) -> u128 {
+    const ITERATIONS: usize = 8;
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        black_box(duration_cache_bench::compute(data, cache));
+    }
+    start.elapsed().as_nanos()
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "paired wall-time ratios need floating-point division"
+)]
+fn print_duration_cache_pairs(data: &[u8]) {
+    const SAMPLES: usize = 31;
+    let mut uncached = [0u128; SAMPLES];
+    let mut cached = [0u128; SAMPLES];
+    let mut ratios = [0.0f64; SAMPLES];
+    for sample in 0..SAMPLES {
+        let (uncached_ns, cached_ns) = if sample.is_multiple_of(2) {
+            (
+                duration_cache_elapsed(data, false),
+                duration_cache_elapsed(data, true),
+            )
+        } else {
+            let cached_ns = duration_cache_elapsed(data, true);
+            let uncached_ns = duration_cache_elapsed(data, false);
+            (uncached_ns, cached_ns)
+        };
+        uncached[sample] = uncached_ns;
+        cached[sample] = cached_ns;
+        ratios[sample] = cached_ns as f64 / uncached_ns as f64;
+    }
+    uncached.sort_unstable();
+    cached.sort_unstable();
+    ratios.sort_by(f64::total_cmp);
+    let mid = SAMPLES / 2;
+    println!(
+        concat!(
+            "mode=duration-cache paired_samples={} uncached_median_ns={} ",
+            "cached_median_ns={} median_change={:+.3}%"
+        ),
+        SAMPLES,
+        uncached[mid],
+        cached[mid],
+        (ratios[mid] - 1.0) * 100.0,
+    );
+}
+
+fn run_duration_cache_phase(data: &[u8], phase: &str, iterations: usize, cache: bool) {
+    black_box(duration_cache_bench::compute(data, cache));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let charts = duration_cache_bench::compute(data, cache);
+        checksum = checksum.wrapping_add(charts.len());
+        black_box(charts);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=duration-cache phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_charts_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        duration_cache_bench::CHART_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
 fn run_duration_alloc(iterations: usize, corpus: &[SimInput]) {
     run_chart_alloc_phase("durations", "owned-timing", iterations, corpus, |sim| {
         rssp::duration::chart_durations_owned(
@@ -3161,6 +3249,11 @@ fn run_duration_alloc(iterations: usize, corpus: &[SimInput]) {
         rssp::compute_chart_durations(&sim.raw, sim.extension, rssp::TimingOffsets::default())
             .expect("fixture durations should compute")
     });
+    let repeated = duration_cache_bench::fixture();
+    duration_cache_bench::assert_behavior(repeated.as_bytes());
+    print_duration_cache_pairs(repeated.as_bytes());
+    run_duration_cache_phase(repeated.as_bytes(), "uncached", iterations, false);
+    run_duration_cache_phase(repeated.as_bytes(), "cached", iterations, true);
 }
 
 fn minimize_inputs(corpus: &[SimInput]) -> Vec<MinimizeInput> {
