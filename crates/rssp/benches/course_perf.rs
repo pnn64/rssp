@@ -459,6 +459,7 @@ fn bench_course_entry_reserve(c: &mut Criterion) {
     course_bench::assert_parse_reserve_behavior();
     let typical = course_bench::parse_input(course_bench::PARSE_TYPICAL_COUNT);
     let large = course_bench::parse_input(course_bench::PARSE_LARGE_COUNT);
+    let selection = course_bench::select_input();
     for (name, input, entry_count) in [
         (
             "course_entry_reserve_fixed_10",
@@ -469,6 +470,11 @@ fn bench_course_entry_reserve(c: &mut Criterion) {
             "course_entry_reserve_fixed_256",
             large.as_slice(),
             course_bench::PARSE_LARGE_COUNT,
+        ),
+        (
+            "course_entry_reserve_select_64",
+            selection.as_slice(),
+            course_bench::SELECT_COUNT,
         ),
     ] {
         let mut group = c.benchmark_group(name);

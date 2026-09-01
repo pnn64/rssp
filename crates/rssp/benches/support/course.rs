@@ -90,6 +90,11 @@ pub fn assert_parse_reserve_behavior() {
         assert_same_course(&current, &legacy);
         assert_eq!(current.entries.len(), entry_count);
     }
+    let input = select_input();
+    let legacy = parse_reserved(&input, true);
+    let current = parse_reserved(&input, false);
+    assert_same_course(&current, &legacy);
+    assert_eq!(current.entries.len(), SELECT_COUNT);
 }
 
 pub fn hash_values() -> Vec<String> {

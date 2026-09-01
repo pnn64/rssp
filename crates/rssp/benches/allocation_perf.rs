@@ -3565,9 +3565,11 @@ fn run_course_entry_reserve_alloc(iterations: usize) {
     course_bench::assert_parse_reserve_behavior();
     let typical = course_bench::parse_input(course_bench::PARSE_TYPICAL_COUNT);
     let large = course_bench::parse_input(course_bench::PARSE_LARGE_COUNT);
+    let selection = course_bench::select_input();
     for (input, entry_count) in [
         (typical.as_slice(), course_bench::PARSE_TYPICAL_COUNT),
         (large.as_slice(), course_bench::PARSE_LARGE_COUNT),
+        (selection.as_slice(), course_bench::SELECT_COUNT),
     ] {
         run_course_entry_reserve_phase(input, entry_count, "growing-vec", iterations, true);
         run_course_entry_reserve_phase(input, entry_count, "presized-vec", iterations, false);

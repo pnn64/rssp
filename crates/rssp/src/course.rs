@@ -1128,7 +1128,13 @@ fn parse_crs_with<const LEGACY: bool, const RESERVE_ENTRIES: bool, const INDEXED
             ),
             CourseTag::SongSelect => {
                 if let Some(entry) = parse_song_select(value) {
-                    entries.push(entry);
+                    push_course_entry::<RESERVE_ENTRIES>(
+                        &mut entries,
+                        entry,
+                        data.len(),
+                        tag_start,
+                        i,
+                    );
                 }
             }
             CourseTag::Unknown => {}
@@ -2391,7 +2397,7 @@ mod tests {
         CourseHashSet, CourseSong, CourseTag, Difficulty, SongSort, analyze_crs_path,
         analyze_crs_path_impl, collect_small_course_hashes, course_tag, course_tag_sequential,
         course_title, dedup_push, merge_custom_patterns, normalize_stepstype, parse_crs,
-        stepstype_eq,
+        parse_crs_with, stepstype_eq,
     };
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
@@ -2620,6 +2626,23 @@ mod tests {
             panic!("valid SONGSELECT should remain");
         };
         assert_eq!(select.meter_range, Some((8, 8)));
+    }
+
+    #[test]
+    fn songselect_entry_reserve_matches_growing_vector() {
+        let mut data = b"#COURSE:Selection Reserve;\n".to_vec();
+        for index in 0..64 {
+            data.extend_from_slice(
+                format!("#SONGSELECT:TITLE=Song {index}:GROUP=Group A,Group B;\n").as_bytes(),
+            );
+        }
+        let growing = parse_crs_with::<false, false, true>(&data)
+            .expect("growing selection course should parse");
+        let reserved = parse_crs_with::<false, true, true>(&data)
+            .expect("reserved selection course should parse");
+
+        assert_eq!(reserved.entries, growing.entries);
+        assert_eq!(reserved.entries.len(), 64);
     }
 
     #[test]

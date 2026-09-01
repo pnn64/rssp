@@ -725,6 +725,57 @@ fn print_generated_warp_pairs(case: &str, bpms: &[(f64, f64)], stops: &[rssp::ti
 }
 
 #[cfg(windows)]
+fn course_parse_cycles(input: &[u8], legacy_growth: bool) -> u64 {
+    const ITERATIONS: usize = 128;
+    let start = platform::read_cycles();
+    for _ in 0..ITERATIONS {
+        black_box(course_bench::parse_reserved(
+            black_box(input),
+            legacy_growth,
+        ));
+    }
+    platform::read_cycles() - start
+}
+
+#[cfg(windows)]
+#[allow(clippy::cast_precision_loss)]
+fn print_course_reserve_pairs(input: &[u8]) {
+    const SAMPLES: usize = 31;
+    let mut growing = [0u64; SAMPLES];
+    let mut preallocated = [0u64; SAMPLES];
+    let mut ratios = [0.0f64; SAMPLES];
+    for sample in 0..SAMPLES {
+        let (growing_cycles, preallocated_cycles) = if sample.is_multiple_of(2) {
+            (
+                course_parse_cycles(input, true),
+                course_parse_cycles(input, false),
+            )
+        } else {
+            let preallocated_cycles = course_parse_cycles(input, false);
+            let growing_cycles = course_parse_cycles(input, true);
+            (growing_cycles, preallocated_cycles)
+        };
+        growing[sample] = growing_cycles;
+        preallocated[sample] = preallocated_cycles;
+        ratios[sample] = preallocated_cycles as f64 / growing_cycles as f64;
+    }
+    growing.sort_unstable();
+    preallocated.sort_unstable();
+    ratios.sort_by(f64::total_cmp);
+    let mid = SAMPLES / 2;
+    eprintln!(
+        concat!(
+            "course_select_reserve paired_samples={} growing_median_cycles={} ",
+            "preallocated_median_cycles={} median_change={:+.3}%"
+        ),
+        SAMPLES,
+        growing[mid],
+        preallocated[mid],
+        (ratios[mid] - 1.0) * 100.0,
+    );
+}
+
+#[cfg(windows)]
 fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     const ENTRIES: usize = 4_096;
     let cpu = platform::stabilize_thread();
@@ -2815,6 +2866,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     course_bench::assert_parse_reserve_behavior();
     let reserve_typical = course_bench::parse_input(course_bench::PARSE_TYPICAL_COUNT);
     let reserve_large = course_bench::parse_input(course_bench::PARSE_LARGE_COUNT);
+    let reserve_selection = course_bench::select_input();
+    print_course_reserve_pairs(&reserve_selection);
     for (name, input, entry_count) in [
         (
             "cycles/course_entry_reserve_fixed_10",
@@ -2825,6 +2878,11 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             "cycles/course_entry_reserve_fixed_256",
             reserve_large.as_slice(),
             course_bench::PARSE_LARGE_COUNT,
+        ),
+        (
+            "cycles/course_entry_reserve_select_64",
+            reserve_selection.as_slice(),
+            course_bench::SELECT_COUNT,
         ),
     ] {
         let mut group = c.benchmark_group(name);
