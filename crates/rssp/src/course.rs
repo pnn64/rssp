@@ -1769,7 +1769,7 @@ pub fn analyze_crs_path(
     course_difficulty: &str,
     options: AnalysisOptions,
 ) -> Result<CourseSummary, String> {
-    analyze_crs_path_impl(
+    analyze_crs_path_impl::<true>(
         course_path,
         songs_dir,
         target_step_type,
@@ -1788,7 +1788,7 @@ pub fn analyze_crs_path_cache_all_for_bench(
     course_difficulty: &str,
     options: AnalysisOptions,
 ) -> Result<CourseSummary, String> {
-    analyze_crs_path_impl(
+    analyze_crs_path_impl::<true>(
         course_path,
         songs_dir,
         target_step_type,
@@ -1798,7 +1798,53 @@ pub fn analyze_crs_path_cache_all_for_bench(
     )
 }
 
-fn analyze_crs_path_impl(
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+pub fn profile_analyze_crs(
+    course_path: &Path,
+    songs_dir: Option<&Path>,
+    target_step_type: &str,
+    course_difficulty: &str,
+    options: AnalysisOptions,
+    song_key_cache: bool,
+) -> Result<CourseSummary, String> {
+    if song_key_cache {
+        analyze_crs_path_impl::<true>(
+            course_path,
+            songs_dir,
+            target_step_type,
+            course_difficulty,
+            options,
+            false,
+        )
+    } else {
+        analyze_crs_path_impl::<false>(
+            course_path,
+            songs_dir,
+            target_step_type,
+            course_difficulty,
+            options,
+            false,
+        )
+    }
+}
+
+fn resolve_course_simfile(
+    songs_dir: &Path,
+    group: Option<&str>,
+    song: &str,
+) -> Result<(PathBuf, PathBuf), String> {
+    let song_dir = resolve_song_dir(songs_dir, group, song)
+        .ok_or_else(|| format!("Song not found: {song}"))?;
+    let scan = pack::scan_song_dir(&song_dir, pack::ScanOpt::default())
+        .map_err(|e| format!("Failed scanning {}: {e:?}", song_dir.display()))?;
+    let simfile = scan
+        .map(|scan| scan.simfile)
+        .ok_or_else(|| format!("No simfile in {}", song_dir.display()))?;
+    Ok((song_dir, simfile))
+}
+
+fn analyze_crs_path_impl<const SONG_KEY_CACHE: bool>(
     course_path: &Path,
     songs_dir: Option<&Path>,
     target_step_type: &str,
@@ -1836,6 +1882,7 @@ fn analyze_crs_path_impl(
     // Function-local course cache documentation:
     // - Owner/thread safety: the calling worker owns it; it is never shared.
     // - Lifetime/warmup: one course analysis; populated lazily on repeated songs.
+    // - Keys: parsed group/song slices; hits bypass path resolution and directory scans.
     // - Capacity: at most 128 simfile summaries; insertion saturates at the cap.
     // - Miss/overflow: analyze at this load-time boundary; overflow bypasses insertion.
     // - Eviction/destruction: no eviction; entries drop on return, off gameplay frames.
@@ -1846,7 +1893,10 @@ fn analyze_crs_path_impl(
     } else {
         repeated_songs.min(MAX_CACHED_SIMS)
     };
-    let mut sim_cache: HashMap<PathBuf, SimfileSummary> = HashMap::with_capacity(cache_capacity);
+    let mut path_cache: HashMap<PathBuf, SimfileSummary> =
+        HashMap::with_capacity(if SONG_KEY_CACHE { 0 } else { cache_capacity });
+    let mut song_cache: HashMap<(Option<&str>, &str), (String, SimfileSummary)> =
+        HashMap::with_capacity(if SONG_KEY_CACHE { cache_capacity } else { 0 });
     let mut entries = Vec::with_capacity(entry_count);
     let mut hash_list = Vec::new();
     let mut hash_seen = CourseHashSet::default();
@@ -1873,35 +1923,58 @@ fn analyze_crs_path_impl(
             );
         };
 
-        let song_dir = resolve_song_dir(&base_songs_dir, group.as_deref(), song)
-            .ok_or_else(|| format!("Song not found: {song}"))?;
-        let scan = pack::scan_song_dir(&song_dir, pack::ScanOpt::default())
-            .map_err(|e| format!("Failed scanning {}: {e:?}", song_dir.display()))?;
-        let scan = scan.ok_or_else(|| format!("No simfile in {}", song_dir.display()))?;
-
-        let cache_song = cache_all
-            || song_uses
-                .get(&(group.as_deref(), song.as_str()))
-                .is_some_and(|&uses| uses > 1);
-        let cache_has_room = cache_all || sim_cache.len() < MAX_CACHED_SIMS;
+        let song_key = (group.as_deref(), song.as_str());
+        let cache_song = cache_all || song_uses.get(&song_key).is_some_and(|&uses| uses > 1);
+        let cache_len = if SONG_KEY_CACHE {
+            song_cache.len()
+        } else {
+            path_cache.len()
+        };
+        let cache_has_room = cache_all || cache_len < MAX_CACHED_SIMS;
         let uncached_sim;
-        let sim: &SimfileSummary = if cache_song {
-            match sim_cache.entry(scan.simfile) {
-                Entry::Occupied(entry) => entry.into_mut(),
+        let (sim, song_dir): (&SimfileSummary, String) = if cache_song && SONG_KEY_CACHE {
+            match song_cache.entry(song_key) {
+                Entry::Occupied(entry) => {
+                    let cached = entry.into_mut();
+                    let dir_name = cached.0.clone();
+                    (&cached.1, dir_name)
+                }
+                Entry::Vacant(entry) if cache_has_room => {
+                    let (dir, path) =
+                        resolve_course_simfile(&base_songs_dir, song_key.0, song_key.1)?;
+                    let dir_name = song_dir_name(&dir);
+                    let summary = analyze_course_song(&path, &prepared, &mut analysis_scratch)?;
+                    let cached = entry.insert((dir_name.clone(), summary));
+                    (&cached.1, dir_name)
+                }
+                Entry::Vacant(entry) => {
+                    drop(entry);
+                    let (dir, path) =
+                        resolve_course_simfile(&base_songs_dir, song_key.0, song_key.1)?;
+                    uncached_sim = analyze_course_song(&path, &prepared, &mut analysis_scratch)?;
+                    (&uncached_sim, song_dir_name(&dir))
+                }
+            }
+        } else if cache_song {
+            let (dir, path) = resolve_course_simfile(&base_songs_dir, song_key.0, song_key.1)?;
+            let dir_name = song_dir_name(&dir);
+            match path_cache.entry(path) {
+                Entry::Occupied(entry) => (entry.into_mut(), dir_name),
                 Entry::Vacant(entry) if cache_has_room => {
                     let summary =
                         analyze_course_song(entry.key(), &prepared, &mut analysis_scratch)?;
-                    entry.insert(summary)
+                    (entry.insert(summary), dir_name)
                 }
                 Entry::Vacant(entry) => {
                     let path = entry.into_key();
                     uncached_sim = analyze_course_song(&path, &prepared, &mut analysis_scratch)?;
-                    &uncached_sim
+                    (&uncached_sim, dir_name)
                 }
             }
         } else {
-            uncached_sim = analyze_course_song(&scan.simfile, &prepared, &mut analysis_scratch)?;
-            &uncached_sim
+            let (dir, path) = resolve_course_simfile(&base_songs_dir, song_key.0, song_key.1)?;
+            uncached_sim = analyze_course_song(&path, &prepared, &mut analysis_scratch)?;
+            (&uncached_sim, song_dir_name(&dir))
         };
 
         let base_chart = select_chart(sim, &step_type, base_diff).ok_or_else(|| {
@@ -1933,7 +2006,7 @@ fn analyze_crs_path_impl(
 
         entries.push(CourseEntrySummary {
             song: course_title_from_simfile(sim),
-            song_dir: song_dir_name(&song_dir),
+            song_dir,
             step_type: chart.step_type_str.clone(),
             difficulty: chart.difficulty_str.clone(),
             rating: chart.rating_str.clone(),
@@ -2249,15 +2322,15 @@ mod tests {
             compute_tech_counts: false,
             ..crate::AnalysisOptions::default()
         };
-        let cached_all = analyze_crs_path_impl(
+        let path_cached = analyze_crs_path_impl::<false>(
             &course_path,
             Some(&songs_dir),
             "dance-single",
             "Medium",
             options.clone(),
-            true,
+            false,
         )
-        .expect("legacy cache policy should analyze");
+        .expect("path-key cache should analyze");
         let summary = analyze_crs_path(
             &course_path,
             Some(&songs_dir),
@@ -2286,11 +2359,11 @@ mod tests {
         let mut expected_json = Vec::new();
         let mut actual_json = Vec::new();
         crate::report::write_course_reports(
-            &cached_all,
+            &path_cached,
             crate::report::OutputMode::JSON,
             &mut expected_json,
         )
-        .expect("legacy cache summary should serialize");
+        .expect("path-key cache summary should serialize");
         crate::report::write_course_reports(
             &summary,
             crate::report::OutputMode::JSON,

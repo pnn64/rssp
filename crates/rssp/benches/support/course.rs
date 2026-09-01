@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 const SIMFILE: &[u8] = include_bytes!("../fixtures/hash_fixture.ssc");
 pub const SONG_COUNT: usize = 64;
+pub const REPEATED_SONGS: usize = 4;
 pub const PARSE_TYPICAL_COUNT: usize = 10;
 pub const PARSE_LARGE_COUNT: usize = 256;
 pub const COURSE_HASH_COUNT: usize = SONG_COUNT;
@@ -216,6 +217,15 @@ pub struct CourseFixture {
 
 impl CourseFixture {
     pub fn new() -> Self {
+        Self::with_unique(SONG_COUNT)
+    }
+
+    pub fn repeated() -> Self {
+        Self::with_unique(REPEATED_SONGS)
+    }
+
+    fn with_unique(unique_songs: usize) -> Self {
+        assert!(unique_songs > 0 && unique_songs <= SONG_COUNT);
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should follow the Unix epoch")
@@ -232,12 +242,15 @@ impl CourseFixture {
             "#REPEAT:Maybe YES after completion;\n",
             "#METER:Beginner:3:Easy:6:Medium:9:Hard:12:Challenge:15:Edit:18;\n",
         ));
-        for index in 0..SONG_COUNT {
+        for index in 0..unique_songs {
             let song = format!("Song{index:03}");
             let song_dir = group_dir.join(&song);
             std::fs::create_dir(&song_dir).expect("song directory should be creatable");
             std::fs::write(song_dir.join(format!("{song}.ssc")), SIMFILE)
                 .expect("benchmark simfile should be writable");
+        }
+        for index in 0..SONG_COUNT {
+            let song = format!("Song{:03}", index % unique_songs);
             writeln!(&mut course, "#SONG:Group/{song}:Challenge:;")
                 .expect("writing to a String should succeed");
         }
@@ -257,6 +270,36 @@ impl CourseFixture {
 
     pub fn songs_dir(&self) -> &Path {
         &self.songs_dir
+    }
+
+    pub fn assert_song_cache(&self) {
+        let analyze = |song_key_cache| {
+            rssp::course::profile_analyze_crs(
+                &self.course_path,
+                Some(&self.songs_dir),
+                "dance-single",
+                "Medium",
+                fast_options(),
+                song_key_cache,
+            )
+            .expect("course cache fixture should analyze")
+        };
+        let path_cached = analyze(false);
+        let song_cached = analyze(true);
+        let (mut expected, mut actual) = (Vec::new(), Vec::new());
+        rssp::report::write_course_reports(
+            &path_cached,
+            rssp::report::OutputMode::JSON,
+            &mut expected,
+        )
+        .expect("path-key cache summary should serialize");
+        rssp::report::write_course_reports(
+            &song_cached,
+            rssp::report::OutputMode::JSON,
+            &mut actual,
+        )
+        .expect("song-key cache summary should serialize");
+        assert_eq!(actual, expected);
     }
 }
 

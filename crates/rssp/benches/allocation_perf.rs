@@ -3659,7 +3659,9 @@ fn run_select_parse_alloc(iterations: usize) {
 
 fn run_course_analyze_alloc(iterations: usize) {
     let fixture = course_bench::CourseFixture::new();
+    let repeated = course_bench::CourseFixture::repeated();
     let options = course_bench::clone_heavy_options();
+    repeated.assert_song_cache();
     run_course_analyze_phase(
         "cache-all",
         iterations,
@@ -3692,6 +3694,25 @@ fn run_course_analyze_alloc(iterations: usize) {
             .expect("benchmark course should analyze")
         },
     );
+    for (phase, song_key_cache) in [("repeat-path-key", false), ("repeat-song-key", true)] {
+        run_course_analyze_phase(
+            phase,
+            iterations,
+            &repeated,
+            &options,
+            |fixture, options| {
+                rssp::course::profile_analyze_crs(
+                    fixture.course_path(),
+                    Some(fixture.songs_dir()),
+                    "dance-single",
+                    "Medium",
+                    options,
+                    song_key_cache,
+                )
+                .expect("repeated benchmark course should analyze")
+            },
+        );
+    }
 }
 
 fn run_course_hash_dedup_phase(values: &[String], phase: &str, iterations: usize, std_hash: bool) {
