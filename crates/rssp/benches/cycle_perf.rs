@@ -586,6 +586,57 @@ fn note_data_cycles(data: &[u8], fused: bool, analyze: bool) -> u64 {
 }
 
 #[cfg(windows)]
+fn last_beat_cycles(chart: &[u8], wide: bool) -> u64 {
+    let start = platform::read_cycles();
+    for _ in 0..last_beat_bench::LAST_BEAT_BATCH {
+        black_box(rssp::stats::chart_last_beat_stack_for_bench(
+            black_box(chart),
+            black_box(4),
+            wide,
+        ));
+    }
+    platform::read_cycles() - start
+}
+
+#[cfg(windows)]
+#[allow(clippy::cast_precision_loss)]
+fn print_last_beat_pairs(case: &str, chart: &[u8]) {
+    const SAMPLES: usize = 31;
+    let mut stack64 = [0u64; SAMPLES];
+    let mut stack96 = [0u64; SAMPLES];
+    let mut ratios = [0.0f64; SAMPLES];
+    for sample in 0..SAMPLES {
+        let (old, new) = if sample.is_multiple_of(2) {
+            (
+                last_beat_cycles(chart, false),
+                last_beat_cycles(chart, true),
+            )
+        } else {
+            let new = last_beat_cycles(chart, true);
+            (last_beat_cycles(chart, false), new)
+        };
+        stack64[sample] = old;
+        stack96[sample] = new;
+        ratios[sample] = new as f64 / old as f64;
+    }
+    stack64.sort_unstable();
+    stack96.sort_unstable();
+    ratios.sort_by(f64::total_cmp);
+    let mid = SAMPLES / 2;
+    eprintln!(
+        concat!(
+            "last_beat_stack case={} paired_samples={} stack64_median_cycles={} ",
+            "stack96_median_cycles={} median_change={:+.3}%"
+        ),
+        case,
+        SAMPLES,
+        stack64[mid],
+        stack96[mid],
+        (ratios[mid] - 1.0) * 100.0,
+    );
+}
+
+#[cfg(windows)]
 #[allow(clippy::cast_precision_loss)]
 fn print_note_data_pairs(data: &[u8], analyze: bool) {
     const SAMPLES: usize = 31;
@@ -2649,6 +2700,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     last_beat_bench::assert_behavior();
     let last_beat_chart =
         last_beat_bench::chart(last_beat_bench::MEASURE_COUNT, last_beat_bench::ROW_COUNT);
+    print_last_beat_pairs("common-16", &last_beat_chart);
     optimizations.throughput(Throughput::Bytes(
         (last_beat_chart.len() * last_beat_bench::LAST_BEAT_BATCH) as u64,
     ));
@@ -2663,6 +2715,46 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
                         black_box(&last_beat_chart),
                         black_box(4),
                         legacy,
+                    ));
+                }
+            });
+        });
+    }
+    for (name, wide) in [
+        ("last_beat_stack64_common", false),
+        ("last_beat_stack96_common", true),
+    ] {
+        optimizations.bench_function(name, |b| {
+            b.iter(|| {
+                for _ in 0..last_beat_bench::LAST_BEAT_BATCH {
+                    black_box(rssp::stats::chart_last_beat_stack_for_bench(
+                        black_box(&last_beat_chart),
+                        black_box(4),
+                        wide,
+                    ));
+                }
+            });
+        });
+    }
+    let dense_last_beat = last_beat_bench::chart(
+        last_beat_bench::MEASURE_COUNT,
+        last_beat_bench::DENSE_ROW_COUNT,
+    );
+    print_last_beat_pairs("dense-96", &dense_last_beat);
+    optimizations.throughput(Throughput::Bytes(
+        (dense_last_beat.len() * last_beat_bench::LAST_BEAT_BATCH) as u64,
+    ));
+    for (name, wide) in [
+        ("last_beat_stack64_dense", false),
+        ("last_beat_stack96_dense", true),
+    ] {
+        optimizations.bench_function(name, |b| {
+            b.iter(|| {
+                for _ in 0..last_beat_bench::LAST_BEAT_BATCH {
+                    black_box(rssp::stats::chart_last_beat_stack_for_bench(
+                        black_box(&dense_last_beat),
+                        black_box(4),
+                        wide,
                     ));
                 }
             });

@@ -7449,15 +7449,19 @@ fn run_translate_markers_alloc(iterations: usize) {
     run_translate_markers_phase(&input, "compact", iterations, false);
 }
 
-fn run_last_beat_phase(chart: &[u8], phase: &str, iterations: usize, legacy: bool) {
+fn run_last_beat_phase(
+    chart: &[u8],
+    phase: &str,
+    iterations: usize,
+    mut last_beat: impl FnMut(&[u8]) -> f64,
+) {
     reset_counters();
     let before = Counters::read();
     let start = Instant::now();
     let mut checksum = 0u64;
     for _ in 0..iterations {
         for _ in 0..last_beat_bench::LAST_BEAT_BATCH {
-            let beat =
-                rssp::stats::chart_last_beat_for_bench(black_box(chart), black_box(4), legacy);
+            let beat = last_beat(black_box(chart));
             checksum = checksum.wrapping_add(beat.to_bits());
             black_box(beat);
         }
@@ -7493,8 +7497,26 @@ fn run_last_beat_phase(chart: &[u8], phase: &str, iterations: usize, legacy: boo
 fn run_last_beat_alloc(iterations: usize) {
     last_beat_bench::assert_behavior();
     let chart = last_beat_bench::chart(last_beat_bench::MEASURE_COUNT, last_beat_bench::ROW_COUNT);
-    run_last_beat_phase(&chart, "heap-measure", iterations, true);
-    run_last_beat_phase(&chart, "stack-measure", iterations, false);
+    run_last_beat_phase(&chart, "heap-measure", iterations, |chart| {
+        rssp::stats::chart_last_beat_for_bench(chart, 4, true)
+    });
+    run_last_beat_phase(&chart, "stack64-common", iterations, |chart| {
+        rssp::stats::chart_last_beat_stack_for_bench(chart, 4, false)
+    });
+    run_last_beat_phase(&chart, "stack96-common", iterations, |chart| {
+        rssp::stats::chart_last_beat_stack_for_bench(chart, 4, true)
+    });
+
+    let dense = last_beat_bench::chart(
+        last_beat_bench::MEASURE_COUNT,
+        last_beat_bench::DENSE_ROW_COUNT,
+    );
+    run_last_beat_phase(&dense, "stack64-dense", iterations, |chart| {
+        rssp::stats::chart_last_beat_stack_for_bench(chart, 4, false)
+    });
+    run_last_beat_phase(&dense, "stack96-dense", iterations, |chart| {
+        rssp::stats::chart_last_beat_stack_for_bench(chart, 4, true)
+    });
 }
 
 struct MatrixAllocInput {

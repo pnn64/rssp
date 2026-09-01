@@ -1,6 +1,7 @@
 pub const LAST_BEAT_BATCH: usize = 128;
 pub const MEASURE_COUNT: usize = 64;
 pub const ROW_COUNT: usize = 16;
+pub const DENSE_ROW_COUNT: usize = 96;
 
 pub fn chart(measures: usize, rows: usize) -> Vec<u8> {
     chart_for_lanes(4, measures, rows)
@@ -35,6 +36,9 @@ fn assert_case(data: &[u8], lanes: usize) {
     let legacy = rssp::stats::chart_last_beat_for_bench(data, lanes, true);
     let stack = rssp::stats::chart_last_beat_for_bench(data, lanes, false);
     assert_eq!(stack.to_bits(), legacy.to_bits());
+    let stack64 = rssp::stats::chart_last_beat_stack_for_bench(data, lanes, false);
+    let stack96 = rssp::stats::chart_last_beat_stack_for_bench(data, lanes, true);
+    assert_eq!(stack96.to_bits(), stack64.to_bits());
 }
 
 pub fn assert_behavior() {

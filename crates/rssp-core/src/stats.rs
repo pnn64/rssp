@@ -1368,10 +1368,12 @@ pub(crate) fn chart_last_beat(data: &[u8], lanes: usize) -> f64 {
 }
 
 // Parser state machine: common measures stay bounded on the stack and only
-// charts with more than 64 rows in one measure spill to retained heap storage.
+// charts with more than 96 rows in one measure spill to retained heap storage.
 fn chart_last_beat_impl<const L: usize>(data: &[u8]) -> f64 {
-    const STACK_ROWS: usize = 64;
+    chart_last_beat_with::<L, 96>(data)
+}
 
+fn chart_last_beat_with<const L: usize, const STACK_ROWS: usize>(data: &[u8]) -> f64 {
     let mut stack = [[0u8; L]; STACK_ROWS];
     let mut stack_len = 0usize;
     let mut overflow = Vec::new();
@@ -1543,6 +1545,22 @@ pub fn chart_last_beat_for_bench(data: &[u8], lanes: usize, legacy: bool) -> f64
         dispatch_lanes!(lanes, chart_last_beat_allocating(data))
     } else {
         chart_last_beat(data, lanes)
+    }
+}
+
+#[cfg(feature = "bench-support")]
+fn chart_last_beat_stack64_impl<const L: usize>(data: &[u8]) -> f64 {
+    chart_last_beat_with::<L, 64>(data)
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn chart_last_beat_stack_for_bench(data: &[u8], lanes: usize, wide: bool) -> f64 {
+    if wide {
+        chart_last_beat(data, lanes)
+    } else {
+        dispatch_lanes!(lanes, chart_last_beat_stack64_impl(data))
     }
 }
 
