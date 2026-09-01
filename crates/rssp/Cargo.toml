@@ -109,6 +109,7 @@ harness = false
 [[bench]]
 name = "hash_perf"
 harness = false
+required-features = ["profile"]
 
 [[bench]]
 name = "metadata_perf"

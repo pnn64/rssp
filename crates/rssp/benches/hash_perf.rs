@@ -5,6 +5,9 @@ use std::time::Duration;
 
 const FIXTURE: &str = include_str!("fixtures/camellia_mix.ssc");
 
+#[path = "support/metadata.rs"]
+mod metadata_bench;
+
 #[derive(Clone)]
 struct ChartInput {
     field_count: u8,
@@ -128,5 +131,83 @@ fn bench_hash_inner(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_hash_pipeline, bench_hash_inner);
+fn assert_hashes_eq(current: &[rssp::ChartHashInfo], legacy: &[rssp::ChartHashInfo]) {
+    assert_eq!(current.len(), legacy.len());
+    for (current, legacy) in current.iter().zip(legacy) {
+        assert_eq!(current.step_type, legacy.step_type);
+        assert_eq!(current.difficulty, legacy.difficulty);
+        assert_eq!(current.hash, legacy.hash);
+    }
+}
+
+fn hash_batch(data: &[u8], legacy: bool) -> Vec<rssp::ChartHashInfo> {
+    rssp::analysis::profile_compute_all_hashes(black_box(data), "ssc", legacy)
+        .expect("hash scratch fixture should hash")
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn print_hash_scratch_pairs(data: &[u8]) {
+    const SAMPLES: usize = 31;
+    assert_hashes_eq(&hash_batch(data, false), &hash_batch(data, true));
+    let mut legacy = [0u128; SAMPLES];
+    let mut reused = [0u128; SAMPLES];
+    let mut ratios = [0.0f64; SAMPLES];
+    for sample in 0..SAMPLES {
+        let elapsed = |legacy| {
+            const ITERATIONS: usize = 32;
+            let start = std::time::Instant::now();
+            for _ in 0..ITERATIONS {
+                black_box(hash_batch(data, legacy));
+            }
+            start.elapsed().as_nanos()
+        };
+        let (legacy_ns, reused_ns) = if sample.is_multiple_of(2) {
+            (elapsed(true), elapsed(false))
+        } else {
+            let reused_ns = elapsed(false);
+            (elapsed(true), reused_ns)
+        };
+        legacy[sample] = legacy_ns;
+        reused[sample] = reused_ns;
+        ratios[sample] = reused_ns as f64 / legacy_ns as f64;
+    }
+    legacy.sort_unstable();
+    reused.sort_unstable();
+    ratios.sort_by(f64::total_cmp);
+    let mid = SAMPLES / 2;
+    eprintln!(
+        concat!(
+            "hash_scratch paired_samples={} per_chart_median_ns={} reused_median_ns={} ",
+            "median_change={:+.3}%"
+        ),
+        SAMPLES,
+        legacy[mid],
+        reused[mid],
+        (ratios[mid] - 1.0) * 100.0,
+    );
+}
+
+fn bench_hash_scratch(c: &mut Criterion) {
+    let fixture = metadata_bench::fixture("0.83");
+    print_hash_scratch_pairs(fixture.as_bytes());
+    let mut group = c.benchmark_group("hash_scratch_256_charts");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(criterion::Throughput::Elements(
+        metadata_bench::CHART_COUNT as u64,
+    ));
+    for (name, legacy) in [("per_chart_buffers", true), ("reused_lane_buffers", false)] {
+        group.bench_function(name, |b| {
+            b.iter(|| black_box(hash_batch(fixture.as_bytes(), legacy)));
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_hash_pipeline,
+    bench_hash_inner,
+    bench_hash_scratch
+);
 criterion_main!(benches);

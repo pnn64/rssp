@@ -1616,6 +1616,13 @@ pub fn compute_all_hashes(
     simfile_data: &[u8],
     extension: &str,
 ) -> Result<Vec<ChartHashInfo>, String> {
+    compute_all_hashes_impl::<true>(simfile_data, extension)
+}
+
+fn compute_all_hashes_impl<const REUSE_ROWS: bool>(
+    simfile_data: &[u8],
+    extension: &str,
+) -> Result<Vec<ChartHashInfo>, String> {
     // 1. Parse the file structure (fast, just byte slicing)
     let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
     let timing_format = timing_format_from_ext(extension);
@@ -1627,6 +1634,7 @@ pub fn compute_all_hashes(
 
     let entries = parsed_data.notes_list;
     let mut results = Vec::with_capacity(entries.len());
+    let mut hash_scratch = crate::hash::NoteHashScratch::default();
 
     for entry in entries {
         // 3. Split fields to get Metadata (StepType, Difficulty)
@@ -1663,7 +1671,16 @@ pub fn compute_all_hashes(
         );
 
         // 5. Minimize rows directly into SHA-1 without materializing the chart.
-        let hash = crate::hash::compute_note_data_hash(chart_data, lanes, bpms_to_use.as_ref());
+        let hash = if REUSE_ROWS {
+            crate::hash::compute_note_data_hash_with_scratch(
+                chart_data,
+                lanes,
+                bpms_to_use.as_ref(),
+                &mut hash_scratch,
+            )
+        } else {
+            crate::hash::compute_note_data_hash(chart_data, lanes, bpms_to_use.as_ref())
+        };
 
         results.push(ChartHashInfo {
             step_type,
@@ -1675,13 +1692,27 @@ pub fn compute_all_hashes(
     Ok(results)
 }
 
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+pub fn profile_compute_all_hashes(
+    simfile_data: &[u8],
+    extension: &str,
+    legacy: bool,
+) -> Result<Vec<ChartHashInfo>, String> {
+    if legacy {
+        compute_all_hashes_impl::<false>(simfile_data, extension)
+    } else {
+        compute_all_hashes_impl::<true>(simfile_data, extension)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AnalysisOptions, AnalysisScratch, ChartMetadataStrings, ChartNoteType, ParsedChartNote,
         PreparedAnalysis, analyze, analyze_prepared_in, analyze_prepared_in_with_notes,
         analyze_with_scratch, analyze_with_scratch_impl, chart_metadata_strings,
-        compute_all_hashes, decode_trim_owned, decode_unescape_owned,
+        compute_all_hashes, compute_all_hashes_impl, decode_trim_owned, decode_unescape_owned,
     };
     use crate::parse::{
         decode_bytes, normalize_chart_desc, normalize_chart_name, unescape_tag, unescape_trim,
@@ -2084,9 +2115,17 @@ mod tests {
     #[test]
     fn batch_hashes_match_analysis_outputs() {
         let hashes = compute_all_hashes(FIXTURE, "ssc").expect("hashing should succeed");
+        let legacy = compute_all_hashes_impl::<false>(FIXTURE, "ssc")
+            .expect("legacy hashing should succeed");
         let summary =
             analyze(FIXTURE, "ssc", &AnalysisOptions::default()).expect("analysis should succeed");
 
+        assert_eq!(hashes.len(), legacy.len());
+        for (hash, old) in hashes.iter().zip(&legacy) {
+            assert_eq!(hash.step_type, old.step_type);
+            assert_eq!(hash.difficulty, old.difficulty);
+            assert_eq!(hash.hash, old.hash);
+        }
         assert_eq!(hashes.len(), summary.charts.len());
         for (hash, chart) in hashes.iter().zip(&summary.charts) {
             assert_eq!(hash.step_type, chart.step_type_str);

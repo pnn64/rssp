@@ -137,6 +137,7 @@ enum Mode {
     Matrix,
     Annotations,
     Hashes,
+    HashScratch,
     Durations,
     LastBeat,
     TimingBuild,
@@ -264,6 +265,7 @@ fn parse_args() -> (Mode, usize) {
                     "matrix" => Mode::Matrix,
                     "annotations" => Mode::Annotations,
                     "hashes" => Mode::Hashes,
+                    "hash-scratch" => Mode::HashScratch,
                     "durations" => Mode::Durations,
                     "last-beat" => Mode::LastBeat,
                     "timing-build" => Mode::TimingBuild,
@@ -356,6 +358,7 @@ fn options_for(mode: Mode) -> rssp::AnalysisOptions {
         | Mode::Matrix
         | Mode::Parse
         | Mode::Hashes
+        | Mode::HashScratch
         | Mode::Durations
         | Mode::Nps
         | Mode::Minimize
@@ -461,6 +464,9 @@ fn run_once(mode: Mode, corpus: &[SimInput], options: &rssp::AnalysisOptions) ->
                 .expect("fixture should hash");
                 checksum = checksum.wrapping_add(hashes.len());
                 black_box(hashes);
+            }
+            Mode::HashScratch => {
+                unreachable!("hash scratch mode uses its dedicated allocation runner")
             }
             Mode::Durations => {
                 let durations = rssp::compute_chart_durations(
@@ -792,6 +798,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Matrix => "matrix",
         Mode::Annotations => "annotations",
         Mode::Hashes => "hashes",
+        Mode::HashScratch => "hash-scratch",
         Mode::Durations => "durations",
         Mode::LastBeat => "last-beat",
         Mode::TimingBuild => "timing-build",
@@ -5968,6 +5975,116 @@ fn run_song_scan_phase<F>(
     );
 }
 
+fn hash_scratch_batch(data: &[u8], legacy: bool) -> Vec<rssp::ChartHashInfo> {
+    rssp::analysis::profile_compute_all_hashes(black_box(data), "ssc", legacy)
+        .expect("hash scratch fixture should hash")
+}
+
+fn assert_hash_scratch(data: &[u8]) {
+    let legacy = hash_scratch_batch(data, true);
+    let current = hash_scratch_batch(data, false);
+    assert_eq!(current.len(), legacy.len());
+    for (current, legacy) in current.iter().zip(legacy) {
+        assert_eq!(current.step_type, legacy.step_type);
+        assert_eq!(current.difficulty, legacy.difficulty);
+        assert_eq!(current.hash, legacy.hash);
+    }
+}
+
+fn hash_scratch_elapsed(data: &[u8], legacy: bool) -> u128 {
+    const ITERATIONS: usize = 32;
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        black_box(hash_scratch_batch(data, legacy));
+    }
+    start.elapsed().as_nanos()
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "paired wall-time ratios need floating-point division"
+)]
+fn print_hash_scratch_pairs(data: &[u8]) {
+    const SAMPLES: usize = 31;
+    let mut legacy = [0u128; SAMPLES];
+    let mut reused = [0u128; SAMPLES];
+    let mut ratios = [0.0f64; SAMPLES];
+    for sample in 0..SAMPLES {
+        let (legacy_ns, reused_ns) = if sample.is_multiple_of(2) {
+            (
+                hash_scratch_elapsed(data, true),
+                hash_scratch_elapsed(data, false),
+            )
+        } else {
+            let reused_ns = hash_scratch_elapsed(data, false);
+            let legacy_ns = hash_scratch_elapsed(data, true);
+            (legacy_ns, reused_ns)
+        };
+        legacy[sample] = legacy_ns;
+        reused[sample] = reused_ns;
+        ratios[sample] = reused_ns as f64 / legacy_ns as f64;
+    }
+    legacy.sort_unstable();
+    reused.sort_unstable();
+    ratios.sort_by(f64::total_cmp);
+    let mid = SAMPLES / 2;
+    println!(
+        concat!(
+            "mode=hash-scratch paired_samples={} per_chart_median_ns={} ",
+            "reused_median_ns={} median_change={:+.3}%"
+        ),
+        SAMPLES,
+        legacy[mid],
+        reused[mid],
+        (ratios[mid] - 1.0) * 100.0,
+    );
+}
+
+fn run_hash_scratch_phase(data: &[u8], phase: &str, iterations: usize, legacy: bool) {
+    black_box(hash_scratch_batch(data, legacy));
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let hashes = hash_scratch_batch(data, legacy);
+        checksum = checksum.wrapping_add(hashes.len());
+        black_box(hashes);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=hash-scratch phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_charts_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        metadata_bench::CHART_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_hash_scratch_alloc(iterations: usize) {
+    let fixture = metadata_bench::fixture("0.83");
+    assert_hash_scratch(fixture.as_bytes());
+    print_hash_scratch_pairs(fixture.as_bytes());
+    run_hash_scratch_phase(fixture.as_bytes(), "per-chart", iterations, true);
+    run_hash_scratch_phase(fixture.as_bytes(), "reused", iterations, false);
+}
+
 fn run_metadata_analyze_alloc(iterations: usize) {
     selectable_bench::assert_behavior();
     run_selectable_alloc::<true>("owned_compare", iterations);
@@ -7488,6 +7605,10 @@ fn main() {
         }
         Mode::MetadataAnalyze => {
             run_metadata_analyze_alloc(iterations);
+            return;
+        }
+        Mode::HashScratch => {
+            run_hash_scratch_alloc(iterations);
             return;
         }
         Mode::TextReport => {

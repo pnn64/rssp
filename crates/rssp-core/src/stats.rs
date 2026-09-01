@@ -1802,6 +1802,18 @@ where
     F: FnMut(usize, &[[u8; L]], bool),
 {
     let mut measure = Vec::with_capacity(64);
+    for_each_minimized_measure_in(data, &mut measure, &mut on_measure);
+}
+
+pub(crate) fn for_each_minimized_measure_in<const L: usize, F>(
+    data: &[u8],
+    measure: &mut Vec<[u8; L]>,
+    mut on_measure: F,
+) where
+    F: FnMut(usize, &[[u8; L]], bool),
+{
+    measure.clear();
+    measure.reserve(64);
     let (mut measure_idx, mut done) = (0usize, false);
 
     let mut line_off = 0usize;
@@ -1813,14 +1825,14 @@ where
 
         match line[0] {
             b',' => {
-                minimize_measure(&mut measure);
-                on_measure(measure_idx, &measure, true);
+                minimize_measure(measure);
+                on_measure(measure_idx, measure.as_slice(), true);
                 measure.clear();
                 measure_idx += 1;
             }
             b';' => {
-                minimize_measure(&mut measure);
-                on_measure(measure_idx, &measure, false);
+                minimize_measure(measure);
+                on_measure(measure_idx, measure.as_slice(), false);
                 done = true;
                 break;
             }
@@ -1834,8 +1846,8 @@ where
     }
 
     if !done {
-        minimize_measure(&mut measure);
-        on_measure(measure_idx, &measure, false);
+        minimize_measure(measure);
+        on_measure(measure_idx, measure.as_slice(), false);
     }
 }
 

@@ -946,6 +946,71 @@ fn print_stream_output_pairs(measures: &[usize]) {
 }
 
 #[cfg(windows)]
+fn hash_scratch_batch(data: &[u8], legacy: bool) -> Vec<rssp::ChartHashInfo> {
+    rssp::analysis::profile_compute_all_hashes(black_box(data), "ssc", legacy)
+        .expect("hash scratch fixture should hash")
+}
+
+#[cfg(windows)]
+fn hash_scratch_cycles(data: &[u8], legacy: bool) -> u64 {
+    const ITERATIONS: usize = 32;
+    let start = platform::read_cycles();
+    for _ in 0..ITERATIONS {
+        black_box(hash_scratch_batch(data, legacy));
+    }
+    platform::read_cycles() - start
+}
+
+#[cfg(windows)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "paired cycle ratios need floating-point division"
+)]
+fn print_hash_scratch_pairs(data: &[u8]) {
+    const SAMPLES: usize = 31;
+    let legacy_output = hash_scratch_batch(data, true);
+    let current_output = hash_scratch_batch(data, false);
+    assert_eq!(current_output.len(), legacy_output.len());
+    for (current, legacy) in current_output.iter().zip(legacy_output) {
+        assert_eq!(current.step_type, legacy.step_type);
+        assert_eq!(current.difficulty, legacy.difficulty);
+        assert_eq!(current.hash, legacy.hash);
+    }
+    let mut legacy = [0u64; SAMPLES];
+    let mut reused = [0u64; SAMPLES];
+    let mut ratios = [0.0f64; SAMPLES];
+    for sample in 0..SAMPLES {
+        let (legacy_cycles, reused_cycles) = if sample.is_multiple_of(2) {
+            (
+                hash_scratch_cycles(data, true),
+                hash_scratch_cycles(data, false),
+            )
+        } else {
+            let reused_cycles = hash_scratch_cycles(data, false);
+            let legacy_cycles = hash_scratch_cycles(data, true);
+            (legacy_cycles, reused_cycles)
+        };
+        legacy[sample] = legacy_cycles;
+        reused[sample] = reused_cycles;
+        ratios[sample] = reused_cycles as f64 / legacy_cycles as f64;
+    }
+    legacy.sort_unstable();
+    reused.sort_unstable();
+    ratios.sort_by(f64::total_cmp);
+    let mid = SAMPLES / 2;
+    eprintln!(
+        concat!(
+            "hash_scratch paired_samples={} per_chart_median_cycles={} ",
+            "reused_median_cycles={} median_change={:+.3}%"
+        ),
+        SAMPLES,
+        legacy[mid],
+        reused[mid],
+        (ratios[mid] - 1.0) * 100.0,
+    );
+}
+
+#[cfg(windows)]
 fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     const ENTRIES: usize = 4_096;
     let cpu = platform::stabilize_thread();
@@ -1004,6 +1069,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     parse_dispatch_bench::assert_reserve_behavior();
     selectable_bench::assert_behavior();
     let text_fixture = metadata_bench::fixture("0.83");
+    print_hash_scratch_pairs(text_fixture.as_bytes());
     let text_summary = rssp::analyze(text_fixture.as_bytes(), "ssc", &metadata_bench::options())
         .expect("text report fixture should analyze");
     text_report_bench::assert_behavior(&text_summary);
@@ -2467,6 +2533,15 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             ));
         });
     });
+    optimizations.throughput(Throughput::Elements(metadata_bench::CHART_COUNT as u64));
+    for (name, legacy) in [
+        ("hash_scratch_per_chart", true),
+        ("hash_scratch_reused", false),
+    ] {
+        optimizations.bench_function(name, |b| {
+            b.iter(|| black_box(hash_scratch_batch(text_fixture.as_bytes(), legacy)));
+        });
+    }
     optimizations.throughput(Throughput::Elements(matrix_densities.len() as u64));
     optimizations.bench_function("matrix_profile_build_legacy", |b| {
         b.iter(|| {

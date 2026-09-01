@@ -15,6 +15,22 @@ const SHA1_K: [[u32; 4]; 4] = [
 
 const STREAM_BUFFER_LEN: usize = 8 * 1024;
 
+/// Reusable measure-row storage for hashing multiple charts in sequence.
+#[derive(Default)]
+pub struct NoteHashScratch {
+    rows: NoteHashRows,
+}
+
+#[derive(Default)]
+enum NoteHashRows {
+    #[default]
+    Empty,
+    Rows4(Vec<[u8; 4]>),
+    Rows5(Vec<[u8; 5]>),
+    Rows8(Vec<[u8; 8]>),
+    Rows10(Vec<[u8; 10]>),
+}
+
 struct Sha1Stream {
     state: [u32; 5],
     block: [u8; 64],
@@ -473,40 +489,76 @@ pub fn compute_chart_hash_pair(chart_data: &[u8], normalized_bpms: &str) -> (Str
 /// without materializing the minimized chart.
 #[must_use]
 pub fn compute_note_data_hash(note_data: &[u8], lanes: usize, normalized_bpms: &str) -> String {
-    fn hash_lanes<const LANES: usize>(note_data: &[u8], normalized_bpms: &str) -> String {
+    compute_note_data_hash_with_scratch(
+        note_data,
+        lanes,
+        normalized_bpms,
+        &mut NoteHashScratch::default(),
+    )
+}
+
+/// Computes a minimized note-data hash while retaining measure storage in `scratch`.
+#[must_use]
+pub fn compute_note_data_hash_with_scratch(
+    note_data: &[u8],
+    lanes: usize,
+    normalized_bpms: &str,
+    scratch: &mut NoteHashScratch,
+) -> String {
+    fn hash_lanes<const LANES: usize>(
+        note_data: &[u8],
+        normalized_bpms: &str,
+        rows: &mut Vec<[u8; LANES]>,
+    ) -> String {
         let mut stream = Sha1Stream::new();
         let mut pending_newline = false;
 
-        crate::stats::for_each_minimized_measure::<LANES, _>(note_data, |_, measure, separator| {
-            for row in measure {
-                if pending_newline {
-                    stream.write(b"\n");
+        crate::stats::for_each_minimized_measure_in::<LANES, _>(
+            note_data,
+            rows,
+            |_, measure, separator| {
+                for row in measure {
+                    if pending_newline {
+                        stream.write(b"\n");
+                    }
+                    stream.write(row);
+                    pending_newline = true;
                 }
-                stream.write(row);
-                pending_newline = true;
-            }
-            if separator {
-                if pending_newline {
-                    stream.write(b"\n");
+                if separator {
+                    if pending_newline {
+                        stream.write(b"\n");
+                    }
+                    stream.write(b",");
+                    pending_newline = true;
                 }
-                stream.write(b",");
-                pending_newline = true;
-            }
-        });
+            },
+        );
 
         short_hex(&stream.finish(normalized_bpms.as_bytes()))
     }
 
+    macro_rules! hash_rows {
+        ($variant:ident, $lanes:literal) => {{
+            if !matches!(scratch.rows, NoteHashRows::$variant(_)) {
+                scratch.rows = NoteHashRows::$variant(Vec::new());
+            }
+            let NoteHashRows::$variant(rows) = &mut scratch.rows else {
+                unreachable!()
+            };
+            hash_lanes::<$lanes>(note_data, normalized_bpms, rows)
+        }};
+    }
     match lanes {
-        5 => hash_lanes::<5>(note_data, normalized_bpms),
-        8 => hash_lanes::<8>(note_data, normalized_bpms),
-        10 => hash_lanes::<10>(note_data, normalized_bpms),
-        _ => hash_lanes::<4>(note_data, normalized_bpms),
+        5 => hash_rows!(Rows5, 5),
+        8 => hash_rows!(Rows8, 8),
+        10 => hash_rows!(Rows10, 10),
+        _ => hash_rows!(Rows4, 4),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::{NoteHashScratch, compute_note_data_hash_with_scratch};
     use super::{compute_chart_hash, compute_chart_hash_pair, compute_note_data_hash};
 
     #[test]
@@ -529,6 +581,7 @@ mod tests {
         ];
         let bpms = "0.000=120.000,64.000=180.000";
 
+        let mut scratch = NoteHashScratch::default();
         for (note_data, lanes) in cases {
             let mut minimized = crate::stats::minimize_chart_for_hash(note_data, lanes);
             if let Some(pos) = minimized.iter().rposition(|&byte| byte != b'\n') {
@@ -536,6 +589,10 @@ mod tests {
             }
             assert_eq!(
                 compute_note_data_hash(note_data, lanes, bpms),
+                compute_chart_hash(&minimized, bpms)
+            );
+            assert_eq!(
+                compute_note_data_hash_with_scratch(note_data, lanes, bpms, &mut scratch),
                 compute_chart_hash(&minimized, bpms)
             );
         }
