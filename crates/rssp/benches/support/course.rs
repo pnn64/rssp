@@ -82,6 +82,19 @@ pub fn parse_reserved(data: &[u8], legacy: bool) -> rssp::course::CourseFile {
     rssp::course::profile_parse_crs_reserve(data, legacy).expect("course fixture should parse")
 }
 
+pub fn parse_select_lists(data: &[u8], growing: bool) -> rssp::course::CourseFile {
+    rssp::course::profile_parse_crs_select_lists(data, growing)
+        .expect("selection fixture should parse")
+}
+
+pub fn assert_select_list_behavior() {
+    let input = select_input();
+    let growing = parse_select_lists(&input, true);
+    let tight = parse_select_lists(&input, false);
+    assert_same_course(&tight, &growing);
+    assert_eq!(tight.entries.len(), SELECT_COUNT);
+}
+
 pub fn assert_parse_reserve_behavior() {
     for entry_count in [0, 1, PARSE_TYPICAL_COUNT, PARSE_LARGE_COUNT] {
         let input = parse_input(entry_count);

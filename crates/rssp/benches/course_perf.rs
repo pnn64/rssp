@@ -556,6 +556,7 @@ fn bench_select_mods(c: &mut Criterion) {
 
 fn bench_select_parse(c: &mut Criterion) {
     let input = course_bench::select_input();
+    course_bench::assert_select_list_behavior();
     let parsed = rssp::course::parse_crs(&input).expect("selection benchmark should parse");
     assert_eq!(parsed.entries.len(), course_bench::SELECT_COUNT);
     let rssp::course::CourseSong::Select(first) = &parsed.entries[0].song else {
@@ -590,14 +591,13 @@ fn bench_select_parse(c: &mut Criterion) {
     group.throughput(Throughput::Elements(
         course_bench::SELECT_COUNT as u64 * course_bench::SELECT_PARAMS,
     ));
-    group.bench_function("parse_64", |b| {
-        b.iter(|| {
-            black_box(
-                rssp::course::parse_crs(black_box(&input))
-                    .expect("selection benchmark should parse"),
-            );
+    for (phase, growing) in [("growing_lists", true), ("tight_lists", false)] {
+        group.bench_function(phase, |b| {
+            b.iter(|| {
+                black_box(course_bench::parse_select_lists(black_box(&input), growing));
+            });
         });
-    });
+    }
     group.finish();
 }
 

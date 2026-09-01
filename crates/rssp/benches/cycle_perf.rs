@@ -776,6 +776,54 @@ fn print_course_reserve_pairs(input: &[u8]) {
 }
 
 #[cfg(windows)]
+fn select_parse_cycles(input: &[u8], growing: bool) -> u64 {
+    const ITERATIONS: usize = 128;
+    let start = platform::read_cycles();
+    for _ in 0..ITERATIONS {
+        black_box(course_bench::parse_select_lists(black_box(input), growing));
+    }
+    platform::read_cycles() - start
+}
+
+#[cfg(windows)]
+#[allow(clippy::cast_precision_loss)]
+fn print_select_list_pairs(input: &[u8]) {
+    const SAMPLES: usize = 31;
+    let mut growing = [0u64; SAMPLES];
+    let mut tight = [0u64; SAMPLES];
+    let mut ratios = [0.0f64; SAMPLES];
+    for sample in 0..SAMPLES {
+        let (growing_cycles, tight_cycles) = if sample.is_multiple_of(2) {
+            (
+                select_parse_cycles(input, true),
+                select_parse_cycles(input, false),
+            )
+        } else {
+            let tight_cycles = select_parse_cycles(input, false);
+            let growing_cycles = select_parse_cycles(input, true);
+            (growing_cycles, tight_cycles)
+        };
+        growing[sample] = growing_cycles;
+        tight[sample] = tight_cycles;
+        ratios[sample] = tight_cycles as f64 / growing_cycles as f64;
+    }
+    growing.sort_unstable();
+    tight.sort_unstable();
+    ratios.sort_by(f64::total_cmp);
+    let mid = SAMPLES / 2;
+    eprintln!(
+        concat!(
+            "course_select_lists paired_samples={} growing_median_cycles={} ",
+            "tight_median_cycles={} median_change={:+.3}%"
+        ),
+        SAMPLES,
+        growing[mid],
+        tight[mid],
+        (ratios[mid] - 1.0) * 100.0,
+    );
+}
+
+#[cfg(windows)]
 fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     const ENTRIES: usize = 4_096;
     let cpu = platform::stabilize_thread();
@@ -2927,19 +2975,23 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     select_mods.finish();
 
     let mut select_parse = c.benchmark_group("cycles/course_select_parse");
+    course_bench::assert_select_list_behavior();
+    print_select_list_pairs(&select_input);
     select_parse.sample_size(50);
     select_parse.measurement_time(Duration::from_secs(3));
     select_parse.throughput(Throughput::Elements(
         course_bench::SELECT_COUNT as u64 * course_bench::SELECT_PARAMS,
     ));
-    select_parse.bench_function("parse_64", |b| {
-        b.iter(|| {
-            black_box(
-                rssp::course::parse_crs(black_box(&select_input))
-                    .expect("selection benchmark should parse"),
-            );
+    for (phase, growing) in [("growing_lists", true), ("tight_lists", false)] {
+        select_parse.bench_function(phase, |b| {
+            b.iter(|| {
+                black_box(course_bench::parse_select_lists(
+                    black_box(&select_input),
+                    growing,
+                ));
+            });
         });
-    });
+    }
     select_parse.finish();
 
     let mut course = c.benchmark_group("cycles/course_cache");

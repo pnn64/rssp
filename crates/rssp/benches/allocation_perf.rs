@@ -3676,43 +3676,46 @@ fn run_select_mods_alloc(iterations: usize) {
 
 fn run_select_parse_alloc(iterations: usize) {
     let input = course_bench::select_input();
+    course_bench::assert_select_list_behavior();
     let parsed = rssp::course::parse_crs(&input).expect("selection benchmark should parse");
     assert_eq!(parsed.entries.len(), course_bench::SELECT_COUNT);
 
-    reset_counters();
-    let before = Counters::read();
-    let start = Instant::now();
-    let mut checksum = 0usize;
-    for _ in 0..iterations {
-        let parsed =
-            rssp::course::parse_crs(black_box(&input)).expect("selection benchmark should parse");
-        checksum = checksum.wrapping_add(parsed.entries.len());
-        black_box(parsed);
+    for (phase, growing) in [("growing-lists", true), ("tight-lists", false)] {
+        reset_counters();
+        let before = Counters::read();
+        let start = Instant::now();
+        let mut checksum = 0usize;
+        for _ in 0..iterations {
+            let parsed = course_bench::parse_select_lists(black_box(&input), growing);
+            checksum = checksum.wrapping_add(parsed.entries.len());
+            black_box(parsed);
+        }
+        let elapsed = start.elapsed();
+        let after = Counters::read();
+        let divisor = iterations as f64;
+        println!(
+            concat!(
+                "mode=course-select-parse phase={} iters={} checksum={} elapsed_s={:.6} ",
+                "throughput_params_s={:.3} alloc_calls_per_iter={:.1} ",
+                "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+                "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+                "live_growth_bytes={} peak_live_growth_bytes={}"
+            ),
+            phase,
+            iterations,
+            black_box(checksum),
+            elapsed.as_secs_f64(),
+            course_bench::SELECT_COUNT as f64 * course_bench::SELECT_PARAMS as f64 * divisor
+                / elapsed.as_secs_f64(),
+            (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+            (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+            (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+            (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+            (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+            after.live_bytes as isize - before.live_bytes as isize,
+            after.peak_live_bytes.saturating_sub(before.live_bytes),
+        );
     }
-    let elapsed = start.elapsed();
-    let after = Counters::read();
-    let divisor = iterations as f64;
-    println!(
-        concat!(
-            "mode=course-select-parse iters={} checksum={} elapsed_s={:.6} ",
-            "throughput_params_s={:.3} alloc_calls_per_iter={:.1} ",
-            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
-            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
-            "live_growth_bytes={} peak_live_growth_bytes={}"
-        ),
-        iterations,
-        black_box(checksum),
-        elapsed.as_secs_f64(),
-        course_bench::SELECT_COUNT as f64 * course_bench::SELECT_PARAMS as f64 * divisor
-            / elapsed.as_secs_f64(),
-        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
-        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
-        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
-        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
-        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
-        after.live_bytes as isize - before.live_bytes as isize,
-        after.peak_live_bytes.saturating_sub(before.live_bytes),
-    );
 }
 
 fn run_course_analyze_alloc(iterations: usize) {

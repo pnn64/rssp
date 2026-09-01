@@ -279,6 +279,13 @@ fn visit_unescaped<'a>(block: &'a [u8], delim: u8, mut visit: impl FnMut(&'a [u8
     visit(&block[start..]);
 }
 
+fn list_capacity(block: &[u8], delim: u8) -> usize {
+    if block.is_empty() {
+        return 0;
+    }
+    1 + block.iter().filter(|&&byte| byte == delim).count()
+}
+
 #[cfg(feature = "profile")]
 #[inline(always)]
 fn split_unescaped(block: &[u8], delim: u8) -> Vec<&[u8]> {
@@ -554,9 +561,12 @@ fn parse_song_entry(value: &[u8]) -> CourseEntry {
     }
 }
 
-fn parse_select_list(raw: &[u8], out: &mut Vec<String>) -> bool {
+fn parse_select_list<const TIGHT_CAPACITY: bool>(raw: &[u8], out: &mut Vec<String>) -> bool {
     if raw.is_empty() {
         return false;
+    }
+    if TIGHT_CAPACITY {
+        out.reserve_exact(list_capacity(raw, b','));
     }
     visit_unescaped(raw, b',', |item| {
         out.push(decode_unescape_trim(item).into_owned());
@@ -642,21 +652,29 @@ pub fn profile_select_mods(raw: &[u8]) -> (bool, bool, String) {
     (entry.secret, entry.no_difficult, entry.modifiers)
 }
 
-fn apply_select_param(entry: &mut CourseEntry, param: &[u8]) -> Option<()> {
+fn apply_select_param<const TIGHT_CAPACITY: bool>(
+    entry: &mut CourseEntry,
+    param: &[u8],
+) -> Option<()> {
     let (name_raw, value) = split_pair(param, b'=')?;
     let name = decode_trimmed(name_raw);
     let CourseSong::Select(select) = &mut entry.song else {
         unreachable!("SONGSELECT parser always constructs selection criteria");
     };
     if name.eq_ignore_ascii_case("TITLE") {
-        parse_select_list(value, &mut select.titles).then_some(())?;
+        parse_select_list::<TIGHT_CAPACITY>(value, &mut select.titles).then_some(())?;
     } else if name.eq_ignore_ascii_case("GROUP") {
-        parse_select_list(value, &mut select.groups).then_some(())?;
+        parse_select_list::<TIGHT_CAPACITY>(value, &mut select.groups).then_some(())?;
     } else if name.eq_ignore_ascii_case("ARTIST") {
-        parse_select_list(value, &mut select.artists).then_some(())?;
+        parse_select_list::<TIGHT_CAPACITY>(value, &mut select.artists).then_some(())?;
     } else if name.eq_ignore_ascii_case("GENRE") {
-        parse_select_list(value, &mut select.genres).then_some(())?;
+        parse_select_list::<TIGHT_CAPACITY>(value, &mut select.genres).then_some(())?;
     } else if name.eq_ignore_ascii_case("DIFFICULTY") {
+        if TIGHT_CAPACITY && !value.is_empty() {
+            select
+                .difficulties
+                .reserve_exact(list_capacity(value, b','));
+        }
         visit_unescaped(value, b',', |raw| {
             if let Some(diff) = parse_course_difficulty(&decode_trimmed(raw)) {
                 select.difficulties.push(diff);
@@ -684,7 +702,7 @@ fn apply_select_param(entry: &mut CourseEntry, param: &[u8]) -> Option<()> {
     Some(())
 }
 
-fn parse_song_select(raw: &[u8]) -> Option<CourseEntry> {
+fn parse_song_select<const TIGHT_CAPACITY: bool>(raw: &[u8]) -> Option<CourseEntry> {
     let mut entry = CourseEntry {
         song: CourseSong::Select(SongSelect::default()),
         steps: StepsSpec::Unknown { raw: String::new() },
@@ -697,7 +715,7 @@ fn parse_song_select(raw: &[u8]) -> Option<CourseEntry> {
     let mut valid = true;
     visit_unescaped(raw, b':', |param| {
         if valid {
-            valid = apply_select_param(&mut entry, param).is_some();
+            valid = apply_select_param::<TIGHT_CAPACITY>(&mut entry, param).is_some();
         }
     });
     valid.then_some(entry)
@@ -1040,7 +1058,12 @@ fn course_tag_sequential(name: &[u8]) -> CourseTag {
     }
 }
 
-fn parse_crs_with<const LEGACY: bool, const RESERVE_ENTRIES: bool, const INDEXED_TAGS: bool>(
+fn parse_crs_with<
+    const LEGACY: bool,
+    const RESERVE_ENTRIES: bool,
+    const INDEXED_TAGS: bool,
+    const TIGHT_SELECT_CAPACITY: bool,
+>(
     data: &[u8],
 ) -> Result<CourseFile, String> {
     let mut name = String::new();
@@ -1127,7 +1150,7 @@ fn parse_crs_with<const LEGACY: bool, const RESERVE_ENTRIES: bool, const INDEXED
                 i,
             ),
             CourseTag::SongSelect => {
-                if let Some(entry) = parse_song_select(value) {
+                if let Some(entry) = parse_song_select::<TIGHT_SELECT_CAPACITY>(value) {
                     push_course_entry::<RESERVE_ENTRIES>(
                         &mut entries,
                         entry,
@@ -1160,16 +1183,16 @@ fn parse_crs_with<const LEGACY: bool, const RESERVE_ENTRIES: bool, const INDEXED
 }
 
 pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
-    parse_crs_with::<false, true, true>(data)
+    parse_crs_with::<false, true, true, true>(data)
 }
 
 #[cfg(feature = "profile")]
 #[doc(hidden)]
 pub fn profile_parse_crs(data: &[u8], legacy: bool) -> Result<CourseFile, String> {
     if legacy {
-        parse_crs_with::<true, true, true>(data)
+        parse_crs_with::<true, true, true, true>(data)
     } else {
-        parse_crs_with::<false, true, true>(data)
+        parse_crs_with::<false, true, true, true>(data)
     }
 }
 
@@ -1177,9 +1200,22 @@ pub fn profile_parse_crs(data: &[u8], legacy: bool) -> Result<CourseFile, String
 #[doc(hidden)]
 pub fn profile_parse_crs_reserve(data: &[u8], legacy_growth: bool) -> Result<CourseFile, String> {
     if legacy_growth {
-        parse_crs_with::<false, false, true>(data)
+        parse_crs_with::<false, false, true, true>(data)
     } else {
-        parse_crs_with::<false, true, true>(data)
+        parse_crs_with::<false, true, true, true>(data)
+    }
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+pub fn profile_parse_crs_select_lists(
+    data: &[u8],
+    growing_lists: bool,
+) -> Result<CourseFile, String> {
+    if growing_lists {
+        parse_crs_with::<false, true, true, false>(data)
+    } else {
+        parse_crs_with::<false, true, true, true>(data)
     }
 }
 
@@ -1187,9 +1223,9 @@ pub fn profile_parse_crs_reserve(data: &[u8], legacy_growth: bool) -> Result<Cou
 #[doc(hidden)]
 pub fn profile_parse_crs_dispatch(data: &[u8], sequential: bool) -> Result<CourseFile, String> {
     if sequential {
-        parse_crs_with::<false, true, false>(data)
+        parse_crs_with::<false, true, false, true>(data)
     } else {
-        parse_crs_with::<false, true, true>(data)
+        parse_crs_with::<false, true, true, true>(data)
     }
 }
 
@@ -2397,7 +2433,7 @@ mod tests {
         CourseHashSet, CourseSong, CourseTag, Difficulty, SongSort, analyze_crs_path,
         analyze_crs_path_impl, collect_small_course_hashes, course_tag, course_tag_sequential,
         course_title, dedup_push, merge_custom_patterns, normalize_stepstype, parse_crs,
-        parse_crs_with, stepstype_eq,
+        parse_crs_with, parse_song_select, stepstype_eq,
     };
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
@@ -2636,13 +2672,38 @@ mod tests {
                 format!("#SONGSELECT:TITLE=Song {index}:GROUP=Group A,Group B;\n").as_bytes(),
             );
         }
-        let growing = parse_crs_with::<false, false, true>(&data)
+        let growing = parse_crs_with::<false, false, true, true>(&data)
             .expect("growing selection course should parse");
-        let reserved = parse_crs_with::<false, true, true>(&data)
+        let reserved = parse_crs_with::<false, true, true, true>(&data)
             .expect("reserved selection course should parse");
 
         assert_eq!(reserved.entries, growing.entries);
         assert_eq!(reserved.entries.len(), 64);
+    }
+
+    #[test]
+    fn songselect_tight_list_capacity_preserves_values() {
+        let raw = concat!(
+            "TITLE=First,Second\\, Mix:TITLE=Third:",
+            "GROUP=Group A,Group B:ARTIST=Artist:GENRE=Pop,Rock:",
+            "DIFFICULTY=Easy,invalid,Challenge"
+        )
+        .as_bytes();
+        let growing = parse_song_select::<false>(raw).expect("growing selection should parse");
+        let tight = parse_song_select::<true>(raw).expect("tight selection should parse");
+
+        assert_eq!(tight, growing);
+        let CourseSong::Select(select) = tight.song else {
+            panic!("selection parser should produce selection criteria");
+        };
+        assert_eq!(select.titles, ["First", "Second, Mix", "Third"]);
+        assert_eq!(select.groups, ["Group A", "Group B"]);
+        assert_eq!(select.artists, ["Artist"]);
+        assert_eq!(select.genres, ["Pop", "Rock"]);
+        assert_eq!(
+            select.difficulties,
+            [Difficulty::Easy, Difficulty::Challenge]
+        );
     }
 
     #[test]
