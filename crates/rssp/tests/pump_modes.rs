@@ -1,6 +1,6 @@
 use rssp::{AnalysisOptions, analyze};
 
-const PUMP_SIMFILE: &[u8] = br#"
+const PUMP_SIMFILE: &[u8] = br"
 #TITLE:Pump Modes;
 #ARTIST:RSSP;
 #BPMS:0.000=120.000;
@@ -26,7 +26,7 @@ const PUMP_SIMFILE: &[u8] = br#"
 0000000000
 0000000000
 ;
-"#;
+";
 
 #[test]
 fn analyze_keeps_pump_single_and_double_columns() {

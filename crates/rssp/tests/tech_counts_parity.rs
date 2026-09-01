@@ -1,3 +1,6 @@
+// Corpus parity checks stay linear so each mismatch retains its full context.
+#![allow(clippy::too_many_lines)]
+
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
@@ -78,7 +81,7 @@ fn compute_chart_tech_counts(
         mono_threshold: 6,
         ..AnalysisOptions::default()
     };
-    let summary = analyze(simfile_data, extension, &options).map_err(|e| e)?;
+    let summary = analyze(simfile_data, extension, &options)?;
     let mut results = Vec::with_capacity(summary.charts.len());
     for chart in summary.charts {
         let counts = chart.tech_counts;

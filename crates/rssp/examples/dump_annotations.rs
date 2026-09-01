@@ -1,13 +1,13 @@
-//! Dump per-row StepParity annotations for a simfile.
+//! Dump per-row `StepParity` annotations for a simfile.
 //!
 //! Companion to the `note_annotations_parity` test: prints the same per-row
 //! data rssp feeds the parity harness (beat, foot-bearing columns, per-column
 //! foot identity, foot count, full per-row tech counts), so you
-//! can eyeball rssp's output or diff it against the ITGmania
+//! can eyeball rssp's output or diff it against the `ITGmania`
 //! `Steps:GetNoteAnnotations()` dump.
 //!
 //! Usage:
-//!   cargo run --example dump_annotations -- <path-to.sm|.ssc> [--json]
+//!   cargo run --example `dump_annotations` -- <path-to.sm|.ssc> [--json]
 //!
 //! Without `--json` it prints a compact per-chart summary; with `--json` it
 //! emits `[{steps_type, difficulty, note_annotations:[...]}]` matching the
@@ -21,7 +21,7 @@ fn columns_of(a: &RowAnnotation) -> Vec<u8> {
     let mut cols = Vec::new();
     let mut mask = a.column_mask;
     while mask != 0 {
-        cols.push(mask.trailing_zeros() as u8);
+        cols.push(u8::try_from(mask.trailing_zeros()).expect("u8 mask has at most eight columns"));
         mask &= mask - 1;
     }
     cols

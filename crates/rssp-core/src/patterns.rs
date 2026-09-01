@@ -214,10 +214,10 @@ where
     let mut output_lens = vec![0; n];
     let mut flat_outputs = Vec::with_capacity(direct_outputs.len());
 
-    for sym in 0..AC_ALPHA {
-        let next = goto[0][sym];
+    for edge in &mut goto[0] {
+        let next = *edge;
         if next == u32::MAX {
-            goto[0][sym] = 0;
+            *edge = 0;
             continue;
         }
         let next = next as usize;
@@ -684,6 +684,7 @@ pub fn detect_patterns<B: AsRef<[u8]>>(
     ac_search_array(bitmasks, &dfa)
 }
 
+#[must_use]
 pub fn detect_default_patterns(bitmasks: &[u8]) -> PatternCounts {
     pattern_search_array(bitmasks)
 }
@@ -700,6 +701,7 @@ pub struct CompiledCustomPatterns {
 
 /// Creates an empty compiled custom patterns structure
 #[inline]
+#[must_use]
 pub fn compiled_custom_empty() -> CompiledCustomPatterns {
     CompiledCustomPatterns {
         patterns: Vec::new(),
@@ -709,6 +711,7 @@ pub fn compiled_custom_empty() -> CompiledCustomPatterns {
 
 /// Checks if compiled custom patterns is empty
 #[inline]
+#[must_use]
 pub const fn compiled_custom_is_empty(compiled: &CompiledCustomPatterns) -> bool {
     compiled.patterns.is_empty()
 }
@@ -779,10 +782,12 @@ fn compile_custom_patterns_impl(patterns: &[String]) -> CompiledCustomPatterns {
     }
 }
 
+#[must_use]
 pub fn compile_custom_patterns(patterns: &[String]) -> CompiledCustomPatterns {
     compile_custom_patterns_impl(patterns)
 }
 
+#[must_use]
 pub fn detect_custom_patterns_compiled(
     bitmasks: &[u8],
     compiled: &CompiledCustomPatterns,

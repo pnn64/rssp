@@ -1,3 +1,12 @@
+// This schema-shaped parity harness intentionally uses exact float comparisons
+// and long, linear comparison routines to keep failures attributable.
+#![allow(
+    clippy::float_cmp,
+    clippy::struct_field_names,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
+
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
@@ -838,7 +847,7 @@ fn compare_bpm(
             let expected_min = expected.map(|entry| entry.bpm_min);
             let actual_min = actual.map(|entry| entry.timing.bpm_min);
             let expected_max = expected.map(|entry| entry.bpm_max);
-            let actual_max = actual.map(|entry| entry.timing.bpm_max);
+            let actual_bpm_max = actual.map(|entry| entry.timing.bpm_max);
             let expected_display = expected.map(|entry| entry.display_bpm.as_str());
             let actual_display = actual.map(|entry| entry.timing.display_bpm.as_str());
             let expected_display_min = expected.map(|entry| entry.display_bpm_min);
@@ -849,7 +858,7 @@ fn compare_bpm(
             let hash_matches = expected_hash.is_some() && expected_hash == actual_hash;
             let bpms_matches = expected_bpms.is_some() && expected_bpms == actual_bpms;
             let min_matches = expected_min.is_some() && expected_min == actual_min;
-            let max_matches = expected_max.is_some() && expected_max == actual_max;
+            let max_matches = expected_max.is_some() && expected_max == actual_bpm_max;
             let display_matches = expected_display.is_some() && expected_display == actual_display;
             let display_min_matches =
                 expected_display_min.is_some() && expected_display_min == actual_display_min;
@@ -880,7 +889,7 @@ fn compare_bpm(
                 expected_min.map_or_else(|| "-".to_string(), |v| v.to_string()),
                 actual_min.map_or_else(|| "-".to_string(), |v| v.to_string()),
                 expected_max.map_or_else(|| "-".to_string(), |v| v.to_string()),
-                actual_max.map_or_else(|| "-".to_string(), |v| v.to_string()),
+                actual_bpm_max.map_or_else(|| "-".to_string(), |v| v.to_string()),
                 expected_display.unwrap_or("-"),
                 actual_display.unwrap_or("-"),
                 expected_display_min.map_or_else(|| "-".to_string(), |v| v.to_string()),
@@ -1897,30 +1906,33 @@ fn compare_sn_breakdown(
 }
 
 fn format_candles(stats: Option<&MonoCandleStats>) -> String {
-    stats
-        .map(|s| {
+    stats.map_or_else(
+        || "-".to_string(),
+        |s| {
             format!(
                 "{} (L {} R {}) {}%",
                 s.total_candles, s.left_foot_candles, s.right_foot_candles, s.candles_percent
             )
-        })
-        .unwrap_or_else(|| "-".to_string())
+        },
+    )
 }
 
 fn format_mono(stats: Option<&MonoCandleStats>) -> String {
-    stats
-        .map(|s| {
+    stats.map_or_else(
+        || "-".to_string(),
+        |s| {
             format!(
                 "{} (L {} R {}) {}%",
                 s.total_mono, s.left_face_mono, s.right_face_mono, s.mono_percent
             )
-        })
-        .unwrap_or_else(|| "-".to_string())
+        },
+    )
 }
 
 fn format_boxes(patterns: Option<&RsspPatternCounts>) -> String {
-    patterns
-        .map(|p| {
+    patterns.map_or_else(
+        || "-".to_string(),
+        |p| {
             let b = &p.boxes;
             format!(
                 "{} (LR {} UD {} LD {} LU {} RD {} RU {})",
@@ -1932,20 +1944,21 @@ fn format_boxes(patterns: Option<&RsspPatternCounts>) -> String {
                 b.rd_boxes,
                 b.ru_boxes
             )
-        })
-        .unwrap_or_else(|| "-".to_string())
+        },
+    )
 }
 
 fn format_anchors(patterns: Option<&RsspPatternCounts>) -> String {
-    patterns
-        .map(|p| {
+    patterns.map_or_else(
+        || "-".to_string(),
+        |p| {
             let a = &p.anchors;
             format!(
                 "{} (L {} D {} U {} R {})",
                 a.total_anchors, a.left_anchors, a.down_anchors, a.up_anchors, a.right_anchors
             )
-        })
-        .unwrap_or_else(|| "-".to_string())
+        },
+    )
 }
 
 fn build_mono_stats(mono: &RsspMonoCandleStats) -> MonoCandleStats {
@@ -2153,7 +2166,7 @@ fn run_rssp_json(raw_bytes: &[u8], extension: &str) -> Result<RsspJsonFile, Stri
         compute_pattern_counts: false,
         translate_markers: false,
     };
-    let summary = analyze(raw_bytes, extension, &options).map_err(|e| e)?;
+    let summary = analyze(raw_bytes, extension, &options)?;
     let mut stdout = Vec::new();
     write_reports(&summary, OutputMode::JSON, &mut stdout).map_err(|e| e.to_string())?;
     serde_json::from_slice(&stdout).map_err(|e| format!("Failed to parse rssp JSON: {e}"))

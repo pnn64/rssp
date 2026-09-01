@@ -2,7 +2,7 @@ use rssp::{AnalysisOptions, analyze};
 
 #[test]
 fn analyze_parses_genre_into_summary() {
-    let simfile = br#"
+    let simfile = br"
 #TITLE:Genre Test;
 #ARTIST:Test Artist;
 #GENRE:  Drum\:Bass  ;
@@ -18,7 +18,7 @@ fn analyze_parses_genre_into_summary() {
 0000
 0000
 ;
-"#;
+";
 
     let summary =
         analyze(simfile, "sm", &AnalysisOptions::default()).expect("simfile should parse");

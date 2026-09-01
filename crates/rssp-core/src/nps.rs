@@ -26,6 +26,8 @@ pub struct ChartNpsInfo {
 ///
 /// Returns an error when the extension is unsupported or the simfile cannot
 /// be parsed.
+// This single pass keeps parsing state and scratch reuse explicit.
+#[allow(clippy::too_many_lines)]
 pub fn compute_chart_peak_nps(
     simfile_data: &[u8],
     extension: &str,

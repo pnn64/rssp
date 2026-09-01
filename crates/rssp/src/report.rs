@@ -376,6 +376,11 @@ pub enum OutputMode {
     CSV,
 }
 
+/// Writes a simfile report in `mode`.
+///
+/// # Errors
+///
+/// Returns the first I/O error produced by `writer`.
 pub fn write_reports<W: Write>(
     simfile: &SimfileSummary,
     mode: OutputMode,
@@ -389,6 +394,11 @@ pub fn write_reports<W: Write>(
     }
 }
 
+/// Writes a course report in `mode`.
+///
+/// # Errors
+///
+/// Returns the first I/O error produced by `writer`.
 pub fn write_course_reports<W: Write>(
     course: &CourseSummary,
     mode: OutputMode,
@@ -470,7 +480,7 @@ fn dummy_simfile_for_course(course: &CourseSummary) -> SimfileSummary {
         median_bpm: 0.0,
         average_bpm: 0.0,
         total_length: course.total_length,
-        global_timing_segments: Default::default(),
+        global_timing_segments: Arc::default(),
         pattern_counts_enabled: course.pattern_counts_enabled,
         tech_counts_enabled: course.tech_counts_enabled,
         charts: Vec::new(),
@@ -660,18 +670,18 @@ const fn count(counts: &PatternCounts, variant: PatternVariant) -> u32 {
 fn chart_or_global<'a>(
     allow_chart: bool,
     chart_has_own_timing: bool,
-    chart_value: &'a Option<String>,
+    chart_value: Option<&'a str>,
     global_value: &'a str,
 ) -> Option<&'a str> {
     if allow_chart && chart_has_own_timing {
-        return chart_value.as_deref().filter(|s| !s.is_empty());
+        return chart_value.filter(|s| !s.is_empty());
     }
 
     if allow_chart
         && let Some(s) = chart_value
         && !s.is_empty()
     {
-        return Some(s.as_str());
+        return Some(s);
     }
 
     if global_value.is_empty() {
@@ -918,7 +928,7 @@ fn build_timing_text_tables(chart: &ChartSummary, simfile: &SimfileSummary) -> T
     let mut time_signatures = parse_time_signatures(chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
-        &chart.chart_time_signatures,
+        chart.chart_time_signatures.as_deref(),
         &simfile.normalized_time_signatures,
     ));
     for (beat, _, _) in &mut time_signatures {
@@ -927,7 +937,7 @@ fn build_timing_text_tables(chart: &ChartSummary, simfile: &SimfileSummary) -> T
     let mut labels = parse_labels(chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
-        &chart.chart_labels,
+        chart.chart_labels.as_deref(),
         &simfile.normalized_labels,
     ));
     for (beat, _) in &mut labels {
@@ -936,7 +946,7 @@ fn build_timing_text_tables(chart: &ChartSummary, simfile: &SimfileSummary) -> T
     let mut tickcounts = parse_tickcounts(chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
-        &chart.chart_tickcounts,
+        chart.chart_tickcounts.as_deref(),
         &simfile.normalized_tickcounts,
     ));
     for (beat, _) in &mut tickcounts {
@@ -945,7 +955,7 @@ fn build_timing_text_tables(chart: &ChartSummary, simfile: &SimfileSummary) -> T
     let mut combos = parse_combos(chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
-        &chart.chart_combos,
+        chart.chart_combos.as_deref(),
         &simfile.normalized_combos,
     ));
     for (beat, _, _) in &mut combos {
@@ -1072,32 +1082,6 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{timing_fixed_6, write_json_native_bpms};
-    #[test]
-    fn timing_fixed_6_matches_harness_style_values() {
-        assert_eq!(timing_fixed_6(0.009), 0.009);
-        assert_eq!(timing_fixed_6(4231.5625), 4231.5625);
-        assert_eq!(timing_fixed_6(171.39500427246094), 171.395004);
-        assert_eq!(timing_fixed_6(159.7899932861328), 159.789993);
-    }
-    #[test]
-    fn streamed_bpm_text_preserves_stack_overflow_output() {
-        let bpms: Vec<_> = (0..1_024)
-            .map(|index| (index as f32 * 4.0, 90.0 + (index % 211) as f32))
-            .collect();
-        let formatted = crate::timing::format_bpm_segments_f32_like_itg(&bpms);
-        assert!(formatted.len() > 16_384);
-
-        let mut actual = Vec::new();
-        write_json_native_bpms(&mut actual, &bpms).expect("BPM text should stream");
-        assert_eq!(actual.first(), Some(&b'"'));
-        assert_eq!(actual.last(), Some(&b'"'));
-        assert_eq!(&actual[1..actual.len() - 1], formatted.as_bytes());
-    }
-}
-
 fn parse_labels_with(
     opt: Option<&str>,
     capacity: usize,
@@ -1218,31 +1202,31 @@ fn write_gimmicks<W: Write>(
     let stops = chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
-        &chart.chart_stops,
+        chart.chart_stops.as_deref(),
         &simfile.normalized_stops,
     );
     let delays = chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
-        &chart.chart_delays,
+        chart.chart_delays.as_deref(),
         &simfile.normalized_delays,
     );
     let warps = chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
-        &chart.chart_warps,
+        chart.chart_warps.as_deref(),
         &simfile.normalized_warps,
     );
     let speeds = chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
-        &chart.chart_speeds,
+        chart.chart_speeds.as_deref(),
         &simfile.normalized_speeds,
     );
     let scrolls = chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
-        &chart.chart_scrolls,
+        chart.chart_scrolls.as_deref(),
         &simfile.normalized_scrolls,
     );
 
@@ -1290,6 +1274,8 @@ fn write_gimmicks<W: Write>(
 }
 
 fn write_chart_header<W: Write>(writer: &mut W, chart: &ChartSummary) -> io::Result<()> {
+    const DASHES: &[u8; 64] = b"----------------------------------------------------------------";
+
     writeln!(
         writer,
         "\n{} {} : {}",
@@ -1297,7 +1283,6 @@ fn write_chart_header<W: Write>(writer: &mut W, chart: &ChartSummary) -> io::Res
     )?;
     let mut remaining =
         chart.difficulty_str.len() + chart.rating_str.len() + chart.step_artist_str.len() + 4;
-    const DASHES: &[u8; 64] = b"----------------------------------------------------------------";
     while remaining >= DASHES.len() {
         writer.write_all(DASHES)?;
         remaining -= DASHES.len();
@@ -1329,6 +1314,8 @@ fn write_pretty_all<W: Write>(writer: &mut W, simfile: &SimfileSummary) -> io::R
     Ok(())
 }
 
+// Report writers stay linear so output order remains obvious and allocation-free.
+#[allow(clippy::too_many_lines)]
 fn write_pretty_chart<W: Write>(
     writer: &mut W,
     chart: &ChartSummary,
@@ -1491,6 +1478,8 @@ fn write_full_all<W: Write>(writer: &mut W, simfile: &SimfileSummary) -> io::Res
     Ok(())
 }
 
+// Report writers stay linear so output order remains obvious and allocation-free.
+#[allow(clippy::too_many_lines)]
 fn write_full_chart<W: Write>(
     writer: &mut W,
     chart: &ChartSummary,
@@ -1656,6 +1645,8 @@ fn write_full_chart<W: Write>(
     Ok(())
 }
 
+// Report writers stay linear so output order remains obvious and allocation-free.
+#[allow(clippy::too_many_lines)]
 fn write_other_patterns<W: Write>(writer: &mut W, chart: &ChartSummary) -> io::Result<()> {
     writeln!(writer, "\n--- Other Patterns ---")?;
     let tower_parts = compute_tower_parts(&chart.detected_patterns);
@@ -1924,7 +1915,7 @@ fn write_json_string<W: Write>(writer: &mut W, s: &str) -> io::Result<()> {
         if let Some(escape) = escape {
             writer.write_all(escape)?;
         } else {
-            let mut buf = [b'\\', b'u', b'0', b'0', b'0', b'0'];
+            let mut buf = *b"\\u0000";
             buf[4] = hex((b >> 4) & 0x0f);
             buf[5] = hex(b & 0x0f);
             writer.write_all(&buf)?;
@@ -1992,9 +1983,9 @@ fn write_json_number_for_key<W: Write>(
         write!(writer, "{u}")
     } else if let Some(f) = number.as_f64() {
         match key {
-            None => write!(writer, "{f}"),
             Some("offset") => write!(writer, "{f:.3}"),
-            Some(
+            None
+            | Some(
                 "beat0_offset_seconds"
                 | "beat0_group_offset_seconds"
                 | "duration_seconds"
@@ -2002,9 +1993,9 @@ fn write_json_number_for_key<W: Write>(
                 | "bpm_min"
                 | "bpm_max"
                 | "display_bpm_min"
-                | "display_bpm_max",
+                | "display_bpm_max"
+                | "bpm",
             ) => write!(writer, "{f}"),
-            Some("bpm") => write!(writer, "{f}"),
             _ => write!(writer, "{f:.2}"),
         }
     } else {
@@ -2161,31 +2152,31 @@ fn write_json_gimmicks<W: Write>(
     let stops = chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
-        &chart.chart_stops,
+        chart.chart_stops.as_deref(),
         &simfile.normalized_stops,
     );
     let delays = chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
-        &chart.chart_delays,
+        chart.chart_delays.as_deref(),
         &simfile.normalized_delays,
     );
     let warps = chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
-        &chart.chart_warps,
+        chart.chart_warps.as_deref(),
         &simfile.normalized_warps,
     );
     let speeds = chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
-        &chart.chart_speeds,
+        chart.chart_speeds.as_deref(),
         &simfile.normalized_speeds,
     );
     let scrolls = chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
-        &chart.chart_scrolls,
+        chart.chart_scrolls.as_deref(),
         &simfile.normalized_scrolls,
     );
     write_json_u32_object(
@@ -2499,6 +2490,8 @@ fn write_json_native_scrolls<W: Write>(
     writer.write_all(b"]")
 }
 
+// JSON field order is part of the report contract and is kept visible here.
+#[allow(clippy::too_many_lines)]
 fn write_json_timing<W: Write>(
     writer: &mut W,
     chart: &ChartSummary,
@@ -2693,6 +2686,8 @@ fn write_json_nps<W: Write>(writer: &mut W, chart: &ChartSummary, indent: usize)
     object.finish()
 }
 
+// JSON field order is part of the report contract and is kept visible here.
+#[allow(clippy::too_many_lines)]
 fn write_json_pattern_counts<W: Write>(
     writer: &mut W,
     chart: &ChartSummary,
@@ -3057,6 +3052,11 @@ fn write_json_chart<W: Write>(
     }
     object.finish()
 }
+/// Writes the complete JSON representation of a simfile analysis.
+///
+/// # Errors
+///
+/// Returns the first I/O error produced by `writer`.
 pub fn write_json_all<W: Write>(simfile: &SimfileSummary, writer: &mut W) -> io::Result<()> {
     let mut root = JsonObjectWriter::new(writer, 0)?;
     root.field_string("title", &simfile.title_str)?;
@@ -3208,6 +3208,8 @@ fn push_bpm_range<W: Write>(out: &mut CsvRow<'_, W>, min_bpm: f64, max_bpm: f64)
     out.write_field(|writer| write!(writer, "{min_bpm}-{max_bpm}"));
 }
 
+// CSV column order is part of the report contract and is kept visible here.
+#[allow(clippy::too_many_lines)]
 fn write_csv_row<W: Write>(
     writer: &mut W,
     simfile: &SimfileSummary,
@@ -3266,31 +3268,31 @@ fn write_csv_row<W: Write>(
     let stops = chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
-        &chart.chart_stops,
+        chart.chart_stops.as_deref(),
         &simfile.normalized_stops,
     );
     let delays = chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
-        &chart.chart_delays,
+        chart.chart_delays.as_deref(),
         &simfile.normalized_delays,
     );
     let warps = chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
-        &chart.chart_warps,
+        chart.chart_warps.as_deref(),
         &simfile.normalized_warps,
     );
     let speeds = chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
-        &chart.chart_speeds,
+        chart.chart_speeds.as_deref(),
         &simfile.normalized_speeds,
     );
     let scrolls = chart_or_global(
         allow_steps_timing,
         chart.chart_has_own_timing,
-        &chart.chart_scrolls,
+        chart.chart_scrolls.as_deref(),
         &simfile.normalized_scrolls,
     );
 
@@ -3573,4 +3575,30 @@ fn write_csv_row<W: Write>(
     }
 
     row.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{timing_fixed_6, write_json_native_bpms};
+    #[test]
+    fn timing_fixed_6_matches_harness_style_values() {
+        assert_eq!(timing_fixed_6(0.009), 0.009);
+        assert_eq!(timing_fixed_6(4231.5625), 4231.5625);
+        assert_eq!(timing_fixed_6(171.395_004_272_460_94), 171.395_004);
+        assert_eq!(timing_fixed_6(159.789_993_286_132_8), 159.789_993);
+    }
+    #[test]
+    fn streamed_bpm_text_preserves_stack_overflow_output() {
+        let bpms: Vec<_> = (0..1_024)
+            .map(|index| (index as f32 * 4.0, 90.0 + (index % 211) as f32))
+            .collect();
+        let formatted = crate::timing::format_bpm_segments_f32_like_itg(&bpms);
+        assert!(formatted.len() > 16_384);
+
+        let mut actual = Vec::new();
+        write_json_native_bpms(&mut actual, &bpms).expect("BPM text should stream");
+        assert_eq!(actual.first(), Some(&b'"'));
+        assert_eq!(actual.last(), Some(&b'"'));
+        assert_eq!(&actual[1..actual.len() - 1], formatted.as_bytes());
+    }
 }

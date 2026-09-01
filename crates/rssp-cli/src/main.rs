@@ -1,3 +1,12 @@
+// Rendering uses range-constrained pixel coordinates and deliberate hot-path
+// inlining; preserving those casts and annotations keeps its codegen stable.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::inline_always
+)]
+
 use std::env::args;
 use std::io;
 use std::path::Path;
@@ -37,6 +46,9 @@ fn print_minimized_notes(simfile: &SimfileSummary) {
     }
 }
 
+// CLI dispatch is intentionally linear so argument handling and output modes
+// remain visible in one place.
+#[allow(clippy::too_many_lines)]
 fn main() -> io::Result<()> {
     let args: Vec<String> = args().collect();
 
@@ -271,7 +283,7 @@ fn main() -> io::Result<()> {
                     &chart_summary.measure_nps_vec,
                     chart_summary.max_nps,
                     &chart_summary.short_hash,
-                    &color_scheme,
+                    color_scheme,
                 )?;
             }
         }

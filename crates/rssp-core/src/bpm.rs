@@ -111,28 +111,27 @@ pub fn normalize_speeds_float_digits(param: &str) -> String {
             continue;
         }
         let mut split = t.split('=');
-        match (split.next(), split.next(), split.next(), split.next()) {
-            (Some(b), Some(r), Some(d), Some(u)) => {
-                if let (Some(beat), Some(ratio), Some(delay)) = (
-                    parse_normalized_decimal(b),
-                    parse_normalized_decimal(r),
-                    parse_normalized_decimal(d),
-                ) {
-                    if !out.is_empty() {
-                        out.push(',');
-                    }
-                    push_dec3_half_up(&mut out, beat);
-                    out.push('=');
-                    push_dec3_half_up(&mut out, ratio);
-                    out.push('=');
-                    push_dec3_half_up(&mut out, delay);
-                    out.push('=');
-                    out += u;
+        if let (Some(b), Some(r), Some(d), Some(u)) =
+            (split.next(), split.next(), split.next(), split.next())
+        {
+            if let (Some(beat), Some(ratio), Some(delay)) = (
+                parse_normalized_decimal(b),
+                parse_normalized_decimal(r),
+                parse_normalized_decimal(d),
+            ) {
+                if !out.is_empty() {
+                    out.push(',');
                 }
+                push_dec3_half_up(&mut out, beat);
+                out.push('=');
+                push_dec3_half_up(&mut out, ratio);
+                out.push('=');
+                push_dec3_half_up(&mut out, delay);
+                out.push('=');
+                out += u;
             }
-            _ => {
-                // Not enough values to parse - skip this row
-            }
+        } else {
+            // Not enough values to parse - skip this row
         }
     }
 
@@ -309,6 +308,7 @@ fn push_clean_entry(out: &mut String, entry: &str) -> Option<usize> {
     }
 }
 
+#[must_use]
 pub fn chart_timing_tag_raw(tag: Option<&[u8]>) -> Option<String> {
     let bytes = tag?;
     let text = std::str::from_utf8(bytes).ok()?;
@@ -320,6 +320,7 @@ pub fn chart_timing_tag_raw(tag: Option<&[u8]>) -> Option<String> {
     }
 }
 
+#[must_use]
 pub fn chart_timing_tag_cow(tag: Option<&[u8]>) -> Option<Cow<'_, str>> {
     let text = std::str::from_utf8(tag?).ok()?;
     let cleaned = clean_timing_map_cow(text);
@@ -683,6 +684,12 @@ pub fn actual_bpm_range_raw_f32(map: &[(f32, f32)]) -> (f64, f64) {
     )
 }
 
+/// Computes display and effective BPM snapshots for every chart in a simfile.
+///
+/// # Errors
+///
+/// Returns an error when `ext` is not `sm` or `ssc`, or when the simfile
+/// structure cannot be parsed.
 pub fn chart_bpm_snapshots(data: &[u8], ext: &str) -> Result<Vec<ChartBpmSnapshot>, String> {
     chart_bpm_snapshots_impl(data, ext)
 }
@@ -1055,12 +1062,12 @@ pub fn compute_mines_nonfake(
     };
     let (warps_sorted, fakes_sorted) = (segments_are_sorted(warps), segments_are_sorted(fakes));
     let in_range = |beat: f64, segs: &[(f64, f64)], idx: &mut usize, sorted: bool| -> bool {
-        if !sorted {
-            *idx = segs.partition_point(|(start, _)| *start <= beat);
-        } else {
+        if sorted {
             while *idx < segs.len() && segs[*idx].0 <= beat {
                 *idx += 1;
             }
+        } else {
+            *idx = segs.partition_point(|(start, _)| *start <= beat);
         }
         let i = *idx;
         i > 0 && {
@@ -1351,11 +1358,11 @@ pub fn normalize_and_tidy_bpms(param: &str) -> String {
     // Dedupe by beat, keeping last
     let mut deduped = Vec::with_capacity(entries.len());
     for e in entries {
-        if deduped
-            .last()
-            .is_some_and(|l: &(i64, String, i64, String, usize)| l.0 == e.0)
+        if let Some(last) = deduped
+            .last_mut()
+            .filter(|last: &&mut (i64, String, i64, String, usize)| last.0 == e.0)
         {
-            *deduped.last_mut().unwrap() = e;
+            *last = e;
         } else {
             deduped.push(e);
         }
@@ -1535,8 +1542,8 @@ mod tests {
         let map: Vec<_> = (0..4_096)
             .map(|idx| {
                 (
-                    idx as f64 * 4.0,
-                    60.125 + ((idx * 977) % 1_000) as f64 / 8.0,
+                    f64::from(idx) * 4.0,
+                    60.125 + f64::from((idx * 977) % 1_000) / 8.0,
                 )
             })
             .collect();
@@ -1556,8 +1563,8 @@ mod tests {
         let large_map: Vec<_> = (0..4_096)
             .map(|idx| {
                 (
-                    idx as f64 * 4.0,
-                    60.125 + ((idx * 977) % 1_000) as f64 / 8.0,
+                    f64::from(idx) * 4.0,
+                    60.125 + f64::from((idx * 977) % 1_000) / 8.0,
                 )
             })
             .collect();

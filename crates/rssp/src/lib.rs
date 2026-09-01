@@ -1,3 +1,16 @@
+// These lints conflict with deliberate hot-path codegen, exact ITG-compatible
+// float behavior, range-constrained chart values, or the stable public API.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::float_cmp,
+    clippy::inline_always,
+    clippy::too_many_arguments,
+    clippy::trivially_copy_pass_by_ref
+)]
+
 pub mod analysis;
 pub mod assets;
 pub mod course;

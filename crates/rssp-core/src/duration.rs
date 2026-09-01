@@ -42,6 +42,7 @@ fn duration_timing_key<'a>(entry: &'a ParsedChartEntry<'_>) -> DurationTimingKey
 }
 
 #[inline(always)]
+#[must_use]
 pub fn chart_duration_seconds(last_beat: f64, timing: &TimingData, offsets: TimingOffsets) -> f64 {
     if last_beat <= 0.0 {
         return 0.0;
@@ -85,6 +86,12 @@ fn compute_duration_timing_segments(
     )
 }
 
+/// Computes duration variants for every chart in a simfile.
+///
+/// # Errors
+///
+/// Returns an error when `extension` is not `sm` or `ssc`, or when the
+/// simfile structure cannot be parsed.
 pub fn compute_chart_durations(
     simfile_data: &[u8],
     extension: &str,
@@ -93,6 +100,8 @@ pub fn compute_chart_durations(
     compute_chart_durations_impl(simfile_data, extension, offsets)
 }
 
+// Duration extraction is a linear parser over chart sections and timing keys.
+#[allow(clippy::too_many_lines)]
 fn compute_chart_durations_impl(
     simfile_data: &[u8],
     extension: &str,

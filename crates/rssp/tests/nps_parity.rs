@@ -1,3 +1,6 @@
+// Corpus indices are bounded by fixture size; checks stay linear for diagnostics.
+#![allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
+
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
@@ -68,7 +71,7 @@ fn compute_chart_nps(
         compute_pattern_counts: false,
         ..AnalysisOptions::default()
     };
-    let summary = analyze(simfile_data, extension, &options).map_err(|e| e)?;
+    let summary = analyze(simfile_data, extension, &options)?;
 
     Ok(summary
         .charts

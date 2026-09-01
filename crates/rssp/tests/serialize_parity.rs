@@ -1,3 +1,15 @@
+// Serialization parity requires exact float checks and schema-shaped fixtures;
+// the corpus comparison stays linear so failures retain full context.
+#![allow(
+    clippy::float_cmp,
+    clippy::inline_always,
+    clippy::ref_option,
+    clippy::struct_excessive_bools,
+    clippy::too_many_lines,
+    clippy::trivially_copy_pass_by_ref
+)]
+
+use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -9,7 +21,11 @@ use pretty_assertions::Comparison;
 use walkdir::WalkDir;
 
 use rssp::parse::extension_is_ssc;
-use rssp::serialize::*;
+use rssp::serialize::{
+    DEFAULT_ARTIST, DEFAULT_COMBOS, DEFAULT_DIFFICULTY, DEFAULT_LABELS, DEFAULT_METER,
+    DEFAULT_STEPSTYPE, DEFAULT_TICKCOUNTS, DEFAULT_TIME_SIGNATURES, DEFAULT_TITLE,
+    serialize_simfile,
+};
 use rssp::stats::RADAR_CATEGORY_COUNT;
 use rssp::timing::{SpeedUnit, TimingSegments};
 use rssp::{AnalysisOptions, ChartSummary, SimfileSummary, analyze};
@@ -32,6 +48,9 @@ pub const TIMING_DEFAULT_BPMS: &[(f32, f32)] = &[(0.0f32, 60.0f32)];
 pub const TIMING_DEFAULT_SPEEDS: &[(f32, f32, f32, SpeedUnit)] =
     &[(0.0f32, 1.0f32, 0.0f32, SpeedUnit::Beats)];
 pub const TIMING_DEFAULT_SCROLLS: &[(f32, f32)] = &[(0.0f32, 1.0f32)];
+
+type TimingPair = (f32, f32);
+type TimingSpeed = (f32, f32, f32, SpeedUnit);
 
 #[derive(Debug, Clone)]
 struct TestCase {
@@ -120,17 +139,14 @@ fn eq<T: Eq>(expected: &T, actual: &T) -> bool {
     expected == actual
 }
 
-fn timing_pairs_eq(expected: &Vec<(f32, f32)>, actual: &Vec<(f32, f32)>) -> bool {
+fn timing_pairs_eq(expected: &[TimingPair], actual: &[TimingPair]) -> bool {
     expected
         .iter()
         .zip(actual.iter())
         .all(|(a, b)| timing_approx_eq(&a.0, &b.0) && timing_approx_eq(&a.1, &b.1))
 }
 
-fn timing_speeds_eq(
-    expected: &Vec<(f32, f32, f32, SpeedUnit)>,
-    actual: &Vec<(f32, f32, f32, SpeedUnit)>,
-) -> bool {
+fn timing_speeds_eq(expected: &[TimingSpeed], actual: &[TimingSpeed]) -> bool {
     expected.iter().zip(actual.iter()).all(|(a, b)| {
         timing_approx_eq(&a.0, &b.0)
             && timing_approx_eq(&a.1, &b.1)
@@ -141,12 +157,12 @@ fn timing_speeds_eq(
 
 fn version_eq(expected: &f32, actual: &f32) -> bool {
     let expected_str = if expected.is_finite() {
-        format!("{:.2}", expected)
+        format!("{expected:.2}")
     } else {
         String::new()
     };
     let actual_str = if actual.is_finite() {
-        format!("{:.2}", actual)
+        format!("{actual:.2}")
     } else {
         String::new()
     };
@@ -157,8 +173,8 @@ fn version_eq(expected: &f32, actual: &f32) -> bool {
 // and comparing those with some leniency.
 // Beats get more leniency because the engine coerces them to 192nd ticks.
 fn normalized_beat_value_eq(expected: &str, actual: &str) -> bool {
-    let mut a_rows = expected.split(",");
-    let mut b_rows = actual.split(",");
+    let mut a_rows = expected.split(',');
+    let mut b_rows = actual.split(',');
     for (row_a, row_b) in a_rows.by_ref().zip(b_rows.by_ref()) {
         // Start with a simple check
         if row_a != row_b {
@@ -191,8 +207,8 @@ fn normalized_beat_value_eq(expected: &str, actual: &str) -> bool {
 
 // Like `normalized_beat_value_eq`, but compare the values as opaque strings.
 fn normalized_beat_str_eq(expected: &str, actual: &str) -> bool {
-    let mut a_rows = expected.split(",");
-    let mut b_rows = actual.split(",");
+    let mut a_rows = expected.split(',');
+    let mut b_rows = actual.split(',');
     for (row_a, row_b) in a_rows.by_ref().zip(b_rows.by_ref()) {
         // Start with a simple check
         if row_a != row_b {
@@ -221,8 +237,8 @@ fn normalized_beat_str_eq(expected: &str, actual: &str) -> bool {
 // Like `normalized_beat_value_eq`, but compare both the beats and values with beat-level precision.
 // Used for warps and fakes.
 fn normalized_beat_beat_eq(expected: &str, actual: &str) -> bool {
-    let mut a_rows = expected.split(",");
-    let mut b_rows = actual.split(",");
+    let mut a_rows = expected.split(',');
+    let mut b_rows = actual.split(',');
     for (row_a, row_b) in a_rows.by_ref().zip(b_rows.by_ref()) {
         // Start with a simple check
         if row_a != row_b {
@@ -272,19 +288,17 @@ fn is_default_version(default: f32) -> impl Fn(&f32, &f32) -> bool {
 
 fn is_default_bytes_opt(default: &[u8]) -> impl Fn(&Option<String>, &Option<String>) -> bool {
     move |e, a| {
-        e.as_ref().is_none_or(|e| e.is_empty())
+        e.as_ref().is_none_or(std::string::String::is_empty)
             && a.as_ref().is_some_and(|a| a.as_bytes() == default)
     }
 }
 
-fn is_default_pairs(default: &[(f32, f32)]) -> impl Fn(&Vec<(f32, f32)>, &Vec<(f32, f32)>) -> bool {
-    move |e, a| e.is_empty() && a == &default
+fn is_default_pairs(default: &[TimingPair]) -> impl Fn(&[TimingPair], &[TimingPair]) -> bool {
+    move |e, a| e.is_empty() && a == default
 }
 
-fn is_default_speeds(
-    default: &[(f32, f32, f32, SpeedUnit)],
-) -> impl Fn(&Vec<(f32, f32, f32, SpeedUnit)>, &Vec<(f32, f32, f32, SpeedUnit)>) -> bool {
-    move |e, a| e.is_empty() && a == &default
+fn is_default_speeds(default: &[TimingSpeed]) -> impl Fn(&[TimingSpeed], &[TimingSpeed]) -> bool {
+    move |e, a| e.is_empty() && a == default
 }
 
 // SM and DS both skip BPMs that have a value of zero
@@ -294,11 +308,9 @@ fn is_default_speeds(
 fn has_noop_bpms(normalized_bpms: &str) -> bool {
     let mut previous_beat: &str = "";
     let mut previous_value: &str = "";
-    for pair in normalized_bpms.split(",") {
+    for pair in normalized_bpms.split(',') {
         if let Some((beat, value)) = pair.split_once('=') {
-            if value == "0.000" {
-                return true;
-            } else if beat == previous_beat || value == previous_value {
+            if value == "0.000" || beat == previous_beat || value == previous_value {
                 return true;
             }
             previous_beat = beat;
@@ -312,7 +324,7 @@ fn has_noop_bpms(normalized_bpms: &str) -> bool {
 fn has_noop_scrolls(normalized_scrolls: &str) -> bool {
     let mut previous_beat: &str = "";
     let mut previous_value: &str = "";
-    for pair in normalized_scrolls.split(",") {
+    for pair in normalized_scrolls.split(',') {
         if let Some((beat, value)) = pair.split_once('=') {
             if beat == previous_beat || value == previous_value {
                 return true;
@@ -328,11 +340,11 @@ fn has_noop_scrolls(normalized_scrolls: &str) -> bool {
 // but when writing to SM, they'll be converted to negative stops.
 // Like no-op BPMs, they can only be detected in the normalized_bpms.
 fn has_negative_bpms(normalized_bpms: &str) -> bool {
-    for pair in normalized_bpms.split(",") {
-        if let Some((_, value)) = pair.split_once('=') {
-            if value.chars().next() == Some('-') {
-                return true;
-            }
+    for pair in normalized_bpms.split(',') {
+        if let Some((_, value)) = pair.split_once('=')
+            && value.starts_with('-')
+        {
+            return true;
         }
     }
     false
@@ -343,29 +355,27 @@ fn has_negative_bpms(normalized_bpms: &str) -> bool {
 // This can be resolved in the future by storing 64-bit floats in the timing data
 // and converting to 32-bit on the game side for engine parity.
 fn has_large_bpms(normalized_bpms: &str) -> bool {
-    for pair in normalized_bpms.split(",") {
-        if let Some((_, value)) = pair.split_once('=') {
-            if let Ok(value_f) = value.parse::<f64>() {
-                if value_f > 8192.0 {
-                    return true;
-                }
-            }
+    for pair in normalized_bpms.split(',') {
+        if let Some((_, value)) = pair.split_once('=')
+            && let Ok(value_f) = value.parse::<f64>()
+            && value_f > 8192.0
+        {
+            return true;
         }
     }
     false
 }
 
 fn has_misrounded_bpm_beats(normalized_bpms: &str) -> bool {
-    for pair in normalized_bpms.split(",") {
-        if let Some((beat, _)) = pair.split_once('=') {
-            if let Some((_, decimal)) = beat.split_once('.') {
-                if let Ok(decimal) = decimal.parse::<f64>() {
-                    let tick = (decimal * 48.0 / 1000.0).round();
-                    let normalized_decimal = (tick * 1000.0 / 48.0).round();
-                    if normalized_decimal != decimal {
-                        return true;
-                    }
-                }
+    for pair in normalized_bpms.split(',') {
+        if let Some((beat, _)) = pair.split_once('=')
+            && let Some((_, decimal)) = beat.split_once('.')
+            && let Ok(decimal) = decimal.parse::<f64>()
+        {
+            let tick = (decimal * 48.0 / 1000.0).round();
+            let normalized_decimal = (tick * 1000.0 / 48.0).round();
+            if normalized_decimal != decimal {
+                return true;
             }
         }
     }
@@ -638,30 +648,32 @@ fn compare_charts(
         match (expected_chart_opt, actual_chart_opt) {
             (None, None) => panic!(), // Unreachable
             (None, Some(actual_chart)) => {
-                errors += &format!(
-                    "Unexpected {} {} chart at index {}\n",
-                    actual_chart.step_type_str, actual_chart.difficulty_str, idx
-                );
+                writeln!(
+                    errors,
+                    "Unexpected {} {} chart at index {idx}",
+                    actual_chart.step_type_str, actual_chart.difficulty_str
+                )
+                .expect("writing to a String cannot fail");
             }
             (Some(expected_chart), None) => {
-                errors += &format!(
-                    "Expected {} {} chart at index {}\n",
-                    expected_chart.step_type_str, expected_chart.difficulty_str, idx
-                );
+                writeln!(
+                    errors,
+                    "Expected {} {} chart at index {idx}",
+                    expected_chart.step_type_str, expected_chart.difficulty_str
+                )
+                .expect("writing to a String cannot fail");
             }
             (Some(expected_chart), Some(actual_chart)) => {
                 let chart_exemptions = exemptions.with_chart(expected_chart);
-                match compare_chart_str_fields(expected_chart, actual_chart, &chart_exemptions) {
-                    Err(errs) => errors += &errs,
-                    _ => {}
+                if let Err(errs) =
+                    compare_chart_str_fields(expected_chart, actual_chart, &chart_exemptions)
+                {
+                    errors += &errs;
                 }
-                match compare_chart_hashes_and_timing(
-                    expected_chart,
-                    actual_chart,
-                    &chart_exemptions,
-                ) {
-                    Err(errs) => errors += &errs,
-                    _ => {}
+                if let Err(errs) =
+                    compare_chart_hashes_and_timing(expected_chart, actual_chart, &chart_exemptions)
+                {
+                    errors += &errs;
                 }
             }
         }
@@ -740,15 +752,14 @@ fn check_file(path: &Path, extension: &str) -> Result<(), String> {
         ));
     }
 
-    let all_ok = comparison_results.iter().all(|r| r.is_ok());
+    let all_ok = comparison_results.iter().all(std::result::Result::is_ok);
     if all_ok {
         Ok(())
     } else {
         let mut err = "\n\nMISMATCH DETECTED\n".to_string();
         for result in comparison_results {
-            match result {
-                Err(e) => err.push_str(&e),
-                Ok(_) => {}
+            if let Err(e) = result {
+                err.push_str(&e);
             }
         }
         Err(err)

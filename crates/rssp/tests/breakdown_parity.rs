@@ -1,3 +1,10 @@
+// Baseline field names mirror the serialized schema; corpus checks stay linear.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::struct_field_names,
+    clippy::too_many_lines
+)]
+
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
@@ -121,7 +128,7 @@ fn compute_chart_breakdowns(
         compute_tech_counts: false,
         ..AnalysisOptions::default()
     };
-    let summary = analyze(simfile_data, extension, &options).map_err(|e| e)?;
+    let summary = analyze(simfile_data, extension, &options)?;
 
     let mut results = Vec::new();
     for chart in summary.charts {

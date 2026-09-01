@@ -529,6 +529,12 @@ fn scan_tree_dir(dir: &Path, opt: ScanOpt) -> Result<(Option<SongScan>, Vec<OsSt
     Ok((song, subdirs))
 }
 
+/// Scans one song directory for a supported simfile and local assets.
+///
+/// # Errors
+///
+/// Returns an error when directory access fails, duplicate handling rejects
+/// the contents, or a path is not valid UTF-8.
 pub fn scan_song_dir(dir: &Path, opt: ScanOpt) -> Result<Option<SongScan>, ScanError> {
     if assets::is_mac_resource_fork(dir) {
         return Ok(None);
@@ -646,6 +652,12 @@ fn scan_pack_root(
     ))
 }
 
+/// Scans one pack directory and its immediate song directories.
+///
+/// # Errors
+///
+/// Returns an error when the directory cannot be read or its contents violate
+/// the selected scan policy.
 pub fn scan_pack_dir(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, ScanError> {
     if assets::is_mac_resource_fork(dir) || !dir.is_dir() {
         return Ok(None);
@@ -703,7 +715,7 @@ fn scan_pack_dir_valid(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, Sca
         0
     };
     let sync_pref = if has_pack_ini {
-        parse_sync_pref(&sync_offset)
+        parse_sync_pref(sync_offset)
     } else {
         SyncPref::Default
     };
@@ -749,6 +761,11 @@ fn scan_pack_dir_valid(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, Sca
     }))
 }
 
+/// Scans every pack beneath a songs root.
+///
+/// # Errors
+///
+/// Returns an error when the root or a pack cannot be read or scanned.
 pub fn scan_songs_dir(dir: &Path, opt: ScanOpt) -> Result<Vec<PackScan>, ScanError> {
     let mut packs = Vec::new();
     for entry in fs::read_dir(dir)? {

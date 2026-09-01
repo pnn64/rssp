@@ -830,6 +830,8 @@ const DIFFICULTY_TABLE: DifficultyTable = [
     ),
 ];
 
+// This array is evaluated at compile time and does not consume runtime stack.
+#[allow(clippy::large_stack_arrays)]
 const fn build_measure_index() -> [[u8; MEASURE_LOOKUP_LEN]; DIFFICULTY_TABLE.len()] {
     let mut lookup = [[0u8; MEASURE_LOOKUP_LEN]; DIFFICULTY_TABLE.len()];
     let mut row = 0usize;
@@ -988,6 +990,7 @@ fn bpm_row_index(bpm: i32) -> Option<usize> {
 }
 
 /// Interpolates difficulty between two BPM rows.
+#[must_use]
 pub fn get_difficulty(bpm: f64, measures: f64) -> f64 {
     let (bpm1, bpm2) = find_bounding_bpms(bpm, &DIFFICULTY_TABLE);
 
@@ -1097,6 +1100,7 @@ fn sort_matrix_inputs(inputs: &mut [MatrixRatingInput]) {
 }
 
 /// Finds the maximum difficulty rating from stream sections.
+#[must_use]
 pub fn compute_matrix_rating(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> f64 {
     let mut best = 0.0f64;
     for_each_matrix_input(measure_densities, bpm_map, |input| {
@@ -1106,6 +1110,7 @@ pub fn compute_matrix_rating(measure_densities: &[usize], bpm_map: &[(f64, f64)]
 }
 
 /// Builds the compact inputs needed to reevaluate a chart's Matrix rating at any music rate.
+#[must_use]
 pub fn compute_matrix_profile(
     measure_densities: &[usize],
     bpm_map: &[(f64, f64)],
@@ -1175,6 +1180,7 @@ fn dedup_matrix_inputs(inputs: &mut [MatrixRatingInput]) -> usize {
 }
 
 /// Reevaluates a compact Matrix profile after scaling its effective BPMs by `music_rate`.
+#[must_use]
 pub fn matrix_rating_at_rate(profile: &[MatrixRatingInput], music_rate: f64) -> f64 {
     matrix_rating_at_valid_rate(profile, valid_music_rate(music_rate))
 }
@@ -1275,16 +1281,16 @@ fn small_matrix_inputs(
         return;
     }
 
-    let (mut segment_idx, mut next_beat) = (0usize, bpm_map.get(1).map_or(f64::INFINITY, |m| m.0));
+    let (mut bpm_idx, mut next_beat) = (0usize, bpm_map.get(1).map_or(f64::INFINITY, |m| m.0));
     for (idx, &density) in measure_densities.iter().enumerate() {
         let beat = idx as f64 * 4.0;
         while beat >= next_beat {
-            segment_idx += 1;
-            next_beat = bpm_map.get(segment_idx + 1).map_or(f64::INFINITY, |m| m.0);
+            bpm_idx += 1;
+            next_beat = bpm_map.get(bpm_idx + 1).map_or(f64::INFINITY, |m| m.0);
         }
 
         let code = density_code(categorize_measure_density(density));
-        let bpm_id = segment_ids[segment_idx];
+        let bpm_id = segment_ids[bpm_idx];
         if code != u8::MAX && bpm_id != usize::MAX {
             bpm_counts[bpm_id][code as usize] += 1;
         }
@@ -1460,9 +1466,9 @@ mod tests {
                 let bpm = if idx % 17 == 0 {
                     -10.0
                 } else {
-                    60.0 + idx as f64 * 0.125
+                    60.0 + f64::from(idx) * 0.125
                 };
-                (idx as f64 * 8.0, bpm)
+                (f64::from(idx) * 8.0, bpm)
             })
             .collect();
 

@@ -79,11 +79,13 @@ const fn is_stream_measure(d: usize) -> bool {
 #[must_use]
 pub fn stream_sequences(measures: &[usize]) -> Vec<StreamSegment> {
     let mut segs = Vec::with_capacity(scratch_cap(measures.len() / 2 + 1));
-    visit_stream_sequences(measures, |segment| {
+    match visit_stream_sequences(measures, |segment| {
         segs.push(segment);
         Ok::<(), std::convert::Infallible>(())
-    })
-    .expect("infallible segment collector should succeed");
+    }) {
+        Ok(()) => {}
+        Err(never) => match never {},
+    }
     segs
 }
 

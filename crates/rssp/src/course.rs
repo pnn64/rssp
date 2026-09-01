@@ -58,7 +58,7 @@ pub enum CourseSong {
     Unknown { raw: String },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SongSelect {
     pub titles: Vec<String>,
     pub groups: Vec<String>,
@@ -70,23 +70,6 @@ pub struct SongSelect {
     pub duration_range: Option<(f32, f32)>,
     pub sort: Option<SongSort>,
     pub index: i32,
-}
-
-impl Default for SongSelect {
-    fn default() -> Self {
-        Self {
-            titles: Vec::new(),
-            groups: Vec::new(),
-            artists: Vec::new(),
-            genres: Vec::new(),
-            difficulties: Vec::new(),
-            meter_range: None,
-            bpm_range: None,
-            duration_range: None,
-            sort: None,
-            index: 0,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -249,6 +232,7 @@ fn visit_unescaped<'a>(block: &'a [u8], delim: u8, mut visit: impl FnMut(&'a [u8
     visit(&block[start..]);
 }
 
+#[allow(clippy::naive_bytecount)] // Avoid a dependency for one reserve estimate.
 fn list_capacity(block: &[u8], delim: u8) -> usize {
     if block.is_empty() {
         return 0;
@@ -348,10 +332,9 @@ fn parse_sort_pick(raw: &str) -> Option<(SongSort, i32)> {
         (SongSort::FewestPlays, s)
     } else if let Some(s) = raw.strip_prefix("GRADEBEST") {
         (SongSort::TopGrades, s)
-    } else if let Some(s) = raw.strip_prefix("GRADEWORST") {
-        (SongSort::LowestGrades, s)
     } else {
-        return None;
+        let s = raw.strip_prefix("GRADEWORST")?;
+        (SongSort::LowestGrades, s)
     };
     let index = rest.trim().parse::<i32>().ok()? - 1;
     Some((sort, index))
@@ -879,6 +862,11 @@ fn parse_crs_impl(data: &[u8]) -> Result<CourseFile, String> {
     })
 }
 
+/// Parses an ITG course file.
+///
+/// # Errors
+///
+/// Returns an error when required course fields are invalid or missing.
 pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
     parse_crs_impl(data)
 }
@@ -1274,6 +1262,12 @@ fn analyze_course_song(
     analyze_prepared_in(&opened.data, opened.extension, prepared, scratch)
 }
 
+/// Resolves and analyzes a course and its referenced songs.
+///
+/// # Errors
+///
+/// Returns an error when the course or a referenced song cannot be read,
+/// parsed, resolved, or analyzed.
 pub fn analyze_crs_path(
     course_path: &Path,
     songs_dir: Option<&Path>,
@@ -1320,7 +1314,7 @@ fn resolve_catalog_song<'a>(
     let Some(group) = group.map(str::trim).filter(|group| !group.is_empty()) else {
         return resolve_song_dir(songs_dir, None, song);
     };
-    if !catalog.as_ref().is_some_and(|cached| cached.key == group) {
+    if catalog.as_ref().is_none_or(|cached| cached.key != group) {
         let dir = find_named_dir(songs_dir, group)?;
         let Some(songs) = catalog_group(&dir) else {
             return resolve_group_song(&dir, song);
@@ -1348,16 +1342,18 @@ fn resolve_course_simfile<'a>(
     song: &str,
     group_catalog: &mut Option<GroupCatalog<'a>>,
 ) -> Result<(PathBuf, PathBuf), String> {
-    let song_dir = resolve_catalog_song(songs_dir, group, song, group_catalog)
+    let resolved_dir = resolve_catalog_song(songs_dir, group, song, group_catalog)
         .ok_or_else(|| format!("Song not found: {song}"))?;
-    let scan = pack::scan_song_dir(&song_dir, pack::ScanOpt::default())
-        .map_err(|e| format!("Failed scanning {}: {e:?}", song_dir.display()))?;
+    let scan = pack::scan_song_dir(&resolved_dir, pack::ScanOpt::default())
+        .map_err(|e| format!("Failed scanning {}: {e:?}", resolved_dir.display()))?;
     let simfile = scan
         .map(|scan| scan.simfile)
-        .ok_or_else(|| format!("No simfile in {}", song_dir.display()))?;
-    Ok((song_dir, simfile))
+        .ok_or_else(|| format!("No simfile in {}", resolved_dir.display()))?;
+    Ok((resolved_dir, simfile))
 }
 
+// Course resolution is a linear state machine with explicit cache lifetimes.
+#[allow(clippy::too_many_lines)]
 fn analyze_crs_path_impl(
     course_path: &Path,
     songs_dir: Option<&Path>,
@@ -1439,7 +1435,7 @@ fn analyze_crs_path_impl(
         let cache_song = song_uses.get(&song_key).is_some_and(|&uses| uses > 1);
         let cache_has_room = song_cache.len() < MAX_CACHED_SIMS;
         let uncached_sim;
-        let (sim, song_dir): (&SimfileSummary, String) = if cache_song {
+        let (sim, dir_name): (&SimfileSummary, String) = if cache_song {
             match song_cache.entry(song_key) {
                 Entry::Occupied(entry) => {
                     let cached = entry.into_mut();
@@ -1458,8 +1454,7 @@ fn analyze_crs_path_impl(
                     let cached = entry.insert((dir_name.clone(), summary));
                     (&cached.1, dir_name)
                 }
-                Entry::Vacant(entry) => {
-                    drop(entry);
+                Entry::Vacant(_) => {
                     let (dir, path) = resolve_course_simfile(
                         &base_songs_dir,
                         song_key.0,
@@ -1515,7 +1510,7 @@ fn analyze_crs_path_impl(
 
         entries.push(CourseEntrySummary {
             song: course_title(&sim.title_str, &sim.subtitle_str),
-            song_dir,
+            song_dir: dir_name,
             step_type: chart.step_type_str.clone(),
             difficulty: chart.difficulty_str.clone(),
             rating: chart.rating_str.clone(),
@@ -1741,12 +1736,12 @@ mod tests {
     #[test]
     fn songselect_parses_itgmania_criteria() {
         let course = parse_crs(
-            br#"
+            br"
 #COURSE:[Per-Song MMod Scale] ITL Random 8s;
 #METER:Hard:8;
 #SONGSELECT:GROUP=ITL Online 2022,ITL Online 2023:METER=8-8;
 #SONGSELECT:TITLE=thank u\, next:ARTIST=Artist\=Name:GENRE=J-Pop,Black Metal:DIFFICULTY=Medium,Hard:BPMRANGE=120-160:DURATION=90-125:SORT=FewestPlays,4:GAINSECONDS=5:GAINLIVES=2:MODS=2x,noshowcourse,nodifficult;
-"#,
+",
         )
         .expect("ITGmania SONGSELECT course should parse");
 
@@ -1834,9 +1829,9 @@ mod tests {
             let group_dir = songs_dir.join(group);
             std::fs::create_dir_all(&group_dir).expect("group directory should be creatable");
             for song in songs {
-                let song_dir = group_dir.join(song);
-                std::fs::create_dir(&song_dir).expect("song directory should be creatable");
-                std::fs::write(song_dir.join(format!("{song}.ssc")), SIMFILE)
+                let fixture_dir = group_dir.join(song);
+                std::fs::create_dir(&fixture_dir).expect("song directory should be creatable");
+                std::fs::write(fixture_dir.join(format!("{song}.ssc")), SIMFILE)
                     .expect("simfile should be writable");
             }
         }

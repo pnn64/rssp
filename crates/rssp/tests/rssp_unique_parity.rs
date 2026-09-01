@@ -1,3 +1,6 @@
+// Baseline field names mirror the serialized schema; corpus checks stay linear.
+#![allow(clippy::struct_field_names, clippy::too_many_lines)]
+
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
@@ -126,30 +129,33 @@ struct Failure {
 }
 
 fn format_candles(stats: Option<&MonoCandleStats>) -> String {
-    stats
-        .map(|s| {
+    stats.map_or_else(
+        || "-".to_string(),
+        |s| {
             format!(
                 "{} (L {} R {}) {}%",
                 s.total_candles, s.left_foot_candles, s.right_foot_candles, s.candles_percent
             )
-        })
-        .unwrap_or_else(|| "-".to_string())
+        },
+    )
 }
 
 fn format_mono(stats: Option<&MonoCandleStats>) -> String {
-    stats
-        .map(|s| {
+    stats.map_or_else(
+        || "-".to_string(),
+        |s| {
             format!(
                 "{} (L {} R {}) {}%",
                 s.total_mono, s.left_face_mono, s.right_face_mono, s.mono_percent
             )
-        })
-        .unwrap_or_else(|| "-".to_string())
+        },
+    )
 }
 
 fn format_boxes(patterns: Option<&PatternCounts>) -> String {
-    patterns
-        .map(|p| {
+    patterns.map_or_else(
+        || "-".to_string(),
+        |p| {
             let b = &p.boxes;
             format!(
                 "{} (LR {} UD {} LD {} LU {} RD {} RU {})",
@@ -161,20 +167,21 @@ fn format_boxes(patterns: Option<&PatternCounts>) -> String {
                 b.rd_boxes,
                 b.ru_boxes
             )
-        })
-        .unwrap_or_else(|| "-".to_string())
+        },
+    )
 }
 
 fn format_anchors(patterns: Option<&PatternCounts>) -> String {
-    patterns
-        .map(|p| {
+    patterns.map_or_else(
+        || "-".to_string(),
+        |p| {
             let a = &p.anchors;
             format!(
                 "{} (L {} D {} U {} R {})",
                 a.total_anchors, a.left_anchors, a.down_anchors, a.up_anchors, a.right_anchors
             )
-        })
-        .unwrap_or_else(|| "-".to_string())
+        },
+    )
 }
 
 fn chart_values_from_summary(chart: &ChartSummary) -> ChartUniqueValues {
@@ -257,7 +264,7 @@ fn compute_chart_values(
         translate_markers: false,
     };
 
-    let summary = analyze(simfile_data, extension, &options).map_err(|e| e)?;
+    let summary = analyze(simfile_data, extension, &options)?;
     let mut results = Vec::new();
 
     for chart in &summary.charts {

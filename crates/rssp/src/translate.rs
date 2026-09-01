@@ -346,7 +346,7 @@ const fn alias_char(value: u32) -> char {
 }
 
 const fn build_alias_table() -> AliasTable {
-    assert!(ALIAS_ENTRY_COUNT <= ALIAS_INDEX_COUNT);
+    const { assert!(ALIAS_ENTRY_COUNT <= ALIAS_INDEX_COUNT) };
     let mut slots = [ALIAS_EMPTY; ALIAS_TABLE_LEN];
     let mut keys = [0u64; ALIAS_INDEX_COUNT];
     let mut values = [0u16; ALIAS_INDEX_COUNT];

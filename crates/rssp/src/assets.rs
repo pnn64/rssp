@@ -330,7 +330,7 @@ fn first_two_sound_files(song_dir: &Path) -> (Option<PathBuf>, Option<PathBuf>) 
     )
 }
 
-/// Resolves `#MUSIC` like ITGmania's Song::TidyUpData fallback behavior.
+/// Resolves `#MUSIC` like `ITGmania`'s `Song::TidyUpData` fallback behavior.
 ///
 /// Order:
 /// 1. Try the tagged path in `#MUSIC` (case-insensitive within song dir).
@@ -984,7 +984,7 @@ fn resolve_bgchanges_with<'a>(
                 )
         })
         .map(|(ix, _)| ix)
-        .last();
+        .next_back();
     let blocks_beat_zero = out.iter().any(|change| {
         change.start_beat <= 0.0 && !matches!(change.target, BackgroundChangeTarget::File(_))
     });

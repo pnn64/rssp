@@ -125,7 +125,7 @@ struct RowMapEntry {
 
 const fn row_map_hash(x: u32) -> usize {
     // 0x9E3779B9 is the 32-bit golden ratio prime
-    x.wrapping_mul(0x9E3779B9) as usize
+    x.wrapping_mul(0x9E37_79B9) as usize
 }
 
 // Dance-single has at most 625 states per layer; dance-double can encode at
@@ -296,6 +296,7 @@ fn dance_double_layout() -> StageLayout {
     )
 }
 
+#[allow(clippy::similar_names)] // Paired x/y coordinate tables are intentionally parallel.
 fn layout_new(points: &[StagePoint], up_mask: u8, down_mask: u8, side_mask: u8) -> StageLayout {
     let cols = points.len();
     debug_assert!(cols <= MAX_COLUMNS);
@@ -314,7 +315,7 @@ fn layout_new(points: &[StagePoint], up_mask: u8, down_mask: u8, side_mask: u8) 
     let facing_penalty = |v: f32| -> f32 {
         let base = -(v.min(0.0));
         if base > 0.0 {
-            ((base as f64).powf(1.8) * 100.0) as f32
+            (f64::from(base).powf(1.8) * 100.0) as f32
         } else {
             0.0
         }
@@ -339,7 +340,10 @@ fn layout_new(points: &[StagePoint], up_mask: u8, down_mask: u8, side_mask: u8) 
                 (None, Some(r)) => r,
                 (Some(l), None) => l,
                 (Some(l), Some(r)) => StagePoint {
+                    // Preserve ITG-compatible overflow and rounding behavior.
+                    #[allow(clippy::manual_midpoint)]
                     x: (l.x + r.x) / 2.0,
+                    #[allow(clippy::manual_midpoint)]
                     y: (l.y + r.y) / 2.0,
                 },
             };
@@ -358,7 +362,10 @@ fn layout_new(points: &[StagePoint], up_mask: u8, down_mask: u8, side_mask: u8) 
             }
 
             let (ndx, ndy) = (dx / dist, dy / dist);
-            let (mut xm, mut ym) = ((ndx as f64).powf(4.0) as f32, (ndy as f64).powf(4.0) as f32);
+            let (mut xm, mut ym) = (
+                f64::from(ndx).powf(4.0) as f32,
+                f64::from(ndy).powf(4.0) as f32,
+            );
             if ndx <= 0.0 {
                 xm = -xm;
             }
@@ -881,6 +888,7 @@ fn calc_action_cost<const CACHED_GEOMETRY: bool>(
     cost
 }
 
+#[allow(clippy::fn_params_excessive_bools)] // Hot flags stay in registers.
 fn calc_tap_cost<const COLS: usize>(
     initial_hit: Foot,
     initial_col: i8,
@@ -913,21 +921,19 @@ fn calc_tap_cost<const COLS: usize>(
     }
     cost += facing_cost;
     cost += spin_cost;
-    if ctx.footswitch != 0.0 {
-        if initial_hit != Foot::None
-            && initial_hit != moved_foot
-            && initial_hit != OTHER_PART_OF_FOOT[moved_idx]
-        {
-            cost += ctx.footswitch;
-        }
+    if ctx.footswitch != 0.0
+        && initial_hit != Foot::None
+        && initial_hit != moved_foot
+        && initial_hit != OTHER_PART_OF_FOOT[moved_idx]
+    {
+        cost += ctx.footswitch;
     }
-    if side_hit {
-        if initial_hit != moved_foot
-            && initial_hit != Foot::None
-            && moved_mask & FOOT_MASKS[foot_idx(initial_hit)] == 0
-        {
-            cost += SIDESWITCH_WEIGHT;
-        }
+    if side_hit
+        && initial_hit != moved_foot
+        && initial_hit != Foot::None
+        && moved_mask & FOOT_MASKS[foot_idx(initial_hit)] == 0
+    {
+        cost += SIDESWITCH_WEIGHT;
     }
     if jacked {
         cost += ctx.jack;
@@ -1011,6 +1017,7 @@ fn calc_bracket_tap_cost(
     cost
 }
 
+#[allow(clippy::fn_params_excessive_bools)] // Hot flags stay in registers.
 fn calc_bracket_jack_cost(
     result: &State,
     moved_left: bool,
@@ -1033,6 +1040,7 @@ fn calc_bracket_jack_cost(
     cost
 }
 
+#[allow(clippy::fn_params_excessive_bools)] // Hot flags stay in registers.
 fn calc_doublestep_cost(
     moved_left: bool,
     moved_right: bool,
@@ -1193,6 +1201,7 @@ const fn calc_missed_footswitch_cost(row: &Row, jacked_left: bool, jacked_right:
     }
 }
 
+#[allow(clippy::fn_params_excessive_bools)] // Hot flags stay in registers.
 fn calc_jack_cost(
     moved_left: bool,
     moved_right: bool,
@@ -1758,7 +1767,7 @@ fn parity_create_rows_holds_with<const LANES: usize, const HAS_FAKES: bool>(
             match ch {
                 b'M' => parity_push_mine(g, &mut counter, c, second, row_fake),
                 b'L' if !row_fake => {
-                    parity_push_note(g, &mut counter, c, beat, second, HOLD_END_NONE, false)
+                    parity_push_note(g, &mut counter, c, beat, second, HOLD_END_NONE, false);
                 }
                 b'2' | b'4' => {
                     let hold_end = get_hold_end(idx, c);
@@ -2204,6 +2213,9 @@ fn parity_jump_row4(
     }
 }
 
+// Dynamic-programming transitions stay together to preserve the allocation-free
+// row loop and make state updates auditable.
+#[allow(clippy::too_many_lines)]
 fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usize> {
     // Sample enough layers for mixed row types, then size the arena once from
     // the file's observed state density instead of repeatedly doubling it.
@@ -2246,7 +2258,7 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
             parity_perms_for_row(g, i)
         };
         let perm_count = if direct_tap {
-            [IDLE_FEET.len(), TAP_FEET.len()][(active_mask != 0) as usize]
+            [IDLE_FEET.len(), TAP_FEET.len()][usize::from(active_mask != 0)]
         } else {
             perms.len()
         };
@@ -2573,15 +2585,13 @@ fn parity_result_key8_with_holds(
     let moved_left = moved_mask & LEFT_FOOT_MASK != 0;
     let moved_right = moved_mask & RIGHT_FOOT_MASK != 0;
     let mut combined = 0u32;
-    for column in 0..MAX_COLUMNS {
+    for (column, &placed) in cols.iter().enumerate().take(MAX_COLUMNS) {
         let placed = if active_mask & (1u8 << column) != 0 {
-            cols[column]
+            placed
         } else {
             Foot::None
         };
-        let foot = if placed != Foot::None {
-            placed
-        } else {
+        let foot = if placed == Foot::None {
             let previous = initial.combined_columns[column];
             match previous {
                 Foot::LeftHeel | Foot::RightHeel
@@ -2593,6 +2603,8 @@ fn parity_result_key8_with_holds(
                 Foot::RightToe if !moved_right => previous,
                 _ => Foot::None,
             }
+        } else {
+            placed
         };
         combined |= (foot as u32) << (column * 3);
     }
@@ -2609,9 +2621,7 @@ fn parity_combined_key4(initial: &State, cols: &FootPlacement, moved_mask: u8) -
     let moved_right = moved_mask & RIGHT_FOOT_MASK != 0;
     let mut combined = 0u32;
     for (i, &placed) in cols.iter().enumerate().take(4) {
-        let foot = if placed != Foot::None {
-            placed
-        } else {
+        let foot = if placed == Foot::None {
             let previous = initial.combined_columns[i];
             match previous {
                 Foot::LeftHeel | Foot::RightHeel
@@ -2623,6 +2633,8 @@ fn parity_combined_key4(initial: &State, cols: &FootPlacement, moved_mask: u8) -
                 Foot::RightToe if !moved_right => previous,
                 _ => Foot::None,
             }
+        } else {
+            placed
         };
         combined |= (foot as u32) << (i * 3);
     }
@@ -3130,7 +3142,7 @@ fn classify_crossover(
     CrossoverKind::None
 }
 
-/// Per-row StepParity annotation, mirroring the full data the engine's
+/// Per-row `StepParity` annotation, mirroring the full data the engine's
 /// `GetNoteAnnotations()` exposes (and Simply Love's `CrossoverCues.lua` reads):
 /// the beat, the elapsed second, the set of foot-bearing columns
 /// (`column_mask`, equivalent to `footPlacement` keys), the foot assigned to
@@ -3156,6 +3168,7 @@ pub struct RowAnnotation {
 impl RowAnnotation {
     /// Number of feet placed on this row (`== column_mask.count_ones()`).
     #[inline]
+    #[must_use]
     pub fn foot_count(&self) -> u32 {
         self.column_mask.count_ones()
     }
@@ -3163,6 +3176,7 @@ impl RowAnnotation {
     /// Foot assigned to `column` (`Foot::None` if no foot steps there or the
     /// column is out of range).
     #[inline]
+    #[must_use]
     pub fn foot(&self, column: usize) -> Foot {
         self.feet.get(column).copied().unwrap_or(Foot::None)
     }
@@ -3170,6 +3184,7 @@ impl RowAnnotation {
     /// Per-column foot assignment, indexed by column (`Foot::None` where no foot
     /// steps). Only the columns in `column_mask` are set.
     #[inline]
+    #[must_use]
     pub fn feet(&self) -> &[Foot] {
         &self.feet
     }
@@ -3368,7 +3383,7 @@ fn cached_spin_cost4<const BRANCHLESS: bool>(
     let result = classes[result_key as usize & (SINGLE_STATE_COUNT - 1)] >> 2;
     let is_spin = initial + result == 3;
     if BRANCHLESS {
-        [0.0, SPIN_WEIGHT][is_spin as usize]
+        [0.0, SPIN_WEIGHT][usize::from(is_spin)]
     } else if is_spin {
         SPIN_WEIGHT
     } else {
@@ -3398,7 +3413,7 @@ fn build_perm_table(layout: &StageLayout) -> PermTable {
             &mut |placement| values.push(placement),
         );
         let len = values.len() - start;
-        debug_assert!(start <= u16::MAX as usize && len <= u16::MAX as usize);
+        debug_assert!(u16::try_from(start).is_ok() && u16::try_from(len).is_ok());
         *range = start as u32 | ((len as u32) << 16);
     }
 
@@ -3755,6 +3770,7 @@ pub struct TimingRowsScratch<const LANES: usize> {
     hold_heads: Vec<SparseHoldHead>,
 }
 
+#[must_use]
 pub fn timing_rows_scratch<const LANES: usize>() -> Option<TimingRowsScratch<LANES>> {
     let cache = layout_for_lanes(LANES)?;
     Some(TimingRowsScratch {
@@ -4055,7 +4071,7 @@ mod tests {
         let Some(mut scratch) = timing_rows_scratch::<4>() else {
             panic!("dance-single parity layout should exist");
         };
-        let rows = [[b'0', b'L', b'0', b'0']];
+        let rows = [*b"0L00"];
         let beats = [0.0];
 
         let counts = analyze_timing_rows_known_holds(

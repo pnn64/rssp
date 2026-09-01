@@ -106,7 +106,7 @@ pub(crate) fn fmt_dec3_half_up(value: f64) -> String {
 pub(crate) fn push_dec3_half_up(out: &mut String, value: f64) {
     let scaled = value.mul_add(1000.0, 0.5).floor();
     if !scaled.is_finite() || scaled <= i64::MIN as f64 || scaled >= i64::MAX as f64 {
-        out.push_str(&format!("{:.3}", scaled / 1000.0));
+        write!(out, "{:.3}", scaled / 1000.0).expect("writing to a String cannot fail");
         return;
     }
 
@@ -181,17 +181,17 @@ mod tests {
 
     #[test]
     fn round_sig_figs_common_range() {
-        assert_eq!(round_sig_figs_6(1.2345678), 1.23457);
-        assert_eq!(round_sig_figs_6(12.345678), 12.3457);
-        assert_eq!(round_sig_figs_6(123.45678), 123.457);
-        assert_eq!(round_sig_figs_6(1234.5678), 1234.57);
-        assert_eq!(round_sig_figs_6(12345.678), 12345.7);
-        assert_eq!(round_sig_figs_6(123456.78), 123457.0);
+        assert_eq!(round_sig_figs_6(1.234_567_8), 1.234_57);
+        assert_eq!(round_sig_figs_6(12.345_678), 12.345_7);
+        assert_eq!(round_sig_figs_6(123.456_78), 123.457);
+        assert_eq!(round_sig_figs_6(1_234.567_8), 1_234.57);
+        assert_eq!(round_sig_figs_6(12_345.678), 12_345.7);
+        assert_eq!(round_sig_figs_6(123_456.78), 123_457.0);
     }
 
     #[test]
     fn round_sig_figs_keeps_fallback_range() {
-        assert_eq!(round_sig_figs_6(0.12345678), 0.123457);
+        assert_eq!(round_sig_figs_6(0.123_456_78), 0.123_457);
         assert_eq!(round_sig_figs_6(1_234_567.8), 1_234_570.0);
     }
 
@@ -208,8 +208,8 @@ mod tests {
             1.2345,
             -1.2344,
             -1.2345,
-            12_345.6789,
-            -12_345.6789,
+            12_345.678_9,
+            -12_345.678_9,
         ];
 
         for value in values {
@@ -221,7 +221,7 @@ mod tests {
     #[test]
     fn dec6_itg_matches_f32_formatting() {
         for value in [
-            -12_345.6789,
+            -12_345.678_9,
             -0.0,
             0.0,
             0.125,

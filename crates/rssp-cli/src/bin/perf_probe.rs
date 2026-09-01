@@ -28,7 +28,7 @@ mod thread_cycles {
     pub fn read() -> u64 {
         let mut cycles = 0;
         // SAFETY: The pseudo-handle is valid and cycles points to writable u64 storage.
-        let ok = unsafe { QueryThreadCycleTime(GetCurrentThread(), &mut cycles) };
+        let ok = unsafe { QueryThreadCycleTime(GetCurrentThread(), &raw mut cycles) };
         assert_ne!(ok, 0, "QueryThreadCycleTime failed");
         cycles
     }
@@ -164,6 +164,7 @@ fn corpus_bytes(corpus: &[SimInput]) -> usize {
     corpus.iter().map(|s| s.raw.len()).sum()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_iters(
     mode: Mode,
     iters: usize,

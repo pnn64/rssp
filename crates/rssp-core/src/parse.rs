@@ -274,12 +274,14 @@ pub fn parse_version(version: Option<&[u8]>, fmt: TimingFormat) -> f32 {
     version
         .and_then(|b| std::str::from_utf8(b).ok())
         .and_then(parse_float_prefix)
-        .map(|version| version as f32)
-        .unwrap_or(if fmt == TimingFormat::Ssc {
-            f32::NAN
-        } else {
-            STEPFILE_VERSION_NUMBER
-        })
+        .map_or(
+            if fmt == TimingFormat::Ssc {
+                f32::NAN
+            } else {
+                STEPFILE_VERSION_NUMBER
+            },
+            |version| version as f32,
+        )
 }
 
 pub const SSC_VERSION_CHART_NAME_TAG: f32 = 0.74;
@@ -937,6 +939,11 @@ fn chart_reserve_len(data_len: usize, start: usize, next: usize) -> usize {
         .clamp(1, MAX_CHART_RESERVE)
 }
 
+/// Extracts global metadata and chart sections without copying their contents.
+///
+/// # Errors
+///
+/// Returns `InvalidInput` when `ext` is not `sm` or `ssc`.
 pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfileData<'a>> {
     extract_sections_impl(data, ext)
 }
@@ -1006,6 +1013,11 @@ fn extract_sections_impl<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimf
     Ok(r)
 }
 
+/// Reports whether a supported simfile extension selects the SSC format.
+///
+/// # Errors
+///
+/// Returns `InvalidInput` unless `ext` is `sm` or `ssc`, ignoring ASCII case.
 pub fn extension_is_ssc(ext: &str) -> io::Result<bool> {
     let ssc = if ext.eq_ignore_ascii_case("ssc") {
         true

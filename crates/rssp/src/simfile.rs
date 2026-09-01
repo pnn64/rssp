@@ -31,6 +31,11 @@ fn ext_of(path: &Path) -> io::Result<&'static str> {
 }
 
 /// Reads a `.sm` or `.ssc` simfile from `path`.
+///
+/// # Errors
+///
+/// Returns an error if the path has an unsupported extension or the file
+/// cannot be read.
 pub fn open(path: impl AsRef<Path>) -> io::Result<OpenedSimfile> {
     let path = path.as_ref();
     let extension = ext_of(path)?;

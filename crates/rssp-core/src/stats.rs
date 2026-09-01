@@ -280,6 +280,7 @@ fn byte_match_mask(word: u64, byte: u8) -> u64 {
 }
 
 #[inline]
+#[allow(clippy::naive_bytecount)] // The remainder completes the vectorized loop above.
 pub(crate) fn count_byte(slice: &[u8], needle: u8) -> usize {
     let (chunks, rem) = slice.as_chunks::<8>();
     let chunks = chunks
@@ -350,12 +351,10 @@ fn track_holds_core<const L: usize>(
                         depths[c] = d + 1;
                     }
                 }
-                b'3' => {
-                    if depths[c] > 0 {
-                        depths[c] -= 1;
-                        let start = stacks[c][depths[c]];
-                        ends[start][c] = i;
-                    }
+                b'3' if depths[c] > 0 => {
+                    depths[c] -= 1;
+                    let start = stacks[c][depths[c]];
+                    ends[start][c] = i;
                 }
                 _ => {}
             }
@@ -473,6 +472,8 @@ fn count_line_notes<const L: usize>(
 }
 
 #[inline(always)]
+// The slow fallback is a byte-classification state machine.
+#[allow(clippy::too_many_lines)]
 fn count_line_slow<const L: usize>(
     line: &[u8; L],
     stats: &mut ArrowStats,
@@ -1119,6 +1120,8 @@ fn minimize_rows_direct_notes<const L: usize, const BEATS: bool>(
     minimize_rows_direct_impl::<L, BEATS, true>(data, chart_notes)
 }
 
+// The row minimizer is a state machine that shares one pass and output buffer.
+#[allow(clippy::too_many_lines)]
 fn minimize_rows_direct_impl<const L: usize, const BEATS: bool, const NOTES: bool>(
     data: &[u8],
     chart_notes: &mut ChartNotesScratch,
@@ -1429,9 +1432,12 @@ fn minimize_timing_rows<const L: usize>(data: &[u8]) -> (Vec<[u8; L]>, Vec<f32>,
     (rows, beats, has_holds)
 }
 
-pub fn minimize_rows_typed<const L: usize>(
-    data: &[u8],
-) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<[u8; L]>, Vec<f32>, f64) {
+/// Owned output from typed-row minimization.
+pub type MinimizedTypedRows<const L: usize> =
+    (Vec<u8>, ArrowStats, Vec<usize>, Vec<[u8; L]>, Vec<f32>, f64);
+
+#[must_use]
+pub fn minimize_rows_typed<const L: usize>(data: &[u8]) -> MinimizedTypedRows<L> {
     let mut scratch = TypedRowsScratch::default();
     let (out, stats, dens, beats, last) = minimize_rows_typed_in(data, &mut scratch);
     (out, stats, dens, scratch.rows, beats, last)
@@ -1525,9 +1531,8 @@ fn minimize_rows_typed_in_impl<const L: usize, const NOTES: bool>(
     (out, stats, dens, beats, last)
 }
 
-pub fn minimize_chart_rows_bits(
-    data: &[u8],
-) -> (
+/// Owned output from four-lane minimization with packed note masks.
+pub type MinimizedChartRows = (
     Vec<u8>,
     ArrowStats,
     Vec<usize>,
@@ -1535,7 +1540,10 @@ pub fn minimize_chart_rows_bits(
     Vec<f32>,
     f64,
     Vec<u8>,
-) {
+);
+
+#[must_use]
+pub fn minimize_chart_rows_bits(data: &[u8]) -> MinimizedChartRows {
     let mut beats = Vec::with_capacity(data.len() / 5);
     let mut rows = Vec::with_capacity(beats.capacity());
     let mut bits = Vec::with_capacity(beats.capacity());
@@ -1721,6 +1729,7 @@ fn timing_stats_typed<const L: usize>(data: &[u8], timing: &TimingData) -> Arrow
     }
 }
 
+#[must_use]
 pub fn compute_timing_aware_stats_with_row_to_beat(
     data: &[u8],
     lanes: usize,
@@ -1741,6 +1750,7 @@ pub fn compute_timing_aware_stats_with_row_to_beat(
     }
 }
 
+#[must_use]
 pub fn compute_timing_aware_stats_from_rows_with_row_to_beat<const L: usize>(
     rows: &[[u8; L]],
     timing: &TimingData,
@@ -1756,6 +1766,7 @@ pub fn compute_timing_aware_stats_from_rows_with_row_to_beat<const L: usize>(
     process_timing_rows::<L>(rows.iter(), &ends, timing, beats)
 }
 
+#[must_use]
 pub fn compute_timing_aware_stats_no_holds_from_rows<const L: usize>(
     rows: &[[u8; L]],
     timing: &TimingData,
@@ -2284,6 +2295,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::naive_bytecount)] // Scalar oracle for the vectorized implementation.
     fn chunked_byte_count_matches_scalar() {
         let data: Vec<_> = (0u8..=u8::MAX).cycle().take(1027).collect();
         for needle in 0u8..=u8::MAX {

@@ -1,4 +1,8 @@
+// Corpus parity checks stay linear; the tiny normalizer is deliberately inlined.
+#![allow(clippy::inline_always, clippy::too_many_lines)]
+
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -160,7 +164,7 @@ fn parse_metadata(simfile_data: &[u8], extension: &str) -> Result<ParsedMetadata
         translate_markers: true,
         ..AnalysisOptions::default()
     };
-    let summary = analyze(simfile_data, extension, &options).map_err(|e| e)?;
+    let summary = analyze(simfile_data, extension, &options)?;
     let title = summary.title_str;
     let subtitle = summary.subtitle_str;
     let artist = summary.artist_str;
@@ -196,7 +200,7 @@ fn parse_step_artists(
         translate_markers: true,
         ..AnalysisOptions::default()
     };
-    let summary = analyze(simfile_data, extension, &options).map_err(|e| e)?;
+    let summary = analyze(simfile_data, extension, &options)?;
     let mut results = Vec::with_capacity(summary.charts.len());
     for chart in summary.charts {
         let meter = chart.rating_str.trim().parse::<u32>().ok();
@@ -447,7 +451,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
 
     let mut error_details = String::new();
     if !metadata_ok {
-        error_details.push_str(&format!(
+        write!(
+            error_details,
             "RSSP title:    {:?}\nGolden title:  {:?}\nRSSP subtitle: {:?}\nGolden subtitle: {:?}\nRSSP artist:   {:?}\nGolden artist: {:?}\n",
             actual.title,
             expected.title,
@@ -455,8 +460,10 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             expected.subtitle,
             actual.artist,
             expected.artist
-        ));
-        error_details.push_str(&format!(
+        )
+        .expect("writing to a String cannot fail");
+        write!(
+            error_details,
             "RSSP title_translated:    {:?}\nGolden title_translated:  {:?}\nRSSP subtitle_translated: {:?}\nGolden subtitle_translated: {:?}\nRSSP artist_translated:   {:?}\nGolden artist_translated: {:?}\n",
             actual.title_translated,
             expected.title_translated,
@@ -464,7 +471,8 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
             expected.subtitle_translated,
             actual.artist_translated,
             expected.artist_translated
-        ));
+        )
+        .expect("writing to a String cannot fail");
     }
     if !step_artist_ok {
         if !error_details.is_empty() {

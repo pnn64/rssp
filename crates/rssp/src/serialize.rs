@@ -90,7 +90,6 @@ impl io::Write for StackWriter<'_> {
     }
 }
 
-#[must_use]
 fn sm_escape(out: &mut dyn io::Write, bytes: &[u8]) -> io::Result<usize> {
     let mut written_bytes = 0;
     let mut span_start = 0;
@@ -181,8 +180,7 @@ enum PropValue<'a> {
     RadarValues(Option<[f32; crate::stats::RADAR_CATEGORY_COUNT]>, bool),
 }
 
-impl<'a> PropValue<'a> {
-    #[must_use]
+impl PropValue<'_> {
     fn serialize(&self, out: &mut dyn io::Write) -> io::Result<usize> {
         match self {
             PropValue::Empty => Ok(0),
@@ -190,7 +188,7 @@ impl<'a> PropValue<'a> {
             PropValue::StrNoEscape(s) => write_all!(out, s.as_bytes()),
             PropValue::StrNoEscapeOpt(opt) => match opt {
                 None => Ok(0),
-                Some(s) => PropValue::StrNoEscape(*s).serialize(out),
+                Some(s) => PropValue::StrNoEscape(s).serialize(out),
             },
             PropValue::Bytes(b) => write_all!(out, b),
             PropValue::NoteData(b) => Ok(write_all!(out, b"\n")? + write_all!(out, b)?),
@@ -231,7 +229,7 @@ impl<'a> PropValue<'a> {
                 let mut written_bytes = 0;
                 let mut first_item = true;
 
-                for (beat, value) in items.iter() {
+                for (beat, value) in *items {
                     if !first_item {
                         written_bytes += write_all!(out, b",\n")?;
                     }
@@ -247,7 +245,7 @@ impl<'a> PropValue<'a> {
                 let mut written_bytes = 0;
                 let mut first_item = true;
 
-                for (beat, ratio, delay, unit) in items.iter() {
+                for (beat, ratio, delay, unit) in *items {
                     if !first_item {
                         written_bytes += write_all!(out, b",\n")?;
                     }
@@ -276,15 +274,12 @@ impl<'a> PropValue<'a> {
     fn is_empty(&self) -> bool {
         match self {
             PropValue::Empty => true,
-            PropValue::Str(s) => s.is_empty(),
-            PropValue::StrNoEscape(s) => s.is_empty(),
+            PropValue::Str(s) | PropValue::StrNoEscape(s) => s.is_empty(),
             PropValue::StrNoEscapeOpt(opt) => opt.as_ref().is_none_or(|s| s.is_empty()),
             PropValue::Bytes(b) => b.is_empty(),
-            PropValue::NoteData(_) => false,
+            PropValue::NoteData(_) | PropValue::Number(_) | PropValue::Bool(_) => false,
             PropValue::Version(v) => !v.is_finite(),
-            PropValue::Number(_) => false,
             PropValue::NumberOpt(opt) => opt.is_none(),
-            PropValue::Bool(_) => false,
             PropValue::TimingPairs(items) => items.is_empty(),
             PropValue::TimingSpeeds(items) => items.is_empty(),
             PropValue::RadarValues(rv, _) => rv.is_none(),
@@ -365,7 +360,6 @@ impl<'a> Prop<'a> {
         prop
     }
 
-    #[must_use]
     #[inline(always)]
     fn start_prop(out: &mut dyn io::Write, key: &[u8]) -> io::Result<usize> {
         let mut written_bytes = 0;
@@ -375,19 +369,16 @@ impl<'a> Prop<'a> {
         Ok(written_bytes)
     }
 
-    #[must_use]
     #[inline(always)]
     fn end_prop(out: &mut dyn io::Write) -> io::Result<usize> {
         Ok(write_all!(out, b";\n")?)
     }
 
-    #[must_use]
     fn serialize(self, ssc: bool, own_timing: bool, out: &mut dyn io::Write) -> io::Result<usize> {
-        if self.ssc_only && !ssc {
-            Ok(0)
-        } else if self.nonempty_value_only && self.value.is_empty() {
-            Ok(0)
-        } else if self.own_timing_only && !own_timing {
+        if (self.ssc_only && !ssc)
+            || (self.nonempty_value_only && self.value.is_empty())
+            || (self.own_timing_only && !own_timing)
+        {
             Ok(0)
         } else {
             let value = match (self.default_value, self.value.is_empty()) {
@@ -403,7 +394,12 @@ impl<'a> Prop<'a> {
     }
 }
 
-#[must_use]
+/// Serializes `summary` as an SM or SSC simfile.
+///
+/// # Errors
+///
+/// Returns an I/O error if writing to `out` fails, or `InvalidInput` when SM
+/// output cannot represent chart-local timing.
 pub fn serialize_simfile(
     summary: &crate::SimfileSummary,
     extension: &str,
@@ -516,7 +512,6 @@ fn serialize_simfile_with(
     Ok(written_bytes)
 }
 
-#[must_use]
 fn write_chart_comment_prefix(
     out: &mut dyn io::Write,
     chart: &crate::ChartSummary,
@@ -534,7 +529,7 @@ fn write_chart_comment_prefix(
                 written_bytes += write_all!(out, line.as_bytes())?;
             }
         }
-    };
+    }
     written_bytes += write_all!(out, b" - ")?;
     // Passively strip newlines again
     for line in chart.description_str.lines() {
@@ -545,7 +540,6 @@ fn write_chart_comment_prefix(
     Ok(written_bytes)
 }
 
-#[must_use]
 fn serialize_sm_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> io::Result<usize> {
     let mut written_bytes = 0;
     written_bytes += write_all!(out, b"#NOTES:\n")?;
@@ -576,7 +570,6 @@ fn serialize_sm_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> i
     Ok(written_bytes)
 }
 
-#[must_use]
 fn serialize_ssc_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> io::Result<usize> {
     let mut written_bytes = 0;
 
@@ -604,7 +597,7 @@ fn serialize_ssc_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> 
         Prop::own_timing_only_with_default(b"SCROLLS", DEFAULT_SCROLLS, PropValue::TimingPairs(&chart.timing_segments.scrolls)),
         Prop::own_timing_only(b"FAKES", PropValue::TimingPairs(&chart.timing_segments.fakes)),
         Prop::own_timing_only_with_default(b"LABELS", DEFAULT_LABELS, PropValue::StrNoEscapeOpt(chart.chart_labels.as_deref())),
-        Prop::nonempty_only(b"ATTACKS", PropValue::StrNoEscapeOpt(chart.chart_has_own_attacks.then(|| chart.chart_attacks.as_deref()).flatten())),
+        Prop::nonempty_only(b"ATTACKS", PropValue::StrNoEscapeOpt(chart.chart_has_own_attacks.then_some(chart.chart_attacks.as_deref()).flatten())),
         Prop::nonempty_only(b"DISPLAYBPM", PropValue::StrNoEscapeOpt(chart.chart_display_bpm.as_deref())),
         Prop::nonempty_only(b"NOTES", PropValue::NoteData(&chart.minimized_note_data)),
         Prop::nonempty_only(b"NOTES2", PropValue::Empty), // TODO: write NOTES2 instead of NOTES as needed
@@ -618,6 +611,7 @@ fn serialize_ssc_chart(out: &mut dyn io::Write, chart: &crate::ChartSummary) -> 
 }
 
 #[cfg(test)]
+#[allow(clippy::too_many_lines)]
 mod tests {
     use pretty_assertions::assert_eq;
     use rssp_core::timing::TimingSegments;
@@ -1243,7 +1237,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_simfile_with_sm_and_chart_timing_returns_error() -> io::Result<()> {
+    fn serialize_simfile_with_sm_and_chart_timing_returns_error() {
         let mut summary = simfile_summary_with_all_fields(true, false);
         summary
             .charts
@@ -1253,13 +1247,11 @@ mod tests {
         {
             let mut cursor = io::Cursor::new(&mut buffer);
 
-            match super::serialize_simfile(&summary, "sm", &mut cursor) {
-                Ok(_) => panic!("serialize_simfile returned Ok but a chart has its own timing"),
-                Err(_) => {}
-            }
+            assert!(
+                super::serialize_simfile(&summary, "sm", &mut cursor).is_err(),
+                "serialize_simfile returned Ok but a chart has its own timing"
+            );
         };
-
-        Ok(())
     }
 
     fn simfile_summary_with_all_fields(
@@ -1267,27 +1259,29 @@ mod tests {
         trigger_defaults: bool,
     ) -> crate::SimfileSummary {
         crate::SimfileSummary {
-            title_str: match trigger_defaults {
-                false => String::from("Title"),
-                true => String::from(""),
+            title_str: if trigger_defaults {
+                String::new()
+            } else {
+                String::from("Title")
             },
             subtitle_str: String::from("Subtitle"),
-            artist_str: match trigger_defaults {
-                false => String::from("Artist"),
-                true => String::from(""),
+            artist_str: if trigger_defaults {
+                String::new()
+            } else {
+                String::from("Artist")
             },
             genre_str: String::from("Genre"),
             titletranslit_str: String::from("Title translit"),
             subtitletranslit_str: String::from("Subtitle translit"),
             artisttranslit_str: String::from("Artist translit"),
             offset: 0.123,
-            normalized_bpms: Default::default(),
-            normalized_stops: Default::default(),
-            normalized_delays: Default::default(),
-            normalized_warps: Default::default(),
-            normalized_speeds: Default::default(),
-            normalized_scrolls: Default::default(),
-            normalized_fakes: Default::default(),
+            normalized_bpms: String::new(),
+            normalized_stops: String::new(),
+            normalized_delays: String::new(),
+            normalized_warps: String::new(),
+            normalized_speeds: String::new(),
+            normalized_scrolls: String::new(),
+            normalized_fakes: String::new(),
             global_timing_segments: if trigger_defaults {
                 Arc::new(TimingSegments::default())
             } else {
@@ -1307,22 +1301,22 @@ mod tests {
                 })
             },
             normalized_time_signatures: if trigger_defaults {
-                String::from("")
+                String::new()
             } else {
                 String::from("0.000000=4=4,\n16.000000=8=4,\n48.000000=4=4")
             },
             normalized_labels: if trigger_defaults {
-                String::from("")
+                String::new()
             } else {
                 String::from("0.000000=Song Start,\n16.000000=Speedup")
             },
             normalized_tickcounts: if trigger_defaults {
-                String::from("")
+                String::new()
             } else {
                 String::from("0.000000=4,\n16.000000=2,\n48.000000=4")
             },
             normalized_combos: if trigger_defaults {
-                String::from("")
+                String::new()
             } else {
                 String::from("0.000000=1,\n16.000000=2,\n48.000000=1")
             },
@@ -1336,7 +1330,7 @@ mod tests {
             display_bpm_str: if include_nonempty {
                 String::from("150")
             } else {
-                Default::default()
+                String::new()
             },
             sample_start: 10.0,
             sample_length: 16.0,
@@ -1348,20 +1342,20 @@ mod tests {
             normalized_fgchanges: if include_nonempty {
                 String::from("0.000000=lua=1.000000=0=0=1")
             } else {
-                Default::default()
+                String::new()
             },
             normalized_keysounds: String::from("a.ogg,b.ogg.c.ogg"),
             normalized_attacks: if include_nonempty {
                 String::from("TIME=64.000000:LEN=2.000000:MODS=*0.5 stealth")
             } else {
-                Default::default()
+                String::new()
             },
             previewvid_path: String::from("previewvid.mov"),
             cdimage_path: String::from("cdimage.png"),
             discimage_path: String::from("discimage.png"),
             lyrics_path: String::from("lyrics.lrc"),
             selectable: true,
-            last_second_hint: include_nonempty.then(|| 120.0),
+            last_second_hint: include_nonempty.then_some(120.0),
 
             // To be populated by the test
             charts: vec![],
@@ -1374,7 +1368,7 @@ mod tests {
             total_length: Default::default(),
             pattern_counts_enabled: Default::default(),
             tech_counts_enabled: Default::default(),
-            total_elapsed: Default::default(),
+            total_elapsed: std::time::Duration::default(),
         }
     }
 
@@ -1384,21 +1378,24 @@ mod tests {
         trigger_defaults: bool,
     ) -> crate::ChartSummary {
         crate::ChartSummary {
-            step_type_str: match trigger_defaults {
-                false => String::from("dance-single"),
-                true => String::from(""),
+            step_type_str: if trigger_defaults {
+                String::new()
+            } else {
+                String::from("dance-single")
             },
             step_artist_str: String::from("Step artist"),
             description_str: String::from("Description"),
             chart_name_str: String::from("Chart name"),
             chart_style_str: String::from("Chart style"),
-            difficulty_str: match trigger_defaults {
-                false => String::from("Challenge"),
-                true => String::from(""),
+            difficulty_str: if trigger_defaults {
+                String::new()
+            } else {
+                String::from("Challenge")
             },
-            rating_str: match trigger_defaults {
-                false => String::from("17"),
-                true => String::from(""),
+            rating_str: if trigger_defaults {
+                String::new()
+            } else {
+                String::from("17")
             },
             cached_radar_values: Some([
                 0.010, 0.020, 0.030, 0.040, 0.050, 0.060, 0.070, 0.080, 0.090, 0.100, 0.110, 0.120,
@@ -1406,9 +1403,10 @@ mod tests {
             ]),
             tech_notation_str: String::from("BR FS XO"),
             minimized_note_data: b"1000\n0000\n0100\n00M0\n0100\n0000\n0001\n0000\n".to_vec(),
-            music_path: match include_nonempty {
-                true => String::from("chart_music.ogg"),
-                false => String::from(""),
+            music_path: if include_nonempty {
+                String::from("chart_music.ogg")
+            } else {
+                String::new()
             },
 
             // Timing fields
@@ -1446,29 +1444,29 @@ mod tests {
             },
 
             // Unused string timing fields (TimingSegments used instead)
-            chart_bpms: Default::default(),
-            chart_bpms_norm: Default::default(),
-            chart_stops: Default::default(),
-            chart_delays: Default::default(),
-            chart_warps: Default::default(),
-            chart_speeds: Default::default(),
-            chart_scrolls: Default::default(),
-            chart_fakes: Default::default(),
+            chart_bpms: None,
+            chart_bpms_norm: None,
+            chart_stops: None,
+            chart_delays: None,
+            chart_warps: None,
+            chart_speeds: None,
+            chart_scrolls: None,
+            chart_fakes: None,
 
             // The remaining fields are irrelevant to serialization
             matrix_rating: Default::default(),
             tier_bpm: Default::default(),
-            stats: Default::default(),
-            stream_counts: Default::default(),
+            stats: rssp_core::stats::ArrowStats::default(),
+            stream_counts: rssp_core::streams::StreamCounts::default(),
             total_measures: Default::default(),
             total_streams: Default::default(),
             mines_nonfake: Default::default(),
-            sn_detailed_breakdown: Default::default(),
-            sn_partial_breakdown: Default::default(),
-            sn_simple_breakdown: Default::default(),
-            detailed_breakdown: Default::default(),
-            partial_breakdown: Default::default(),
-            simple_breakdown: Default::default(),
+            sn_detailed_breakdown: String::new(),
+            sn_partial_breakdown: String::new(),
+            sn_simple_breakdown: String::new(),
+            detailed_breakdown: String::new(),
+            partial_breakdown: String::new(),
+            simple_breakdown: String::new(),
             max_nps: Default::default(),
             median_nps: Default::default(),
             duration_seconds: Default::default(),
@@ -1483,17 +1481,17 @@ mod tests {
             mono_percent: Default::default(),
             candle_total: Default::default(),
             candle_percent: Default::default(),
-            tech_counts: Default::default(),
-            note_annotations: Default::default(),
-            custom_patterns: Default::default(),
-            short_hash: Default::default(),
-            bpm_neutral_hash: Default::default(),
-            elapsed: Default::default(),
-            measure_densities: Default::default(),
-            measure_nps_vec: Default::default(),
-            row_to_beat: Default::default(),
+            tech_counts: rssp_core::step_parity::TechCounts::default(),
+            note_annotations: None,
+            custom_patterns: Vec::new(),
+            short_hash: String::new(),
+            bpm_neutral_hash: String::new(),
+            elapsed: std::time::Duration::default(),
+            measure_densities: Vec::new(),
+            measure_nps_vec: Vec::new(),
+            row_to_beat: Vec::new(),
             chart_offset_seconds: Default::default(),
-            matrix_profile: Default::default(),
+            matrix_profile: rssp_core::matrix::MatrixProfile::default(),
         }
     }
 }

@@ -1,3 +1,6 @@
+// Corpus parity checks stay linear so each mismatch retains its full context.
+#![allow(clippy::too_many_lines)]
+
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
@@ -61,7 +64,7 @@ fn approx_eq(a: f64, b: f64) -> bool {
 }
 
 fn compute_chart_bpms(simfile_data: &[u8], extension: &str) -> Result<Vec<ChartBpmInfo>, String> {
-    let snapshots = chart_bpm_snapshots(simfile_data, extension).map_err(|e| e)?;
+    let snapshots = chart_bpm_snapshots(simfile_data, extension)?;
 
     Ok(snapshots
         .into_iter()

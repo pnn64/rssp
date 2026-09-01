@@ -1,9 +1,12 @@
-//! Per-row StepParity annotation parity against ITGmania.
+// Corpus parity checks stay linear so each mismatch retains its full context.
+#![allow(clippy::too_many_lines)]
+
+//! Per-row `StepParity` annotation parity against `ITGmania`.
 //!
 //! This is the row-level companion to `tech_counts_parity`. Where that test
-//! proves the *aggregate* crossover/footswitch/etc. counts match ITGmania, this
+//! proves the *aggregate* crossover/footswitch/etc. counts match `ITGmania`, this
 //! one proves the *per-row* annotation matches: for every annotated row it
-//! checks the beat, the foot-bearing columns (ITGmania's `footPlacement` keys),
+//! checks the beat, the foot-bearing columns (`ITGmania`'s `footPlacement` keys),
 //! the per-column foot identity (`feet`), the foot count, and the full per-row
 //! tech (`tech_counts`). The `feet` / `tech_counts` checks engage only when the
 //! baseline carries them (older baselines stay green).
@@ -21,8 +24,8 @@
 //! Corpus + baseline locations default to `tests/data/{packs,baseline}` but can
 //! be overridden so you can point at any song library, e.g.:
 //!   RSSP_PARITY_PACKS_DIR=D:/github/deadsync-0/target/local/songs \
-//!   RSSP_PARITY_BASELINE_DIR=D:/path/to/baselines \
-//!   cargo test --test note_annotations_parity
+//!   `RSSP_PARITY_BASELINE_DIR=D:/path/to/baselines` \
+//!   cargo test --test `note_annotations_parity`
 
 use std::collections::HashMap;
 use std::fs;
@@ -65,7 +68,7 @@ struct GoldenTechCounts {
 #[derive(Debug, Deserialize)]
 struct GoldenNoteAnnotation {
     beat: f32,
-    /// Foot-bearing columns, 0-indexed (ITGmania `footPlacement` keys minus 1).
+    /// Foot-bearing columns, 0-indexed (`ITGmania` `footPlacement` keys minus 1).
     columns: Vec<u8>,
     /// Foot id assigned to each column, parallel to `columns` (absent on older
     /// baselines -> the foot-identity check is skipped for that chart).
@@ -127,12 +130,12 @@ fn chart_key(step_type: &str, difficulty: &str) -> Option<(String, String)> {
 }
 
 /// Foot-bearing columns of a row as a sorted 0-indexed list (the rssp analog of
-/// ITGmania's `footPlacement` keys).
+/// `ITGmania`'s `footPlacement` keys).
 fn columns_of(annotation: &RowAnnotation) -> Vec<u8> {
     let mut cols = Vec::with_capacity(annotation.column_mask.count_ones() as usize);
     let mut mask = annotation.column_mask;
     while mask != 0 {
-        let c = mask.trailing_zeros() as u8;
+        let c = u8::try_from(mask.trailing_zeros()).expect("u8 mask has at most eight columns");
         cols.push(c);
         mask &= mask - 1;
     }
@@ -140,7 +143,7 @@ fn columns_of(annotation: &RowAnnotation) -> Vec<u8> {
 }
 
 /// Foot id assigned to each foot-bearing column, parallel to [`columns_of`]
-/// (the rssp analog of ITGmania's `footPlacement` values).
+/// (the rssp analog of `ITGmania`'s `footPlacement` values).
 fn feet_of(annotation: &RowAnnotation) -> Vec<u8> {
     columns_of(annotation)
         .into_iter()
@@ -214,43 +217,43 @@ fn diff_annotations(
                 e.beat, expected_cols, actual_cols
             ));
         }
-        if let Some(expected_count) = e.note_count {
-            if u32::from(expected_count) != a.foot_count() {
+        if let Some(expected_count) = e.note_count
+            && u32::from(expected_count) != a.foot_count()
+        {
+            return Some(format!(
+                "{label}: row {idx} (beat {:.4}) note_count differs (golden {}, rssp {})",
+                e.beat,
+                expected_count,
+                a.foot_count()
+            ));
+        }
+        if let Some(expected_feet) = &e.feet
+            && expected_feet.len() == e.columns.len()
+        {
+            // Align golden feet to sorted columns, matching feet_of's order.
+            let mut pairs: Vec<(u8, u8)> = e
+                .columns
+                .iter()
+                .copied()
+                .zip(expected_feet.iter().copied())
+                .collect();
+            pairs.sort_by_key(|p| p.0);
+            let expected_feet_sorted: Vec<u8> = pairs.iter().map(|p| p.1).collect();
+            let actual_feet = feet_of(a);
+            if expected_feet_sorted != actual_feet {
                 return Some(format!(
-                    "{label}: row {idx} (beat {:.4}) note_count differs (golden {}, rssp {})",
-                    e.beat,
-                    expected_count,
-                    a.foot_count()
+                    "{label}: row {idx} (beat {:.4}) feet differ (golden {:?}, rssp {:?})",
+                    e.beat, expected_feet_sorted, actual_feet
                 ));
             }
         }
-        if let Some(expected_feet) = &e.feet {
-            if expected_feet.len() == e.columns.len() {
-                // Align golden feet to sorted columns, matching feet_of's order.
-                let mut pairs: Vec<(u8, u8)> = e
-                    .columns
-                    .iter()
-                    .copied()
-                    .zip(expected_feet.iter().copied())
-                    .collect();
-                pairs.sort_by_key(|p| p.0);
-                let expected_feet_sorted: Vec<u8> = pairs.iter().map(|p| p.1).collect();
-                let actual_feet = feet_of(a);
-                if expected_feet_sorted != actual_feet {
-                    return Some(format!(
-                        "{label}: row {idx} (beat {:.4}) feet differ (golden {:?}, rssp {:?})",
-                        e.beat, expected_feet_sorted, actual_feet
-                    ));
-                }
-            }
-        }
-        if let Some(expected_tech) = &e.tech_counts {
-            if !tech_matches(expected_tech, &a.row_tech) {
-                return Some(format!(
-                    "{label}: row {idx} (beat {:.4}) tech_counts differ (golden {:?}, rssp {:?})",
-                    e.beat, expected_tech, a.row_tech
-                ));
-            }
+        if let Some(expected_tech) = &e.tech_counts
+            && !tech_matches(expected_tech, &a.row_tech)
+        {
+            return Some(format!(
+                "{label}: row {idx} (beat {:.4}) tech_counts differ (golden {:?}, rssp {:?})",
+                e.beat, expected_tech, a.row_tech
+            ));
         }
     }
 

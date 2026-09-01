@@ -1,3 +1,6 @@
+// Corpus parity checks stay linear so each mismatch retains its full context.
+#![allow(clippy::too_many_lines)]
+
 use libtest_mimic::Arguments;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -18,6 +21,10 @@ struct GoldenChart {
     #[serde(default)]
     meter: Option<u32>,
 }
+
+type ChartKey = (String, String);
+type GoldenHash = (String, Option<u32>);
+type GoldenMap = HashMap<ChartKey, Vec<GoldenHash>>;
 
 fn main() {
     let args = Arguments::from_args();
@@ -229,7 +236,7 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
         .map_err(|e| format!("RSSP Parsing Error: {e}"))?;
 
     // 6. Compare Charts (support multiple edits per difficulty)
-    let mut golden_map: HashMap<(String, String), Vec<(String, Option<u32>)>> = HashMap::new();
+    let mut golden_map = GoldenMap::new();
     for golden in golden_charts {
         let step_type_lower = golden.step_type.to_ascii_lowercase();
         if step_type_lower != "dance-single" && step_type_lower != "dance-double" {
@@ -313,7 +320,6 @@ fn check_file(path: &Path, extension: &str, baseline_dir: &Path) -> Result<(), S
                 expected_hashes
             ));
         }
-        continue;
     }
 
     Ok(())

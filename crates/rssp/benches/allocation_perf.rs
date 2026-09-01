@@ -1,3 +1,6 @@
+// Benchmark reporting intentionally converts bounded counters to floating point.
+#![allow(clippy::cast_precision_loss)]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::sync::atomic::{AtomicU64, Ordering};

@@ -1,3 +1,6 @@
+// Corpus parity checks and timing diagnostics intentionally stay linear.
+#![allow(clippy::too_many_arguments, clippy::too_many_lines)]
+
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
@@ -214,7 +217,7 @@ fn compute_chart_timings(
     simfile_data: &[u8],
     extension: &str,
 ) -> Result<Vec<ChartTimingInfo>, String> {
-    let summary = analyze(simfile_data, extension, &AnalysisOptions::default()).map_err(|e| e)?;
+    let summary = analyze(simfile_data, extension, &AnalysisOptions::default())?;
 
     let mut results = Vec::new();
     for chart in &summary.charts {

@@ -1,3 +1,6 @@
+// Corpus parity checks stay linear so each mismatch retains its full context.
+#![allow(clippy::too_many_lines)]
+
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};

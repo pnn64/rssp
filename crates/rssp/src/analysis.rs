@@ -46,6 +46,8 @@ pub use crate::stats::{ChartNoteType, ParsedChartNote};
 
 /// Options for controlling simfile analysis.
 #[derive(Debug, Clone)]
+// Public booleans keep common configuration cheap and source-compatible.
+#[allow(clippy::struct_excessive_bools)]
 pub struct AnalysisOptions {
     pub strip_tags: bool,
     pub mono_threshold: usize,
@@ -589,6 +591,9 @@ fn chart_metadata_strings(
 }
 
 /// Processes a single chart's data to produce a `ChartSummary`.
+// Field-for-field chart assembly is kept together to make every output value
+// auditable against the source format.
+#[allow(clippy::too_many_lines)]
 fn build_chart_summary<'a>(
     entry: &'a ParsedChartEntry<'_>,
     global_attacks_opt: Option<&[u8]>,
@@ -1185,6 +1190,10 @@ pub fn analyze_prepared_in_with_notes<T>(
     )
 }
 
+// This is the linear analysis pipeline; splitting it would obscure scratch
+// ownership and introduce extra handoffs along the hot path.
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::similar_names)]
 fn analyze_with_scratch_impl<T, MapNote: FnMut(ParsedChartNote) -> T>(
     simfile_data: &[u8],
     extension: &str,
@@ -1394,7 +1403,7 @@ fn analyze_with_scratch_impl<T, MapNote: FnMut(ParsedChartNote) -> T>(
     let last_second_hint = parsed_data
         .last_second_hint
         .map(|b| parse_offset_seconds(Some(b)))
-        .and_then(|n| if n <= 0.0 { None } else { Some(n) });
+        .filter(|&n| n > 0.0);
 
     let allow_steps_timing = steps_timing_allowed(ssc_version, timing_format);
     let owned_patterns;
@@ -1561,6 +1570,12 @@ fn analyze_with_scratch_impl<T, MapNote: FnMut(ParsedChartNote) -> T>(
     })
 }
 
+/// Computes the canonical chart hashes without running the full analysis.
+///
+/// # Errors
+///
+/// Returns an error when `extension` is unsupported or the simfile cannot be
+/// parsed into chart sections.
 pub fn compute_all_hashes(
     simfile_data: &[u8],
     extension: &str,
@@ -1640,6 +1655,13 @@ mod tests {
     use crate::parse::{decode_bytes, unescape_tag};
 
     const FIXTURE: &[u8] = include_bytes!("../benches/fixtures/hash_fixture.ssc");
+    const LOCAL_TIMING: &[u8] = concat!(
+        "#VERSION:0.83;\n#BPMS:0=120,8=180;\n",
+        "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n",
+        "#DESCRIPTION:local timing;\n#DIFFICULTY:Challenge;\n#METER:10;\n#CREDIT:;\n",
+        "#BPMS:0=150,4=200;\n#NOTES:\n1000\n0100\n0010\n0001\n;\n"
+    )
+    .as_bytes();
 
     fn json(summary: &crate::SimfileSummary) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1684,13 +1706,6 @@ mod tests {
             scratch_capacities
         );
 
-        const LOCAL_TIMING: &[u8] = concat!(
-            "#VERSION:0.83;\n#BPMS:0=120,8=180;\n",
-            "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n",
-            "#DESCRIPTION:local timing;\n#DIFFICULTY:Challenge;\n#METER:10;\n#CREDIT:;\n",
-            "#BPMS:0=150,4=200;\n#NOTES:\n1000\n0100\n0010\n0001\n;\n"
-        )
-        .as_bytes();
         let expected =
             analyze(LOCAL_TIMING, "ssc", &options).expect("local timing analysis should succeed");
         let first = analyze_with_scratch(LOCAL_TIMING, "ssc", &options, &mut scratch)

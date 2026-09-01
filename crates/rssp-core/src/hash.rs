@@ -1,3 +1,7 @@
+// SHA-1 notation conventionally names its state words a-e and message words
+// w/t/u/v; retaining that notation keeps the unrolled rounds reviewable.
+#![allow(clippy::many_single_char_names)]
+
 const SHA1_INIT: [u32; 5] = [
     0x6745_2301,
     0xefcd_ab89,
@@ -346,7 +350,7 @@ fn bytes_to_u32_be(chunk: &[u8]) -> u32 {
 #[inline(always)]
 fn sha1_compress_block(state: &mut [u32; 5], block: &[u8]) {
     let mut block_u32 = [0u32; 16];
-    for (i, chunk) in block.chunks_exact(4).enumerate() {
+    for (i, chunk) in block.as_chunks::<4>().0.iter().enumerate() {
         block_u32[i] = bytes_to_u32_be(chunk);
     }
     sha1_digest_block_u32(state, &block_u32);
@@ -377,7 +381,7 @@ fn sha1_update(state: &mut [u32; 5], buf: &mut [u8; 64], buf_len: &mut usize, da
     };
 
     let data = &data[offset..];
-    for chunk in data.chunks_exact(64) {
+    for chunk in data.as_chunks::<64>().0 {
         sha1_compress_block(state, chunk);
     }
     let rem = data.len() & 63;

@@ -1,4 +1,3 @@
-use png;
 use std::fs::File;
 
 #[derive(Debug, Clone, Copy)]
@@ -33,9 +32,9 @@ fn generate_graph_pixels(
         .collect();
 
     let mut img_buffer = vec![0; (width * height * 3) as usize];
-    img_buffer
-        .chunks_exact_mut(3)
-        .for_each(|pixel| pixel.copy_from_slice(&bg_color));
+    for pixel in img_buffer.as_chunks_mut::<3>().0 {
+        *pixel = bg_color;
+    }
 
     if !measure_nps_vec.is_empty() && max_nps > 0.0 {
         let num_measures = measure_nps_vec.len();
@@ -83,7 +82,7 @@ pub fn generate_density_graph_png(
     measure_nps_vec: &[f64],
     max_nps: f64,
     short_hash: &str,
-    color_scheme: &ColorScheme,
+    color_scheme: ColorScheme,
 ) -> std::io::Result<()> {
     const IMAGE_WIDTH: u32 = 1000;
     const GRAPH_HEIGHT: u32 = 400;

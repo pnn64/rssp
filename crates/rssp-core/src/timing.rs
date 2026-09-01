@@ -57,8 +57,11 @@ pub type WarpSegment = Segment;
 pub type FakeSegment = Segment;
 pub type ScrollSegment = Segment;
 
+type BpmStopResult = (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64);
+
 // --- Core math ---
 #[inline(always)]
+#[must_use]
 pub fn note_row_to_beat(row: i32) -> f64 {
     f64::from(row) / f64::from(ROWS_PER_BEAT)
 }
@@ -69,6 +72,7 @@ fn note_row_to_beat_f32(row: i32) -> f32 {
 }
 
 #[inline(always)]
+#[must_use]
 pub fn beat_to_note_row(beat: f64) -> i32 {
     lrint_f64(beat * f64::from(ROWS_PER_BEAT)) as i32
 }
@@ -108,6 +112,7 @@ pub struct ChartTiming<'a> {
 }
 
 #[inline(always)]
+#[must_use]
 pub fn resolve_chart_timing<'a>(
     allow_steps_timing: bool,
     song_offset_seconds: f64,
@@ -377,7 +382,7 @@ fn compact_row_segments(mut segments: Vec<Segment>) -> Vec<Segment> {
     segments
 }
 
-fn tidy_key_indices(segments: Vec<Segment>) -> Vec<Segment> {
+fn tidy_key_indices(segments: &[Segment]) -> Vec<Segment> {
     let mut keys: Vec<_> = segments
         .iter()
         .enumerate()
@@ -438,7 +443,7 @@ fn tidy_row_segments(mut segments: Vec<Segment>) -> Vec<Segment> {
     } else if segments.len() > u32::MAX as usize {
         tidy_wide_records(segments)
     } else {
-        tidy_key_indices(segments)
+        tidy_key_indices(&segments)
     }
 }
 
@@ -938,7 +943,7 @@ fn process_bpms_and_stops(
     format: TimingFormat,
     bpms: Vec<(f64, f64)>,
     stops: Vec<Segment>,
-) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
+) -> BpmStopResult {
     match format {
         TimingFormat::Sm => process_bpms_and_stops_sm(&bpms, &stops),
         TimingFormat::Ssc => process_bpms_and_stops_ssc(bpms, stops),
@@ -987,10 +992,7 @@ fn tidy_bpms(mut bpms: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
     bpms
 }
 
-fn process_bpms_and_stops_ssc(
-    mut bpms: Vec<(f64, f64)>,
-    mut stops: Vec<Segment>,
-) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
+fn process_bpms_and_stops_ssc(mut bpms: Vec<(f64, f64)>, mut stops: Vec<Segment>) -> BpmStopResult {
     bpms.retain(|(beat, bpm)| beat.is_finite() && bpm.is_finite() && *beat >= 0.0 && *bpm > 0.0);
     for (beat, _) in &mut bpms {
         *beat = quantize_beat(*beat);
@@ -1068,10 +1070,9 @@ fn push_sm_warp(
     warps.push(warp);
 }
 
-fn process_bpms_and_stops_sm(
-    bpms: &[(f64, f64)],
-    stops: &[Segment],
-) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
+// SM timing conversion is a state machine whose ordering defines compatibility.
+#[allow(clippy::too_many_lines)]
+fn process_bpms_and_stops_sm(bpms: &[(f64, f64)], stops: &[Segment]) -> BpmStopResult {
     let mut bpm_changes = Vec::with_capacity(bpms.len());
     for &(beat, value) in bpms {
         if beat.is_finite() && value.is_finite() && value != 0.0 {
@@ -2110,7 +2111,7 @@ fn get_beat_internal(t: &TimingData, elapsed: f64, start_time: f64) -> BeatInfo 
                 state.warp_destination = state.warp_destination.max(w.beat + w.value);
                 state.warp_idx += 1;
             }
-            _ => {}
+            TimingEvent::Marker | TimingEvent::NotFound => {}
         }
         state.last_row = event_row;
     }
@@ -2170,7 +2171,7 @@ fn get_elapsed_time(t: &TimingData, state: &mut GetBeatState, target_beat: f64) 
                 state.warp_destination = state.warp_destination.max(w.beat + w.value);
                 state.warp_idx += 1;
             }
-            _ => {}
+            TimingEvent::NotFound => {}
         }
         state.last_row = event_row;
     }
@@ -2233,7 +2234,7 @@ fn get_elapsed_time_f32(t: &TimingData, state: &mut GetBeatStateF32, target_beat
                 state.warp_idx += 1;
                 curr_segment += 1;
             }
-            _ => {}
+            TimingEvent::NotFound => {}
         }
         state.last_row = event_row;
     }
@@ -2376,7 +2377,7 @@ pub fn get_bpm_for_beat(t: &TimingData, beat: f64) -> f64 {
         return DEFAULT_BPM;
     }
     let idx = t.beat_to_time.partition_point(|p| p.beat <= beat);
-    t.beat_to_time[idx.saturating_sub(1).max(0)].bpm
+    t.beat_to_time[idx.saturating_sub(1)].bpm
 }
 
 pub fn get_capped_max_bpm(t: &TimingData, cap: Option<f64>) -> f64 {
@@ -2584,7 +2585,7 @@ mod tests {
     fn generated_warps_follow_negative_stops() {
         let stops: Vec<_> = (0..64)
             .map(|index| Segment {
-                beat: index as f64 * 4.0 + 2.0,
+                beat: f64::from(index) * 4.0 + 2.0,
                 value: -0.5,
             })
             .collect();
