@@ -1298,6 +1298,64 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     });
     sm_timing.finish();
 
+    let extra_warps = sm_timing_bench::extra_warps();
+    let mut sm_warps = c.benchmark_group("cycles/sm_warp_merge_2048");
+    sm_warps.throughput(Throughput::Elements(sm_timing_bench::WARP_COUNT as u64));
+    sm_warps.sample_size(50);
+    sm_warps.measurement_time(Duration::from_secs(3));
+    sm_warps.bench_function("copy_into_empty", |b| {
+        b.iter_batched(
+            || extra_warps.clone(),
+            |extra| {
+                black_box(rssp::timing::merge_extra_warps_for_bench(
+                    Vec::new(),
+                    black_box(extra),
+                    false,
+                ));
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    sm_warps.bench_function("reuse_generated", |b| {
+        b.iter_batched(
+            || extra_warps.clone(),
+            |extra| {
+                black_box(rssp::timing::merge_extra_warps_for_bench(
+                    Vec::new(),
+                    black_box(extra),
+                    true,
+                ));
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    sm_warps.finish();
+
+    let (warp_bpms, warp_stops) = sm_timing_bench::warp_inputs();
+    let mut sm_warp_pipeline = c.benchmark_group("cycles/sm_warp_pipeline_2048");
+    sm_warp_pipeline.throughput(Throughput::Elements(sm_timing_bench::WARP_COUNT as u64));
+    sm_warp_pipeline.sample_size(50);
+    sm_warp_pipeline.measurement_time(Duration::from_secs(3));
+    sm_warp_pipeline.bench_function("copy_into_empty", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::process_sm_warp_merge_for_bench(
+                black_box(&warp_bpms),
+                black_box(&warp_stops),
+                false,
+            ));
+        });
+    });
+    sm_warp_pipeline.bench_function("reuse_generated", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::process_sm_warp_merge_for_bench(
+                black_box(&warp_bpms),
+                black_box(&warp_stops),
+                true,
+            ));
+        });
+    });
+    sm_warp_pipeline.finish();
+
     timing_merge_bench::assert_behavior();
     let timing_merge_fixture = timing_merge_bench::TimingMergeFixture::new();
     let mut timing_merge = c.benchmark_group("cycles/sm_stop_merge_2048_each");

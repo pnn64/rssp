@@ -805,8 +805,8 @@ pub fn compute_timing_segments(
             .collect();
     let delays = tidy_row_segments(delays);
 
-    let mut warps = parse_optional_timing(chart_warps, global_warps, parse_segments, cleaned);
-    warps.extend(extra_warps);
+    let warps = parse_optional_timing(chart_warps, global_warps, parse_segments, cleaned);
+    let warps = merge_extra_warps::<true>(warps, extra_warps);
     let warps: Vec<_> = warps
         .into_iter()
         .map(|s| Segment {
@@ -1316,6 +1316,49 @@ pub fn process_sm_timing_for_bench(
     }
 }
 
+fn merge_extra_warps<const REUSE_EMPTY: bool>(
+    mut warps: Vec<Segment>,
+    extra_warps: Vec<Segment>,
+) -> Vec<Segment> {
+    if REUSE_EMPTY && warps.is_empty() {
+        return extra_warps;
+    }
+    warps.extend(extra_warps);
+    warps
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn merge_extra_warps_for_bench(
+    warps: Vec<Segment>,
+    extra_warps: Vec<Segment>,
+    reuse_empty: bool,
+) -> Vec<Segment> {
+    if reuse_empty {
+        merge_extra_warps::<true>(warps, extra_warps)
+    } else {
+        merge_extra_warps::<false>(warps, extra_warps)
+    }
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn process_sm_warp_merge_for_bench(
+    bpms: &[(f64, f64)],
+    stops: &[Segment],
+    reuse_empty: bool,
+) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
+    let (bpms, stops, extra_warps, beat0_offset) = process_bpms_and_stops_sm::<false>(bpms, stops);
+    let warps = if reuse_empty {
+        merge_extra_warps::<true>(Vec::new(), extra_warps)
+    } else {
+        merge_extra_warps::<false>(Vec::new(), extra_warps)
+    };
+    (bpms, stops, warps, beat0_offset)
+}
+
 #[must_use]
 pub fn convert_warps_and_delays_to_sm_stops<'a>(
     bpms: &[(f32, f32)],
@@ -1581,8 +1624,8 @@ pub fn timing_data_from_chart_data(
             .map(q)
             .collect(),
     );
-    let mut warps = parse_optional_timing(chart_warps, global_warps, parse_segments, cleaned);
-    warps.extend(extra_warps);
+    let warps = parse_optional_timing(chart_warps, global_warps, parse_segments, cleaned);
+    let warps = merge_extra_warps::<true>(warps, extra_warps);
     let warps = tidy_row_segments(warps.into_iter().map(qv).collect());
     let speeds = tidy_speed_segments(
         parse_optional_timing(chart_speeds, global_speeds, parse_speeds, cleaned)
@@ -2660,6 +2703,35 @@ mod tests {
         for (actual, expected) in actual.iter().zip(expected) {
             assert_eq!(actual.beat.to_bits(), expected.beat.to_bits());
             assert_eq!(actual.value.to_bits(), expected.value.to_bits());
+        }
+    }
+
+    #[test]
+    fn generated_warp_merge_reuses_empty_output_without_behavior_change() {
+        let cases = [
+            (Vec::new(), Vec::new()),
+            (
+                Vec::new(),
+                vec![Segment {
+                    beat: 4.0,
+                    value: 2.0,
+                }],
+            ),
+            (
+                vec![Segment {
+                    beat: 0.0,
+                    value: 1.0,
+                }],
+                vec![Segment {
+                    beat: 4.0,
+                    value: 2.0,
+                }],
+            ),
+        ];
+        for (warps, extra_warps) in cases {
+            let copied = merge_extra_warps::<false>(warps.clone(), extra_warps.clone());
+            let reused = merge_extra_warps::<true>(warps, extra_warps);
+            assert_segment_bits_eq(&reused, &copied);
         }
     }
 

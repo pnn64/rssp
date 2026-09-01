@@ -1,6 +1,7 @@
 pub const BPM_COUNT: usize = 4_096;
 pub const STOP_COUNT: usize = 2_048;
 pub const INPUT_COUNT: u64 = (BPM_COUNT + STOP_COUNT) as u64;
+pub const WARP_COUNT: usize = 2_048;
 
 pub struct SmTimingFixture {
     pub bpms: Vec<(f64, f64)>,
@@ -22,12 +23,40 @@ impl SmTimingFixture {
     }
 }
 
+pub fn extra_warps() -> Vec<rssp::timing::Segment> {
+    (0..WARP_COUNT)
+        .map(|index| rssp::timing::Segment {
+            beat: index as f64 * 4.0 + 2.0,
+            value: 1.0,
+        })
+        .collect()
+}
+
+pub fn warp_inputs() -> (Vec<(f64, f64)>, Vec<rssp::timing::Segment>) {
+    let bpms = vec![(0.0, 120.0)];
+    let stops = (0..WARP_COUNT)
+        .map(|index| rssp::timing::Segment {
+            beat: index as f64 * 4.0 + 2.0,
+            value: -0.5,
+        })
+        .collect();
+    (bpms, stops)
+}
+
 type SmTimingOutput = (
     Vec<(f64, f64)>,
     Vec<rssp::timing::Segment>,
     Vec<rssp::timing::Segment>,
     f64,
 );
+
+fn assert_segments_eq(actual: &[rssp::timing::Segment], expected: &[rssp::timing::Segment]) {
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert_eq!(actual.beat.to_bits(), expected.beat.to_bits());
+        assert_eq!(actual.value.to_bits(), expected.value.to_bits());
+    }
+}
 
 fn assert_output_eq(actual: &SmTimingOutput, expected: &SmTimingOutput) {
     assert_eq!(actual.0.len(), expected.0.len());
@@ -108,4 +137,25 @@ pub fn assert_behavior() {
     assert_eq!(empty.0, [(0.0, 60.0)]);
     assert!(empty.1.is_empty());
     assert!(empty.2.is_empty());
+
+    let extra = extra_warps();
+    let copied = rssp::timing::merge_extra_warps_for_bench(Vec::new(), extra.clone(), false);
+    let reused = rssp::timing::merge_extra_warps_for_bench(Vec::new(), extra.clone(), true);
+    assert_segments_eq(&reused, &copied);
+    assert_eq!(reused.len(), WARP_COUNT);
+
+    let explicit = vec![rssp::timing::Segment {
+        beat: -4.0,
+        value: 2.0,
+    }];
+    let copied = rssp::timing::merge_extra_warps_for_bench(explicit.clone(), extra.clone(), false);
+    let reused = rssp::timing::merge_extra_warps_for_bench(explicit, extra, true);
+    assert_segments_eq(&reused, &copied);
+    assert_eq!(reused.len(), WARP_COUNT + 1);
+
+    let (bpms, stops) = warp_inputs();
+    let copied = rssp::timing::process_sm_warp_merge_for_bench(&bpms, &stops, false);
+    let reused = rssp::timing::process_sm_warp_merge_for_bench(&bpms, &stops, true);
+    assert_output_eq(&reused, &copied);
+    assert_eq!(reused.2.len(), WARP_COUNT);
 }

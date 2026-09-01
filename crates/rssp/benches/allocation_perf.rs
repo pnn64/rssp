@@ -4167,6 +4167,109 @@ fn run_sm_timing_alloc(iterations: usize) {
     let fixture = sm_timing_bench::SmTimingFixture::new();
     run_sm_timing_phase(&fixture, "legacy-f32-then-f64", iterations, true);
     run_sm_timing_phase(&fixture, "direct-f64", iterations, false);
+    let extra_warps = sm_timing_bench::extra_warps();
+    run_warp_merge_phase(&extra_warps, "copy-into-empty", iterations, false);
+    run_warp_merge_phase(&extra_warps, "reuse-generated", iterations, true);
+    let (bpms, stops) = sm_timing_bench::warp_inputs();
+    run_warp_pipeline_phase(&bpms, &stops, "copy-into-empty", iterations, false);
+    run_warp_pipeline_phase(&bpms, &stops, "reuse-generated", iterations, true);
+}
+
+fn run_warp_merge_phase(
+    extra_warps: &[rssp::timing::Segment],
+    phase: &str,
+    iterations: usize,
+    reuse_empty: bool,
+) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let output = rssp::timing::merge_extra_warps_for_bench(
+            Vec::new(),
+            black_box(extra_warps.to_vec()),
+            reuse_empty,
+        );
+        checksum = checksum
+            .wrapping_add(output.len())
+            .wrapping_add(output.last().map_or(0, |warp| warp.beat.to_bits() as usize));
+        black_box(output);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=sm-warp-merge phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_warps_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        sm_timing_bench::WARP_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
+fn run_warp_pipeline_phase(
+    bpms: &[(f64, f64)],
+    stops: &[rssp::timing::Segment],
+    phase: &str,
+    iterations: usize,
+    reuse_empty: bool,
+) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        let output = rssp::timing::process_sm_warp_merge_for_bench(
+            black_box(bpms),
+            black_box(stops),
+            reuse_empty,
+        );
+        checksum = checksum
+            .wrapping_add(output.0.len())
+            .wrapping_add(output.1.len())
+            .wrapping_add(output.2.len())
+            .wrapping_add(output.3.to_bits() as usize);
+        black_box(output);
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=sm-warp-pipeline phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_warps_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        sm_timing_bench::WARP_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
 }
 
 type TimingMergeFn = for<'a> fn(

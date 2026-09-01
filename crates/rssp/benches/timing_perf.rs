@@ -1,4 +1,4 @@
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -71,6 +71,64 @@ fn bench_sm_timing(c: &mut Criterion) {
                 black_box(&fixture.bpms),
                 black_box(&fixture.stops),
                 false,
+            ));
+        });
+    });
+    group.finish();
+
+    let extra_warps = sm_timing_bench::extra_warps();
+    let mut group = c.benchmark_group("sm_warp_merge_2048");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(sm_timing_bench::WARP_COUNT as u64));
+    group.bench_function("copy_into_empty", |b| {
+        b.iter_batched(
+            || extra_warps.clone(),
+            |extra| {
+                black_box(rssp::timing::merge_extra_warps_for_bench(
+                    Vec::new(),
+                    black_box(extra),
+                    false,
+                ));
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("reuse_generated", |b| {
+        b.iter_batched(
+            || extra_warps.clone(),
+            |extra| {
+                black_box(rssp::timing::merge_extra_warps_for_bench(
+                    Vec::new(),
+                    black_box(extra),
+                    true,
+                ));
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.finish();
+
+    let (bpms, stops) = sm_timing_bench::warp_inputs();
+    let mut group = c.benchmark_group("sm_warp_pipeline_2048");
+    group.sample_size(100);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(sm_timing_bench::WARP_COUNT as u64));
+    group.bench_function("copy_into_empty", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::process_sm_warp_merge_for_bench(
+                black_box(&bpms),
+                black_box(&stops),
+                false,
+            ));
+        });
+    });
+    group.bench_function("reuse_generated", |b| {
+        b.iter(|| {
+            black_box(rssp::timing::process_sm_warp_merge_for_bench(
+                black_box(&bpms),
+                black_box(&stops),
+                true,
             ));
         });
     });
