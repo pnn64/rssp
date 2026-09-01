@@ -1966,15 +1966,20 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     path_sort_bench::assert_behavior();
     let sort_paths = path_sort_bench::paths();
     optimizations.throughput(Throughput::Elements(path_sort_bench::PATH_COUNT as u64));
-    for (name, legacy) in [
-        ("path_sort_cached_strings", true),
-        ("path_sort_contiguous_keys", false),
+    for (name, mode) in [
+        ("path_sort_cached_strings", 0),
+        ("path_sort_stable_contiguous_keys", 1),
+        ("path_sort_in_place_contiguous_keys", 2),
     ] {
         optimizations.bench_function(name, |b| {
             b.iter_batched(
                 || sort_paths.clone(),
                 |mut paths| {
-                    rssp::profile::sort_paths_ci(black_box(&mut paths), legacy);
+                    if mode == 0 {
+                        rssp::profile::sort_paths_ci(black_box(&mut paths), true);
+                    } else {
+                        rssp::profile::sort_paths_ci_in_place(black_box(&mut paths), mode == 2);
+                    }
                     black_box(paths);
                 },
                 BatchSize::SmallInput,

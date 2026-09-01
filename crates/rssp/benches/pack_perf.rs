@@ -851,12 +851,20 @@ fn bench_path_sort(c: &mut Criterion) {
     group.sample_size(100);
     group.measurement_time(Duration::from_secs(2));
     group.throughput(Throughput::Elements(path_sort_bench::PATH_COUNT as u64));
-    for (name, legacy) in [("cached_strings", true), ("contiguous_keys", false)] {
+    for (name, mode) in [
+        ("cached_strings", 0),
+        ("stable_contiguous_keys", 1),
+        ("in_place_contiguous_keys", 2),
+    ] {
         group.bench_function(name, |b| {
             b.iter_batched(
                 || paths.clone(),
                 |mut paths| {
-                    rssp::profile::sort_paths_ci(black_box(&mut paths), legacy);
+                    if mode == 0 {
+                        rssp::profile::sort_paths_ci(black_box(&mut paths), true);
+                    } else {
+                        rssp::profile::sort_paths_ci_in_place(black_box(&mut paths), mode == 2);
+                    }
                     black_box(paths);
                 },
                 BatchSize::SmallInput,

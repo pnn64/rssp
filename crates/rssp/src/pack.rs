@@ -71,7 +71,7 @@ struct CompactKey {
     original: u32,
 }
 
-fn sort_compact_ci<T>(
+fn sort_compact_ci<T, const IN_PLACE: bool>(
     values: &mut [T],
     estimate: usize,
     mut append_key: impl FnMut(&T, &mut Vec<u8>),
@@ -101,10 +101,18 @@ fn sort_compact_ci<T>(
         values.sort_by(fallback);
         return;
     }
-    keys.sort_by(|left, right| {
-        text[left.start as usize..left.end as usize]
-            .cmp(&text[right.start as usize..right.end as usize])
-    });
+    if IN_PLACE {
+        keys.sort_unstable_by(|left, right| {
+            text[left.start as usize..left.end as usize]
+                .cmp(&text[right.start as usize..right.end as usize])
+                .then_with(|| left.original.cmp(&right.original))
+        });
+    } else {
+        keys.sort_by(|left, right| {
+            text[left.start as usize..left.end as usize]
+                .cmp(&text[right.start as usize..right.end as usize])
+        });
+    }
 
     let mut destinations = vec![0u32; values.len()];
     for (target, key) in keys.iter().enumerate() {
@@ -121,7 +129,12 @@ fn sort_compact_ci<T>(
 
 #[cfg(any(test, feature = "profile"))]
 fn sort_paths_ci(paths: &mut [PathBuf]) {
-    sort_compact_ci(
+    sort_paths_ci_with::<true>(paths);
+}
+
+#[cfg(any(test, feature = "profile"))]
+fn sort_paths_ci_with<const IN_PLACE: bool>(paths: &mut [PathBuf]) {
+    sort_compact_ci::<_, IN_PLACE>(
         paths,
         24,
         |path, text| {
@@ -143,7 +156,7 @@ fn sort_names_ci(names: &mut [OsString]) {
 }
 
 fn sort_packs_ci(packs: &mut [PackScan]) {
-    sort_compact_ci(
+    sort_compact_ci::<_, true>(
         packs,
         24,
         |pack, text| {
@@ -164,6 +177,15 @@ pub(crate) fn profile_sort_paths_ci(paths: &mut [PathBuf], legacy: bool) {
         paths.sort_by_cached_key(|path| assets::lc_name(path));
     } else {
         sort_paths_ci(paths);
+    }
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_sort_paths_ci_in_place(paths: &mut [PathBuf], in_place: bool) {
+    if in_place {
+        sort_paths_ci_with::<true>(paths);
+    } else {
+        sort_paths_ci_with::<false>(paths);
     }
 }
 

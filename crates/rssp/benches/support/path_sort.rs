@@ -24,9 +24,15 @@ pub fn paths() -> Vec<PathBuf> {
 fn assert_sorted(input: &[PathBuf]) {
     let mut legacy = input.to_vec();
     let mut direct = input.to_vec();
+    let mut stable = input.to_vec();
+    let mut in_place = input.to_vec();
     rssp::profile::sort_paths_ci(&mut legacy, true);
     rssp::profile::sort_paths_ci(&mut direct, false);
+    rssp::profile::sort_paths_ci_in_place(&mut stable, false);
+    rssp::profile::sort_paths_ci_in_place(&mut in_place, true);
     assert_eq!(direct, legacy);
+    assert_eq!(in_place, stable);
+    assert_eq!(in_place, direct);
 }
 
 pub fn assert_behavior() {

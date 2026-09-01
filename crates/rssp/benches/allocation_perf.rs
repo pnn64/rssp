@@ -5304,7 +5304,7 @@ fn run_pack_root_alloc(iterations: usize) {
     run_pack_root_phase("cached-entry-types", iterations, rssp::profile::pack_root);
 }
 
-fn run_path_sort_phase(phase: &str, iterations: usize, legacy: bool) {
+fn run_path_sort_phase(phase: &str, iterations: usize, mode: u8) {
     let mut paths = path_sort_bench::paths();
     rssp::profile::sort_paths_ci(&mut paths, false);
     reset_counters();
@@ -5313,7 +5313,11 @@ fn run_path_sort_phase(phase: &str, iterations: usize, legacy: bool) {
     let mut checksum = 0usize;
     for _ in 0..iterations {
         paths.reverse();
-        rssp::profile::sort_paths_ci(black_box(&mut paths), legacy);
+        if mode == 0 {
+            rssp::profile::sort_paths_ci(black_box(&mut paths), true);
+        } else {
+            rssp::profile::sort_paths_ci_in_place(black_box(&mut paths), mode == 2);
+        }
         checksum = checksum.wrapping_add(paths[0].as_os_str().len());
     }
     let elapsed = start.elapsed();
@@ -5345,8 +5349,9 @@ fn run_path_sort_phase(phase: &str, iterations: usize, legacy: bool) {
 
 fn run_path_sort_alloc(iterations: usize) {
     path_sort_bench::assert_behavior();
-    run_path_sort_phase("cached-strings", iterations, true);
-    run_path_sort_phase("contiguous-keys", iterations, false);
+    run_path_sort_phase("cached-strings", iterations, 0);
+    run_path_sort_phase("stable-contiguous-keys", iterations, 1);
+    run_path_sort_phase("in-place-contiguous-keys", iterations, 2);
 }
 
 fn run_pack_scan_alloc(iterations: usize) {
