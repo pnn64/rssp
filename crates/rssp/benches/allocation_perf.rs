@@ -3663,6 +3663,7 @@ fn run_course_analyze_alloc(iterations: usize) {
     let options = course_bench::clone_heavy_options();
     fixture.assert_group_cache();
     fixture.assert_group_catalog();
+    fixture.assert_catalog_dirs();
     repeated.assert_song_cache();
     run_course_analyze_phase(
         "cache-all",
@@ -3696,6 +3697,22 @@ fn run_course_analyze_alloc(iterations: usize) {
             .expect("benchmark course should analyze")
         },
     );
+    for (phase, trust_catalog) in [
+        ("catalog-dir-recheck", false),
+        ("catalog-dir-trusted", true),
+    ] {
+        run_course_analyze_phase(phase, iterations, &fixture, &options, |fixture, options| {
+            rssp::course::profile_catalog_dirs(
+                fixture.course_path(),
+                Some(fixture.songs_dir()),
+                "dance-single",
+                "Medium",
+                options,
+                trust_catalog,
+            )
+            .expect("catalog directory benchmark course should analyze")
+        });
+    }
     for (phase, group_cache) in [("group-cache-off", false), ("group-cache-on", true)] {
         run_course_analyze_phase(phase, iterations, &fixture, &options, |fixture, options| {
             rssp::course::profile_analyze_groups(

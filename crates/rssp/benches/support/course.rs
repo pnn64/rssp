@@ -353,6 +353,32 @@ impl CourseFixture {
             .expect("cataloged group summary should serialize");
         assert_eq!(actual, expected);
     }
+
+    pub fn assert_catalog_dirs(&self) {
+        let analyze = |trust_catalog| {
+            rssp::course::profile_catalog_dirs(
+                &self.course_path,
+                Some(&self.songs_dir),
+                "dance-single",
+                "Medium",
+                fast_options(),
+                trust_catalog,
+            )
+            .expect("course catalog directory fixture should analyze")
+        };
+        let rechecked = analyze(false);
+        let trusted = analyze(true);
+        let (mut expected, mut actual) = (Vec::new(), Vec::new());
+        rssp::report::write_course_reports(
+            &rechecked,
+            rssp::report::OutputMode::JSON,
+            &mut expected,
+        )
+        .expect("rechecked catalog summary should serialize");
+        rssp::report::write_course_reports(&trusted, rssp::report::OutputMode::JSON, &mut actual)
+            .expect("trusted catalog summary should serialize");
+        assert_eq!(actual, expected);
+    }
 }
 
 impl Drop for CourseFixture {
