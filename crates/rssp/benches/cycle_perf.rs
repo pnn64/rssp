@@ -2775,9 +2775,17 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             ))
         });
     });
-    pack_ini.bench_function("borrowed_fields", |b| {
+    pack_ini.bench_function("sequential_key_dispatch", |b| {
         b.iter(|| {
-            black_box(rssp::pack::profile_parse_pack_ini(
+            black_box(rssp::pack::profile_parse_pack_ini_dispatch(
+                black_box(pack_bench::PACK_INI_INPUT),
+                true,
+            ))
+        });
+    });
+    pack_ini.bench_function("indexed_key_dispatch", |b| {
+        b.iter(|| {
+            black_box(rssp::pack::profile_parse_pack_ini_dispatch(
                 black_box(pack_bench::PACK_INI_INPUT),
                 false,
             ))

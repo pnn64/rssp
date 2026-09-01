@@ -4979,16 +4979,24 @@ fn run_course_resolve_alloc(iterations: usize) {
     run_course_resolve_phase(&fixture, "entry-types-names", iterations, false);
 }
 
-fn run_pack_ini_phase(phase: &str, iterations: usize, owned: bool) {
+fn run_pack_ini_phase(phase: &str, iterations: usize, mode: u8) {
     reset_counters();
     let before = Counters::read();
     let start = Instant::now();
     let mut checksum = 0usize;
     for _ in 0..iterations {
-        checksum = checksum.wrapping_add(rssp::pack::profile_parse_pack_ini(
-            black_box(pack_bench::PACK_INI_INPUT),
-            owned,
-        ));
+        let parsed = match mode {
+            0 => rssp::pack::profile_parse_pack_ini(black_box(pack_bench::PACK_INI_INPUT), true),
+            1 => rssp::pack::profile_parse_pack_ini_dispatch(
+                black_box(pack_bench::PACK_INI_INPUT),
+                true,
+            ),
+            _ => rssp::pack::profile_parse_pack_ini_dispatch(
+                black_box(pack_bench::PACK_INI_INPUT),
+                false,
+            ),
+        };
+        checksum = checksum.wrapping_add(parsed);
     }
     let elapsed = start.elapsed();
     let after = Counters::read();
@@ -5018,8 +5026,9 @@ fn run_pack_ini_phase(phase: &str, iterations: usize, owned: bool) {
 
 fn run_pack_ini_alloc(iterations: usize) {
     pack_bench::assert_pack_ini_behavior();
-    run_pack_ini_phase("owned-fields", iterations, true);
-    run_pack_ini_phase("borrowed-fields", iterations, false);
+    run_pack_ini_phase("owned-fields", iterations, 0);
+    run_pack_ini_phase("sequential-key-dispatch", iterations, 1);
+    run_pack_ini_phase("indexed-key-dispatch", iterations, 2);
 }
 
 fn run_pack_hint_phase(phase: &str, iterations: usize, legacy: bool) {

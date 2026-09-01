@@ -820,14 +820,25 @@ fn bench_pack_ini(c: &mut Criterion) {
     group.sample_size(100);
     group.measurement_time(Duration::from_secs(3));
     group.throughput(Throughput::Bytes(pack_bench::PACK_INI_INPUT.len() as u64));
-    for (name, owned) in [("owned_fields", true), ("borrowed_fields", false)] {
-        group.bench_function(name, |b| {
+    group.bench_function("owned_fields", |b| {
+        b.iter(|| {
+            black_box(rssp::pack::profile_parse_pack_ini(
+                black_box(pack_bench::PACK_INI_INPUT),
+                true,
+            ))
+        });
+    });
+    for (name, sequential) in [
+        ("sequential_key_dispatch", true),
+        ("indexed_key_dispatch", false),
+    ] {
+        group.bench_function(name, move |b| {
             b.iter(|| {
-                black_box(rssp::pack::profile_parse_pack_ini(
+                black_box(rssp::pack::profile_parse_pack_ini_dispatch(
                     black_box(pack_bench::PACK_INI_INPUT),
-                    owned,
+                    sequential,
                 ))
-            });
+            })
         });
     }
     group.finish();

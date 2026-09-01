@@ -43,6 +43,11 @@ pub fn assert_pack_ini_behavior() {
         rssp::pack::profile_parse_pack_ini(PACK_INI_INPUT, true),
         "borrowed Pack.ini fields changed parser output"
     );
+    assert_eq!(
+        rssp::pack::profile_parse_pack_ini_dispatch(PACK_INI_INPUT, false),
+        rssp::pack::profile_parse_pack_ini_dispatch(PACK_INI_INPUT, true),
+        "indexed Pack.ini dispatch changed parser output"
+    );
 }
 
 pub fn assert_hint_norm_behavior() {

@@ -229,7 +229,61 @@ struct PackIniRaw<T> {
     year: T,
 }
 
-fn parse_pack_ini_with<'a, T: Default>(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PackIniKey {
+    Version,
+    DisplayTitle,
+    SortTitle,
+    TranslitTitle,
+    Series,
+    Banner,
+    Background,
+    SyncOffset,
+    Year,
+    Unknown,
+}
+
+fn pack_ini_key(key: &str) -> PackIniKey {
+    match key.len() {
+        4 if key.eq_ignore_ascii_case("year") => PackIniKey::Year,
+        6 if key.eq_ignore_ascii_case("series") => PackIniKey::Series,
+        6 if key.eq_ignore_ascii_case("banner") => PackIniKey::Banner,
+        7 if key.eq_ignore_ascii_case("version") => PackIniKey::Version,
+        9 if key.eq_ignore_ascii_case("sorttitle") => PackIniKey::SortTitle,
+        10 if key.eq_ignore_ascii_case("background") => PackIniKey::Background,
+        10 if key.eq_ignore_ascii_case("syncoffset") => PackIniKey::SyncOffset,
+        12 if key.eq_ignore_ascii_case("displaytitle") => PackIniKey::DisplayTitle,
+        13 if key.eq_ignore_ascii_case("translittitle") => PackIniKey::TranslitTitle,
+        _ => PackIniKey::Unknown,
+    }
+}
+
+#[cfg(any(test, feature = "profile"))]
+fn pack_ini_key_sequential(key: &str) -> PackIniKey {
+    if key.eq_ignore_ascii_case("version") {
+        PackIniKey::Version
+    } else if key.eq_ignore_ascii_case("displaytitle") {
+        PackIniKey::DisplayTitle
+    } else if key.eq_ignore_ascii_case("sorttitle") {
+        PackIniKey::SortTitle
+    } else if key.eq_ignore_ascii_case("translittitle") {
+        PackIniKey::TranslitTitle
+    } else if key.eq_ignore_ascii_case("series") {
+        PackIniKey::Series
+    } else if key.eq_ignore_ascii_case("banner") {
+        PackIniKey::Banner
+    } else if key.eq_ignore_ascii_case("background") {
+        PackIniKey::Background
+    } else if key.eq_ignore_ascii_case("syncoffset") {
+        PackIniKey::SyncOffset
+    } else if key.eq_ignore_ascii_case("year") {
+        PackIniKey::Year
+    } else {
+        PackIniKey::Unknown
+    }
+}
+
+fn parse_pack_ini_with<'a, T: Default, const INDEXED_KEYS: bool>(
     text: &'a str,
     mut take_value: impl FnMut(&'a str) -> T,
 ) -> PackIniRaw<T> {
@@ -254,24 +308,29 @@ fn parse_pack_ini_with<'a, T: Default>(
         };
         let key = k.trim();
         let value = v.trim();
-        if key.eq_ignore_ascii_case("version") {
-            out.version = take_value(value);
-        } else if key.eq_ignore_ascii_case("displaytitle") {
-            out.display_title = take_value(value);
-        } else if key.eq_ignore_ascii_case("sorttitle") {
-            out.sort_title = take_value(value);
-        } else if key.eq_ignore_ascii_case("translittitle") {
-            out.translit_title = take_value(value);
-        } else if key.eq_ignore_ascii_case("series") {
-            out.series = take_value(value);
-        } else if key.eq_ignore_ascii_case("banner") {
-            out.banner = take_value(value);
-        } else if key.eq_ignore_ascii_case("background") {
-            out.background = take_value(value);
-        } else if key.eq_ignore_ascii_case("syncoffset") {
-            out.sync_offset = take_value(value);
-        } else if key.eq_ignore_ascii_case("year") {
-            out.year = take_value(value);
+        let key = if INDEXED_KEYS {
+            pack_ini_key(key)
+        } else {
+            #[cfg(any(test, feature = "profile"))]
+            {
+                pack_ini_key_sequential(key)
+            }
+            #[cfg(not(any(test, feature = "profile")))]
+            {
+                unreachable!("sequential Pack.ini dispatch requires profile feature")
+            }
+        };
+        match key {
+            PackIniKey::Version => out.version = take_value(value),
+            PackIniKey::DisplayTitle => out.display_title = take_value(value),
+            PackIniKey::SortTitle => out.sort_title = take_value(value),
+            PackIniKey::TranslitTitle => out.translit_title = take_value(value),
+            PackIniKey::Series => out.series = take_value(value),
+            PackIniKey::Banner => out.banner = take_value(value),
+            PackIniKey::Background => out.background = take_value(value),
+            PackIniKey::SyncOffset => out.sync_offset = take_value(value),
+            PackIniKey::Year => out.year = take_value(value),
+            PackIniKey::Unknown => {}
         }
     }
 
@@ -279,12 +338,17 @@ fn parse_pack_ini_with<'a, T: Default>(
 }
 
 fn parse_pack_ini(text: &str) -> PackIniRaw<&str> {
-    parse_pack_ini_with(text, |value| value)
+    parse_pack_ini_with::<_, true>(text, |value| value)
 }
 
 #[cfg(any(test, feature = "profile"))]
 fn parse_pack_ini_owned(text: &str) -> PackIniRaw<String> {
-    parse_pack_ini_with(text, str::to_string)
+    parse_pack_ini_with::<_, false>(text, str::to_string)
+}
+
+#[cfg(any(test, feature = "profile"))]
+fn parse_pack_ini_sequential(text: &str) -> PackIniRaw<&str> {
+    parse_pack_ini_with::<_, false>(text, |value| value)
 }
 
 #[cfg(feature = "profile")]
@@ -315,6 +379,20 @@ pub fn profile_parse_pack_ini(text: &str, owned: bool) -> usize {
         std::hint::black_box(raw);
         total
     }
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+#[must_use]
+pub fn profile_parse_pack_ini_dispatch(text: &str, sequential: bool) -> usize {
+    let raw = if sequential {
+        parse_pack_ini_sequential(text)
+    } else {
+        parse_pack_ini(text)
+    };
+    let total = pack_ini_len(&raw);
+    std::hint::black_box(raw);
+    total
 }
 
 fn pick_pack_parent_img(pack_dir: &Path, group_name: &str) -> Option<PathBuf> {
@@ -1348,10 +1426,10 @@ pub(crate) fn profile_find_simfiles_legacy(root: &Path, opt: ScanOpt) -> Vec<Pat
 #[cfg(test)]
 mod tests {
     use super::{
-        DupPolicy, PackIniRaw, ScanError, ScanOpt, find_simfiles, parse_pack_ini,
-        parse_pack_ini_owned, pick_pack_parent_img, profile_scan_song_dir_joined_paths,
-        scan_pack_dir, scan_pack_root, scan_pack_root_legacy, scan_song_dir, scan_songs_dir,
-        sort_paths_ci,
+        DupPolicy, PackIniKey, PackIniRaw, ScanError, ScanOpt, find_simfiles, pack_ini_key,
+        pack_ini_key_sequential, parse_pack_ini, parse_pack_ini_owned, parse_pack_ini_sequential,
+        pick_pack_parent_img, profile_scan_song_dir_joined_paths, scan_pack_dir, scan_pack_root,
+        scan_pack_root_legacy, scan_song_dir, scan_songs_dir, sort_paths_ci,
     };
     use crate::assets;
     use std::fs;
@@ -1483,8 +1561,13 @@ mod tests {
                 [Other]\n\
                 Year=1900\n";
         let parsed = parse_pack_ini(input);
+        let sequential = parse_pack_ini_sequential(input);
         let owned = parse_pack_ini_owned(input);
 
+        assert_eq!(
+            parsed, sequential,
+            "indexed Pack.ini dispatch changed fields"
+        );
         assert_eq!(
             [
                 parsed.version,
@@ -1525,6 +1608,30 @@ mod tests {
                 year: "2026",
             }
         );
+    }
+
+    #[test]
+    fn indexed_pack_ini_keys_match_sequential_dispatch() {
+        for key in [
+            "VERSION",
+            "displaytitle",
+            "SortTitle",
+            "TRANSLITTITLE",
+            "series",
+            "Banner",
+            "BACKGROUND",
+            "syncOffset",
+            "Year",
+            "UnknownKey",
+            "",
+        ] {
+            assert_eq!(
+                pack_ini_key(key),
+                pack_ini_key_sequential(key),
+                "Pack.ini key dispatch changed for {key:?}"
+            );
+        }
+        assert_eq!(pack_ini_key("VERSION"), PackIniKey::Version);
     }
 
     #[test]
