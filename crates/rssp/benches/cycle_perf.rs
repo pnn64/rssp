@@ -1694,11 +1694,13 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     resolve_fixture.assert_behavior();
     course_bench::assert_step_norm_behavior();
     course_bench::assert_title_match_behavior();
+    course_bench::assert_title_join_behavior();
     course_fixture.assert_group_cache();
     course_fixture.assert_group_catalog();
     course_fixture.assert_catalog_dirs();
     repeated_course.assert_song_cache();
     repeated_course.assert_nps_capacity();
+    repeated_course.assert_title_capacity();
     let course_hashes = course_bench::hash_values();
     course_bench::assert_hash_dedup_behavior(&course_hashes);
     let course_summary_hashes = course_bench::course_hash_values();
@@ -1927,6 +1929,23 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             }
         });
     });
+    optimizations.throughput(Throughput::Elements(course_bench::TITLE_JOIN_BATCH as u64));
+    for (name, prealloc) in [
+        ("title_join_format", false),
+        ("title_join_preallocated", true),
+    ] {
+        optimizations.bench_function(name, |b| {
+            b.iter(|| {
+                for _ in 0..course_bench::TITLE_JOIN_BATCH {
+                    black_box(rssp::course::profile_course_title(
+                        black_box(course_bench::TITLE_JOIN_TITLE),
+                        black_box(course_bench::TITLE_JOIN_SUBTITLE),
+                        prealloc,
+                    ));
+                }
+            });
+        });
+    }
     pack_bench::assert_hint_norm_behavior();
     optimizations.throughput(Throughput::Elements(pack_bench::HINT_NORM_BATCH as u64));
     for (name, legacy) in [
@@ -2729,6 +2748,29 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     }
     course_nps.finish();
+
+    let mut course_titles = c.benchmark_group("cycles/course_title_capacity");
+    course_titles.sample_size(20);
+    course_titles.measurement_time(Duration::from_secs(3));
+    course_titles.throughput(Throughput::Elements(course_bench::SONG_COUNT as u64));
+    for (name, prealloc_title) in [("format", false), ("preallocated", true)] {
+        course_titles.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(
+                    rssp::course::profile_course_titles(
+                        black_box(repeated_course.course_path()),
+                        Some(black_box(repeated_course.songs_dir())),
+                        black_box("dance-single"),
+                        black_box("Medium"),
+                        black_box(course_options.clone()),
+                        prealloc_title,
+                    )
+                    .expect("title capacity benchmark course should analyze"),
+                );
+            });
+        });
+    }
+    course_titles.finish();
 
     let mut course_dir_check = c.benchmark_group("cycles/course_catalog_dir_check");
     course_dir_check.sample_size(20);

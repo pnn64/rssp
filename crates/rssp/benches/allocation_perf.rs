@@ -3666,6 +3666,7 @@ fn run_course_analyze_alloc(iterations: usize) {
     fixture.assert_catalog_dirs();
     repeated.assert_song_cache();
     repeated.assert_nps_capacity();
+    repeated.assert_title_capacity();
     run_course_analyze_phase(
         "cache-all",
         iterations,
@@ -3775,6 +3776,25 @@ fn run_course_analyze_alloc(iterations: usize) {
                     prealloc_nps,
                 )
                 .expect("NPS capacity benchmark course should analyze")
+            },
+        );
+    }
+    for (phase, prealloc_title) in [("title-format", false), ("title-preallocated", true)] {
+        run_course_analyze_phase(
+            phase,
+            iterations,
+            &repeated,
+            &options,
+            |fixture, options| {
+                rssp::course::profile_course_titles(
+                    fixture.course_path(),
+                    Some(fixture.songs_dir()),
+                    "dance-single",
+                    "Medium",
+                    options,
+                    prealloc_title,
+                )
+                .expect("title capacity benchmark course should analyze")
             },
         );
     }
@@ -4944,8 +4964,54 @@ fn run_title_match_phase(phase: &str, iterations: usize, legacy: bool) {
 
 fn run_title_match_alloc(iterations: usize) {
     course_bench::assert_title_match_behavior();
+    course_bench::assert_title_join_behavior();
     run_title_match_phase("owned-full-title", iterations, true);
     run_title_match_phase("borrowed-parts", iterations, false);
+    run_title_join_phase("join-format", iterations, false);
+    run_title_join_phase("join-preallocated", iterations, true);
+}
+
+fn run_title_join_phase(phase: &str, iterations: usize, prealloc: bool) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0usize;
+    for _ in 0..iterations {
+        for _ in 0..course_bench::TITLE_JOIN_BATCH {
+            let title = rssp::course::profile_course_title(
+                black_box(course_bench::TITLE_JOIN_TITLE),
+                black_box(course_bench::TITLE_JOIN_SUBTITLE),
+                prealloc,
+            );
+            checksum = checksum.wrapping_add(title.len());
+            black_box(title);
+        }
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    let titles = course_bench::TITLE_JOIN_BATCH as f64 * divisor;
+    println!(
+        concat!(
+            "mode=course-title phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_titles_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        titles / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
 }
 
 fn run_course_banner_phase<F>(

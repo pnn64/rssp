@@ -38,6 +38,9 @@ pub const TITLE_MATCH_BATCH: usize = 1_024;
 pub const TITLE_MATCH_INPUT: &[u8] =
     b"#TITLE:Performance Song;#SUBTITLE:Benchmark Mix;#ARTIST:RSSP;";
 pub const TITLE_MATCH_EXPECTED: &str = "Performance Song Benchmark Mix";
+pub const TITLE_JOIN_BATCH: usize = 4_096;
+pub const TITLE_JOIN_TITLE: &str = "RSSP Hash Perf Fixture";
+pub const TITLE_JOIN_SUBTITLE: &str = "Benchmark";
 
 pub fn parse_input(entry_count: usize) -> Vec<u8> {
     let mut course = String::with_capacity(256 + entry_count * 40);
@@ -194,6 +197,20 @@ pub fn assert_title_match_behavior() {
         ),
         Some(true)
     );
+}
+
+pub fn assert_title_join_behavior() {
+    for (title, subtitle) in [
+        ("", ""),
+        ("Song", ""),
+        ("", "Mix"),
+        (TITLE_JOIN_TITLE, TITLE_JOIN_SUBTITLE),
+        ("Café 二", "夜"),
+    ] {
+        let formatted = rssp::course::profile_course_title(title, subtitle, false);
+        let preallocated = rssp::course::profile_course_title(title, subtitle, true);
+        assert_eq!(preallocated, formatted);
+    }
 }
 
 pub fn select_input() -> Vec<u8> {
@@ -403,6 +420,36 @@ impl CourseFixture {
             &mut actual,
         )
         .expect("preallocated NPS summary should serialize");
+        assert_eq!(actual, expected);
+    }
+
+    pub fn assert_title_capacity(&self) {
+        let analyze = |prealloc_title| {
+            rssp::course::profile_course_titles(
+                &self.course_path,
+                Some(&self.songs_dir),
+                "dance-single",
+                "Medium",
+                fast_options(),
+                prealloc_title,
+            )
+            .expect("course title capacity fixture should analyze")
+        };
+        let formatted = analyze(false);
+        let preallocated = analyze(true);
+        let (mut expected, mut actual) = (Vec::new(), Vec::new());
+        rssp::report::write_course_reports(
+            &formatted,
+            rssp::report::OutputMode::JSON,
+            &mut expected,
+        )
+        .expect("formatted course summary should serialize");
+        rssp::report::write_course_reports(
+            &preallocated,
+            rssp::report::OutputMode::JSON,
+            &mut actual,
+        )
+        .expect("preallocated course summary should serialize");
         assert_eq!(actual, expected);
     }
 }

@@ -56,6 +56,7 @@ fn bench_course_analysis(c: &mut Criterion) {
     fixture.assert_catalog_dirs();
     repeated.assert_song_cache();
     repeated.assert_nps_capacity();
+    repeated.assert_title_capacity();
 
     let mut group = c.benchmark_group("course_analysis");
     group.sample_size(20);
@@ -124,6 +125,29 @@ fn bench_course_analysis(c: &mut Criterion) {
                         prealloc_nps,
                     )
                     .expect("NPS capacity benchmark course should analyze"),
+                );
+            });
+        });
+    }
+    group.finish();
+
+    let mut group = c.benchmark_group("course_title_capacity");
+    group.sample_size(20);
+    group.measurement_time(Duration::from_secs(3));
+    group.throughput(Throughput::Elements(course_bench::SONG_COUNT as u64));
+    for (name, prealloc_title) in [("format", false), ("preallocated", true)] {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(
+                    rssp::course::profile_course_titles(
+                        black_box(repeated.course_path()),
+                        Some(black_box(repeated.songs_dir())),
+                        black_box("dance-single"),
+                        black_box("Medium"),
+                        black_box(fast_options.clone()),
+                        prealloc_title,
+                    )
+                    .expect("title capacity benchmark course should analyze"),
                 );
             });
         });
@@ -647,6 +671,7 @@ fn bench_stepstype_normalize(c: &mut Criterion) {
 
 fn bench_title_match(c: &mut Criterion) {
     course_bench::assert_title_match_behavior();
+    course_bench::assert_title_join_behavior();
     let mut group = c.benchmark_group("course_title_match");
     group.sample_size(200);
     group.measurement_time(Duration::from_secs(2));
@@ -675,6 +700,25 @@ fn bench_title_match(c: &mut Criterion) {
             }
         });
     });
+    group.finish();
+
+    let mut group = c.benchmark_group("course_title_join");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(2));
+    group.throughput(Throughput::Elements(course_bench::TITLE_JOIN_BATCH as u64));
+    for (name, prealloc) in [("format", false), ("preallocated", true)] {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                for _ in 0..course_bench::TITLE_JOIN_BATCH {
+                    black_box(rssp::course::profile_course_title(
+                        black_box(course_bench::TITLE_JOIN_TITLE),
+                        black_box(course_bench::TITLE_JOIN_SUBTITLE),
+                        prealloc,
+                    ));
+                }
+            });
+        });
+    }
     group.finish();
 }
 
