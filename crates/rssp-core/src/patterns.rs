@@ -649,8 +649,7 @@ fn pattern_output_slice(state: u8) -> &'static [u8] {
 // Immutable process-lifetime table shared lock-free by analysis callers. It is
 // const-built (no warmup or miss work), has fixed 190-state/167-output capacity,
 // never evicts, and resides in the binary until process teardown. Each input
-// byte performs one transition plus at most three output visits. The
-// default-pattern-DFA allocation/cycle benchmarks cover storage and lookup cost.
+// byte performs one transition plus at most three output visits.
 static PATTERN_DFA: PatternDfa = build_pattern_dfa(ALL_PATTERN_VALUES);
 
 #[inline]
@@ -689,37 +688,6 @@ pub fn detect_default_patterns(bitmasks: &[u8]) -> PatternCounts {
     pattern_search_array(bitmasks)
 }
 
-#[cfg(feature = "bench-support")]
-static LEGACY_PATTERN_DFA: std::sync::LazyLock<AcDfa<PatternVariant>> =
-    std::sync::LazyLock::new(|| ac_build(ALL_PATTERNS.iter().copied(), |byte| byte));
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn detect_default_patterns_heap_for_bench(bitmasks: &[u8]) -> PatternCounts {
-    ac_search_array(bitmasks, &LEGACY_PATTERN_DFA)
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn detect_default_patterns_runtime_build_for_bench(bitmasks: &[u8]) -> PatternCounts {
-    let dfa = ac_build(ALL_PATTERNS.iter().copied(), |byte| byte);
-    ac_search_array(bitmasks, &dfa)
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn default_pattern_dfa_sizes_for_bench() -> (usize, usize) {
-    let heap = &*LEGACY_PATTERN_DFA;
-    let heap_bytes = heap.goto.len() * std::mem::size_of::<u32>()
-        + heap.output_starts.len() * std::mem::size_of::<u32>()
-        + heap.output_lens.len() * std::mem::size_of::<u32>()
-        + heap.flat_outputs.len() * std::mem::size_of::<PatternVariant>();
-    (heap_bytes, std::mem::size_of::<PatternDfa>())
-}
-
 // ============================================================================
 // Custom Pattern Detection
 // ============================================================================
@@ -755,9 +723,7 @@ fn pattern_hash_ci(pattern: &str) -> u64 {
     hash ^ (hash >> 32)
 }
 
-fn compile_custom_patterns_impl<const GROW_DFA: bool>(
-    patterns: &[String],
-) -> CompiledCustomPatterns {
+fn compile_custom_patterns_impl(patterns: &[String]) -> CompiledCustomPatterns {
     if patterns.is_empty() {
         return compiled_custom_empty();
     }
@@ -795,13 +761,9 @@ fn compile_custom_patterns_impl<const GROW_DFA: bool>(
     }
     compiled.shrink_to_fit();
 
-    let state_capacity = if GROW_DFA {
-        1
-    } else {
-        compiled.iter().fold(1usize, |capacity, pattern| {
-            capacity.saturating_add(pattern.pattern.len())
-        })
-    };
+    let state_capacity = compiled.iter().fold(1usize, |capacity, pattern| {
+        capacity.saturating_add(pattern.pattern.len())
+    });
     let dfa = ac_build_with_capacity(
         compiled
             .iter()
@@ -818,56 +780,7 @@ fn compile_custom_patterns_impl<const GROW_DFA: bool>(
 }
 
 pub fn compile_custom_patterns(patterns: &[String]) -> CompiledCustomPatterns {
-    compile_custom_patterns_impl::<false>(patterns)
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn compile_custom_patterns_growing_dfa_for_bench(
-    patterns: &[String],
-) -> CompiledCustomPatterns {
-    compile_custom_patterns_impl::<true>(patterns)
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn compile_custom_patterns_legacy_for_bench(patterns: &[String]) -> CompiledCustomPatterns {
-    use std::borrow::Cow;
-    use std::collections::HashMap;
-
-    let mut pattern_indexes = HashMap::with_capacity(patterns.len());
-    for pattern in patterns {
-        let upper = if pattern.bytes().any(|byte| byte.is_ascii_lowercase()) {
-            Cow::Owned(pattern.to_ascii_uppercase())
-        } else {
-            Cow::Borrowed(pattern.as_str())
-        };
-        if pattern_indexes.contains_key(upper.as_ref()) {
-            continue;
-        }
-        let next_index = pattern_indexes.len();
-        pattern_indexes.insert(upper.into_owned(), next_index);
-    }
-
-    let mut compiled: Vec<_> = std::iter::repeat_with(|| CompiledPattern {
-        pattern: String::new(),
-    })
-    .take(pattern_indexes.len())
-    .collect();
-    for (pattern, index) in pattern_indexes {
-        compiled[index].pattern = pattern;
-    }
-    let dfa = ac_build(
-        compiled
-            .iter()
-            .enumerate()
-            .map(|(index, pattern)| (index, pattern.pattern.as_bytes())),
-        pattern_bit,
-    );
-    CompiledCustomPatterns {
-        patterns: compiled,
-        dfa,
-    }
+    compile_custom_patterns_impl(patterns)
 }
 
 pub fn detect_custom_patterns_compiled(
@@ -1283,12 +1196,10 @@ pub const fn compute_box_counts(counts: &PatternCounts) -> BoxCounts {
 #[cfg(test)]
 mod tests {
     use super::{
-        AC_ALPHA, CompiledCustomPatterns, CompiledPattern, CustomPatternSummary, ac_build,
-        ac_output_slice, ac_search_vec, analyze_patterns_from_rows, compile_custom_patterns,
-        compile_custom_patterns_impl, count_anchors, count_facing_steps,
-        detect_custom_patterns_compiled, detect_default_patterns, note_mask4, pattern_bit,
+        AC_ALPHA, ac_build, ac_output_slice, ac_search_vec, analyze_patterns_from_rows,
+        compile_custom_patterns, count_anchors, count_facing_steps,
+        detect_custom_patterns_compiled, detect_default_patterns, note_mask4,
     };
-    use std::collections::HashSet;
 
     fn row_from_mask(mask: u8) -> [u8; 4] {
         std::array::from_fn(|column| {
@@ -1311,58 +1222,6 @@ mod tests {
             }
         }
     }
-
-    fn compile_custom_patterns_materialized(patterns: &[String]) -> CompiledCustomPatterns {
-        let mut compiled = Vec::with_capacity(patterns.len());
-        let mut pattern_bits = Vec::with_capacity(patterns.len());
-        let mut seen = HashSet::with_capacity(patterns.len());
-
-        for pattern in patterns {
-            let upper = pattern.to_ascii_uppercase();
-            if !seen.insert(upper.clone()) {
-                continue;
-            }
-            pattern_bits.push(upper.bytes().map(pattern_bit).collect::<Vec<_>>());
-            compiled.push(CompiledPattern { pattern: upper });
-        }
-
-        let dfa = ac_build(
-            pattern_bits
-                .iter()
-                .enumerate()
-                .map(|(index, bits)| (index, bits.as_slice())),
-            |byte| byte,
-        );
-        CompiledCustomPatterns {
-            patterns: compiled,
-            dfa,
-        }
-    }
-
-    fn detect_custom_patterns_materialized(
-        bitmasks: &[u8],
-        compiled: &CompiledCustomPatterns,
-    ) -> Vec<CustomPatternSummary> {
-        let mut counts = vec![0u32; compiled.patterns.len()];
-        let mut state = 0u32;
-        for &bitmask in bitmasks {
-            let symbol = (bitmask & 0x0F) as usize;
-            state = compiled.dfa.goto[state as usize * AC_ALPHA + symbol];
-            for &id in ac_output_slice(&compiled.dfa, state) {
-                counts[id] += 1;
-            }
-        }
-        compiled
-            .patterns
-            .iter()
-            .zip(counts)
-            .map(|(pattern, count)| CustomPatternSummary {
-                pattern: pattern.pattern.clone(),
-                count,
-            })
-            .collect()
-    }
-
     #[test]
     fn facing_steps_count_left_and_right_runs() {
         assert_eq!(
@@ -1450,101 +1309,5 @@ mod tests {
 
         assert_eq!(actual, expected);
         assert_eq!(ac_output_slice(&dfa, suffix_state), &[4, 1, 0, 2]);
-    }
-
-    #[test]
-    fn custom_pattern_pipeline_matches_materialized_implementation() {
-        let patterns = [
-            "", "ldu", "LDU", "LuL", "lul", "RDR", "rdr", "éL", "x", "LLLLLLLL",
-        ]
-        .map(str::to_string);
-        let mut state = 0x9e37_79b9_u32;
-        let bitmasks: Vec<_> = (0..4_096)
-            .map(|_| {
-                state ^= state << 13;
-                state ^= state >> 17;
-                state ^= state << 5;
-                state as u8 & 0x0f
-            })
-            .collect();
-
-        let expected_compiled = compile_custom_patterns_materialized(&patterns);
-        let actual_compiled = compile_custom_patterns(&patterns);
-        let growing_compiled = compile_custom_patterns_impl::<true>(&patterns);
-        assert_eq!(actual_compiled.dfa.goto, growing_compiled.dfa.goto);
-        assert_eq!(
-            actual_compiled.dfa.output_starts,
-            growing_compiled.dfa.output_starts
-        );
-        assert_eq!(
-            actual_compiled.dfa.output_lens,
-            growing_compiled.dfa.output_lens
-        );
-        assert_eq!(
-            actual_compiled.dfa.flat_outputs,
-            growing_compiled.dfa.flat_outputs
-        );
-        assert_eq!(
-            actual_compiled
-                .patterns
-                .iter()
-                .map(|pattern| pattern.pattern.as_str())
-                .collect::<Vec<_>>(),
-            growing_compiled
-                .patterns
-                .iter()
-                .map(|pattern| pattern.pattern.as_str())
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(actual_compiled.dfa.goto, expected_compiled.dfa.goto);
-        assert_eq!(
-            actual_compiled.dfa.output_starts,
-            expected_compiled.dfa.output_starts
-        );
-        assert_eq!(
-            actual_compiled.dfa.output_lens,
-            expected_compiled.dfa.output_lens
-        );
-        assert_eq!(
-            actual_compiled.dfa.flat_outputs,
-            expected_compiled.dfa.flat_outputs
-        );
-        assert_eq!(
-            actual_compiled
-                .patterns
-                .iter()
-                .map(|pattern| pattern.pattern.as_str())
-                .collect::<Vec<_>>(),
-            expected_compiled
-                .patterns
-                .iter()
-                .map(|pattern| pattern.pattern.as_str())
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            detect_custom_patterns_compiled(&bitmasks, &actual_compiled),
-            detect_custom_patterns_materialized(&bitmasks, &expected_compiled)
-        );
-        assert_eq!(
-            detect_custom_patterns_compiled(&[], &actual_compiled),
-            detect_custom_patterns_materialized(&[], &expected_compiled)
-        );
-
-        let many_patterns: Vec<_> = (0..300)
-            .map(|mut value| {
-                let mut pattern = String::with_capacity(5);
-                for _ in 0..5 {
-                    pattern.push(char::from(b"LDUR"[value & 3]));
-                    value >>= 2;
-                }
-                pattern
-            })
-            .collect();
-        let expected_many = compile_custom_patterns_materialized(&many_patterns);
-        let actual_many = compile_custom_patterns(&many_patterns);
-        assert_eq!(
-            detect_custom_patterns_compiled(&bitmasks, &actual_many),
-            detect_custom_patterns_materialized(&bitmasks, &expected_many)
-        );
     }
 }

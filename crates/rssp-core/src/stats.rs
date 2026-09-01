@@ -84,11 +84,7 @@ impl From<RawChartNote> for ParsedChartNote {
 #[derive(Default)]
 pub struct ChartNotesScratch {
     notes: Vec<RawChartNote>,
-    #[cfg(any(test, feature = "bench-support"))]
-    invalid_heads: Vec<usize>,
     has_invalid: bool,
-    #[cfg(any(test, feature = "bench-support"))]
-    legacy_invalid_heads: bool,
     hold_heads: [Option<usize>; 10],
     lanes: usize,
     row_index: usize,
@@ -98,8 +94,6 @@ impl ChartNotesScratch {
     fn begin(&mut self, lanes: usize, capacity: usize) {
         self.notes.clear();
         self.notes.reserve(capacity);
-        #[cfg(any(test, feature = "bench-support"))]
-        self.invalid_heads.clear();
         self.has_invalid = false;
         self.hold_heads.fill(None);
         self.lanes = lanes;
@@ -108,11 +102,6 @@ impl ChartNotesScratch {
 
     fn invalidate_hold(&mut self, column: usize) {
         if let Some(note_index) = self.hold_heads[column].take() {
-            #[cfg(any(test, feature = "bench-support"))]
-            if self.legacy_invalid_heads {
-                self.invalid_heads.push(note_index);
-                return;
-            }
             self.notes[note_index].tail_row_index = INVALID_NOTE_ROW;
             self.has_invalid = true;
         }
@@ -157,24 +146,6 @@ impl ChartNotesScratch {
     fn finish(&mut self) {
         for column in 0..self.lanes {
             self.invalidate_hold(column);
-        }
-        #[cfg(any(test, feature = "bench-support"))]
-        if self.legacy_invalid_heads {
-            if self.invalid_heads.is_empty() {
-                return;
-            }
-            self.invalid_heads.sort_unstable();
-            let mut invalid = self.invalid_heads.iter().copied().peekable();
-            let mut note_index = 0usize;
-            self.notes.retain(|_| {
-                let keep = invalid.peek().copied() != Some(note_index);
-                if !keep {
-                    invalid.next();
-                }
-                note_index += 1;
-                keep
-            });
-            return;
         }
         if self.has_invalid {
             self.notes
@@ -395,14 +366,6 @@ fn track_holds_core<const L: usize>(
 
 fn scan_hold_ends<const L: usize>(rows: &[[u8; L]]) -> Vec<[usize; L]> {
     track_holds_core::<L>(rows.iter().map(<[u8; L]>::as_slice), rows.len())
-}
-
-#[cfg(any(test, feature = "bench-support"))]
-fn match_hold_ends_legacy<const L: usize>(rows: &[[u8; L]]) -> Vec<[Option<usize>; L]> {
-    scan_hold_ends(rows)
-        .into_iter()
-        .map(|r| r.map(|e| (e != HOLD_END_NONE).then_some(e)))
-        .collect()
 }
 
 // ============================================================================
@@ -731,30 +694,7 @@ fn recalc_without_phantoms<const L: usize>(rows: &[[u8; L]], ends: &[[usize; L]]
     stats
 }
 
-#[cfg(any(test, feature = "bench-support"))]
-fn recalc_without_phantoms_legacy<const L: usize>(
-    rows: &[[u8; L]],
-    ends: &[[Option<usize>; L]],
-) -> ArrowStats {
-    let mut stats = ArrowStats::default();
-    for (i, line) in rows.iter().enumerate() {
-        let phantom_mask =
-            ends[i].iter().enumerate().fold(
-                0u16,
-                |m, (c, e)| {
-                    if e.is_none() { m | (1u16 << c) } else { m }
-                },
-            );
-        count_line_masked(line, &mut stats, phantom_mask);
-    }
-    stats
-}
-
-fn recalc_phantom_stats<const L: usize, const LEGACY: bool>(rows: &[[u8; L]]) -> ArrowStats {
-    #[cfg(any(test, feature = "bench-support"))]
-    if LEGACY {
-        return recalc_without_phantoms_legacy(rows, &match_hold_ends_legacy(rows));
-    }
+fn recalc_phantom_stats<const L: usize>(rows: &[[u8; L]]) -> ArrowStats {
     recalc_without_phantoms(rows, &scan_hold_ends(rows))
 }
 
@@ -1070,7 +1010,7 @@ where
     if holds > 0 && (holds != ends || has_phantom) {
         let rows = parse_minimized_rows::<L>(&output);
         let step_count = stats.total_steps;
-        stats = recalc_phantom_stats::<L, false>(&rows);
+        stats = recalc_phantom_stats(&rows);
         stats.total_steps = step_count;
     }
 
@@ -1108,21 +1048,6 @@ pub fn minimize_chart_count_rows(
     }
 }
 
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn minimize_chart_count_rows_hold_ends_for_bench(
-    data: &[u8],
-    lanes: usize,
-    legacy_options: bool,
-) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
-    if legacy_options {
-        dispatch_lanes!(lanes, minimize_rows_direct_legacy_hold_ends(data))
-    } else {
-        minimize_chart_count_rows(data, lanes)
-    }
-}
-
 /// Minimizes chart data and emits resolved note events without materializing rows.
 pub fn minimize_chart_count_rows_notes(
     data: &[u8],
@@ -1135,18 +1060,6 @@ pub fn minimize_chart_count_rows_notes(
         10 => minimize_rows_direct_notes::<10, true>(data, chart_notes),
         _ => minimize_rows_direct_notes::<4, true>(data, chart_notes),
     }
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn minimize_chart_count_rows_notes_for_bench(
-    data: &[u8],
-    lanes: usize,
-    legacy_invalid_heads: bool,
-    chart_notes: &mut ChartNotesScratch,
-) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
-    chart_notes.legacy_invalid_heads = legacy_invalid_heads;
-    minimize_chart_count_rows_notes(data, lanes, chart_notes)
 }
 
 fn reduce_output_measure<const L: usize>(output: &mut Vec<u8>, start: usize, rows: usize) -> usize {
@@ -1195,7 +1108,7 @@ fn minimize_rows_direct<const L: usize, const BEATS: bool>(
     data: &[u8],
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
     let mut chart_notes = ChartNotesScratch::default();
-    minimize_rows_direct_impl::<L, BEATS, false, false>(data, &mut chart_notes)
+    minimize_rows_direct_impl::<L, BEATS, false>(data, &mut chart_notes)
 }
 
 fn minimize_rows_direct_notes<const L: usize, const BEATS: bool>(
@@ -1203,23 +1116,10 @@ fn minimize_rows_direct_notes<const L: usize, const BEATS: bool>(
     chart_notes: &mut ChartNotesScratch,
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
     chart_notes.begin(L, data.len() / (L + 1));
-    minimize_rows_direct_impl::<L, BEATS, true, false>(data, chart_notes)
+    minimize_rows_direct_impl::<L, BEATS, true>(data, chart_notes)
 }
 
-#[cfg(feature = "bench-support")]
-fn minimize_rows_direct_legacy_hold_ends<const L: usize>(
-    data: &[u8],
-) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
-    let mut chart_notes = ChartNotesScratch::default();
-    minimize_rows_direct_impl::<L, true, false, true>(data, &mut chart_notes)
-}
-
-fn minimize_rows_direct_impl<
-    const L: usize,
-    const BEATS: bool,
-    const NOTES: bool,
-    const LEGACY_HOLD_ENDS: bool,
->(
+fn minimize_rows_direct_impl<const L: usize, const BEATS: bool, const NOTES: bool>(
     data: &[u8],
     chart_notes: &mut ChartNotesScratch,
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
@@ -1323,7 +1223,7 @@ fn minimize_rows_direct_impl<
     if holds > 0 && (holds != ends || has_phantom) {
         let rows = parse_minimized_rows::<L>(&output);
         let step_count = stats.total_steps;
-        stats = recalc_phantom_stats::<L, LEGACY_HOLD_ENDS>(&rows);
+        stats = recalc_phantom_stats(&rows);
         stats.total_steps = step_count;
     }
 
@@ -1331,33 +1231,6 @@ fn minimize_rows_direct_impl<
         chart_notes.finish();
     }
 
-    let last = calc_last_beat(last_m, last_r, last_rows);
-    (output, stats, densities, beats, last)
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn minimize_chart_count_rows_legacy_for_bench(
-    data: &[u8],
-    lanes: usize,
-) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
-    dispatch_lanes!(lanes, minimize_rows_materialized(data))
-}
-
-#[cfg(feature = "bench-support")]
-fn minimize_rows_materialized<const L: usize>(
-    data: &[u8],
-) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
-    let mut beats = Vec::with_capacity(data.len() / (L + 1));
-    let (mut last_m, mut last_r, mut last_rows) = (None, 0, 0);
-    let mut on_rows = |measure, rows| append_row_beats(&mut beats, measure, rows);
-    let mut on_line = |_: &[u8; L], measure, row, rows, has_object| {
-        if has_object {
-            (last_m, last_r, last_rows) = (Some(measure), row, rows);
-        }
-    };
-    let (output, stats, densities) = process_chart::<L, _, _>(data, &mut on_rows, &mut on_line);
     let last = calc_last_beat(last_m, last_r, last_rows);
     (output, stats, densities, beats, last)
 }
@@ -1474,116 +1347,6 @@ fn scan_last_rows<const L: usize>(
             (*last_m, *last_r, *last_rows) = (Some(midx), ridx, rows);
         }
     }
-}
-
-#[cfg(feature = "bench-support")]
-fn chart_last_beat_allocating<const L: usize>(data: &[u8]) -> f64 {
-    let mut measure = Vec::with_capacity(64);
-    let mut object_depths = [0u32; L];
-    let (mut last_m, mut last_r, mut last_rows) = (None, 0usize, 0usize);
-    let (mut midx, mut done) = (0usize, false);
-
-    let mut line_off = 0usize;
-    while let Some(raw) = next_line(data, &mut line_off) {
-        let line = skip_ws(raw);
-        if line.is_empty() || line[0] == b'/' {
-            continue;
-        }
-
-        match line[0] {
-            b',' => {
-                scan_last_measure(
-                    &mut measure,
-                    midx,
-                    &mut object_depths,
-                    &mut last_m,
-                    &mut last_r,
-                    &mut last_rows,
-                );
-                midx += 1;
-            }
-            b';' => {
-                scan_last_measure(
-                    &mut measure,
-                    midx,
-                    &mut object_depths,
-                    &mut last_m,
-                    &mut last_r,
-                    &mut last_rows,
-                );
-                done = true;
-                break;
-            }
-            _ if line.len() >= L => {
-                let mut arr = [0u8; L];
-                arr.copy_from_slice(&line[..L]);
-                measure.push(arr);
-            }
-            _ => {}
-        }
-    }
-
-    if !done {
-        scan_last_measure(
-            &mut measure,
-            midx,
-            &mut object_depths,
-            &mut last_m,
-            &mut last_r,
-            &mut last_rows,
-        );
-    }
-
-    calc_last_beat(last_m, last_r, last_rows)
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn chart_last_beat_for_bench(data: &[u8], lanes: usize, legacy: bool) -> f64 {
-    if legacy {
-        dispatch_lanes!(lanes, chart_last_beat_allocating(data))
-    } else {
-        chart_last_beat(data, lanes)
-    }
-}
-
-#[cfg(feature = "bench-support")]
-fn chart_last_beat_stack64_impl<const L: usize>(data: &[u8]) -> f64 {
-    chart_last_beat_with::<L, 64>(data)
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn chart_last_beat_stack_for_bench(data: &[u8], lanes: usize, wide: bool) -> f64 {
-    if wide {
-        chart_last_beat(data, lanes)
-    } else {
-        dispatch_lanes!(lanes, chart_last_beat_stack64_impl(data))
-    }
-}
-
-#[cfg(feature = "bench-support")]
-fn scan_last_measure<const L: usize>(
-    measure: &mut Vec<[u8; L]>,
-    midx: usize,
-    object_depths: &mut [u32; L],
-    last_m: &mut Option<usize>,
-    last_r: &mut usize,
-    last_rows: &mut usize,
-) {
-    if measure.is_empty() {
-        return;
-    }
-    minimize_measure(measure);
-    let rows = measure.len();
-    for (ridx, line) in measure.iter().enumerate() {
-        if row_has_object(line, object_depths) {
-            (*last_m, *last_r, *last_rows) = (Some(midx), ridx, rows);
-        }
-    }
-    measure.clear();
 }
 
 #[inline(always)]
@@ -2479,24 +2242,33 @@ mod tests {
     }
 
     #[test]
-    fn in_place_invalid_notes_match_index_cleanup() {
+    fn invalid_hold_heads_are_removed() {
         let data = b"2000\n1000\n0200\n0300\n0040\n0001\n;";
-        let run = |legacy_invalid_heads| {
-            let mut scratch = ChartNotesScratch {
-                legacy_invalid_heads,
-                ..ChartNotesScratch::default()
-            };
-            let result = minimize_chart_count_rows_notes(data, 4, &mut scratch);
-            let notes: Vec<_> = scratch.drain().collect();
-            (result, notes)
-        };
-
-        let (legacy_result, legacy_notes) = run(true);
-        let (result, notes) = run(false);
-        assert_eq!(result, legacy_result);
-        assert_eq!(notes, legacy_notes);
-        assert_eq!(notes.len(), 3);
-        assert!(notes.iter().all(|note| note.row_index < 6));
+        let mut scratch = ChartNotesScratch::default();
+        minimize_chart_count_rows_notes(data, 4, &mut scratch);
+        assert_eq!(
+            scratch.drain().collect::<Vec<_>>(),
+            vec![
+                ParsedChartNote {
+                    row_index: 1,
+                    column: 0,
+                    note_type: ChartNoteType::Tap,
+                    tail_row_index: None,
+                },
+                ParsedChartNote {
+                    row_index: 2,
+                    column: 1,
+                    note_type: ChartNoteType::Hold,
+                    tail_row_index: Some(3),
+                },
+                ParsedChartNote {
+                    row_index: 5,
+                    column: 3,
+                    note_type: ChartNoteType::Tap,
+                    tail_row_index: None,
+                },
+            ]
+        );
     }
 
     #[test]
@@ -2621,14 +2393,6 @@ mod tests {
         assert_eq!(scratch.row_capacity(), capacity);
     }
 
-    fn assert_sentinel_hold_ends_match_options<const L: usize>(data: &[u8]) {
-        let expected = {
-            let mut scratch = ChartNotesScratch::default();
-            minimize_rows_direct_impl::<L, true, false, true>(data, &mut scratch)
-        };
-        assert_eq!(minimize_chart_count_rows(data, L), expected);
-    }
-
     #[test]
     fn in_place_typed_rows_match_owned_and_reuse_capacity() {
         assert_typed_in_matches_owned::<4>(&generated_chart::<4>());
@@ -2643,15 +2407,6 @@ mod tests {
         assert_direct_matches_typed::<10>(&generated_chart::<10>());
         assert_direct_matches_typed::<4>(b"\n,\n;\n");
         assert_direct_matches_typed::<4>(b" // comment\n 1000 trailing\n0000\r\n");
-    }
-
-    #[test]
-    fn sentinel_hold_ends_match_option_table() {
-        assert_sentinel_hold_ends_match_options::<4>(&generated_chart::<4>());
-        assert_sentinel_hold_ends_match_options::<5>(&generated_chart::<5>());
-        assert_sentinel_hold_ends_match_options::<8>(&generated_chart::<8>());
-        assert_sentinel_hold_ends_match_options::<10>(&generated_chart::<10>());
-        assert_sentinel_hold_ends_match_options::<4>(b"2000\n0200\n1000\n0030\n0040\n0001\n;");
     }
 
     #[test]

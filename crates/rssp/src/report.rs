@@ -6,14 +6,13 @@ use std::time::Duration;
 #[cfg(target_arch = "wasm32")]
 use web_time::Duration;
 
-use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
+use serde_json::Number as JsonNumber;
 
 use crate::bpm::{actual_bpm_range_raw_f32, normalize_float_digits, resolve_display_bpm};
 use crate::math::{round_dp, round_sig_figs_6, round_sig_figs_itg, roundtrip_bpm_itg};
 use crate::patterns::{CustomPatternSummary, PatternCounts, PatternVariant};
 use crate::stats::{
-    ArrowStats, RADAR_CATEGORY_COUNT, StreamCounts, measure_equally_spaced, stream_sequences,
-    visit_measure_spacing, visit_stream_sequences,
+    ArrowStats, RADAR_CATEGORY_COUNT, StreamCounts, visit_measure_spacing, visit_stream_sequences,
 };
 use crate::step_parity::{RowAnnotation, TechCounts};
 use crate::timing::{
@@ -383,8 +382,8 @@ pub fn write_reports<W: Write>(
     writer: &mut W,
 ) -> io::Result<()> {
     match mode {
-        OutputMode::Full => write_full_all_with::<W, true>(writer, simfile),
-        OutputMode::Pretty => write_pretty_all_with::<W, true>(writer, simfile),
+        OutputMode::Full => write_full_all(writer, simfile),
+        OutputMode::Pretty => write_pretty_all(writer, simfile),
         OutputMode::JSON => write_json_all(simfile, writer),
         OutputMode::CSV => write_csv_all(writer, simfile),
     }
@@ -421,12 +420,6 @@ impl fmt::Display for DurationDisplay {
 
 const fn format_duration(seconds: i32) -> DurationDisplay {
     DurationDisplay(seconds)
-}
-
-fn format_duration_owned(seconds: i32) -> String {
-    let minutes = seconds / 60;
-    let seconds = seconds % 60;
-    format!("{minutes}m {seconds:02}s")
 }
 
 fn dummy_simfile_for_course(course: &CourseSummary) -> SimfileSummary {
@@ -509,7 +502,7 @@ fn write_pretty_course<W: Write>(writer: &mut W, course: &CourseSummary) -> io::
     }
 
     let dummy = dummy_simfile_for_course(course);
-    write_pretty_chart_with::<W, true>(writer, &course.chart, &dummy)?;
+    write_pretty_chart(writer, &course.chart, &dummy)?;
     Ok(())
 }
 
@@ -539,103 +532,10 @@ fn write_full_course<W: Write>(writer: &mut W, course: &CourseSummary) -> io::Re
     }
 
     let dummy = dummy_simfile_for_course(course);
-    write_full_chart_with::<W, true>(writer, &course.chart, &dummy)?;
+    write_full_chart(writer, &course.chart, &dummy)?;
     writeln!(writer, "\nElapsed Time: {:?}", course.total_elapsed)?;
     Ok(())
 }
-
-#[cfg(test)]
-fn write_json_course_materialized<W: Write>(
-    course: &CourseSummary,
-    writer: &mut W,
-) -> io::Result<()> {
-    let mut root_obj = JsonMap::new();
-    root_obj.insert("course".to_string(), JsonValue::from(course.course.clone()));
-    root_obj.insert(
-        "course_difficulty".to_string(),
-        JsonValue::from(course.course_difficulty.clone()),
-    );
-    root_obj.insert(
-        "step_type".to_string(),
-        JsonValue::from(course.step_type.clone()),
-    );
-    root_obj.insert(
-        "length".to_string(),
-        JsonValue::from(course.total_length.to_string()),
-    );
-    root_obj.insert(
-        "sha1_hashes".to_string(),
-        JsonValue::from(course.sha1_hashes.clone()),
-    );
-    root_obj.insert(
-        "bpm_neutral_sha1_hashes".to_string(),
-        JsonValue::from(course.bpm_neutral_sha1_hashes.clone()),
-    );
-
-    let entries: Vec<JsonValue> = course
-        .entries
-        .iter()
-        .map(|entry| {
-            let mut obj = JsonMap::new();
-            obj.insert("song".to_string(), JsonValue::from(entry.song.clone()));
-            obj.insert(
-                "song_dir".to_string(),
-                JsonValue::from(entry.song_dir.clone()),
-            );
-            obj.insert(
-                "step_type".to_string(),
-                JsonValue::from(entry.step_type.clone()),
-            );
-            obj.insert(
-                "difficulty".to_string(),
-                JsonValue::from(entry.difficulty.clone()),
-            );
-            obj.insert("rating".to_string(), JsonValue::from(entry.rating.clone()));
-            obj.insert("sha1".to_string(), JsonValue::from(entry.sha1.clone()));
-            obj.insert(
-                "bpm_neutral_sha1".to_string(),
-                JsonValue::from(entry.bpm_neutral_sha1.clone()),
-            );
-            JsonValue::Object(obj)
-        })
-        .collect();
-    root_obj.insert("entries".to_string(), JsonValue::from(entries));
-
-    let dummy = dummy_simfile_for_course(course);
-    let mut chart_obj = JsonMap::new();
-    chart_obj.insert("chart_info".to_string(), json_chart_info(&course.chart));
-    chart_obj.insert("arrow_stats".to_string(), json_arrow_stats(&course.chart));
-    chart_obj.insert("gimmicks".to_string(), json_gimmicks(&course.chart, &dummy));
-    chart_obj.insert("timing".to_string(), json_timing(&course.chart, &dummy));
-    chart_obj.insert("stream_info".to_string(), json_stream_info(&course.chart));
-    chart_obj.insert("nps".to_string(), json_nps(&course.chart));
-    chart_obj.insert("breakdown".to_string(), json_sn_breakdown(&course.chart));
-    chart_obj.insert(
-        "stream_breakdown".to_string(),
-        json_stream_breakdown(&course.chart),
-    );
-    if course.pattern_counts_enabled {
-        chart_obj.insert(
-            "mono_candle_stats".to_string(),
-            json_mono_candle_stats(&course.chart),
-        );
-        chart_obj.insert(
-            "pattern_counts".to_string(),
-            json_pattern_counts(&course.chart),
-        );
-    }
-    if course.tech_counts_enabled {
-        chart_obj.insert("tech_counts".to_string(), json_tech_counts(&course.chart));
-    }
-    root_obj.insert("chart".to_string(), JsonValue::Object(chart_obj));
-
-    let root = JsonValue::Object(root_obj);
-
-    write_json_value_with_key(writer, None, &root, 0)?;
-    writeln!(writer)?;
-    Ok(())
-}
-
 fn write_json_course_hashes<W: Write>(writer: &mut W, hashes: &[String]) -> io::Result<()> {
     write_json_scalar_iter(writer, hashes, |writer, hash| {
         write_json_string(writer, hash)
@@ -688,66 +588,6 @@ fn write_json_course<W: Write>(course: &CourseSummary, writer: &mut W) -> io::Re
     root.finish()?;
     writeln!(writer)
 }
-
-#[cfg(test)]
-fn write_csv_course_materialized<W: Write>(
-    writer: &mut W,
-    course: &CourseSummary,
-) -> io::Result<()> {
-    let header = [
-        "Course",
-        "Difficulty",
-        "StepsType",
-        "Length",
-        "Entries",
-        "sha1_hashes",
-        "bpm_neutral_sha1_hashes",
-        "total_arrows",
-        "total_steps",
-        "jumps",
-        "hands",
-        "holds",
-        "rolls",
-        "mines",
-        "lifts",
-        "fakes",
-        "total_streams",
-        "total_breaks",
-        "max_nps",
-        "median_nps",
-    ];
-    writeln!(writer, "{}", header.join(","))?;
-
-    let chart = &course.chart;
-    let hashes = course.sha1_hashes.join("|");
-    let bpm_hashes = course.bpm_neutral_sha1_hashes.join("|");
-    writeln!(
-        writer,
-        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.6},{:.2}",
-        course.course,
-        course.course_difficulty,
-        course.step_type,
-        format_duration(course.total_length),
-        course.entries.len(),
-        hashes,
-        bpm_hashes,
-        chart.stats.total_arrows,
-        chart.stats.total_steps,
-        chart.stats.jumps,
-        chart.stats.hands,
-        chart.stats.holds,
-        chart.stats.rolls,
-        chart.stats.mines,
-        chart.stats.lifts,
-        chart.stats.fakes,
-        chart.total_streams,
-        chart.stream_counts.total_breaks,
-        chart.max_nps,
-        chart.median_nps
-    )?;
-    Ok(())
-}
-
 const COURSE_CSV_HEADER: &[u8] = concat!(
     "Course,Difficulty,StepsType,Length,Entries,sha1_hashes,",
     "bpm_neutral_sha1_hashes,total_arrows,total_steps,jumps,hands,",
@@ -916,15 +756,6 @@ fn add_indefinite_segment<T: PartialEq>(segments: &mut Vec<(f64, T)>, beat: f64,
     );
 }
 
-#[cfg(any(test, feature = "profile"))]
-fn tidy_segments_old<T: PartialEq>(segments: Vec<(f64, T)>) -> Vec<(f64, T)> {
-    let mut out = Vec::with_capacity(segments.len());
-    for (beat, value) in segments {
-        add_indefinite_segment(&mut out, beat, value);
-    }
-    out
-}
-
 fn tidy_in_place<T>(mut segments: Vec<T>, mut add: impl FnMut(&mut Vec<T>, T)) -> Vec<T> {
     let input_len = segments.len();
     let input = segments.as_mut_ptr();
@@ -961,65 +792,7 @@ fn tidy_timing_triples(segments: Vec<(f64, i32, i32)>) -> Vec<(f64, i32, i32)> {
     })
 }
 
-#[cfg(any(test, feature = "profile"))]
-fn parse_time_signatures_with<const PREALLOC: bool>(
-    opt: Option<&str>,
-    capacity: usize,
-    tidy: impl FnOnce(Vec<(f64, (i32, i32))>) -> Vec<(f64, (i32, i32))>,
-) -> Vec<(f64, i32, i32)> {
-    let Some(s) = opt else {
-        return vec![(0.0, 4, 4)];
-    };
-
-    let mut raw = Vec::new();
-    for segment in s.split(',') {
-        let segment = segment.trim();
-        if segment.is_empty() {
-            continue;
-        }
-        let mut parts = segment.split('=');
-        let Some(beat_str) = parts.next() else {
-            continue;
-        };
-        let Some(num_str) = parts.next() else {
-            continue;
-        };
-        let Some(den_str) = parts.next() else {
-            continue;
-        };
-        let Ok(beat) = beat_str.trim().parse::<f64>() else {
-            continue;
-        };
-        let Ok(num) = num_str.trim().parse::<i32>() else {
-            continue;
-        };
-        let Ok(den) = den_str.trim().parse::<i32>() else {
-            continue;
-        };
-        if PREALLOC && raw.is_empty() {
-            raw.reserve(capacity);
-        }
-        raw.push((beat, (num, den)));
-    }
-
-    if raw.is_empty() {
-        return vec![(0.0, 4, 4)];
-    }
-
-    let needs_default = raw
-        .first()
-        .is_some_and(|(beat, _)| beat_to_note_row(*beat) > 0);
-    if needs_default {
-        raw.insert(0, (0.0, (4, 4)));
-    }
-
-    tidy(raw)
-        .into_iter()
-        .map(|(beat, (num, den))| (beat, num, den))
-        .collect()
-}
-
-fn parse_tickcounts_with<const PREALLOC: bool>(
+fn parse_tickcounts_with(
     opt: Option<&str>,
     capacity: usize,
     tidy: impl FnOnce(Vec<(f64, i32)>) -> Vec<(f64, i32)>,
@@ -1047,7 +820,7 @@ fn parse_tickcounts_with<const PREALLOC: bool>(
         let Ok(count) = count_str.trim().parse::<i32>() else {
             continue;
         };
-        if PREALLOC && raw.is_empty() {
+        if raw.is_empty() {
             raw.reserve(capacity);
         }
         raw.push((beat, count));
@@ -1058,57 +831,6 @@ fn parse_tickcounts_with<const PREALLOC: bool>(
     }
 
     tidy(raw)
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn parse_combos_with<const PREALLOC: bool>(
-    opt: Option<&str>,
-    capacity: usize,
-    tidy: impl FnOnce(Vec<(f64, (i32, i32))>) -> Vec<(f64, (i32, i32))>,
-) -> Vec<(f64, i32, i32)> {
-    let Some(s) = opt else {
-        return vec![(0.0, 1, 1)];
-    };
-
-    let mut raw = Vec::new();
-    for segment in s.split(',') {
-        let segment = segment.trim();
-        if segment.is_empty() {
-            continue;
-        }
-        let mut parts = segment.split('=');
-        let Some(beat_str) = parts.next() else {
-            continue;
-        };
-        let Some(combo_str) = parts.next() else {
-            continue;
-        };
-        let Some(miss_str) = parts.next() else {
-            continue;
-        };
-        let Ok(beat) = beat_str.trim().parse::<f64>() else {
-            continue;
-        };
-        let Ok(combo) = combo_str.trim().parse::<i32>() else {
-            continue;
-        };
-        let Ok(miss) = miss_str.trim().parse::<i32>() else {
-            continue;
-        };
-        if PREALLOC && raw.is_empty() {
-            raw.reserve(capacity);
-        }
-        raw.push((beat, (combo, miss)));
-    }
-
-    if raw.is_empty() {
-        return vec![(0.0, 1, 1)];
-    }
-
-    tidy(raw)
-        .into_iter()
-        .map(|(beat, (combo, miss))| (beat, combo, miss))
-        .collect()
 }
 
 fn estimate_text_segments(text: &str, bytes_per_segment: usize) -> usize {
@@ -1165,39 +887,12 @@ fn parse_time_signatures(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
 
 fn parse_tickcounts(opt: Option<&str>) -> Vec<(f64, i32)> {
     let capacity = opt.map_or(0, |text| estimate_text_segments(text, 6));
-    parse_tickcounts_with::<true>(opt, capacity, tidy_indefinite_segments)
+    parse_tickcounts_with(opt, capacity, tidy_indefinite_segments)
 }
 
 fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
     let capacity = opt.map_or(0, |text| estimate_text_segments(text, 8));
     parse_timing_triples(opt, capacity, (0.0, 1, 1), false)
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn parse_time_signatures_staged(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
-    let capacity = opt.map_or(0, |text| estimate_text_segments(text, 7) + 1);
-    parse_time_signatures_with::<true>(opt, capacity, tidy_indefinite_segments)
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn parse_combos_staged(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
-    let capacity = opt.map_or(0, |text| estimate_text_segments(text, 8));
-    parse_combos_with::<true>(opt, capacity, tidy_indefinite_segments)
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn parse_time_signatures_old(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
-    parse_time_signatures_with::<false>(opt, 0, tidy_segments_old)
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn parse_tickcounts_old(opt: Option<&str>) -> Vec<(f64, i32)> {
-    parse_tickcounts_with::<false>(opt, 0, tidy_segments_old)
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn parse_combos_old(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
-    parse_combos_with::<false>(opt, 0, tidy_segments_old)
 }
 
 struct NormalizedTimingTables {
@@ -1379,24 +1074,7 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
 
 #[cfg(test)]
 mod tests {
-    use std::fmt::Write as _;
-
-    use super::{
-        CourseEntrySummary, CourseSummary, CsvRow, SpeedUnit, build_timing_snapshot,
-        chart_or_global, format_duration, normalize_scrolls_like_itg, normalize_speeds_like_itg,
-        parse_combos, parse_combos_staged, parse_labels, parse_tickcounts, parse_time_signatures,
-        parse_time_signatures_staged, push_bpm_range, push_duration, push_num, push_str,
-        steps_timing_allowed, timing_fixed_6, write_csv_course, write_csv_course_materialized,
-        write_json_all, write_json_all_materialized, write_json_all_with, write_json_course,
-        write_json_course_materialized, write_json_native_bpms, write_json_stream_sequences,
-    };
-
-    fn timing_fixed_6_materialized(value: f64) -> f64 {
-        format!("{:.6}", value as f32)
-            .parse()
-            .expect("fixed 6-decimal timing formatting should always parse")
-    }
-
+    use super::{timing_fixed_6, write_json_native_bpms};
     #[test]
     fn timing_fixed_6_matches_harness_style_values() {
         assert_eq!(timing_fixed_6(0.009), 0.009);
@@ -1404,63 +1082,6 @@ mod tests {
         assert_eq!(timing_fixed_6(171.39500427246094), 171.395004);
         assert_eq!(timing_fixed_6(159.7899932861328), 159.789993);
     }
-
-    #[test]
-    fn flat_timing_triples_preserve_staged_normalization() {
-        for input in [
-            None,
-            Some(""),
-            Some("0=4=4"),
-            Some("8=3=4,invalid,0=4=4,8=7=8,4=4=4"),
-            Some("-0.001=2=3,0.001=5=7,16=5=7,8=6=8"),
-        ] {
-            assert_eq!(
-                parse_time_signatures(input),
-                parse_time_signatures_staged(input),
-                "time signatures: {input:?}"
-            );
-            assert_eq!(
-                parse_combos(input),
-                parse_combos_staged(input),
-                "combos: {input:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn timing_fixed_6_matches_materialized_f32_formatting() {
-        for bits in (0..=u32::MAX).step_by(65_537) {
-            let value = f64::from(f32::from_bits(bits));
-            let actual = timing_fixed_6(value);
-            let expected = timing_fixed_6_materialized(value);
-            if expected.is_nan() {
-                assert!(actual.is_nan(), "bits={bits:#010x}");
-            } else {
-                assert_eq!(actual.to_bits(), expected.to_bits(), "bits={bits:#010x}");
-            }
-        }
-
-        for value in [
-            -0.0,
-            0.0,
-            0.000_000_5,
-            -0.000_000_5,
-            8_388_607.5,
-            8_388_608.0,
-            f64::INFINITY,
-            f64::NEG_INFINITY,
-            f64::NAN,
-        ] {
-            let actual = timing_fixed_6(value);
-            let expected = timing_fixed_6_materialized(value);
-            if expected.is_nan() {
-                assert!(actual.is_nan());
-            } else {
-                assert_eq!(actual.to_bits(), expected.to_bits(), "value={value:?}");
-            }
-        }
-    }
-
     #[test]
     fn streamed_bpm_text_preserves_stack_overflow_output() {
         let bpms: Vec<_> = (0..1_024)
@@ -1475,438 +1096,9 @@ mod tests {
         assert_eq!(actual.last(), Some(&b'"'));
         assert_eq!(&actual[1..actual.len() - 1], formatted.as_bytes());
     }
-
-    #[test]
-    fn timing_snapshot_matches_materialized_vector_pipeline() {
-        const FIXTURE: &[u8] = include_bytes!("../benches/fixtures/watch_yo_step.ssc");
-        let options = crate::AnalysisOptions {
-            compute_tech_counts: false,
-            compute_pattern_counts: false,
-            ..crate::AnalysisOptions::default()
-        };
-        let summary = crate::analyze(FIXTURE, "ssc", &options).expect("fixture should analyze");
-        let allow_steps_timing = steps_timing_allowed(summary.ssc_version, summary.timing_format);
-
-        for chart in &summary.charts {
-            let actual = build_timing_snapshot(chart, &summary);
-            let timing = &chart.timing_segments;
-            let finalize = timing_fixed_6;
-
-            let bpms_raw: Vec<_> = timing
-                .bpms
-                .iter()
-                .map(|&(beat, bpm)| {
-                    (
-                        f64::from(beat),
-                        crate::math::roundtrip_bpm_itg(f64::from(bpm)),
-                    )
-                })
-                .collect();
-            let expected_bpms: Vec<_> = bpms_raw
-                .iter()
-                .map(|&(beat, bpm)| (finalize(beat), finalize(bpm)))
-                .collect();
-            assert_eq!(actual.bpms, expected_bpms);
-            assert_eq!(
-                actual.bpms_formatted,
-                crate::timing::format_bpm_segments_like_itg(&bpms_raw)
-            );
-            assert_eq!(
-                (actual.bpm_min_raw, actual.bpm_max_raw),
-                crate::bpm::actual_bpm_range_raw(&bpms_raw)
-            );
-
-            let expected_speeds = normalize_speeds_like_itg(
-                timing
-                    .speeds
-                    .iter()
-                    .map(|&(beat, ratio, delay, unit)| {
-                        (
-                            f64::from(beat),
-                            f64::from(ratio),
-                            f64::from(delay),
-                            i32::from(unit == SpeedUnit::Seconds),
-                        )
-                    })
-                    .collect(),
-            )
-            .into_iter()
-            .map(|(beat, ratio, delay, unit)| {
-                (finalize(beat), finalize(ratio), finalize(delay), unit)
-            })
-            .collect::<Vec<_>>();
-            assert_eq!(actual.speeds, expected_speeds);
-
-            let expected_scrolls = normalize_scrolls_like_itg(
-                timing
-                    .scrolls
-                    .iter()
-                    .map(|&(beat, ratio)| (f64::from(beat), f64::from(ratio)))
-                    .collect(),
-            )
-            .into_iter()
-            .map(|(beat, ratio)| (finalize(beat), finalize(ratio)))
-            .collect::<Vec<_>>();
-            assert_eq!(actual.scrolls, expected_scrolls);
-
-            let time_signatures = chart_or_global(
-                allow_steps_timing,
-                chart.chart_has_own_timing,
-                &chart.chart_time_signatures,
-                &summary.normalized_time_signatures,
-            );
-            let expected_time_signatures = parse_time_signatures(time_signatures)
-                .into_iter()
-                .map(|(beat, numerator, denominator)| (finalize(beat), numerator, denominator))
-                .collect::<Vec<_>>();
-            assert_eq!(actual.time_signatures, expected_time_signatures);
-
-            let labels = chart_or_global(
-                allow_steps_timing,
-                chart.chart_has_own_timing,
-                &chart.chart_labels,
-                &summary.normalized_labels,
-            );
-            let expected_labels = parse_labels(labels)
-                .into_iter()
-                .map(|(beat, label)| (finalize(beat), label))
-                .collect::<Vec<_>>();
-            assert_eq!(actual.labels, expected_labels);
-
-            let tickcounts = chart_or_global(
-                allow_steps_timing,
-                chart.chart_has_own_timing,
-                &chart.chart_tickcounts,
-                &summary.normalized_tickcounts,
-            );
-            let expected_tickcounts = parse_tickcounts(tickcounts)
-                .into_iter()
-                .map(|(beat, count)| (finalize(beat), count))
-                .collect::<Vec<_>>();
-            assert_eq!(actual.tickcounts, expected_tickcounts);
-
-            let combos = chart_or_global(
-                allow_steps_timing,
-                chart.chart_has_own_timing,
-                &chart.chart_combos,
-                &summary.normalized_combos,
-            );
-            let expected_combos = parse_combos(combos)
-                .into_iter()
-                .map(|(beat, combo, miss)| (finalize(beat), combo, miss))
-                .collect::<Vec<_>>();
-            assert_eq!(actual.combos, expected_combos);
-        }
-    }
-
-    #[test]
-    fn csv_row_streaming_matches_materialized_fields() {
-        fn escaped(value: &str) -> String {
-            if value.contains('"') || value.contains(',') {
-                format!("\"{}\"", value.replace('"', "\"\""))
-            } else {
-                value.to_string()
-            }
-        }
-
-        let values = ["plain", "a,b", "a\"b", "line\nbreak", "", "café"];
-        let mut expected = values.map(escaped).join(",");
-        expected.push_str(",42,-3.5\n");
-
-        let mut actual = Vec::new();
-        let mut row = CsvRow::new(&mut actual);
-        for value in values {
-            push_str(&mut row, value);
-        }
-        push_num(&mut row, 42);
-        push_num(&mut row, -3.5);
-        row.finish().expect("in-memory CSV row should write");
-
-        assert_eq!(actual, expected.as_bytes());
-    }
-
-    #[test]
-    fn csv_numeric_fields_match_materialized_formatting() {
-        for seconds in [
-            i32::MIN,
-            -3_661,
-            -61,
-            -60,
-            -1,
-            0,
-            1,
-            59,
-            60,
-            61,
-            3_661,
-            i32::MAX,
-        ] {
-            let expected = format!("{}\n", format_duration(seconds));
-            let mut actual = Vec::new();
-            let mut row = CsvRow::new(&mut actual);
-            push_duration(&mut row, seconds);
-            row.finish().expect("in-memory CSV row should write");
-            assert_eq!(actual, expected.as_bytes(), "seconds={seconds}");
-        }
-
-        for (min_bpm, max_bpm) in [
-            (-0.0, 0.0),
-            (-123.5, 456.25),
-            (f64::MIN, f64::MAX),
-            (f64::NEG_INFINITY, f64::INFINITY),
-            (f64::NAN, f64::NAN),
-        ] {
-            let expected = format!("{min_bpm}-{max_bpm}\n");
-            let mut actual = Vec::new();
-            let mut row = CsvRow::new(&mut actual);
-            push_bpm_range(&mut row, min_bpm, max_bpm);
-            row.finish().expect("in-memory CSV row should write");
-            assert_eq!(actual, expected.as_bytes());
-        }
-    }
-
-    #[test]
-    fn json_streaming_matches_materialized_report() {
-        fn assert_matches(fixture: &[u8], options: &crate::AnalysisOptions) {
-            let summary = crate::analyze(fixture, "ssc", options).expect("fixture should analyze");
-
-            let mut expected = Vec::new();
-            write_json_all_materialized(&summary, &mut expected)
-                .expect("materialized JSON should write");
-            let mut actual = Vec::new();
-            write_json_all(&summary, &mut actual).expect("streaming JSON should write");
-
-            assert_eq!(actual, expected);
-            let mut prior = Vec::new();
-            write_json_all_with::<_, true, false, false, false, false>(&summary, &mut prior)
-                .expect("materialized timing arrays should write");
-            assert_eq!(actual, prior);
-            serde_json::from_slice::<serde_json::Value>(&actual)
-                .expect("streaming output should be valid JSON");
-        }
-
-        fn dense_timing_fixture(segment_count: usize) -> String {
-            fn push_pairs(
-                out: &mut String,
-                segment_count: usize,
-                mut value: impl FnMut(usize) -> f64,
-            ) {
-                for index in 0..segment_count {
-                    if index != 0 {
-                        out.push(',');
-                    }
-                    write!(out, "{}={}", index * 4, value(index)).unwrap();
-                }
-                out.push_str(";\n");
-            }
-
-            let mut fixture = String::new();
-            fixture.push_str("#VERSION:0.83;\n#OFFSET:-0.125;\n#BPMS:");
-            push_pairs(&mut fixture, segment_count, |index| {
-                90.0 + (index % 211) as f64
-            });
-            fixture.push_str("#STOPS:");
-            push_pairs(&mut fixture, segment_count, |index| {
-                0.01 + (index % 17) as f64 / 100.0
-            });
-            fixture.push_str("#DELAYS:");
-            push_pairs(&mut fixture, segment_count, |index| {
-                0.02 + (index % 13) as f64 / 100.0
-            });
-            fixture.push_str("#WARPS:");
-            push_pairs(&mut fixture, segment_count, |index| {
-                0.5 + (index % 7) as f64
-            });
-            fixture.push_str("#SPEEDS:");
-            for index in 0..segment_count {
-                if index != 0 {
-                    fixture.push(',');
-                }
-                write!(
-                    &mut fixture,
-                    "{}={}=0.25={}",
-                    index * 4,
-                    1.25 + (index % 9) as f64 / 10.0,
-                    index & 1
-                )
-                .unwrap();
-            }
-            fixture.push_str(";\n#SCROLLS:");
-            push_pairs(&mut fixture, segment_count, |index| {
-                0.75 + (index % 11) as f64 / 10.0
-            });
-            fixture.push_str("#FAKES:");
-            push_pairs(&mut fixture, segment_count, |index| {
-                0.25 + (index % 5) as f64
-            });
-            fixture.push_str(concat!(
-                "#TIMESIGNATURES:0=4=4,64=3=4,128=7=8;\n",
-                "#LABELS:0=Song Start,64=Middle,128=Finale;\n",
-                "#TICKCOUNTS:0=4,64=8,128=12;\n",
-                "#COMBOS:0=1=1,64=2=3,128=4=5;\n",
-                "#NOTEDATA:;\n",
-                "#STEPSTYPE:dance-single;\n",
-                "#DESCRIPTION:dense timing oracle;\n",
-                "#DIFFICULTY:Challenge;\n",
-                "#METER:10;\n",
-                "#CREDIT:;\n",
-                "#NOTES:\n",
-                "1000\n0100\n0010\n0001\n",
-                ";\n"
-            ));
-            fixture
-        }
-
-        const HASH_FIXTURE: &[u8] = include_bytes!("../benches/fixtures/hash_fixture.ssc");
-        const REPORT_FIXTURE: &[u8] = include_bytes!("../benches/fixtures/camellia_mix.ssc");
-        let mut fast_options = crate::AnalysisOptions::default();
-        fast_options.compute_tech_counts = false;
-        fast_options.compute_pattern_counts = false;
-        let mut custom_options = crate::AnalysisOptions::default();
-        custom_options.custom_patterns = ["RUR", "L\"U", "LDU", "D\\R", "rur"]
-            .map(str::to_string)
-            .into();
-
-        for options in &[
-            crate::AnalysisOptions::default(),
-            fast_options.clone(),
-            custom_options,
-        ] {
-            assert_matches(HASH_FIXTURE, options);
-        }
-        assert_matches(REPORT_FIXTURE, &fast_options);
-        assert_matches(REPORT_FIXTURE, &crate::AnalysisOptions::default());
-        assert_matches(dense_timing_fixture(32).as_bytes(), &fast_options);
-    }
-
-    #[test]
-    fn course_reports_streaming_match_materialized_output() {
-        const FIXTURE: &[u8] = include_bytes!("../benches/fixtures/hash_fixture.ssc");
-
-        fn assert_matches(options: &crate::AnalysisOptions, populated: bool) {
-            let mut simfile =
-                crate::analyze(FIXTURE, "ssc", options).expect("fixture should analyze");
-            let chart = simfile
-                .charts
-                .pop()
-                .expect("fixture should contain a chart");
-            let entries = if populated {
-                vec![
-                    CourseEntrySummary {
-                        song: "Song \"One\"\n".to_string(),
-                        song_dir: "Group\\Song One".to_string(),
-                        step_type: "dance-single".to_string(),
-                        difficulty: "Challenge".to_string(),
-                        rating: "12".to_string(),
-                        sha1: "0123456789abcdef".to_string(),
-                        bpm_neutral_sha1: "fedcba9876543210".to_string(),
-                    },
-                    CourseEntrySummary {
-                        song: "Café 二".to_string(),
-                        song_dir: String::new(),
-                        step_type: "dance-double".to_string(),
-                        difficulty: "Edit".to_string(),
-                        rating: "0".to_string(),
-                        sha1: String::new(),
-                        bpm_neutral_sha1: String::new(),
-                    },
-                ]
-            } else {
-                Vec::new()
-            };
-            let course = CourseSummary {
-                course: "Course \"Parity\"\n".to_string(),
-                course_difficulty: "Challenge".to_string(),
-                step_type: "dance-single".to_string(),
-                total_length: 3_661,
-                entries,
-                chart,
-                sha1_hashes: if populated {
-                    vec![
-                        "0123456789abcdef".to_string(),
-                        String::new(),
-                        "abcdef0123456789".to_string(),
-                    ]
-                } else {
-                    Vec::new()
-                },
-                bpm_neutral_sha1_hashes: if populated {
-                    vec![
-                        "fedcba9876543210".to_string(),
-                        String::new(),
-                        "9876543210fedcba".to_string(),
-                    ]
-                } else {
-                    Vec::new()
-                },
-                pattern_counts_enabled: options.compute_pattern_counts,
-                tech_counts_enabled: options.compute_tech_counts,
-                total_elapsed: std::time::Duration::ZERO,
-            };
-
-            let mut expected = Vec::new();
-            write_json_course_materialized(&course, &mut expected)
-                .expect("materialized course JSON should write");
-            let mut actual = Vec::new();
-            write_json_course(&course, &mut actual).expect("streaming course JSON should write");
-
-            assert_eq!(actual, expected);
-            serde_json::from_slice::<serde_json::Value>(&actual)
-                .expect("streaming course output should be valid JSON");
-
-            expected.clear();
-            write_csv_course_materialized(&mut expected, &course)
-                .expect("materialized course CSV should write");
-            actual.clear();
-            write_csv_course(&mut actual, &course).expect("streaming course CSV should write");
-            assert_eq!(actual, expected);
-        }
-
-        assert_matches(&crate::AnalysisOptions::default(), true);
-        let fast_options = crate::AnalysisOptions {
-            compute_tech_counts: false,
-            compute_pattern_counts: false,
-            ..crate::AnalysisOptions::default()
-        };
-        assert_matches(&fast_options, false);
-    }
-
-    #[test]
-    fn streamed_sequence_objects_match_materialized_segments() {
-        let densities = [0, 12, 15, 16, 20, 0, 24, 0, 0, 32];
-        let mut state = 0x243f_6a88_85a3_08d3_u64;
-
-        for len in 0..128 {
-            let measures: Vec<_> = (0..len)
-                .map(|_| {
-                    state ^= state << 13;
-                    state ^= state >> 7;
-                    state ^= state << 17;
-                    densities[state as usize % densities.len()]
-                })
-                .collect();
-            let expected = crate::stats::stream_sequences(&measures)
-                .into_iter()
-                .map(|segment| {
-                    serde_json::json!({
-                        "stream_start": segment.start as u32,
-                        "stream_end": segment.end as u32,
-                        "is_break": segment.is_break,
-                    })
-                })
-                .collect::<Vec<_>>();
-
-            let mut actual = Vec::new();
-            write_json_stream_sequences(&mut actual, &measures, 0)
-                .expect("stream sequences should write");
-            let actual: Vec<serde_json::Value> =
-                serde_json::from_slice(&actual).expect("stream sequences should be valid JSON");
-            assert_eq!(actual, expected, "{measures:?}");
-        }
-    }
 }
 
-fn parse_labels_with<const PREALLOC: bool>(
+fn parse_labels_with(
     opt: Option<&str>,
     capacity: usize,
     tidy: impl FnOnce(Vec<(f64, String)>) -> Vec<(f64, String)>,
@@ -1931,7 +1123,7 @@ fn parse_labels_with<const PREALLOC: bool>(
         if label.is_empty() {
             continue;
         }
-        if PREALLOC && raw.is_empty() {
+        if raw.is_empty() {
             raw.reserve(capacity);
         }
         raw.push((beat, label));
@@ -1946,69 +1138,7 @@ fn parse_labels_with<const PREALLOC: bool>(
 
 fn parse_labels(opt: Option<&str>) -> Vec<(f64, String)> {
     let capacity = opt.map_or(0, |text| estimate_text_segments(text, 16));
-    parse_labels_with::<true>(opt, capacity, tidy_indefinite_segments)
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn parse_labels_old(opt: Option<&str>) -> Vec<(f64, String)> {
-    parse_labels_with::<false>(opt, 0, tidy_segments_old)
-}
-
-#[cfg(feature = "profile")]
-pub(crate) type ProfileTimingText = (
-    Vec<(f64, i32, i32)>,
-    Vec<(f64, String)>,
-    Vec<(f64, i32)>,
-    Vec<(f64, i32, i32)>,
-);
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_timing_text(
-    time_signatures: &str,
-    labels: &str,
-    tickcounts: &str,
-    combos: &str,
-    legacy: bool,
-) -> ProfileTimingText {
-    if legacy {
-        (
-            parse_time_signatures_old(Some(time_signatures)),
-            parse_labels_old(Some(labels)),
-            parse_tickcounts_old(Some(tickcounts)),
-            parse_combos_old(Some(combos)),
-        )
-    } else {
-        (
-            parse_time_signatures(Some(time_signatures)),
-            parse_labels(Some(labels)),
-            parse_tickcounts(Some(tickcounts)),
-            parse_combos(Some(combos)),
-        )
-    }
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_timing_triples(
-    time_signatures: &str,
-    labels: &str,
-    tickcounts: &str,
-    combos: &str,
-    staged: bool,
-) -> ProfileTimingText {
-    (
-        if staged {
-            parse_time_signatures_staged(Some(time_signatures))
-        } else {
-            parse_time_signatures(Some(time_signatures))
-        },
-        parse_labels(Some(labels)),
-        parse_tickcounts(Some(tickcounts)),
-        if staged {
-            parse_combos_staged(Some(combos))
-        } else {
-            parse_combos(Some(combos))
-        },
-    )
+    parse_labels_with(opt, capacity, tidy_indefinite_segments)
 }
 
 fn count_timing_segments_from_str(s: &str) -> u32 {
@@ -2159,19 +1289,7 @@ fn write_gimmicks<W: Write>(
     Ok(())
 }
 
-fn write_chart_header<W: Write, const STREAMED: bool>(
-    writer: &mut W,
-    chart: &ChartSummary,
-) -> io::Result<()> {
-    if !STREAMED {
-        let header = format!(
-            "{} {} : {}",
-            chart.difficulty_str, chart.rating_str, chart.step_artist_str
-        );
-        writeln!(writer, "\n{header}")?;
-        return writeln!(writer, "{}", "-".repeat(header.len()));
-    }
-
+fn write_chart_header<W: Write>(writer: &mut W, chart: &ChartSummary) -> io::Result<()> {
     writeln!(
         writer,
         "\n{} {} : {}",
@@ -2188,36 +1306,14 @@ fn write_chart_header<W: Write, const STREAMED: bool>(
     writer.write_all(b"\n")
 }
 
-fn write_pretty_all_with<W: Write, const STREAMED: bool>(
-    writer: &mut W,
-    simfile: &SimfileSummary,
-) -> io::Result<()> {
+fn write_pretty_all<W: Write>(writer: &mut W, simfile: &SimfileSummary) -> io::Result<()> {
     writeln!(writer, "--- Song Details ---")?;
-    if STREAMED {
-        write!(writer, "Title: {}", simfile.title_str)?;
-        if !simfile.subtitle_str.is_empty() {
-            write!(writer, " {}", simfile.subtitle_str)?;
-        }
-        writeln!(writer, " by {}", simfile.artist_str)?;
-        writeln!(writer, "Length: {}", format_duration(simfile.total_length))?;
-    } else {
-        writeln!(
-            writer,
-            "Title: {}{} by {}",
-            simfile.title_str,
-            if simfile.subtitle_str.is_empty() {
-                String::new()
-            } else {
-                format!(" {}", simfile.subtitle_str)
-            },
-            simfile.artist_str
-        )?;
-        writeln!(
-            writer,
-            "Length: {}",
-            format_duration_owned(simfile.total_length)
-        )?;
+    write!(writer, "Title: {}", simfile.title_str)?;
+    if !simfile.subtitle_str.is_empty() {
+        write!(writer, " {}", simfile.subtitle_str)?;
     }
+    writeln!(writer, " by {}", simfile.artist_str)?;
+    writeln!(writer, "Length: {}", format_duration(simfile.total_length))?;
     if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
         writeln!(writer, "BPM: {:.0}", simfile.min_bpm)?;
     } else {
@@ -2227,18 +1323,18 @@ fn write_pretty_all_with<W: Write, const STREAMED: bool>(
     }
 
     for chart in &simfile.charts {
-        write_pretty_chart_with::<W, STREAMED>(writer, chart, simfile)?;
+        write_pretty_chart(writer, chart, simfile)?;
     }
 
     Ok(())
 }
 
-fn write_pretty_chart_with<W: Write, const STREAMED: bool>(
+fn write_pretty_chart<W: Write>(
     writer: &mut W,
     chart: &ChartSummary,
     simfile: &SimfileSummary,
 ) -> io::Result<()> {
-    write_chart_header::<W, STREAMED>(writer, chart)?;
+    write_chart_header(writer, chart)?;
 
     if (chart.median_nps - chart.max_nps).abs() < f64::EPSILON {
         writeln!(writer, "NPS: {:.2} Median/Peak", chart.median_nps)?;
@@ -2359,10 +1455,7 @@ fn write_pretty_chart_with<W: Write, const STREAMED: bool>(
     Ok(())
 }
 
-fn write_full_all_with<W: Write, const STREAMED: bool>(
-    writer: &mut W,
-    simfile: &SimfileSummary,
-) -> io::Result<()> {
+fn write_full_all<W: Write>(writer: &mut W, simfile: &SimfileSummary) -> io::Result<()> {
     writeln!(writer, "--- Song Details ---")?;
     writeln!(writer, "Title: {}", simfile.title_str)?;
     if !simfile.subtitle_str.is_empty() {
@@ -2379,15 +1472,7 @@ fn write_full_all_with<W: Write, const STREAMED: bool>(
         writeln!(writer, "Artist trans: {}", simfile.artisttranslit_str)?;
     }
 
-    if STREAMED {
-        writeln!(writer, "Length: {}", format_duration(simfile.total_length))?;
-    } else {
-        writeln!(
-            writer,
-            "Length: {}",
-            format_duration_owned(simfile.total_length)
-        )?;
-    }
+    writeln!(writer, "Length: {}", format_duration(simfile.total_length))?;
     if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
         writeln!(writer, "BPM: {:.0}", simfile.min_bpm)?;
     } else {
@@ -2399,19 +1484,19 @@ fn write_full_all_with<W: Write, const STREAMED: bool>(
     writeln!(writer, "Offset: {:.3}", simfile.offset)?;
 
     for chart in &simfile.charts {
-        write_full_chart_with::<W, STREAMED>(writer, chart, simfile)?;
+        write_full_chart(writer, chart, simfile)?;
     }
     writeln!(writer, "\nElapsed Time: {:?}", simfile.total_elapsed)?;
 
     Ok(())
 }
 
-fn write_full_chart_with<W: Write, const STREAMED: bool>(
+fn write_full_chart<W: Write>(
     writer: &mut W,
     chart: &ChartSummary,
     simfile: &SimfileSummary,
 ) -> io::Result<()> {
-    write_chart_header::<W, STREAMED>(writer, chart)?;
+    write_chart_header(writer, chart)?;
 
     writeln!(writer, "Step Type: {}", chart.step_type_str)?;
     writeln!(writer, "Matrix Rating: {:.4}", chart.matrix_rating)?;
@@ -2786,602 +1871,6 @@ fn write_other_patterns<W: Write>(writer: &mut W, chart: &ChartSummary) -> io::R
 
     Ok(())
 }
-
-#[cfg(test)]
-fn json_chart_info(chart: &ChartSummary) -> JsonValue {
-    serde_json::json!({
-        "step_type": chart.step_type_str,
-        "difficulty": chart.difficulty_str,
-        "tier_bpm": chart.tier_bpm,
-        "rating": chart.rating_str,
-        "matrix_rating": chart.matrix_rating,
-        "step_artists": chart.step_artist_str,
-        "tech_notation": chart.tech_notation_str,
-        "sha1": chart.short_hash,
-        "bpm_neutral_sha1": chart.bpm_neutral_hash,
-    })
-}
-
-#[cfg(test)]
-fn json_arrow_stats(chart: &ChartSummary) -> JsonValue {
-    let (mines_judgable, _) = chart_mine_fake_counts(chart);
-    serde_json::json!({
-        "total_arrows": chart.stats.total_arrows,
-        "left_arrows": chart.stats.left,
-        "down_arrows": chart.stats.down,
-        "up_arrows": chart.stats.up,
-        "right_arrows": chart.stats.right,
-        "total_steps": chart.stats.total_steps,
-        "jumps": chart.stats.jumps,
-        "hands": chart.stats.hands,
-        "holds": chart.stats.holds,
-        "rolls": chart.stats.rolls,
-        "mines": mines_judgable,
-    })
-}
-
-#[cfg(test)]
-fn json_stream_info(chart: &ChartSummary) -> JsonValue {
-    let total_stream = chart.total_streams;
-    let total_break = chart.stream_counts.total_breaks;
-    let total_measures = chart.total_measures;
-
-    let (stream_percent, adj_stream_percent, break_percent) =
-        compute_stream_percentages(total_stream, total_break, total_measures);
-
-    let segments = stream_sequences(&chart.measure_densities);
-    let mut stream_sequences = Vec::with_capacity(segments.len());
-    for segment in segments {
-        stream_sequences.push(serde_json::json!({
-            "stream_start": segment.start as u32,
-            "stream_end": segment.end as u32,
-            "is_break": segment.is_break,
-        }));
-    }
-
-    serde_json::json!({
-        "total_streams": total_stream,
-        "16th_streams": chart.stream_counts.run16_streams,
-        "20th_streams": chart.stream_counts.run20_streams,
-        "24th_streams": chart.stream_counts.run24_streams,
-        "32nd_streams": chart.stream_counts.run32_streams,
-        "total_breaks": total_break,
-        "sn_breaks": chart.stream_counts.sn_breaks,
-        "stream_percent": stream_percent,
-        "adj_stream_percent": adj_stream_percent,
-        "break_percent": break_percent,
-        "stream_sequences": stream_sequences,
-    })
-}
-
-#[cfg(test)]
-fn json_nps(chart: &ChartSummary) -> JsonValue {
-    let mut notes_per_measure = Vec::with_capacity(chart.measure_densities.len());
-    for &count in &chart.measure_densities {
-        notes_per_measure.push(JsonValue::from(count as u32));
-    }
-
-    let mut nps_per_measure = Vec::with_capacity(chart.measure_nps_vec.len());
-    for &value in &chart.measure_nps_vec {
-        nps_per_measure.push(JsonValue::from(value));
-    }
-
-    let lanes = crate::step_type_lanes(&chart.step_type_str);
-    let spaced = measure_equally_spaced(&chart.minimized_note_data, lanes);
-    let mut equally_spaced_per_measure = Vec::with_capacity(spaced.len());
-    for value in spaced {
-        equally_spaced_per_measure.push(JsonValue::from(value));
-    }
-
-    serde_json::json!({
-        "max_nps": chart.max_nps,
-        "median_nps": chart.median_nps,
-        "notes_per_measure": notes_per_measure,
-        "nps_per_measure": nps_per_measure,
-        "equally_spaced_per_measure": equally_spaced_per_measure,
-    })
-}
-
-#[cfg(test)]
-fn json_sn_breakdown(chart: &ChartSummary) -> JsonValue {
-    serde_json::json!({
-        "sn_detailed_breakdown": chart.sn_detailed_breakdown,
-        "sn_partial_breakdown": chart.sn_partial_breakdown,
-        "sn_simple_breakdown": chart.sn_simple_breakdown,
-    })
-}
-
-#[cfg(test)]
-fn json_stream_breakdown(chart: &ChartSummary) -> JsonValue {
-    serde_json::json!({
-        "detailed_breakdown": chart.detailed_breakdown,
-        "partial_breakdown": chart.partial_breakdown,
-        "simple_breakdown": chart.simple_breakdown,
-    })
-}
-
-#[cfg(test)]
-fn json_mono_candle_stats(chart: &ChartSummary) -> JsonValue {
-    let left_foot_candles = count(&chart.detected_patterns, PatternVariant::CandleLeft);
-    let right_foot_candles = count(&chart.detected_patterns, PatternVariant::CandleRight);
-    let total_candles = left_foot_candles + right_foot_candles;
-
-    serde_json::json!({
-        "total_candles": total_candles,
-        "left_foot_candles": left_foot_candles,
-        "right_foot_candles": right_foot_candles,
-        "candles_percent": chart.candle_percent,
-        "total_mono": chart.mono_total,
-        "left_face_mono": chart.facing_left,
-        "right_face_mono": chart.facing_right,
-        "mono_percent": chart.mono_percent,
-    })
-}
-
-#[cfg(test)]
-fn json_gimmicks(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
-    let lifts = chart.stats.lifts;
-    let (_, fakes) = chart_mine_fake_counts(chart);
-    let allow_steps_timing = steps_timing_allowed(simfile.ssc_version, simfile.timing_format);
-    let stops = chart_or_global(
-        allow_steps_timing,
-        chart.chart_has_own_timing,
-        &chart.chart_stops,
-        &simfile.normalized_stops,
-    );
-    let delays = chart_or_global(
-        allow_steps_timing,
-        chart.chart_has_own_timing,
-        &chart.chart_delays,
-        &simfile.normalized_delays,
-    );
-    let warps = chart_or_global(
-        allow_steps_timing,
-        chart.chart_has_own_timing,
-        &chart.chart_warps,
-        &simfile.normalized_warps,
-    );
-    let speeds = chart_or_global(
-        allow_steps_timing,
-        chart.chart_has_own_timing,
-        &chart.chart_speeds,
-        &simfile.normalized_speeds,
-    );
-    let scrolls = chart_or_global(
-        allow_steps_timing,
-        chart.chart_has_own_timing,
-        &chart.chart_scrolls,
-        &simfile.normalized_scrolls,
-    );
-
-    let stop_count = count_timing_segments(stops);
-    let delay_count = count_timing_segments(delays);
-    let warp_count = count_timing_segments(warps);
-    let speed_count = count_gimmick_speed_segments(speeds);
-    let scroll_count = count_gimmick_scroll_segments(scrolls);
-
-    let mut obj = JsonMap::new();
-
-    obj.insert("lifts".to_string(), JsonValue::from(lifts));
-    obj.insert("fakes".to_string(), JsonValue::from(fakes));
-    obj.insert("stops_freezes".to_string(), JsonValue::from(stop_count));
-    obj.insert("speeds".to_string(), JsonValue::from(speed_count));
-    obj.insert("scrolls".to_string(), JsonValue::from(scroll_count));
-    obj.insert("delays".to_string(), JsonValue::from(delay_count));
-    obj.insert("warps".to_string(), JsonValue::from(warp_count));
-
-    JsonValue::Object(obj)
-}
-
-#[cfg(test)]
-fn json_timing(chart: &ChartSummary, simfile: &SimfileSummary) -> JsonValue {
-    let TimingSnapshot {
-        beat0_offset_seconds,
-        beat0_group_offset_seconds,
-        bpms,
-        bpms_formatted,
-        bpm_min_raw,
-        bpm_max_raw,
-        stops,
-        delays,
-        time_signatures,
-        warps,
-        labels,
-        tickcounts,
-        combos,
-        speeds,
-        scrolls,
-        fakes,
-    } = build_timing_snapshot(chart, simfile);
-
-    let bpm_min = round_sig_figs_6(round_sig_figs_itg(bpm_min_raw));
-    let bpm_max = round_sig_figs_6(round_sig_figs_itg(bpm_max_raw));
-
-    let chart_display_bpm = chart
-        .chart_display_bpm
-        .as_deref()
-        .filter(|s| !s.trim().is_empty());
-    let display_tag = chart_display_bpm;
-    let (display_bpm_min_raw, display_bpm_max_raw, display_bpm) =
-        resolve_display_bpm(display_tag, bpm_min_raw, bpm_max_raw, 1.0);
-    let display_bpm_min = round_sig_figs_6(round_sig_figs_itg(display_bpm_min_raw));
-    let display_bpm_max = round_sig_figs_6(round_sig_figs_itg(display_bpm_max_raw));
-    let bpms: Vec<JsonValue> = bpms
-        .into_iter()
-        .map(|(beat, bpm)| serde_json::json!([beat, bpm]))
-        .collect();
-    let stops: Vec<JsonValue> = stops
-        .into_iter()
-        .map(|(beat, duration)| serde_json::json!([beat, duration]))
-        .collect();
-    let delays: Vec<JsonValue> = delays
-        .into_iter()
-        .map(|(beat, duration)| serde_json::json!([beat, duration]))
-        .collect();
-    let warps: Vec<JsonValue> = warps
-        .into_iter()
-        .map(|(beat, length)| serde_json::json!([beat, length]))
-        .collect();
-    let speeds: Vec<JsonValue> = speeds
-        .into_iter()
-        .map(|(beat, ratio, delay, unit)| serde_json::json!([beat, ratio, delay, unit]))
-        .collect();
-    let scrolls: Vec<JsonValue> = scrolls
-        .into_iter()
-        .map(|(beat, ratio)| serde_json::json!([beat, ratio]))
-        .collect();
-    let fakes: Vec<JsonValue> = fakes
-        .into_iter()
-        .map(|(beat, length)| serde_json::json!([beat, length]))
-        .collect();
-    // SL-ChartParser uses chart BPMS for hashing when present, regardless of split timing.
-    let hash_bpms = chart
-        .chart_bpms
-        .as_deref()
-        .map(normalize_float_digits)
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| simfile.normalized_bpms.clone());
-
-    serde_json::json!({
-        "beat0_offset_seconds": beat0_offset_seconds,
-        "beat0_group_offset_seconds": beat0_group_offset_seconds,
-        "hash_bpms": hash_bpms,
-        "bpms_formatted": bpms_formatted,
-        "bpm_min": bpm_min,
-        "bpm_max": bpm_max,
-        "display_bpm": display_bpm,
-        "display_bpm_min": display_bpm_min,
-        "display_bpm_max": display_bpm_max,
-        "bpms": bpms,
-        "stops": stops,
-        "delays": delays,
-        "time_signatures": time_signatures
-            .into_iter()
-            .map(|(beat, num, den)| serde_json::json!([beat, num, den]))
-            .collect::<Vec<_>>(),
-        "warps": warps,
-        "labels": labels
-            .into_iter()
-            .map(|(beat, label)| serde_json::json!([beat, label]))
-            .collect::<Vec<_>>(),
-        "tickcounts": tickcounts
-            .into_iter()
-            .map(|(beat, count)| serde_json::json!([beat, count]))
-            .collect::<Vec<_>>(),
-        "combos": combos
-            .into_iter()
-            .map(|(beat, combo, miss)| serde_json::json!([beat, combo, miss]))
-            .collect::<Vec<_>>(),
-        "speeds": speeds,
-        "scrolls": scrolls,
-        "fakes": fakes,
-        "duration_seconds": chart.duration_seconds,
-    })
-}
-
-#[cfg(test)]
-fn json_pattern_counts(chart: &ChartSummary) -> JsonValue {
-    let mut obj = JsonMap::new();
-
-    // Boxes
-    let box_parts = compute_box_parts(&chart.detected_patterns);
-    let corner_boxes = box_parts.ld + box_parts.lu + box_parts.rd + box_parts.ru;
-    let total_boxes = box_parts.lr + box_parts.ud + corner_boxes;
-    obj.insert(
-        "boxes".to_string(),
-        serde_json::json!({
-            "total_boxes": total_boxes,
-            "lr_boxes": box_parts.lr,
-            "ud_boxes": box_parts.ud,
-            "corner_boxes": corner_boxes,
-            "ld_boxes": box_parts.ld,
-            "lu_boxes": box_parts.lu,
-            "rd_boxes": box_parts.rd,
-            "ru_boxes": box_parts.ru,
-        }),
-    );
-
-    // Anchors
-    let total_anchors =
-        chart.anchor_left + chart.anchor_down + chart.anchor_up + chart.anchor_right;
-    obj.insert(
-        "anchors".to_string(),
-        serde_json::json!({
-            "total_anchors": total_anchors,
-            "left_anchors": chart.anchor_left,
-            "down_anchors": chart.anchor_down,
-            "up_anchors": chart.anchor_up,
-            "right_anchors": chart.anchor_right,
-        }),
-    );
-
-    // Towers
-    let tower_parts = compute_tower_parts(&chart.detected_patterns);
-    let corner_towers = tower_parts.ld + tower_parts.lu + tower_parts.rd + tower_parts.ru;
-    let total_towers = tower_parts.lr + tower_parts.ud + corner_towers;
-    obj.insert(
-        "towers".to_string(),
-        serde_json::json!({
-            "total_towers": total_towers,
-            "lr_towers": tower_parts.lr,
-            "ud_towers": tower_parts.ud,
-            "corner_towers": corner_towers,
-            "ld_towers": tower_parts.ld,
-            "lu_towers": tower_parts.lu,
-            "rd_towers": tower_parts.rd,
-            "ru_towers": tower_parts.ru,
-        }),
-    );
-
-    // Triangles
-    let triangle_parts = compute_triangle_parts(&chart.detected_patterns);
-    let total_triangles =
-        triangle_parts.ldl + triangle_parts.lul + triangle_parts.rdr + triangle_parts.rur;
-    obj.insert(
-        "triangles".to_string(),
-        serde_json::json!({
-            "total_triangles": total_triangles,
-            "ldl_triangles": triangle_parts.ldl,
-            "lul_triangles": triangle_parts.lul,
-            "rdr_triangles": triangle_parts.rdr,
-            "rur_triangles": triangle_parts.rur,
-        }),
-    );
-
-    // Staircases
-    let stairs = compute_stair_parts(
-        &chart.detected_patterns,
-        PatternVariant::StaircaseLeft,
-        PatternVariant::StaircaseRight,
-        PatternVariant::StaircaseInvLeft,
-        PatternVariant::StaircaseInvRight,
-    );
-    let total_staircases = stairs.left + stairs.right + stairs.left_inv + stairs.right_inv;
-    let alt_stairs = compute_stair_parts(
-        &chart.detected_patterns,
-        PatternVariant::AltStaircasesLeft,
-        PatternVariant::AltStaircasesRight,
-        PatternVariant::AltStaircasesInvLeft,
-        PatternVariant::AltStaircasesInvRight,
-    );
-    let total_alt = alt_stairs.left + alt_stairs.right + alt_stairs.left_inv + alt_stairs.right_inv;
-    let double_stairs = compute_stair_parts(
-        &chart.detected_patterns,
-        PatternVariant::DStaircaseLeft,
-        PatternVariant::DStaircaseRight,
-        PatternVariant::DStaircaseInvLeft,
-        PatternVariant::DStaircaseInvRight,
-    );
-    let total_double =
-        double_stairs.left + double_stairs.right + double_stairs.left_inv + double_stairs.right_inv;
-    obj.insert(
-        "staircases".to_string(),
-        serde_json::json!({
-            "total_staircases": total_staircases,
-            "left_staircases": stairs.left,
-            "right_staircases": stairs.right,
-            "left_inv_staircases": stairs.left_inv,
-            "right_inv_staircases": stairs.right_inv,
-            "total_alt_staircases": total_alt,
-            "left_alt_staircases": alt_stairs.left,
-            "right_alt_staircases": alt_stairs.right,
-            "left_inv_alt_staircases": alt_stairs.left_inv,
-            "right_inv_alt_staircases": alt_stairs.right_inv,
-            "total_double_staircases": total_double,
-            "left_double_staircases": double_stairs.left,
-            "right_double_staircases": double_stairs.right,
-            "left_inv_double_staircases": double_stairs.left_inv,
-            "right_inv_double_staircases": double_stairs.right_inv,
-        }),
-    );
-
-    // Sweeps
-    let sweeps = compute_sweep_parts(
-        &chart.detected_patterns,
-        PatternVariant::SweepLeft,
-        PatternVariant::SweepRight,
-        PatternVariant::SweepInvLeft,
-        PatternVariant::SweepInvRight,
-    );
-    let total_sweeps = sweeps.left + sweeps.right + sweeps.left_inv + sweeps.right_inv;
-    obj.insert(
-        "sweeps".to_string(),
-        serde_json::json!({
-            "total_sweeps": total_sweeps,
-            "left_sweeps": sweeps.left,
-            "right_sweeps": sweeps.right,
-            "left_inv_sweeps": sweeps.left_inv,
-            "right_inv_sweeps": sweeps.right_inv,
-        }),
-    );
-
-    // Candle Sweeps
-    let candle_sweeps = compute_sweep_parts(
-        &chart.detected_patterns,
-        PatternVariant::SweepCandleLeft,
-        PatternVariant::SweepCandleRight,
-        PatternVariant::SweepCandleInvLeft,
-        PatternVariant::SweepCandleInvRight,
-    );
-    let total_candle_sweeps =
-        candle_sweeps.left + candle_sweeps.right + candle_sweeps.left_inv + candle_sweeps.right_inv;
-    obj.insert(
-        "candle_sweeps".to_string(),
-        serde_json::json!({
-            "total_candle_sweeps": total_candle_sweeps,
-            "left_candle_sweeps": candle_sweeps.left,
-            "right_candle_sweeps": candle_sweeps.right,
-            "left_inv_candle_sweeps": candle_sweeps.left_inv,
-            "right_inv_candle_sweeps": candle_sweeps.right_inv,
-        }),
-    );
-
-    // Copters
-    let copters = compute_simple_quad_parts(
-        &chart.detected_patterns,
-        PatternVariant::CopterLeft,
-        PatternVariant::CopterRight,
-        PatternVariant::CopterInvLeft,
-        PatternVariant::CopterInvRight,
-    );
-    let total_copters = copters.a + copters.b + copters.c + copters.d;
-    obj.insert(
-        "copters".to_string(),
-        serde_json::json!({
-            "total_copters": total_copters,
-            "left_copters": copters.a,
-            "right_copters": copters.b,
-            "left_inv_copters": copters.c,
-            "right_inv_copters": copters.d,
-        }),
-    );
-
-    // Spirals
-    let spirals = compute_simple_quad_parts(
-        &chart.detected_patterns,
-        PatternVariant::SpiralLeft,
-        PatternVariant::SpiralRight,
-        PatternVariant::SpiralInvLeft,
-        PatternVariant::SpiralInvRight,
-    );
-    let total_spirals = spirals.a + spirals.b + spirals.c + spirals.d;
-    obj.insert(
-        "spirals".to_string(),
-        serde_json::json!({
-            "total_spirals": total_spirals,
-            "left_spirals": spirals.a,
-            "right_spirals": spirals.b,
-            "left_inv_spirals": spirals.c,
-            "right_inv_spirals": spirals.d,
-        }),
-    );
-
-    // Turbo Candles
-    let turbo_candles = compute_simple_quad_parts(
-        &chart.detected_patterns,
-        PatternVariant::TurboCandleLeft,
-        PatternVariant::TurboCandleRight,
-        PatternVariant::TurboCandleInvLeft,
-        PatternVariant::TurboCandleInvRight,
-    );
-    let total_turbo_candles = turbo_candles.a + turbo_candles.b + turbo_candles.c + turbo_candles.d;
-    obj.insert(
-        "turbo_candles".to_string(),
-        serde_json::json!({
-            "total_turbo_candles": total_turbo_candles,
-            "left_turbo_candles": turbo_candles.a,
-            "right_turbo_candles": turbo_candles.b,
-            "left_inv_turbo_candles": turbo_candles.c,
-            "right_inv_turbo_candles": turbo_candles.d,
-        }),
-    );
-
-    // Hip Breakers
-    let hip_breakers = compute_simple_quad_parts(
-        &chart.detected_patterns,
-        PatternVariant::HipBreakerLeft,
-        PatternVariant::HipBreakerRight,
-        PatternVariant::HipBreakerInvLeft,
-        PatternVariant::HipBreakerInvRight,
-    );
-    let total_hip_breakers = hip_breakers.a + hip_breakers.b + hip_breakers.c + hip_breakers.d;
-    obj.insert(
-        "hip_breakers".to_string(),
-        serde_json::json!({
-            "total_hip_breakers": total_hip_breakers,
-            "left_hip_breakers": hip_breakers.a,
-            "right_hip_breakers": hip_breakers.b,
-            "left_inv_hip_breakers": hip_breakers.c,
-            "right_inv_hip_breakers": hip_breakers.d,
-        }),
-    );
-
-    // Doritos
-    let doritos = compute_simple_quad_parts(
-        &chart.detected_patterns,
-        PatternVariant::DoritoLeft,
-        PatternVariant::DoritoRight,
-        PatternVariant::DoritoInvLeft,
-        PatternVariant::DoritoInvRight,
-    );
-    let total_doritos = doritos.a + doritos.b + doritos.c + doritos.d;
-    obj.insert(
-        "doritos".to_string(),
-        serde_json::json!({
-            "total_doritos": total_doritos,
-            "left_doritos": doritos.a,
-            "right_doritos": doritos.b,
-            "left_inv_doritos": doritos.c,
-            "right_inv_doritos": doritos.d,
-        }),
-    );
-
-    // Luchis
-    let luchis = compute_simple_quad_parts(
-        &chart.detected_patterns,
-        PatternVariant::LuchiLeftDU,
-        PatternVariant::LuchiLeftUD,
-        PatternVariant::LuchiRightDU,
-        PatternVariant::LuchiRightUD,
-    );
-    let total_luchis = luchis.a + luchis.b + luchis.c + luchis.d;
-    obj.insert(
-        "luchis".to_string(),
-        serde_json::json!({
-            "total_luchis": total_luchis,
-            "left_du_luchis": luchis.a,
-            "left_ud_luchis": luchis.b,
-            "right_du_luchis": luchis.c,
-            "right_ud_luchis": luchis.d,
-        }),
-    );
-
-    // Custom patterns
-    if !chart.custom_patterns.is_empty() {
-        let mut custom = JsonMap::new();
-        for cp in &chart.custom_patterns {
-            custom.insert(cp.pattern.clone(), JsonValue::from(cp.count));
-        }
-        obj.insert("custom_patterns".to_string(), JsonValue::Object(custom));
-    }
-
-    JsonValue::Object(obj)
-}
-
-#[cfg(test)]
-fn json_tech_counts(chart: &ChartSummary) -> JsonValue {
-    serde_json::json!({
-        "crossovers": chart.tech_counts.crossovers,
-        "footswitches": chart.tech_counts.footswitches,
-        "up_footswitches": chart.tech_counts.up_footswitches,
-        "down_footswitches": chart.tech_counts.down_footswitches,
-        "sideswitches": chart.tech_counts.sideswitches,
-        "jacks": chart.tech_counts.jacks,
-        "brackets": chart.tech_counts.brackets,
-        "doublesteps": chart.tech_counts.doublesteps,
-    })
-}
-
 fn write_indent<W: Write>(writer: &mut W, indent: usize) -> io::Result<()> {
     for _ in 0..indent {
         writer.write_all(b" ")?;
@@ -3522,105 +2011,6 @@ fn write_json_number_for_key<W: Write>(
         write!(writer, "0")
     }
 }
-
-fn write_json_value_with_key<W: Write>(
-    writer: &mut W,
-    key: Option<&str>,
-    value: &JsonValue,
-    indent: usize,
-) -> io::Result<()> {
-    match value {
-        JsonValue::Null => writer.write_all(b"null"),
-        JsonValue::Bool(b) => {
-            if *b {
-                writer.write_all(b"true")
-            } else {
-                writer.write_all(b"false")
-            }
-        }
-        JsonValue::Number(n) => write_json_number_for_key(writer, key, n),
-        JsonValue::String(s) => write_json_string(writer, s),
-        JsonValue::Array(arr) => write_json_array(writer, arr, indent),
-        JsonValue::Object(obj) => write_json_object(writer, obj, indent),
-    }
-}
-
-fn write_json_scalar_array<W: Write>(
-    writer: &mut W,
-    arr: &[JsonValue],
-    indent: usize,
-) -> io::Result<()> {
-    writer.write_all(b"[")?;
-    for (i, value) in arr.iter().enumerate() {
-        if i != 0 {
-            writer.write_all(b", ")?;
-        }
-        write_json_value_with_key(writer, None, value, indent)?;
-    }
-    writer.write_all(b"]")
-}
-
-fn write_json_array_multiline<W: Write>(
-    writer: &mut W,
-    arr: &[JsonValue],
-    indent: usize,
-) -> io::Result<()> {
-    writer.write_all(b"[\n")?;
-    let mut first = true;
-    for value in arr {
-        if !first {
-            writer.write_all(b",\n")?;
-        }
-        first = false;
-        write_indent(writer, indent + 2)?;
-        write_json_value_with_key(writer, None, value, indent + 2)?;
-    }
-    writer.write_all(b"\n")?;
-    write_indent(writer, indent)?;
-    writer.write_all(b"]")
-}
-
-fn write_json_array<W: Write>(writer: &mut W, arr: &[JsonValue], indent: usize) -> io::Result<()> {
-    if arr.is_empty() {
-        return writer.write_all(b"[]");
-    }
-
-    if arr.iter().all(|v| {
-        matches!(
-            v,
-            JsonValue::Null | JsonValue::Bool(_) | JsonValue::Number(_) | JsonValue::String(_)
-        )
-    }) {
-        return write_json_scalar_array(writer, arr, indent);
-    }
-
-    write_json_array_multiline(writer, arr, indent)
-}
-
-fn write_json_object<W: Write>(
-    writer: &mut W,
-    obj: &JsonMap<String, JsonValue>,
-    indent: usize,
-) -> io::Result<()> {
-    writer.write_all(b"{\n")?;
-    let mut first = true;
-    for (key, value) in obj {
-        if !first {
-            writer.write_all(b",\n")?;
-        }
-        first = false;
-        write_indent(writer, indent + 2)?;
-        write_json_string(writer, key)?;
-        writer.write_all(b": ")?;
-        write_json_value_with_key(writer, Some(key.as_str()), value, indent + 2)?;
-    }
-    if !obj.is_empty() {
-        writer.write_all(b"\n")?;
-    }
-    write_indent(writer, indent)?;
-    writer.write_all(b"}")
-}
-
 struct JsonObjectWriter<'a, W> {
     writer: &'a mut W,
     indent: usize,
@@ -3652,13 +2042,6 @@ impl<'a, W: Write> JsonObjectWriter<'a, W> {
         self.writer.write_all(b": ")?;
         write_value(self.writer, value_indent)
     }
-
-    fn field_value(&mut self, key: &str, value: &JsonValue) -> io::Result<()> {
-        self.field_with(key, |writer, indent| {
-            write_json_value_with_key(writer, Some(key), value, indent)
-        })
-    }
-
     fn field_string(&mut self, key: &str, value: &str) -> io::Result<()> {
         self.field_with(key, |writer, _| write_json_string(writer, value))
     }
@@ -3834,30 +2217,11 @@ fn write_json_stream_segment<W: Write>(
     object.finish()
 }
 
-fn write_json_stream_sequences_with<W: Write, const MATERIALIZE: bool>(
+fn write_json_stream_sequences<W: Write>(
     writer: &mut W,
     measures: &[usize],
     indent: usize,
 ) -> io::Result<()> {
-    if MATERIALIZE {
-        let segments = stream_sequences(measures);
-        return write_json_multiline_array(
-            writer,
-            segments.len(),
-            indent,
-            |writer, index, item_indent| {
-                let segment = segments[index];
-                write_json_stream_segment(
-                    writer,
-                    item_indent,
-                    segment.start,
-                    segment.end,
-                    segment.is_break,
-                )
-            },
-        );
-    }
-
     writer.write_all(b"[")?;
     let item_indent = indent + 2;
     let mut first = true;
@@ -3885,16 +2249,7 @@ fn write_json_stream_sequences_with<W: Write, const MATERIALIZE: bool>(
     writer.write_all(b"]")
 }
 
-#[cfg(test)]
-fn write_json_stream_sequences<W: Write>(
-    writer: &mut W,
-    measures: &[usize],
-    indent: usize,
-) -> io::Result<()> {
-    write_json_stream_sequences_with::<W, false>(writer, measures, indent)
-}
-
-fn write_json_stream_info_with<W: Write, const MATERIALIZE: bool>(
+fn write_json_stream_info<W: Write>(
     writer: &mut W,
     chart: &ChartSummary,
     indent: usize,
@@ -3916,7 +2271,7 @@ fn write_json_stream_info_with<W: Write, const MATERIALIZE: bool>(
     object.field_f64("adj_stream_percent", adj_stream_percent)?;
     object.field_f64("break_percent", break_percent)?;
     object.field_with("stream_sequences", |writer, indent| {
-        write_json_stream_sequences_with::<W, MATERIALIZE>(writer, &chart.measure_densities, indent)
+        write_json_stream_sequences(writer, &chart.measure_densities, indent)
     })?;
     object.finish()
 }
@@ -4144,7 +2499,7 @@ fn write_json_native_scrolls<W: Write>(
     writer.write_all(b"]")
 }
 
-fn write_json_timing_with<W: Write, const MATERIALIZE: bool, const MATERIALIZE_BPM_TEXT: bool>(
+fn write_json_timing<W: Write>(
     writer: &mut W,
     chart: &ChartSummary,
     simfile: &SimfileSummary,
@@ -4154,29 +2509,12 @@ fn write_json_timing_with<W: Write, const MATERIALIZE: bool, const MATERIALIZE_B
     let beat0_offset_seconds =
         timing_fixed_6(chart.chart_offset_seconds + f64::from(timing.beat0_offset_adjust));
     let beat0_group_offset_seconds = 0.0;
-    let bpms_formatted =
-        MATERIALIZE_BPM_TEXT.then(|| format_bpm_segments_f32_like_itg(&timing.bpms));
     let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw_f32(&timing.bpms);
-    let materialized = MATERIALIZE.then(|| build_normalized_timing_tables(chart, simfile));
-    let text = (!MATERIALIZE).then(|| build_timing_text_tables(chart, simfile));
-    let (time_signatures, labels, tickcounts, combos) = if let Some(tables) = &materialized {
-        (
-            tables.time_signatures.as_slice(),
-            tables.labels.as_slice(),
-            tables.tickcounts.as_slice(),
-            tables.combos.as_slice(),
-        )
-    } else {
-        let tables = text
-            .as_ref()
-            .expect("streamed timing tables must be available");
-        (
-            tables.time_signatures.as_slice(),
-            tables.labels.as_slice(),
-            tables.tickcounts.as_slice(),
-            tables.combos.as_slice(),
-        )
-    };
+    let tables = build_timing_text_tables(chart, simfile);
+    let time_signatures = tables.time_signatures.as_slice();
+    let labels = tables.labels.as_slice();
+    let tickcounts = tables.tickcounts.as_slice();
+    let combos = tables.combos.as_slice();
 
     let bpm_min = round_sig_figs_6(round_sig_figs_itg(bpm_min_raw));
     let bpm_max = round_sig_figs_6(round_sig_figs_itg(bpm_max_raw));
@@ -4205,13 +2543,9 @@ fn write_json_timing_with<W: Write, const MATERIALIZE: bool, const MATERIALIZE_B
     object.field_f64("beat0_offset_seconds", beat0_offset_seconds)?;
     object.field_f64("beat0_group_offset_seconds", beat0_group_offset_seconds)?;
     object.field_string("hash_bpms", hash_bpms)?;
-    if let Some(bpms_formatted) = &bpms_formatted {
-        object.field_string("bpms_formatted", bpms_formatted)?;
-    } else {
-        object.field_with("bpms_formatted", |writer, _| {
-            write_json_native_bpms(writer, &timing.bpms)
-        })?;
-    }
+    object.field_with("bpms_formatted", |writer, _| {
+        write_json_native_bpms(writer, &timing.bpms)
+    })?;
     object.field_f64("bpm_min", bpm_min)?;
     object.field_f64("bpm_max", bpm_max)?;
     object.field_string("display_bpm", &display_bpm)?;
@@ -4300,15 +2634,9 @@ fn write_json_timing_with<W: Write, const MATERIALIZE: bool, const MATERIALIZE_B
         })
     })?;
     object.field_with("speeds", |writer, indent| {
-        if let Some(tables) = &materialized {
-            return write_json_speed_iter(writer, tables.speeds.iter().copied(), indent);
-        }
         write_json_native_speeds(writer, &timing.speeds, indent)
     })?;
     object.field_with("scrolls", |writer, indent| {
-        if let Some(tables) = &materialized {
-            return write_json_pair_iter(writer, tables.scrolls.iter().copied(), indent);
-        }
         write_json_native_scrolls(writer, &timing.scrolls, indent)
     })?;
     object.field_with("fakes", |writer, indent| {
@@ -4341,14 +2669,7 @@ fn write_json_spacing<W: Write>(writer: &mut W, chart: &ChartSummary) -> io::Res
     writer.write_all(b"]")
 }
 
-fn write_json_nps_with<W: Write, const MATERIALIZE: bool>(
-    writer: &mut W,
-    chart: &ChartSummary,
-    indent: usize,
-) -> io::Result<()> {
-    let lanes = crate::step_type_lanes(&chart.step_type_str);
-    let equally_spaced =
-        MATERIALIZE.then(|| measure_equally_spaced(&chart.minimized_note_data, lanes));
+fn write_json_nps<W: Write>(writer: &mut W, chart: &ChartSummary, indent: usize) -> io::Result<()> {
     let mut object = JsonObjectWriter::new(writer, indent)?;
     object.field_f64("max_nps", chart.max_nps)?;
     object.field_f64("median_nps", chart.median_nps)?;
@@ -4367,17 +2688,12 @@ fn write_json_nps_with<W: Write, const MATERIALIZE: bool>(
         )
     })?;
     object.field_with("equally_spaced_per_measure", |writer, _| {
-        if let Some(values) = equally_spaced {
-            return write_json_scalar_iter(writer, values, |writer, value| {
-                writer.write_all(if value { b"true" } else { b"false" })
-            });
-        }
         write_json_spacing(writer, chart)
     })?;
     object.finish()
 }
 
-fn write_json_pattern_counts_with<W: Write, const MATERIALIZE_CUSTOM: bool>(
+fn write_json_pattern_counts<W: Write>(
     writer: &mut W,
     chart: &ChartSummary,
     indent: usize,
@@ -4681,13 +2997,7 @@ fn write_json_pattern_counts_with<W: Write, const MATERIALIZE_CUSTOM: bool>(
         )?;
     }
 
-    if MATERIALIZE_CUSTOM && !chart.custom_patterns.is_empty() {
-        let mut custom = JsonMap::new();
-        for pattern in &chart.custom_patterns {
-            custom.insert(pattern.pattern.clone(), JsonValue::from(pattern.count));
-        }
-        object.field_value("custom_patterns", &JsonValue::Object(custom))?;
-    } else if !chart.custom_patterns.is_empty() {
+    if !chart.custom_patterns.is_empty() {
         object.field_with("custom_patterns", |writer, indent| {
             let mut custom = JsonObjectWriter::new(writer, indent)?;
             // Analysis deduplicates names and retains their stable input order,
@@ -4701,14 +3011,7 @@ fn write_json_pattern_counts_with<W: Write, const MATERIALIZE_CUSTOM: bool>(
     object.finish()
 }
 
-fn write_json_chart_with<
-    W: Write,
-    const MATERIALIZE_TIMING: bool,
-    const MATERIALIZE_NPS: bool,
-    const MATERIALIZE_STREAMS: bool,
-    const MATERIALIZE_BPM_TEXT: bool,
-    const MATERIALIZE_CUSTOM: bool,
->(
+fn write_json_chart<W: Write>(
     writer: &mut W,
     chart: &ChartSummary,
     simfile: &SimfileSummary,
@@ -4725,15 +3028,13 @@ fn write_json_chart_with<
         write_json_gimmicks(writer, chart, simfile, indent)
     })?;
     object.field_with("timing", |writer, indent| {
-        write_json_timing_with::<W, MATERIALIZE_TIMING, MATERIALIZE_BPM_TEXT>(
-            writer, chart, simfile, indent,
-        )
+        write_json_timing(writer, chart, simfile, indent)
     })?;
     object.field_with("stream_info", |writer, indent| {
-        write_json_stream_info_with::<W, MATERIALIZE_STREAMS>(writer, chart, indent)
+        write_json_stream_info(writer, chart, indent)
     })?;
     object.field_with("nps", |writer, indent| {
-        write_json_nps_with::<W, MATERIALIZE_NPS>(writer, chart, indent)
+        write_json_nps(writer, chart, indent)
     })?;
     object.field_with("breakdown", |writer, indent| {
         write_json_sn_breakdown(writer, chart, indent)
@@ -4746,7 +3047,7 @@ fn write_json_chart_with<
             write_json_mono_candle_stats(writer, chart, indent)
         })?;
         object.field_with("pattern_counts", |writer, indent| {
-            write_json_pattern_counts_with::<W, MATERIALIZE_CUSTOM>(writer, chart, indent)
+            write_json_pattern_counts(writer, chart, indent)
         })?;
     }
     if simfile.tech_counts_enabled {
@@ -4756,114 +3057,7 @@ fn write_json_chart_with<
     }
     object.finish()
 }
-
-fn write_json_chart<W: Write>(
-    writer: &mut W,
-    chart: &ChartSummary,
-    simfile: &SimfileSummary,
-    indent: usize,
-) -> io::Result<()> {
-    write_json_chart_with::<W, false, false, false, false, false>(writer, chart, simfile, indent)
-}
-
-#[cfg(test)]
-fn write_json_all_materialized<W: Write>(
-    simfile: &SimfileSummary,
-    writer: &mut W,
-) -> io::Result<()> {
-    let bpm_value = if (simfile.min_bpm - simfile.max_bpm).abs() < f64::EPSILON {
-        JsonValue::from(simfile.min_bpm)
-    } else {
-        JsonValue::from(format!("{:.0}-{:.0}", simfile.min_bpm, simfile.max_bpm))
-    };
-    let charts: Vec<JsonValue> = simfile
-        .charts
-        .iter()
-        .map(|chart| {
-            let mut chart_obj = JsonMap::new();
-            chart_obj.insert("chart_info".to_string(), json_chart_info(chart));
-            chart_obj.insert("arrow_stats".to_string(), json_arrow_stats(chart));
-            chart_obj.insert("gimmicks".to_string(), json_gimmicks(chart, simfile));
-            chart_obj.insert("timing".to_string(), json_timing(chart, simfile));
-            chart_obj.insert("stream_info".to_string(), json_stream_info(chart));
-            chart_obj.insert("nps".to_string(), json_nps(chart));
-            chart_obj.insert("breakdown".to_string(), json_sn_breakdown(chart));
-            chart_obj.insert("stream_breakdown".to_string(), json_stream_breakdown(chart));
-            if simfile.pattern_counts_enabled {
-                chart_obj.insert(
-                    "mono_candle_stats".to_string(),
-                    json_mono_candle_stats(chart),
-                );
-                chart_obj.insert("pattern_counts".to_string(), json_pattern_counts(chart));
-            }
-            if simfile.tech_counts_enabled {
-                chart_obj.insert("tech_counts".to_string(), json_tech_counts(chart));
-            }
-            JsonValue::Object(chart_obj)
-        })
-        .collect();
-
-    let mut root_obj = JsonMap::new();
-    root_obj.insert(
-        "title".to_string(),
-        JsonValue::from(simfile.title_str.clone()),
-    );
-    root_obj.insert(
-        "subtitle".to_string(),
-        JsonValue::from(simfile.subtitle_str.clone()),
-    );
-    root_obj.insert(
-        "artist".to_string(),
-        JsonValue::from(simfile.artist_str.clone()),
-    );
-    root_obj.insert(
-        "title_trans".to_string(),
-        JsonValue::from(simfile.titletranslit_str.clone()),
-    );
-    root_obj.insert(
-        "subtitle_trans".to_string(),
-        JsonValue::from(simfile.subtitletranslit_str.clone()),
-    );
-    root_obj.insert(
-        "artist_trans".to_string(),
-        JsonValue::from(simfile.artisttranslit_str.clone()),
-    );
-    root_obj.insert(
-        "length".to_string(),
-        JsonValue::from(simfile.total_length.to_string()),
-    );
-    root_obj.insert("bpm".to_string(), bpm_value);
-    root_obj.insert("min_bpm".to_string(), JsonValue::from(simfile.min_bpm));
-    root_obj.insert("max_bpm".to_string(), JsonValue::from(simfile.max_bpm));
-    root_obj.insert(
-        "average_bpm".to_string(),
-        JsonValue::from(simfile.average_bpm),
-    );
-    root_obj.insert(
-        "median_bpm".to_string(),
-        JsonValue::from(simfile.median_bpm),
-    );
-    root_obj.insert(
-        "bpm_data".to_string(),
-        JsonValue::from(simfile.normalized_bpms.clone()),
-    );
-    root_obj.insert("offset".to_string(), JsonValue::from(simfile.offset));
-    root_obj.insert("charts".to_string(), JsonValue::from(charts));
-    write_json_value_with_key(writer, None, &JsonValue::Object(root_obj), 0)?;
-    writeln!(writer)
-}
-
-fn write_json_all_with<
-    W: Write,
-    const MATERIALIZE_TIMING: bool,
-    const MATERIALIZE_NPS: bool,
-    const MATERIALIZE_STREAMS: bool,
-    const MATERIALIZE_BPM_TEXT: bool,
-    const MATERIALIZE_CUSTOM: bool,
->(
-    simfile: &SimfileSummary,
-    writer: &mut W,
-) -> io::Result<()> {
+pub fn write_json_all<W: Write>(simfile: &SimfileSummary, writer: &mut W) -> io::Result<()> {
     let mut root = JsonObjectWriter::new(writer, 0)?;
     root.field_string("title", &simfile.title_str)?;
     root.field_string("subtitle", &simfile.subtitle_str)?;
@@ -4893,120 +3087,12 @@ fn write_json_all_with<
             simfile.charts.len(),
             indent,
             |writer, idx, item_indent| {
-                write_json_chart_with::<
-                    W,
-                    MATERIALIZE_TIMING,
-                    MATERIALIZE_NPS,
-                    MATERIALIZE_STREAMS,
-                    MATERIALIZE_BPM_TEXT,
-                    MATERIALIZE_CUSTOM,
-                >(writer, &simfile.charts[idx], simfile, item_indent)
+                write_json_chart(writer, &simfile.charts[idx], simfile, item_indent)
             },
         )
     })?;
     root.finish()?;
     writeln!(writer)
-}
-
-pub fn write_json_all<W: Write>(simfile: &SimfileSummary, writer: &mut W) -> io::Result<()> {
-    write_json_all_with::<W, false, false, false, false, false>(simfile, writer)
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_write_text<W: Write>(
-    simfile: &SimfileSummary,
-    writer: &mut W,
-    full: bool,
-    legacy: bool,
-) -> io::Result<()> {
-    match (full, legacy) {
-        (false, false) => write_pretty_all_with::<W, true>(writer, simfile),
-        (false, true) => write_pretty_all_with::<W, false>(writer, simfile),
-        (true, false) => write_full_all_with::<W, true>(writer, simfile),
-        (true, true) => write_full_all_with::<W, false>(writer, simfile),
-    }
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_write_json_materialized<W: Write>(
-    simfile: &SimfileSummary,
-    writer: &mut W,
-) -> io::Result<()> {
-    write_json_all_with::<W, true, false, false, false, false>(simfile, writer)
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_write_json_nps_materialized<W: Write>(
-    simfile: &SimfileSummary,
-    writer: &mut W,
-) -> io::Result<()> {
-    write_json_all_with::<W, false, true, false, false, false>(simfile, writer)
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_write_json_streams_materialized<W: Write>(
-    simfile: &SimfileSummary,
-    writer: &mut W,
-) -> io::Result<()> {
-    write_json_all_with::<W, false, false, true, false, false>(simfile, writer)
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_write_json_bpm_text_materialized<W: Write>(
-    simfile: &SimfileSummary,
-    writer: &mut W,
-) -> io::Result<()> {
-    write_json_all_with::<W, false, false, false, true, false>(simfile, writer)
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_write_json_custom_report_materialized<W: Write>(
-    simfile: &SimfileSummary,
-    writer: &mut W,
-) -> io::Result<()> {
-    write_json_all_with::<W, false, false, false, false, true>(simfile, writer)
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_write_json_pattern_counts<W: Write, const MATERIALIZE: bool>(
-    writer: &mut W,
-    chart: &ChartSummary,
-) -> io::Result<()> {
-    write_json_pattern_counts_with::<W, MATERIALIZE>(writer, chart, 0)
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_write_json_timing<W: Write, const MATERIALIZE: bool>(
-    writer: &mut W,
-    chart: &ChartSummary,
-    simfile: &SimfileSummary,
-) -> io::Result<()> {
-    write_json_timing_with::<W, MATERIALIZE, false>(writer, chart, simfile, 0)
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_write_json_bpm_text<W: Write, const MATERIALIZE: bool>(
-    writer: &mut W,
-    chart: &ChartSummary,
-    simfile: &SimfileSummary,
-) -> io::Result<()> {
-    write_json_timing_with::<W, false, MATERIALIZE>(writer, chart, simfile, 0)
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_write_json_nps<W: Write, const MATERIALIZE: bool>(
-    writer: &mut W,
-    chart: &ChartSummary,
-) -> io::Result<()> {
-    write_json_nps_with::<W, MATERIALIZE>(writer, chart, 0)
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_write_json_streams<W: Write, const MATERIALIZE: bool>(
-    writer: &mut W,
-    chart: &ChartSummary,
-) -> io::Result<()> {
-    write_json_stream_info_with::<W, MATERIALIZE>(writer, chart, 0)
 }
 
 const CSV_HEADER_BASE: &str = "Title,Subtitle,Artist,Title trans,Subtitle trans,Artist trans,Length,BPM,BPM Tier,min_bpm,max_bpm,average_bpm,median bpm,BPM-data,offset,file_md5_hash,step_type,difficulty,rating,step_artist,tech_notation,sha1_hash,bpm_neutral_hash,total_arrows,left_arrows,down_arrows,up_arrows,right_arrows,total_steps,jumps,hands,holds,rolls,mines,lifts,fakes,stops_freezes,delays,warps,speeds,scrolls,total_streams,16th_streams,20th_streams,24th_streams,32nd_streams,total_breaks,sn_breaks,stream_percent,adj_stream_percent,max_nps,median_nps,matrix_rating";

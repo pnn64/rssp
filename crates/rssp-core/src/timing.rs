@@ -197,7 +197,7 @@ fn parse_f64_fast(s: &str) -> Option<f64> {
 }
 
 // --- Unified parsing ---
-fn parse_segments_impl<const LEGACY_COUNT: bool>(s: &str) -> Vec<Segment> {
+fn parse_segments(s: &str) -> Vec<Segment> {
     const ESTIMATED_COMPONENT_BYTES: usize = 9;
     const LARGE_MAP_BYTES: usize = 32 * 1_024;
     const MAX_INITIAL_COMPONENTS: usize = 4_096;
@@ -209,8 +209,6 @@ fn parse_segments_impl<const LEGACY_COUNT: bool>(s: &str) -> Vec<Segment> {
         s.len()
             .div_ceil(ESTIMATED_COMPONENT_BYTES)
             .min(MAX_INITIAL_COMPONENTS)
-    } else if LEGACY_COUNT {
-        s.bytes().filter(|&byte| byte == b',').count() + 1
     } else {
         crate::stats::count_byte(s.as_bytes(), b',') + 1
     };
@@ -233,20 +231,6 @@ fn parse_segments_impl<const LEGACY_COUNT: bool>(s: &str) -> Vec<Segment> {
         }
     }
     segments
-}
-
-fn parse_segments(s: &str) -> Vec<Segment> {
-    parse_segments_impl::<false>(s)
-}
-
-#[cfg(any(test, feature = "bench-support"))]
-#[doc(hidden)]
-pub fn parse_segments_for_bench(s: &str, legacy_count: bool) -> Vec<Segment> {
-    if legacy_count {
-        parse_segments_impl::<true>(s)
-    } else {
-        parse_segments_impl::<false>(s)
-    }
 }
 
 fn parse_segments_positive(s: &str) -> Vec<Segment> {
@@ -340,13 +324,6 @@ fn append_packed_segments(
     finish_segment_rows(rows, row_start, ordered, require_positive);
 }
 
-#[cfg(any(test, feature = "bench-support"))]
-fn build_segment_rows(segments: &[Segment], require_positive: bool) -> Vec<i32> {
-    let mut rows = Vec::with_capacity(segments.len());
-    append_segment_rows(&mut rows, segments, require_positive);
-    rows
-}
-
 fn build_segment_row_storage(
     stops: &[Segment],
     delays: &[Segment],
@@ -369,36 +346,6 @@ fn build_segment_row_storage(
     append_segment_rows(&mut rows, fakes, false);
     offsets[4] = rows.len();
     (rows, offsets)
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub enum SegmentRowsForBench {
-    Split([Vec<i32>; 4]),
-    Packed { rows: Vec<i32>, offsets: [usize; 5] },
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn build_segment_rows_for_bench(
-    stops: &[Segment],
-    delays: &[Segment],
-    warps: &[Segment],
-    fakes: &[Segment],
-    packed: bool,
-) -> SegmentRowsForBench {
-    if packed {
-        let (rows, offsets) = build_segment_row_storage(stops, delays, warps, fakes);
-        SegmentRowsForBench::Packed { rows, offsets }
-    } else {
-        SegmentRowsForBench::Split([
-            build_segment_rows(stops, true),
-            build_segment_rows(delays, true),
-            build_segment_rows(warps, false),
-            build_segment_rows(fakes, false),
-        ])
-    }
 }
 
 #[inline]
@@ -453,34 +400,6 @@ fn tidy_key_indices(segments: Vec<Segment>) -> Vec<Segment> {
     out
 }
 
-fn tidy_packed_records(segments: Vec<Segment>) -> Vec<Segment> {
-    let mut keyed: Vec<_> = segments
-        .into_iter()
-        .enumerate()
-        .map(|(index, segment)| {
-            (
-                segment_sort_key(segment_row(&segment), index as u32),
-                segment,
-            )
-        })
-        .collect();
-    keyed.sort_unstable_by_key(|entry| entry.0);
-
-    let mut out = Vec::with_capacity(keyed.len());
-    let mut index = 0;
-    while index < keyed.len() {
-        let row = keyed[index].0 >> 32;
-        let mut last = keyed[index].1;
-        index += 1;
-        while index < keyed.len() && keyed[index].0 >> 32 == row {
-            last = keyed[index].1;
-            index += 1;
-        }
-        out.push(last);
-    }
-    out
-}
-
 fn tidy_wide_records(segments: Vec<Segment>) -> Vec<Segment> {
     let mut keyed: Vec<_> = segments
         .into_iter()
@@ -504,7 +423,7 @@ fn tidy_wide_records(segments: Vec<Segment>) -> Vec<Segment> {
     out
 }
 
-fn tidy_row_segments_mode<const KEYS_ONLY: bool>(mut segments: Vec<Segment>) -> Vec<Segment> {
+fn tidy_row_segments(mut segments: Vec<Segment>) -> Vec<Segment> {
     let mut ordered = true;
     let mut previous_row = i32::MIN;
     for segment in &mut segments {
@@ -518,24 +437,8 @@ fn tidy_row_segments_mode<const KEYS_ONLY: bool>(mut segments: Vec<Segment>) -> 
         compact_row_segments(segments)
     } else if segments.len() > u32::MAX as usize {
         tidy_wide_records(segments)
-    } else if KEYS_ONLY {
+    } else {
         tidy_key_indices(segments)
-    } else {
-        tidy_packed_records(segments)
-    }
-}
-
-fn tidy_row_segments(segments: Vec<Segment>) -> Vec<Segment> {
-    tidy_row_segments_mode::<true>(segments)
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn tidy_row_segments_for_bench(segments: Vec<Segment>, legacy: bool) -> Vec<Segment> {
-    if legacy {
-        tidy_row_segments_mode::<false>(segments)
-    } else {
-        tidy_row_segments_mode::<true>(segments)
     }
 }
 
@@ -835,7 +738,7 @@ pub fn compute_timing_segments(
     let delays = tidy_row_segments(delays);
 
     let warps = parse_optional_timing(chart_warps, global_warps, parse_segments, cleaned);
-    let warps = merge_extra_warps::<true>(warps, extra_warps);
+    let warps = merge_extra_warps(warps, extra_warps);
     let warps: Vec<_> = warps
         .into_iter()
         .map(|s| Segment {
@@ -968,7 +871,7 @@ fn format_bpm_segments_iter(
 
 #[must_use]
 pub fn compute_row_to_beat(minimized_note_data: &[u8]) -> Vec<f32> {
-    compute_row_to_beat_impl::<true>(minimized_note_data)
+    compute_row_to_beat_impl(minimized_note_data)
 }
 
 fn first_row_capacity(data: &[u8]) -> usize {
@@ -992,12 +895,8 @@ fn first_row_capacity(data: &[u8]) -> usize {
     }
 }
 
-fn compute_row_to_beat_impl<const PREALLOC: bool>(minimized_note_data: &[u8]) -> Vec<f32> {
-    let capacity = if PREALLOC {
-        first_row_capacity(minimized_note_data)
-    } else {
-        0
-    };
+fn compute_row_to_beat_impl(minimized_note_data: &[u8]) -> Vec<f32> {
+    let capacity = first_row_capacity(minimized_note_data);
     let mut row_to_beat = Vec::with_capacity(capacity);
     for (measure_index, measure_bytes) in minimized_note_data.split(|&b| b == b',').enumerate() {
         let num_rows = count_measure_rows(measure_bytes);
@@ -1012,17 +911,6 @@ fn compute_row_to_beat_impl<const PREALLOC: bool>(minimized_note_data: &[u8]) ->
         }
     }
     row_to_beat
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn compute_row_to_beat_for_bench(minimized_note_data: &[u8], legacy: bool) -> Vec<f32> {
-    if legacy {
-        compute_row_to_beat_impl::<false>(minimized_note_data)
-    } else {
-        compute_row_to_beat_impl::<true>(minimized_note_data)
-    }
 }
 
 #[inline(always)]
@@ -1052,7 +940,7 @@ fn process_bpms_and_stops(
     stops: Vec<Segment>,
 ) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
     match format {
-        TimingFormat::Sm => process_bpms_and_stops_sm::<false, true>(&bpms, &stops),
+        TimingFormat::Sm => process_bpms_and_stops_sm(&bpms, &stops),
         TimingFormat::Ssc => process_bpms_and_stops_ssc(bpms, stops),
     }
 }
@@ -1145,18 +1033,9 @@ fn sort_segments_by_beat(segments: &mut [Segment]) {
     }
 }
 
-fn push_sm_bpm<const LEGACY: bool>(
-    legacy: &mut Vec<(f32, f32)>,
-    final_bpms: &mut Vec<(f64, f64)>,
-    beat: f32,
-    bpm: f32,
-) {
+fn push_sm_bpm(final_bpms: &mut Vec<(f64, f64)>, beat: f32, bpm: f32) {
     let beat = quantize_beat_f32(beat);
-    if LEGACY {
-        legacy.push((beat, bpm));
-    } else {
-        final_bpms.push((f64::from(beat), f64::from(bpm)));
-    }
+    final_bpms.push((f64::from(beat), f64::from(bpm)));
 }
 
 #[cold]
@@ -1177,19 +1056,19 @@ fn reserve_sm_warps(
 }
 
 #[inline(always)]
-fn push_sm_warp<const PREALLOC: bool>(
+fn push_sm_warp(
     warps: &mut Vec<Segment>,
     bpm_changes: &[(f32, f32)],
     stop_changes: &[(f32, f32)],
     warp: Segment,
 ) {
-    if PREALLOC && warps.capacity() == 0 {
+    if warps.capacity() == 0 {
         reserve_sm_warps(warps, bpm_changes, stop_changes);
     }
     warps.push(warp);
 }
 
-fn process_bpms_and_stops_sm<const LEGACY: bool, const PREALLOC_WARPS: bool>(
+fn process_bpms_and_stops_sm(
     bpms: &[(f64, f64)],
     stops: &[Segment],
 ) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
@@ -1233,13 +1112,12 @@ fn process_bpms_and_stops_sm<const LEGACY: bool, const PREALLOC_WARPS: bool>(
     }
 
     let bpm_capacity = bpm_changes.len().max(1);
-    let mut legacy_bpms = Vec::with_capacity(if LEGACY { bpm_capacity } else { 0 });
-    let mut out_bpms = Vec::with_capacity(if LEGACY { 0 } else { bpm_capacity });
+    let mut out_bpms = Vec::with_capacity(bpm_capacity);
     let mut out_stops = Vec::with_capacity(stop_changes.len().saturating_sub(stop_idx));
     let mut out_warps: Vec<Segment> = Vec::new();
 
     if bpm > 0.0 && bpm <= FAST_BPM_WARP_F32 {
-        push_sm_bpm::<LEGACY>(&mut legacy_bpms, &mut out_bpms, 0.0, bpm);
+        push_sm_bpm(&mut out_bpms, 0.0, bpm);
     }
 
     let mut prev_beat = 0.0_f32;
@@ -1264,7 +1142,7 @@ fn process_bpms_and_stops_sm<const LEGACY: bool, const PREALLOC_WARPS: bool>(
             {
                 let warp_end = change_beat - (time_offset * bpm / 60.0);
                 if warp_end > start {
-                    push_sm_warp::<PREALLOC_WARPS>(
+                    push_sm_warp(
                         &mut out_warps,
                         &bpm_changes,
                         &stop_changes,
@@ -1275,7 +1153,7 @@ fn process_bpms_and_stops_sm<const LEGACY: bool, const PREALLOC_WARPS: bool>(
                     );
                 }
                 if bpm != prewarp_bpm {
-                    push_sm_bpm::<LEGACY>(&mut legacy_bpms, &mut out_bpms, start, bpm);
+                    push_sm_bpm(&mut out_bpms, start, bpm);
                 }
                 warp_start = None;
             }
@@ -1288,7 +1166,7 @@ fn process_bpms_and_stops_sm<const LEGACY: bool, const PREALLOC_WARPS: bool>(
                 prewarp_bpm = bpm;
                 time_offset = 0.0;
             } else if warp_start.is_none() {
-                push_sm_bpm::<LEGACY>(&mut legacy_bpms, &mut out_bpms, change_beat, change_val);
+                push_sm_bpm(&mut out_bpms, change_beat, change_val);
             }
             bpm = change_val;
             bpm_idx += 1;
@@ -1309,7 +1187,7 @@ fn process_bpms_and_stops_sm<const LEGACY: bool, const PREALLOC_WARPS: bool>(
                     && let Some(start) = warp_start
                 {
                     if change_beat > start {
-                        push_sm_warp::<PREALLOC_WARPS>(
+                        push_sm_warp(
                             &mut out_warps,
                             &bpm_changes,
                             &stop_changes,
@@ -1325,7 +1203,7 @@ fn process_bpms_and_stops_sm<const LEGACY: bool, const PREALLOC_WARPS: bool>(
                     });
                     if (0.0..=FAST_BPM_WARP_F32).contains(&bpm) {
                         if bpm != prewarp_bpm {
-                            push_sm_bpm::<LEGACY>(&mut legacy_bpms, &mut out_bpms, start, bpm);
+                            push_sm_bpm(&mut out_bpms, start, bpm);
                         }
                         warp_start = None;
                     } else {
@@ -1345,7 +1223,7 @@ fn process_bpms_and_stops_sm<const LEGACY: bool, const PREALLOC_WARPS: bool>(
             99_999_999.0_f32
         };
         if warp_end > start {
-            push_sm_warp::<PREALLOC_WARPS>(
+            push_sm_warp(
                 &mut out_warps,
                 &bpm_changes,
                 &stop_changes,
@@ -1356,18 +1234,10 @@ fn process_bpms_and_stops_sm<const LEGACY: bool, const PREALLOC_WARPS: bool>(
             );
         }
         if bpm != prewarp_bpm {
-            push_sm_bpm::<LEGACY>(&mut legacy_bpms, &mut out_bpms, start, bpm);
+            push_sm_bpm(&mut out_bpms, start, bpm);
         }
     }
 
-    let out_bpms = if LEGACY {
-        legacy_bpms
-            .into_iter()
-            .map(|(b, v)| (f64::from(b), f64::from(v)))
-            .collect()
-    } else {
-        out_bpms
-    };
     let out_bpms = tidy_bpms(out_bpms);
     sort_segments_by_beat(&mut out_stops);
     sort_segments_by_beat(&mut out_warps);
@@ -1375,78 +1245,12 @@ fn process_bpms_and_stops_sm<const LEGACY: bool, const PREALLOC_WARPS: bool>(
     (out_bpms, out_stops, out_warps, f64::from(beat0_offset))
 }
 
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn process_sm_timing_for_bench(
-    bpms: &[(f64, f64)],
-    stops: &[Segment],
-    legacy: bool,
-) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
-    if legacy {
-        process_bpms_and_stops_sm::<true, true>(bpms, stops)
-    } else {
-        process_bpms_and_stops_sm::<false, true>(bpms, stops)
-    }
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn process_sm_warp_capacity_for_bench(
-    bpms: &[(f64, f64)],
-    stops: &[Segment],
-    preallocate: bool,
-) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
-    if preallocate {
-        process_bpms_and_stops_sm::<false, true>(bpms, stops)
-    } else {
-        process_bpms_and_stops_sm::<false, false>(bpms, stops)
-    }
-}
-
-fn merge_extra_warps<const REUSE_EMPTY: bool>(
-    mut warps: Vec<Segment>,
-    extra_warps: Vec<Segment>,
-) -> Vec<Segment> {
-    if REUSE_EMPTY && warps.is_empty() {
+fn merge_extra_warps(mut warps: Vec<Segment>, extra_warps: Vec<Segment>) -> Vec<Segment> {
+    if warps.is_empty() {
         return extra_warps;
     }
     warps.extend(extra_warps);
     warps
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn merge_extra_warps_for_bench(
-    warps: Vec<Segment>,
-    extra_warps: Vec<Segment>,
-    reuse_empty: bool,
-) -> Vec<Segment> {
-    if reuse_empty {
-        merge_extra_warps::<true>(warps, extra_warps)
-    } else {
-        merge_extra_warps::<false>(warps, extra_warps)
-    }
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn process_sm_warp_merge_for_bench(
-    bpms: &[(f64, f64)],
-    stops: &[Segment],
-    reuse_empty: bool,
-) -> (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64) {
-    let (bpms, stops, extra_warps, beat0_offset) =
-        process_bpms_and_stops_sm::<false, true>(bpms, stops);
-    let warps = if reuse_empty {
-        merge_extra_warps::<true>(Vec::new(), extra_warps)
-    } else {
-        merge_extra_warps::<false>(Vec::new(), extra_warps)
-    };
-    (bpms, stops, warps, beat0_offset)
 }
 
 #[must_use]
@@ -1741,7 +1545,7 @@ pub fn timing_data_from_chart_data(
             .collect(),
     );
     let warps = parse_optional_timing(chart_warps, global_warps, parse_segments, cleaned);
-    let warps = merge_extra_warps::<true>(warps, extra_warps);
+    let warps = merge_extra_warps(warps, extra_warps);
     let warps = tidy_row_segments(warps.into_iter().map(qv).collect());
     let speeds = tidy_speed_segments(
         parse_optional_timing(chart_speeds, global_speeds, parse_speeds, cleaned)
@@ -2680,54 +2484,9 @@ mod tests {
     }
 
     #[test]
-    fn chunked_segment_capacity_scan_matches_scalar_path() {
-        use std::fmt::Write;
-
-        let cases = [
-            "",
-            ",",
-            "0=.5",
-            " ,0=1,missing,4=2,=3,8=nope,96r=-0.5,12=NaN,16=inf, ",
-        ];
-        for map in cases {
-            assert_segment_bits_eq(
-                &parse_segments_for_bench(map, false),
-                &parse_segments_for_bench(map, true),
-            );
-        }
-
-        let mut map = String::with_capacity(32 * 1_024);
-        for idx in 0..3_840 {
-            if idx != 0 {
-                map.push(',');
-            }
-            write!(&mut map, "{}=.5", idx * 4).expect("writing to a String cannot fail");
-        }
-        assert!(map.len() < 32 * 1_024);
-        assert_segment_bits_eq(
-            &parse_segments_for_bench(&map, false),
-            &parse_segments_for_bench(&map, true),
-        );
-    }
-
-    #[test]
-    fn preallocated_row_beats_match_growing_path() {
-        let cases: &[&[u8]] = &[
-            b"",
-            b",\n,",
-            b"1000",
-            b" 1000 \n0100\n,\n0010\n0001\n",
-            b"10000000\n01000000\n,\n00100000\n00010000\n",
-            b"\n1000\n0100\n",
-        ];
-        for &data in cases {
-            let growing = compute_row_to_beat_impl::<false>(data);
-            let preallocated = compute_row_to_beat_impl::<true>(data);
-            assert_eq!(preallocated.len(), growing.len());
-            for (actual, expected) in preallocated.iter().zip(growing) {
-                assert_eq!(actual.to_bits(), expected.to_bits());
-            }
-        }
+    fn row_beats_follow_measure_spacing() {
+        let actual = compute_row_to_beat(b"1000\n0100\n,\n0010\n0001\n");
+        assert_eq!(actual, vec![0.0, 2.0, 4.0, 6.0]);
     }
 
     #[test]
@@ -2768,37 +2527,6 @@ mod tests {
         }
         rows
     }
-
-    fn tidy_bpms_materialized(mut bpms: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
-        if bpms.is_empty() {
-            return vec![(0.0, DEFAULT_BPM)];
-        }
-        bpms.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-
-        let mut last_per_beat: Vec<(f64, f64)> = Vec::with_capacity(bpms.len());
-        for (beat, bpm) in bpms {
-            if let Some(last) = last_per_beat.last_mut()
-                && beat == last.0
-            {
-                *last = (beat, bpm);
-                continue;
-            }
-            last_per_beat.push((beat, bpm));
-        }
-        last_per_beat[0].0 = 0.0;
-
-        let mut tidied = Vec::with_capacity(last_per_beat.len());
-        let mut last_value = None;
-        for (beat, bpm) in last_per_beat {
-            if last_value == Some(bpm) {
-                continue;
-            }
-            last_value = Some(bpm);
-            tidied.push((beat, bpm));
-        }
-        tidied
-    }
-
     fn tidy_scroll_segments_slow(segments: Vec<Segment>) -> Vec<Segment> {
         let mut out = Vec::with_capacity(segments.len());
         for mut seg in segments {
@@ -2826,31 +2554,6 @@ mod tests {
         }
         out
     }
-
-    fn tidy_row_segments_materialized(segments: Vec<Segment>) -> Vec<Segment> {
-        let mut keyed: Vec<(i32, usize, Segment)> = Vec::with_capacity(segments.len());
-        for (idx, mut seg) in segments.into_iter().enumerate() {
-            let row = beat_to_note_row(seg.beat);
-            seg.beat = note_row_to_beat(row);
-            keyed.push((row, idx, seg));
-        }
-        keyed.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-
-        let mut out = Vec::with_capacity(keyed.len());
-        let mut i = 0;
-        while i < keyed.len() {
-            let row = keyed[i].0;
-            let mut last = keyed[i].2;
-            i += 1;
-            while i < keyed.len() && keyed[i].0 == row {
-                last = keyed[i].2;
-                i += 1;
-            }
-            out.push(last);
-        }
-        out
-    }
-
     fn assert_segment_bits_eq(actual: &[Segment], expected: &[Segment]) {
         assert_eq!(actual.len(), expected.len());
         for (actual, expected) in actual.iter().zip(expected) {
@@ -2860,51 +2563,35 @@ mod tests {
     }
 
     #[test]
-    fn generated_warp_merge_reuses_empty_output_without_behavior_change() {
-        let cases = [
-            (Vec::new(), Vec::new()),
-            (
-                Vec::new(),
-                vec![Segment {
-                    beat: 4.0,
-                    value: 2.0,
-                }],
-            ),
-            (
-                vec![Segment {
-                    beat: 0.0,
-                    value: 1.0,
-                }],
-                vec![Segment {
-                    beat: 4.0,
-                    value: 2.0,
-                }],
-            ),
+    fn generated_warp_merge_appends_in_order() {
+        let extra = vec![Segment {
+            beat: 4.0,
+            value: 2.0,
+        }];
+        assert_segment_bits_eq(&merge_extra_warps(Vec::new(), extra.clone()), &extra);
+
+        let expected = [
+            Segment {
+                beat: 0.0,
+                value: 1.0,
+            },
+            extra[0],
         ];
-        for (warps, extra_warps) in cases {
-            let copied = merge_extra_warps::<false>(warps.clone(), extra_warps.clone());
-            let reused = merge_extra_warps::<true>(warps, extra_warps);
-            assert_segment_bits_eq(&reused, &copied);
-        }
+        assert_segment_bits_eq(&merge_extra_warps(vec![expected[0]], extra), &expected);
     }
 
     #[test]
-    fn generated_warp_preallocation_preserves_output_and_empty_storage() {
+    fn generated_warps_follow_negative_stops() {
         let stops: Vec<_> = (0..64)
             .map(|index| Segment {
                 beat: index as f64 * 4.0 + 2.0,
                 value: -0.5,
             })
             .collect();
-        let growing = process_bpms_and_stops_sm::<false, false>(&[(0.0, 120.0)], &stops);
-        let preallocated = process_bpms_and_stops_sm::<false, true>(&[(0.0, 120.0)], &stops);
-        assert_bpm_bits_eq(&preallocated.0, &growing.0);
-        assert_segment_bits_eq(&preallocated.1, &growing.1);
-        assert_segment_bits_eq(&preallocated.2, &growing.2);
-        assert_eq!(preallocated.3.to_bits(), growing.3.to_bits());
-        assert_eq!(preallocated.2.len(), stops.len());
+        let output = process_bpms_and_stops_sm(&[(0.0, 120.0)], &stops);
+        assert_eq!(output.2.len(), stops.len());
 
-        let no_warps = process_bpms_and_stops_sm::<false, true>(
+        let no_warps = process_bpms_and_stops_sm(
             &[(0.0, 120.0), (4.0, 180.0)],
             &[Segment {
                 beat: 2.0,
@@ -3089,67 +2776,6 @@ mod tests {
     }
 
     #[test]
-    fn ordered_segment_rows_match_sorted_path() {
-        let cases = [
-            Vec::new(),
-            vec![Segment {
-                beat: 0.0,
-                value: 1.0,
-            }],
-            vec![
-                Segment {
-                    beat: 0.0,
-                    value: 1.0,
-                },
-                Segment {
-                    beat: 0.0,
-                    value: 2.0,
-                },
-                Segment {
-                    beat: 4.0,
-                    value: -1.0,
-                },
-                Segment {
-                    beat: 8.0,
-                    value: f64::NAN,
-                },
-                Segment {
-                    beat: 12.0,
-                    value: 0.5,
-                },
-            ],
-            vec![
-                Segment {
-                    beat: 8.0,
-                    value: 1.0,
-                },
-                Segment {
-                    beat: -4.0,
-                    value: 2.0,
-                },
-                Segment {
-                    beat: 0.0,
-                    value: 3.0,
-                },
-                Segment {
-                    beat: 8.0,
-                    value: 4.0,
-                },
-            ],
-        ];
-
-        for segments in cases {
-            for require_positive in [false, true] {
-                assert_eq!(
-                    build_segment_rows(&segments, require_positive),
-                    build_segment_rows_sorted(&segments, require_positive),
-                    "{segments:?}, require_positive={require_positive}"
-                );
-            }
-        }
-    }
-
-    #[test]
     fn packed_segment_rows_match_independent_vectors() {
         let segments = TimingSegments {
             bpms: vec![(0.0, 120.0)],
@@ -3172,86 +2798,6 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn generated_segment_rows_match_sorted_path() {
-        let mut state = 0x510e_527f_ade6_82d1_u64;
-        for len in 0..128 {
-            let segments: Vec<_> = (0..len)
-                .map(|idx| {
-                    state ^= state << 13;
-                    state ^= state >> 7;
-                    state ^= state << 17;
-                    let row = if len % 2 == 0 {
-                        idx as i32 / 3
-                    } else {
-                        (state % 128) as i32 - 32
-                    };
-                    Segment {
-                        beat: note_row_to_beat(row),
-                        value: match state % 5 {
-                            0 => -1.0,
-                            1 => 0.0,
-                            _ => 0.125,
-                        },
-                    }
-                })
-                .collect();
-            for require_positive in [false, true] {
-                assert_eq!(
-                    build_segment_rows(&segments, require_positive),
-                    build_segment_rows_sorted(&segments, require_positive)
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn in_place_bpm_cleanup_matches_materialized_path_bit_for_bit() {
-        let cases = [
-            Vec::new(),
-            vec![(4.0, 120.0)],
-            vec![
-                (0.0, 120.0),
-                (4.0, 120.0),
-                (8.0, 150.0),
-                (8.0, 180.0),
-                (12.0, 180.0),
-            ],
-            vec![(8.0, 180.0), (-4.0, 90.0), (0.0, 120.0), (8.0, 150.0)],
-            vec![(f64::NAN, 90.0), (4.0, f64::NAN), (0.0, 120.0)],
-        ];
-
-        for bpms in cases {
-            let expected = tidy_bpms_materialized(bpms.clone());
-            let actual = tidy_bpms(bpms);
-            assert_bpm_bits_eq(&actual, &expected);
-        }
-    }
-
-    #[test]
-    fn generated_bpm_cleanup_matches_materialized_path_bit_for_bit() {
-        let mut state = 0x3c6e_f372_fe94_f82b_u64;
-        for len in 0..128 {
-            let bpms: Vec<_> = (0..len)
-                .map(|idx| {
-                    state ^= state << 13;
-                    state ^= state >> 7;
-                    state ^= state << 17;
-                    let beat = if len % 2 == 0 {
-                        idx as f64 / 3.0
-                    } else {
-                        (state % 64) as f64 - 16.0
-                    };
-                    (beat, 60.0 + (state % 7) as f64 * 30.0)
-                })
-                .collect();
-            let expected = tidy_bpms_materialized(bpms.clone());
-            let actual = tidy_bpms(bpms);
-            assert_bpm_bits_eq(&actual, &expected);
-        }
-    }
-
     #[test]
     fn ordered_speed_and_scroll_cleanup_match_search_path_bit_for_bit() {
         let scrolls = vec![
@@ -3362,86 +2908,6 @@ mod tests {
             assert_speed_bits_eq(&actual, &expected);
         }
     }
-
-    #[test]
-    fn ordered_row_segment_cleanup_matches_materialized_sort_path() {
-        let cases = [
-            Vec::new(),
-            vec![Segment {
-                beat: 0.0,
-                value: 1.0,
-            }],
-            vec![
-                Segment {
-                    beat: 0.0,
-                    value: 1.0,
-                },
-                Segment {
-                    beat: 1.0 / 192.0,
-                    value: 2.0,
-                },
-                Segment {
-                    beat: 1.0,
-                    value: 3.0,
-                },
-                Segment {
-                    beat: 1.0 + 1.0 / 192.0,
-                    value: 4.0,
-                },
-            ],
-            vec![
-                Segment {
-                    beat: 8.0,
-                    value: 1.0,
-                },
-                Segment {
-                    beat: 0.0,
-                    value: 2.0,
-                },
-                Segment {
-                    beat: 4.0,
-                    value: 3.0,
-                },
-                Segment {
-                    beat: 0.0,
-                    value: 4.0,
-                },
-            ],
-        ];
-
-        for segments in cases {
-            let expected = tidy_row_segments_materialized(segments.clone());
-            let actual = tidy_row_segments(segments);
-            assert_segment_bits_eq(&actual, &expected);
-        }
-    }
-
-    #[test]
-    fn generated_row_segment_cleanup_matches_materialized_sort_path() {
-        let mut state = 0xbb67_ae85_84ca_a73b_u64;
-        for len in 0..128 {
-            let segments: Vec<_> = (0..len)
-                .map(|idx| {
-                    state ^= state << 13;
-                    state ^= state >> 7;
-                    state ^= state << 17;
-                    let row = if len % 2 == 0 {
-                        idx as i32 / 3
-                    } else {
-                        (state % 96) as i32 - 32
-                    };
-                    Segment {
-                        beat: note_row_to_beat(row),
-                        value: f64::from((state >> 32) as u32),
-                    }
-                })
-                .collect();
-            let expected = tidy_row_segments_materialized(segments.clone());
-            let actual = tidy_row_segments(segments);
-            assert_segment_bits_eq(&actual, &expected);
-        }
-    }
-
     #[test]
     fn sequential_beat_cursor_matches_independent_queries_bit_for_bit() {
         let timing = variable_timing();

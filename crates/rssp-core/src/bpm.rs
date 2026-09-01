@@ -392,15 +392,11 @@ fn trim_owned(mut value: String) -> String {
     value
 }
 
-fn decode_display_bpm_tag<const BORROW: bool>(tag: Option<&[u8]>) -> Option<Cow<'_, str>> {
+fn decode_display_bpm_tag(tag: Option<&[u8]>) -> Option<Cow<'_, str>> {
     let decoded = decode_bytes(tag?);
-    let value = if BORROW {
-        match decoded {
-            Cow::Borrowed(value) => Cow::Borrowed(value.trim()),
-            Cow::Owned(value) => Cow::Owned(trim_owned(value)),
-        }
-    } else {
-        Cow::Owned(decoded.trim().to_string())
+    let value = match decoded {
+        Cow::Borrowed(value) => Cow::Borrowed(value.trim()),
+        Cow::Owned(value) => Cow::Owned(trim_owned(value)),
     };
     (!value.is_empty()).then_some(value)
 }
@@ -579,7 +575,7 @@ fn chart_metadata(fields: &[&[u8]], fmt: TimingFormat) -> Option<(String, String
     ))
 }
 
-fn chart_bpm_snapshot<const BORROW_DISPLAY: bool>(
+fn chart_bpm_snapshot(
     entry: &ParsedChartEntry<'_>,
     global: &TimingTags,
     bpms_norm: &str,
@@ -618,7 +614,7 @@ fn chart_bpm_snapshot<const BORROW_DISPLAY: bool>(
             bpm_max_raw: cached.bpm_max_raw,
         }
     };
-    let chart_dbpm = decode_display_bpm_tag::<BORROW_DISPLAY>(entry.chart_display_bpm.as_deref());
+    let chart_dbpm = decode_display_bpm_tag(entry.chart_display_bpm.as_deref());
     let (display_bpm_min_raw, display_bpm_max_raw, display_bpm) = resolve_display_bpm(
         chart_dbpm.as_deref(),
         timing.bpm_min_raw,
@@ -688,27 +684,10 @@ pub fn actual_bpm_range_raw_f32(map: &[(f32, f32)]) -> (f64, f64) {
 }
 
 pub fn chart_bpm_snapshots(data: &[u8], ext: &str) -> Result<Vec<ChartBpmSnapshot>, String> {
-    chart_bpm_snapshots_impl::<true>(data, ext)
+    chart_bpm_snapshots_impl(data, ext)
 }
 
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn chart_bpm_snapshots_for_bench(
-    data: &[u8],
-    ext: &str,
-    legacy_display_alloc: bool,
-) -> Result<Vec<ChartBpmSnapshot>, String> {
-    if legacy_display_alloc {
-        chart_bpm_snapshots_impl::<false>(data, ext)
-    } else {
-        chart_bpm_snapshots_impl::<true>(data, ext)
-    }
-}
-
-fn chart_bpm_snapshots_impl<const BORROW_DISPLAY: bool>(
-    data: &[u8],
-    ext: &str,
-) -> Result<Vec<ChartBpmSnapshot>, String> {
+fn chart_bpm_snapshots_impl(data: &[u8], ext: &str) -> Result<Vec<ChartBpmSnapshot>, String> {
     let parsed = extract_sections(data, ext).map_err(|e| e.to_string())?;
     let fmt = timing_format_from_ext(ext);
     let use_chart = steps_timing_allowed(parse_version(parsed.version, fmt), fmt);
@@ -717,7 +696,7 @@ fn chart_bpm_snapshots_impl<const BORROW_DISPLAY: bool>(
     let mut snapshots = Vec::with_capacity(parsed.notes_list.len());
     let mut global_timing = None;
     for entry in &parsed.notes_list {
-        if let Some(snapshot) = chart_bpm_snapshot::<BORROW_DISPLAY>(
+        if let Some(snapshot) = chart_bpm_snapshot(
             entry,
             &global,
             &bpms_norm,
@@ -1040,27 +1019,6 @@ fn elapsed_with_events_sorted(
     time
 }
 
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn get_elapsed_time_for_bench(
-    target: f64,
-    bpms: &[(f64, f64)],
-    stops: &[(f64, f64)],
-    delays: &[(f64, f64)],
-    warps: &[(f64, f64)],
-    legacy: bool,
-) -> f64 {
-    if !legacy {
-        return get_elapsed_time(target, bpms, stops, delays, warps);
-    }
-    if stops.is_empty() && delays.is_empty() && warps.is_empty() {
-        elapsed_bpm_only(target, bpms)
-    } else {
-        elapsed_with_events_sorted(target, bpms, stops, delays, warps)
-    }
-}
-
 #[must_use]
 pub fn compute_last_beat(data: &[u8], lanes: usize) -> f64 {
     crate::stats::chart_last_beat(data, lanes)
@@ -1146,7 +1104,7 @@ pub fn compute_bpm_stats(values: &[f64]) -> (f64, f64) {
     } else {
         filtered.extend_from_slice(values);
     }
-    bpm_stats_from_values::<false, true>(&mut filtered, all_values_are_displayable, 0.0)
+    bpm_stats_from_values::<false>(&mut filtered, all_values_are_displayable, 0.0)
 }
 
 #[must_use]
@@ -1164,7 +1122,7 @@ pub fn compute_bpm_map_stats(map: &[(f64, f64)]) -> (f64, f64) {
     if !all_values_are_displayable {
         filtered.extend(map.iter().map(|&(_, bpm)| bpm));
     }
-    bpm_stats_from_values::<false, true>(&mut filtered, all_values_are_displayable, 0.0)
+    bpm_stats_from_values::<false>(&mut filtered, all_values_are_displayable, 0.0)
 }
 
 #[must_use]
@@ -1182,7 +1140,7 @@ pub fn compute_bpm_range_and_stats_with_scratch(
     map: &[(f64, f64)],
     values: &mut Vec<f64>,
 ) -> (i32, i32, f64, f64) {
-    compute_bpm_summary::<true, true>(map, values)
+    compute_bpm_summary(map, values)
 }
 
 const BPM_SELECTION_MIN: usize = 64;
@@ -1206,10 +1164,7 @@ fn fill_display_bpms<const SUM: bool>(
     (min, max, sum)
 }
 
-fn compute_bpm_summary<const FUSE_SUM: bool, const IN_PLACE_SORT: bool>(
-    map: &[(f64, f64)],
-    values: &mut Vec<f64>,
-) -> (i32, i32, f64, f64) {
+fn compute_bpm_summary(map: &[(f64, f64)], values: &mut Vec<f64>) -> (i32, i32, f64, f64) {
     values.clear();
     if map.is_empty() {
         return (0, 0, 0.0, 0.0);
@@ -1218,7 +1173,7 @@ fn compute_bpm_summary<const FUSE_SUM: bool, const IN_PLACE_SORT: bool>(
     if values.capacity() < map.len() {
         values.reserve(map.len());
     }
-    let (mut min, mut max, sum) = if FUSE_SUM && map.len() >= BPM_SELECTION_MIN {
+    let (mut min, mut max, sum) = if map.len() >= BPM_SELECTION_MIN {
         fill_display_bpms::<true>(map, values)
     } else {
         fill_display_bpms::<false>(map, values)
@@ -1233,8 +1188,7 @@ fn compute_bpm_summary<const FUSE_SUM: bool, const IN_PLACE_SORT: bool>(
         }
     }
 
-    let (median, average) =
-        bpm_stats_from_values::<FUSE_SUM, IN_PLACE_SORT>(values, all_values_are_displayable, sum);
+    let (median, average) = bpm_stats_from_values::<true>(values, all_values_are_displayable, sum);
     (
         min.max(0.0).round() as i32,
         max.max(0.0).round() as i32,
@@ -1243,45 +1197,7 @@ fn compute_bpm_summary<const FUSE_SUM: bool, const IN_PLACE_SORT: bool>(
     )
 }
 
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn compute_bpm_summary_for_bench(
-    map: &[(f64, f64)],
-    values: &mut Vec<f64>,
-    legacy: bool,
-) -> (i32, i32, f64, f64) {
-    if legacy {
-        compute_bpm_summary::<false, true>(map, values)
-    } else {
-        compute_bpm_summary::<true, true>(map, values)
-    }
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn compute_bpm_summary_sort_for_bench(
-    map: &[(f64, f64)],
-    values: &mut Vec<f64>,
-    in_place: bool,
-) -> (i32, i32, f64, f64) {
-    if in_place {
-        compute_bpm_summary::<true, true>(map, values)
-    } else {
-        compute_bpm_summary::<true, false>(map, values)
-    }
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn compute_small_bpm_stats_for_bench(values: &mut [f64], in_place: bool) -> (f64, f64) {
-    if in_place {
-        bpm_stats_from_values::<false, true>(values, true, 0.0)
-    } else {
-        bpm_stats_from_values::<false, false>(values, true, 0.0)
-    }
-}
-
-fn bpm_stats_from_values<const PRECOMPUTED_SUM: bool, const IN_PLACE_SORT: bool>(
+fn bpm_stats_from_values<const PRECOMPUTED_SUM: bool>(
     values: &mut [f64],
     can_select: bool,
     sum: f64,
@@ -1312,7 +1228,7 @@ fn bpm_stats_from_values<const PRECOMPUTED_SUM: bool, const IN_PLACE_SORT: bool>
         return (median, average);
     }
 
-    if IN_PLACE_SORT && can_select && values.len() >= BPM_UNSTABLE_SORT_MIN {
+    if can_select && values.len() >= BPM_UNSTABLE_SORT_MIN {
         values.sort_unstable_by(|a, b| {
             a.partial_cmp(b)
                 .expect("display BPM values are finite numbers")
@@ -1475,24 +1391,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn borrowed_display_bpm_tag_matches_owned() {
-        for raw in [
-            None,
-            Some(&b" 120:240 "[..]),
-            Some(&b" \t\r\n "[..]),
-            Some(&b"\xA0120:240\xA0"[..]),
-        ] {
-            assert_eq!(
-                decode_display_bpm_tag::<true>(raw),
-                decode_display_bpm_tag::<false>(raw)
-            );
-        }
+    fn display_bpm_tag_trims_without_forcing_clean_utf8_owned() {
+        assert_eq!(decode_display_bpm_tag(None), None);
+        assert_eq!(decode_display_bpm_tag(Some(b" \t\r\n ")), None);
         assert!(matches!(
-            decode_display_bpm_tag::<true>(Some(b"120:240")),
+            decode_display_bpm_tag(Some(b" 120:240 ")),
             Some(Cow::Borrowed("120:240"))
         ));
         assert!(matches!(
-            decode_display_bpm_tag::<true>(Some(b"\xA0120:240\xA0")),
+            decode_display_bpm_tag(Some(b"\xA0120:240\xA0")),
             Some(Cow::Owned(value)) if value == "120:240"
         ));
     }
@@ -1520,65 +1427,6 @@ mod tests {
         assert!(matches!(clean_norm_map_cow("0=120"), (Cow::Borrowed(_), _)));
         assert!(matches!(clean_norm_map_cow(",0=120,"), (Cow::Owned(_), _)));
     }
-
-    fn mines_nonfake_reference(
-        data: &[u8],
-        lanes: usize,
-        warps: &[(f64, f64)],
-        fakes: &[(f64, f64)],
-    ) -> u32 {
-        let lanes = if lanes == 8 { 8 } else { 4 };
-        let minimized = crate::stats::minimize_chart_for_hash(data, lanes);
-        let mut rows = Vec::new();
-        let mut per_measure = Vec::new();
-        let (mut measure_idx, mut row_idx, mut count) = (0usize, 0usize, 0usize);
-
-        for line in minimized.split(|&byte| byte == b'\n') {
-            if line.is_empty() {
-                continue;
-            }
-            if line[0] == b',' {
-                per_measure.push(count);
-                measure_idx += 1;
-                row_idx = 0;
-                count = 0;
-                continue;
-            }
-            if line.len() < lanes {
-                continue;
-            }
-            let mine = line[..lanes]
-                .iter()
-                .any(|&byte| matches!(byte, b'M' | b'm'));
-            rows.push((measure_idx, row_idx, mine));
-            count += 1;
-            row_idx += 1;
-        }
-        per_measure.push(count);
-
-        let in_range = |beat: f64, segments: &[(f64, f64)]| {
-            let idx = segments.partition_point(|(start, _)| *start <= beat);
-            idx > 0 && {
-                let (start, length) = segments[idx - 1];
-                length > 0.0 && length.is_finite() && beat < start + length
-            }
-        };
-
-        u32::try_from(
-            rows.iter()
-                .filter(|&&(measure, row, mine)| {
-                    if !mine {
-                        return false;
-                    }
-                    let row_count = per_measure[measure].max(1) as f64;
-                    let beat = (measure as f64).mul_add(4.0, 4.0 * (row as f64 / row_count));
-                    !in_range(beat, warps) && !in_range(beat, fakes)
-                })
-                .count(),
-        )
-        .unwrap_or(u32::MAX)
-    }
-
     #[test]
     fn normalize_float_digits_formats_pairs() {
         assert_eq!(
@@ -1658,32 +1506,6 @@ mod tests {
                 .map(|(idx, &bpm)| (idx as f64 * 4.0, bpm))
                 .collect();
             assert_eq!(compute_bpm_map_stats(&map), compute_bpm_stats(&values));
-        }
-    }
-
-    #[test]
-    fn in_place_small_bpm_stats_match_stable_sort() {
-        let cases = [
-            vec![120.0],
-            vec![180.0, 120.0, 180.0, 60.0],
-            (0..BPM_UNSTABLE_SORT_MIN - 1)
-                .map(|index| 60.125 + ((index * 37) % 211) as f64 / 8.0)
-                .collect(),
-            (0..BPM_UNSTABLE_SORT_MIN)
-                .map(|index| 60.125 + ((index * 37) % 211) as f64 / 8.0)
-                .collect(),
-            (0..BPM_SELECTION_MIN - 1)
-                .map(|index| 60.125 + ((index * 37) % 211) as f64 / 8.0)
-                .collect(),
-        ];
-
-        for mut stable in cases {
-            let mut in_place = stable.clone();
-            let expected = bpm_stats_from_values::<false, false>(&mut stable, true, 0.0);
-            let actual = bpm_stats_from_values::<false, true>(&mut in_place, true, 0.0);
-            assert_eq!(actual.0.to_bits(), expected.0.to_bits());
-            assert_eq!(actual.1.to_bits(), expected.1.to_bits());
-            assert_eq!(in_place, stable);
         }
     }
 
@@ -1767,31 +1589,6 @@ mod tests {
         );
         assert_eq!(scratch.capacity(), capacity);
     }
-
-    #[test]
-    fn f32_bpm_snapshot_derivations_match_materialized_f64_path() {
-        let f32_map = vec![
-            (0.0, 120.0),
-            (4.0, 150.555_5),
-            (8.0, -10.0),
-            (12.0, f32::INFINITY),
-            (16.0, 180.0),
-        ];
-        let f64_map: Vec<_> = f32_map
-            .iter()
-            .map(|&(beat, bpm)| (f64::from(beat), f64::from(bpm)))
-            .collect();
-
-        assert_eq!(
-            crate::timing::format_bpm_segments_f32_like_itg(&f32_map),
-            crate::timing::format_bpm_segments_like_itg(&f64_map)
-        );
-        assert_eq!(
-            actual_bpm_range_raw_f32(&f32_map),
-            actual_bpm_range_raw(&f64_map)
-        );
-    }
-
     #[test]
     fn inherited_bpm_snapshot_cache_does_not_leak_chart_timing() {
         let mut fixture = "#VERSION:0.83;\n#BPMS:0=120,4=180;\n".to_string();
@@ -1836,50 +1633,6 @@ mod tests {
         assert_eq!(
             compute_tier_bpm(&densities, &fixed, 4.0),
             compute_tier_bpm(&densities, &generic, 4.0)
-        );
-    }
-
-    #[test]
-    fn streaming_mine_count_matches_materialized_rows() {
-        let chart4 = b"\
-            M000\n\
-            0000\n\
-            0000\n\
-            0000\n\
-            00M0\n\
-            0000\n\
-            000M\n\
-            0000\n\
-            ,\n\
-            M000\n\
-            0000\n\
-            0m00\n\
-            0000\n";
-        let chart8 = b"\
-            M0000000\n\
-            00000000\n\
-            0000m000\n\
-            00000000\n\
-            ,\n\
-            0000000M\n\
-            00000000\n";
-        let warps = [(0.0, 0.5), (8.0, 0.25)];
-        let fakes = [(5.5, 1.0)];
-
-        assert_eq!(
-            compute_mines_nonfake(chart4, 4, &warps, &fakes),
-            mines_nonfake_reference(chart4, 4, &warps, &fakes)
-        );
-        assert_eq!(
-            compute_mines_nonfake(chart8, 8, &warps, &fakes),
-            mines_nonfake_reference(chart8, 8, &warps, &fakes)
-        );
-
-        let unsorted_warps = [(8.0, 0.25), (0.0, 0.5)];
-        let unsorted_fakes = [(5.5, 1.0), (2.0, 0.25)];
-        assert_eq!(
-            compute_mines_nonfake(chart4, 4, &unsorted_warps, &unsorted_fakes),
-            mines_nonfake_reference(chart4, 4, &unsorted_warps, &unsorted_fakes)
         );
     }
 }

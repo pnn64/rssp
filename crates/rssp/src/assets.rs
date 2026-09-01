@@ -8,8 +8,6 @@ use std::path::{Path, PathBuf};
 
 use memchr::memchr2;
 
-#[cfg(any(test, feature = "profile"))]
-use crate::parse::extract_bgchanges_values;
 use crate::parse::{bgchanges_values, decode_bytes, unescape_tag};
 
 const RANDOM_BACKGROUND_FILE: &str = "-random-";
@@ -29,13 +27,6 @@ pub enum BackgroundChangeTarget {
 pub struct ResolvedBackgroundChange {
     pub start_beat: f32,
     pub target: BackgroundChangeTarget,
-}
-
-#[cfg(any(test, feature = "profile"))]
-pub(crate) fn lc_name(path: &Path) -> String {
-    path.file_name()
-        .map(|s| s.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default()
 }
 
 pub(crate) fn is_mac_resource_fork(path: &Path) -> bool {
@@ -69,11 +60,6 @@ pub(crate) fn to_slash(s: &str) -> Cow<'_, str> {
     } else {
         Cow::Borrowed(s)
     }
-}
-
-#[cfg(any(test, feature = "profile"))]
-pub(crate) fn to_slash_legacy(s: &str) -> String {
-    s.chars().map(|c| if c == '\\' { '/' } else { c }).collect()
 }
 
 pub(crate) fn is_dir_ci(dir: &Path, name: &str) -> Option<PathBuf> {
@@ -140,33 +126,6 @@ pub(crate) fn match_mask_ci(name: &str, mask: &str) -> bool {
         || mid
             .windows(b.len())
             .any(|window| window.eq_ignore_ascii_case(b.as_bytes()))
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn list_image_candidates(dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut candidates = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(extension) = Path::new(&name)
-            .extension()
-            .and_then(|extension| extension.to_str())
-        else {
-            continue;
-        };
-        if name.to_string_lossy().starts_with("._") || img_rank(extension).is_none() {
-            continue;
-        }
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        candidates.push(path);
-    }
-    candidates.sort_by(|left, right| cmp_name_ci(left, right));
-    candidates
 }
 
 pub(crate) fn cmp_ascii_ci(left: &[u8], right: &[u8]) -> Ordering {
@@ -240,7 +199,7 @@ fn image_hint_matches(path: &Path, contains: &[u8], suffix: &[u8]) -> bool {
 }
 
 // Inline the common file-plus-three-directories case; deeper paths keep the
-// exact materialized fallback instead of imposing an artificial depth limit.
+// exact collected fallback instead of imposing an artificial depth limit.
 const INLINE_REL_COMPONENTS: usize = 4;
 
 fn collect_rel_parts(rel: &str) -> Option<Vec<&str>> {
@@ -293,7 +252,7 @@ fn resolve_rel_parts(base: &Path, parts: &[&str]) -> Option<PathBuf> {
     })
 }
 
-fn resolve_rel_ci_materialized(base: &Path, rel: &str) -> Option<PathBuf> {
+fn resolve_rel_ci_deep(base: &Path, rel: &str) -> Option<PathBuf> {
     resolve_rel_parts(base, &collect_rel_parts(rel)?)
 }
 
@@ -301,48 +260,9 @@ fn resolve_rel_ci(base: &Path, rel: &str) -> Option<PathBuf> {
     let rel = to_slash(rel);
     let mut parts = [""; INLINE_REL_COMPONENTS];
     let Some(len) = fill_rel_parts(rel.as_ref(), &mut parts) else {
-        return resolve_rel_ci_materialized(base, rel.as_ref());
+        return resolve_rel_ci_deep(base, rel.as_ref());
     };
     resolve_rel_parts(base, &parts[..len])
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_resolve_rel_ci(base: &Path, rel: &str, legacy: bool) -> Option<PathBuf> {
-    if legacy {
-        let rel = to_slash(rel);
-        resolve_rel_ci_materialized(base, rel.as_ref())
-    } else {
-        resolve_rel_ci(base, rel)
-    }
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_rel_parts_hash(rel: &str, legacy: bool) -> u64 {
-    let rel = to_slash(rel);
-    let mut inline = [""; INLINE_REL_COMPONENTS];
-    let owned;
-    let parts = if legacy {
-        owned = collect_rel_parts(rel.as_ref()).unwrap_or_default();
-        owned.as_slice()
-    } else if let Some(len) = fill_rel_parts(rel.as_ref(), &mut inline) {
-        &inline[..len]
-    } else {
-        owned = collect_rel_parts(rel.as_ref()).unwrap_or_default();
-        owned.as_slice()
-    };
-    parts.iter().fold(0u64, |hash, part| {
-        part.bytes()
-            .fold(hash.rotate_left(7), |hash, byte| hash ^ u64::from(byte))
-    })
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_rel_parts_match(rel: &str) -> bool {
-    let rel = to_slash(rel);
-    let expected = collect_rel_parts(rel.as_ref());
-    let mut inline = [""; INLINE_REL_COMPONENTS];
-    fill_rel_parts(rel.as_ref(), &mut inline)
-        .is_none_or(|len| expected.as_deref().unwrap_or_default() == &inline[..len])
 }
 
 fn resolve_asset(song_dir: &Path, tag: &str) -> Option<PathBuf> {
@@ -379,17 +299,6 @@ fn is_movie_ext(path: &Path) -> bool {
         .is_some_and(|ext| MOVIE_EXTS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
 }
 
-#[cfg(any(test, feature = "profile"))]
-pub(crate) fn cmp_name_ci(left: &Path, right: &Path) -> Ordering {
-    let left = left
-        .file_name()
-        .map_or_else(Cow::default, |name| name.to_string_lossy());
-    let right = right
-        .file_name()
-        .map_or_else(Cow::default, |name| name.to_string_lossy());
-    cmp_ascii_ci(left.as_bytes(), right.as_bytes())
-}
-
 #[inline(always)]
 fn first_two_sound_files(song_dir: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
     let Ok(entries) = fs::read_dir(song_dir) else {
@@ -419,53 +328,6 @@ fn first_two_sound_files(song_dir: &Path) -> (Option<PathBuf>, Option<PathBuf>) 
         first.map(|name| song_dir.join(name)),
         second.map(|name| song_dir.join(name)),
     )
-}
-
-#[cfg(feature = "profile")]
-fn first_two_sound_files_legacy(song_dir: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
-    let Ok(entries) = fs::read_dir(song_dir) else {
-        return (None, None);
-    };
-    let mut first: Option<PathBuf> = None;
-    let mut second: Option<PathBuf> = None;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if is_mac_resource_fork(&path) || !path.is_file() || !is_sound_ext(&path) {
-            continue;
-        }
-        if first
-            .as_ref()
-            .is_none_or(|candidate| cmp_name_ci(&path, candidate) == Ordering::Less)
-        {
-            second = first.replace(path);
-        } else if second
-            .as_ref()
-            .is_none_or(|candidate| cmp_name_ci(&path, candidate) == Ordering::Less)
-        {
-            second = Some(path);
-        }
-    }
-    (first, second)
-}
-
-#[cfg(any(test, feature = "profile"))]
-#[inline(always)]
-fn only_movie_file(song_dir: &Path) -> Option<PathBuf> {
-    let Ok(entries) = fs::read_dir(song_dir) else {
-        return None;
-    };
-    let mut movie = None;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if is_mac_resource_fork(&path) || !path.is_file() || !is_movie_ext(&path) {
-            continue;
-        }
-        if movie.is_some() {
-            return None;
-        }
-        movie = Some(path);
-    }
-    movie
 }
 
 /// Resolves `#MUSIC` like ITGmania's Song::TidyUpData fallback behavior.
@@ -499,20 +361,6 @@ fn pick_music_fallback((first, second): (Option<PathBuf>, Option<PathBuf>)) -> O
         return second;
     }
     Some(first)
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_resolve_music_path_legacy(
-    song_dir: &Path,
-    music_tag: &str,
-) -> Option<PathBuf> {
-    let tag = music_tag.trim();
-    if !tag.is_empty()
-        && let Some(path) = resolve_asset(song_dir, tag)
-    {
-        return Some(path);
-    }
-    pick_music_fallback(first_two_sound_files_legacy(song_dir))
 }
 
 fn png_dims(mut f: fs::File) -> Option<(u32, u32)> {
@@ -685,59 +533,6 @@ fn root_asset_eq(path: &Path, song_dir: &Path, name: &OsStr) -> bool {
     path.parent() == Some(song_dir) && path.file_name() == Some(name)
 }
 
-#[cfg(feature = "profile")]
-#[must_use]
-pub(crate) fn profile_resolve_song_assets_legacy(
-    song_dir: &Path,
-    banner_tag: &str,
-    background_tag: &str,
-) -> (Option<PathBuf>, Option<PathBuf>) {
-    let mut banner = resolve_asset(song_dir, banner_tag);
-    let mut background = resolve_asset(song_dir, background_tag);
-    if banner.is_some() && background.is_some() {
-        return (banner, background);
-    }
-
-    let images = list_image_candidates(song_dir);
-    for image in &images {
-        if banner.is_none() && image_hint_matches(image, b"banner", b"bn") {
-            banner = Some(image.clone());
-        }
-        if background.is_none() && image_hint_matches(image, b"background", b"bg") {
-            background = Some(image.clone());
-        }
-        if banner.is_some() && background.is_some() {
-            return (banner, background);
-        }
-    }
-
-    for image in &images {
-        if banner.is_some() && background.is_some() {
-            break;
-        }
-        if background.as_ref().is_some_and(|path| path == image)
-            || banner.as_ref().is_some_and(|path| path == image)
-        {
-            continue;
-        }
-        let Some((w, h)) = img_dims(image) else {
-            continue;
-        };
-        if background.is_none() && w >= 320 && h >= 240 {
-            background = Some(image.clone());
-            continue;
-        }
-        if banner.is_none() && (100..=320).contains(&w) && (50..=240).contains(&h) {
-            banner = Some(image.clone());
-            continue;
-        }
-        if banner.is_none() && w > 200 && h > 0 && (w as f32 / h as f32) > 2.0 {
-            banner = Some(image.clone());
-        }
-    }
-    (banner, background)
-}
-
 struct BgFileCatalog {
     files: Vec<String>,
     bucket_ranges: [(usize, usize); 256],
@@ -779,8 +574,8 @@ impl BgResolutionStatus {
 }
 
 impl BgFileCatalog {
-    fn from_files<const IN_PLACE: bool>(mut files: Vec<String>) -> Self {
-        sort_bg_files::<IN_PLACE>(&mut files);
+    fn from_files(mut files: Vec<String>) -> Self {
+        sort_bg_files(&mut files);
         Self::from_sorted(files)
     }
 
@@ -808,21 +603,8 @@ fn cmp_bg_file(left: &String, right: &String) -> std::cmp::Ordering {
         .then_with(|| left.cmp(right))
 }
 
-fn sort_bg_files<const IN_PLACE: bool>(files: &mut [String]) {
-    if IN_PLACE {
-        files.sort_unstable_by(cmp_bg_file);
-    } else {
-        files.sort_by(cmp_bg_file);
-    }
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_sort_bg_files(files: &mut [String], in_place: bool) {
-    if in_place {
-        sort_bg_files::<true>(files);
-    } else {
-        sort_bg_files::<false>(files);
-    }
+fn sort_bg_files(files: &mut [String]) {
+    files.sort_unstable_by(cmp_bg_file);
 }
 
 #[inline(always)]
@@ -833,13 +615,7 @@ fn bg_file_bucket(file: &str) -> usize {
         .map_or(0, |byte| byte.to_ascii_lowercase() as usize)
 }
 
-fn list_song_dir_rel_files<
-    const TRACK_MOVIE: bool,
-    const CACHE_ENTRY_TYPE: bool,
-    const IN_PLACE_SORT: bool,
->(
-    song_dir: &Path,
-) -> (BgFileCatalog, Option<PathBuf>) {
+fn list_song_dir_rel_files(song_dir: &Path) -> (BgFileCatalog, Option<PathBuf>) {
     let mut dirs = vec![song_dir.to_path_buf()];
     let mut files = Vec::new();
     let mut only_movie = None;
@@ -850,11 +626,7 @@ fn list_song_dir_rel_files<
             continue;
         };
         for entry in entries.flatten() {
-            let file_type = if CACHE_ENTRY_TYPE {
-                entry.file_type().ok()
-            } else {
-                None
-            };
+            let file_type = entry.file_type().ok();
             let path = entry.path();
             let is_dir = file_type.map_or_else(
                 || path.is_dir(),
@@ -868,8 +640,7 @@ fn list_song_dir_rel_files<
                 continue;
             };
             files.push(to_slash(&rel.to_string_lossy()).into_owned());
-            if TRACK_MOVIE
-                && is_root
+            if is_root
                 && !movies_ambiguous
                 && !is_mac_resource_fork(&path)
                 && is_movie_ext(&path)
@@ -887,10 +658,7 @@ fn list_song_dir_rel_files<
             }
         }
     }
-    (
-        BgFileCatalog::from_files::<IN_PLACE_SORT>(files),
-        only_movie,
-    )
+    (BgFileCatalog::from_files(files), only_movie)
 }
 
 fn strip_newlines(s: &str) -> Cow<'_, str> {
@@ -945,30 +713,9 @@ fn find_bg_delimiter(rem: &str) -> Option<usize> {
     memchr2(b'=', b',', rem.as_bytes())
 }
 
-#[cfg(any(test, feature = "profile"))]
-fn find_bg_delimiter_legacy(rem: &str) -> Option<usize> {
-    match (rem.find('='), rem.find(',')) {
-        (Some(equals), Some(comma)) => Some(equals.min(comma)),
-        (Some(equals), None) => Some(equals),
-        (None, Some(comma)) => Some(comma),
-        (None, None) => None,
-    }
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_find_bg_delimiter(rem: &str) -> Option<usize> {
-    find_bg_delimiter(rem)
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_find_bg_delimiter_legacy(rem: &str) -> Option<usize> {
-    find_bg_delimiter_legacy(rem)
-}
-
 fn for_each_bgchange_pair_with(
     changes: &str,
     files: &BgFileCatalog,
-    find_delimiter: &impl Fn(&str) -> Option<usize>,
     mut handle: impl FnMut(&str, &str, Option<usize>),
 ) {
     let changes = strip_newlines(changes);
@@ -995,7 +742,7 @@ fn for_each_bgchange_pair_with(
             (found, delimiter, file_index)
         } else {
             let rem = &changes[start..];
-            let end = start + find_delimiter(rem).unwrap_or(rem.len());
+            let end = start + find_bg_delimiter(rem).unwrap_or(rem.len());
             let field = &changes[start..end];
             let delimiter = changes.as_bytes().get(end).copied();
             start = end + usize::from(delimiter.is_some());
@@ -1032,29 +779,7 @@ fn for_each_bgchange_pair_with(
         }
     }
 }
-
-#[cfg(test)]
-fn for_each_bgchange_pair(
-    changes: &str,
-    files: &BgFileCatalog,
-    handle: impl FnMut(&str, &str, Option<usize>),
-) {
-    for_each_bgchange_pair_with(changes, files, &find_bg_delimiter, handle);
-}
-
-#[cfg(test)]
-fn for_each_bgchange_pair_legacy(
-    changes: &str,
-    files: &BgFileCatalog,
-    handle: impl FnMut(&str, &str, Option<usize>),
-) {
-    for_each_bgchange_pair_with(changes, files, &find_bg_delimiter_legacy, handle);
-}
-
-fn join_rel<const PREALLOC: bool>(base: &Path, relative: &str) -> PathBuf {
-    if !PREALLOC {
-        return base.join(relative);
-    }
+fn join_rel(base: &Path, relative: &str) -> PathBuf {
     let mut joined = PathBuf::with_capacity(
         base.as_os_str()
             .len()
@@ -1066,16 +791,7 @@ fn join_rel<const PREALLOC: bool>(base: &Path, relative: &str) -> PathBuf {
     joined
 }
 
-#[cfg(feature = "profile")]
-pub(crate) fn profile_join_rel(base: &Path, relative: &str, prealloc: bool) -> PathBuf {
-    if prealloc {
-        join_rel::<true>(base, relative)
-    } else {
-        join_rel::<false>(base, relative)
-    }
-}
-
-fn resolve_bgchange_target<const PREALLOC_PATHS: bool>(
+fn resolve_bgchange_target(
     song_dir: &Path,
     target_name: &str,
     file_index: Option<usize>,
@@ -1095,12 +811,10 @@ fn resolve_bgchange_target<const PREALLOC_PATHS: bool>(
     if let Some(file_index) = file_index {
         let relative = &files.files[file_index];
         return match resolution_status.get(file_index) {
-            1 => Some(BackgroundChangeTarget::File(join_rel::<PREALLOC_PATHS>(
-                song_dir, relative,
-            ))),
+            1 => Some(BackgroundChangeTarget::File(join_rel(song_dir, relative))),
             2 => None,
             _ => {
-                let path = join_rel::<PREALLOC_PATHS>(song_dir, relative);
+                let path = join_rel(song_dir, relative);
                 if !is_mac_resource_fork(&path) && path.is_file() {
                     resolution_status.set(file_index, 1);
                     Some(BackgroundChangeTarget::File(path))
@@ -1114,7 +828,7 @@ fn resolve_bgchange_target<const PREALLOC_PATHS: bool>(
     resolve_asset(song_dir, target_name).map(BackgroundChangeTarget::File)
 }
 
-fn parse_bgchange_pair<const PREALLOC_PATHS: bool>(
+fn parse_bgchange_pair(
     song_dir: &Path,
     start_beat: &str,
     target: &str,
@@ -1123,18 +837,12 @@ fn parse_bgchange_pair<const PREALLOC_PATHS: bool>(
     resolution_status: &mut BgResolutionStatus,
 ) -> Option<ResolvedBackgroundChange> {
     let start_beat = start_beat.trim().parse::<f32>().unwrap_or(0.0);
-    let target = resolve_bgchange_target::<PREALLOC_PATHS>(
-        song_dir,
-        target,
-        file_index,
-        files,
-        resolution_status,
-    )?;
+    let target = resolve_bgchange_target(song_dir, target, file_index, files, resolution_status)?;
     Some(ResolvedBackgroundChange { start_beat, target })
 }
 
 #[inline(always)]
-fn upsert_bgchange<const FILTER_UNORDERED: bool>(
+fn upsert_bgchange(
     out: &mut Vec<ResolvedBackgroundChange>,
     change: ResolvedBackgroundChange,
     beats_ordered: &mut bool,
@@ -1151,27 +859,25 @@ fn upsert_bgchange<const FILTER_UNORDERED: bool>(
         }
         *beats_ordered = false;
     }
-    if FILTER_UNORDERED {
-        if let Some(last) = out.last_mut()
-            && last.start_beat == change.start_beat
-        {
-            *last = change;
-            return;
+    if let Some(last) = out.last_mut()
+        && last.start_beat == change.start_beat
+    {
+        *last = change;
+        return;
+    }
+    if beat_filter.is_none() {
+        let mut filter = [0u64; BG_BEAT_FILTER_WORDS];
+        for existing in out.iter() {
+            mark_bg_beat(&mut filter, existing.start_beat);
         }
-        if beat_filter.is_none() {
-            let mut filter = [0u64; BG_BEAT_FILTER_WORDS];
-            for existing in out.iter() {
-                mark_bg_beat(&mut filter, existing.start_beat);
-            }
-            *beat_filter = Some(filter);
-        }
-        let maybe_seen = beat_filter
-            .as_mut()
-            .is_some_and(|filter| mark_bg_beat(filter, change.start_beat));
-        if !maybe_seen {
-            out.push(change);
-            return;
-        }
+        *beat_filter = Some(filter);
+    }
+    let maybe_seen = beat_filter
+        .as_mut()
+        .is_some_and(|filter| mark_bg_beat(filter, change.start_beat));
+    if !maybe_seen {
+        out.push(change);
+        return;
     }
     if let Some(slot) = out
         .iter_mut()
@@ -1223,26 +929,17 @@ fn push_beat_zero(
     });
 }
 
-fn sort_bgchanges<const SKIP_ORDERED: bool>(
-    out: &mut [ResolvedBackgroundChange],
-    beats_ordered: bool,
-) {
-    if !SKIP_ORDERED || !beats_ordered {
+fn sort_bgchanges(out: &mut [ResolvedBackgroundChange], beats_ordered: bool) {
+    if !beats_ordered {
         out.sort_by(|a, b| a.start_beat.total_cmp(&b.start_beat));
     }
 }
 
-fn resolve_bgchanges_with<
-    'a,
-    const FILTER_UNORDERED: bool,
-    const SKIP_ORDERED: bool,
-    const PREALLOC_PATHS: bool,
->(
+fn resolve_bgchanges_with<'a>(
     song_dir: &Path,
     values: impl IntoIterator<Item = &'a [u8]>,
     files: &BgFileCatalog,
     fallback_movie: impl FnOnce() -> Option<PathBuf>,
-    find_delimiter: impl Fn(&str) -> Option<usize>,
 ) -> Vec<ResolvedBackgroundChange> {
     let mut resolution_status = BgResolutionStatus::new(files.files.len());
     let mut out: Vec<ResolvedBackgroundChange> = Vec::new();
@@ -1252,33 +949,23 @@ fn resolve_bgchanges_with<
     for raw in values {
         let decoded = decode_bytes(raw);
         let text = unescape_tag(decoded.as_ref());
-        for_each_bgchange_pair_with(
-            text.as_ref(),
-            files,
-            &find_delimiter,
-            |start_beat, target, file_index| {
-                let Some(change) = parse_bgchange_pair::<PREALLOC_PATHS>(
-                    song_dir,
-                    start_beat,
-                    target,
-                    file_index,
-                    files,
-                    &mut resolution_status,
-                ) else {
-                    return;
-                };
-                if matches!(change.target, BackgroundChangeTarget::NoSongBg) {
-                    saw_no_song_bg = true;
-                    return;
-                }
-                upsert_bgchange::<FILTER_UNORDERED>(
-                    &mut out,
-                    change,
-                    &mut beats_ordered,
-                    &mut beat_filter,
-                );
-            },
-        );
+        for_each_bgchange_pair_with(text.as_ref(), files, |start_beat, target, file_index| {
+            let Some(change) = parse_bgchange_pair(
+                song_dir,
+                start_beat,
+                target,
+                file_index,
+                files,
+                &mut resolution_status,
+            ) else {
+                return;
+            };
+            if matches!(change.target, BackgroundChangeTarget::NoSongBg) {
+                saw_no_song_bg = true;
+                return;
+            }
+            upsert_bgchange(&mut out, change, &mut beats_ordered, &mut beat_filter);
+        });
     }
     let has_explicit_movie = out.iter().any(|change| {
         matches!(
@@ -1323,7 +1010,7 @@ fn resolve_bgchanges_with<
             );
         }
     }
-    sort_bgchanges::<SKIP_ORDERED>(&mut out, beats_ordered);
+    sort_bgchanges(&mut out, beats_ordered);
     out
 }
 
@@ -1332,165 +1019,8 @@ pub fn resolve_background_changes_like_itg(
     song_dir: &Path,
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
-    resolve_bgchanges_catalog_sort::<true>(song_dir, simfile_data)
-}
-
-fn resolve_bgchanges_catalog_sort<const IN_PLACE_SORT: bool>(
-    song_dir: &Path,
-    simfile_data: &[u8],
-) -> Vec<ResolvedBackgroundChange> {
-    let (files, movie) = list_song_dir_rel_files::<true, true, IN_PLACE_SORT>(song_dir);
-    resolve_bgchanges_with::<true, true, true>(
-        song_dir,
-        bgchanges_values(simfile_data),
-        &files,
-        || movie,
-        find_bg_delimiter,
-    )
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_bgchanges_catalog_sort(
-    song_dir: &Path,
-    simfile_data: &[u8],
-    in_place: bool,
-) -> Vec<ResolvedBackgroundChange> {
-    if in_place {
-        resolve_bgchanges_catalog_sort::<true>(song_dir, simfile_data)
-    } else {
-        resolve_bgchanges_catalog_sort::<false>(song_dir, simfile_data)
-    }
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn resolve_bgchanges_legacy(song_dir: &Path, simfile_data: &[u8]) -> Vec<ResolvedBackgroundChange> {
-    let (files, _) = list_song_dir_rel_files::<false, true, true>(song_dir);
-    resolve_bgchanges_with::<true, false, true>(
-        song_dir,
-        extract_bgchanges_values(simfile_data),
-        &files,
-        || only_movie_file(song_dir),
-        find_bg_delimiter,
-    )
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn resolve_bgchanges_double_find(
-    song_dir: &Path,
-    simfile_data: &[u8],
-) -> Vec<ResolvedBackgroundChange> {
-    let (files, movie) = list_song_dir_rel_files::<true, true, true>(song_dir);
-    resolve_bgchanges_with::<true, false, true>(
-        song_dir,
-        extract_bgchanges_values(simfile_data),
-        &files,
-        || movie,
-        find_bg_delimiter_legacy,
-    )
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_bgchanges_materialized(
-    song_dir: &Path,
-    simfile_data: &[u8],
-) -> Vec<ResolvedBackgroundChange> {
-    let (files, movie) = list_song_dir_rel_files::<true, true, true>(song_dir);
-    resolve_bgchanges_with::<true, false, true>(
-        song_dir,
-        extract_bgchanges_values(simfile_data),
-        &files,
-        || movie,
-        find_bg_delimiter,
-    )
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_bgchanges_linear_upsert(
-    song_dir: &Path,
-    simfile_data: &[u8],
-) -> Vec<ResolvedBackgroundChange> {
-    let (files, movie) = list_song_dir_rel_files::<true, true, true>(song_dir);
-    resolve_bgchanges_with::<false, false, true>(
-        song_dir,
-        bgchanges_values(simfile_data),
-        &files,
-        || movie,
-        find_bg_delimiter,
-    )
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_bgchanges_path_metadata(
-    song_dir: &Path,
-    simfile_data: &[u8],
-) -> Vec<ResolvedBackgroundChange> {
-    let (files, movie) = list_song_dir_rel_files::<true, false, true>(song_dir);
-    resolve_bgchanges_with::<true, false, true>(
-        song_dir,
-        bgchanges_values(simfile_data),
-        &files,
-        || movie,
-        find_bg_delimiter,
-    )
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_bgchanges_always_sort(
-    song_dir: &Path,
-    simfile_data: &[u8],
-) -> Vec<ResolvedBackgroundChange> {
-    let (files, movie) = list_song_dir_rel_files::<true, true, true>(song_dir);
-    resolve_bgchanges_with::<true, false, true>(
-        song_dir,
-        bgchanges_values(simfile_data),
-        &files,
-        || movie,
-        find_bg_delimiter,
-    )
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_bgchanges_growing_paths(
-    song_dir: &Path,
-    simfile_data: &[u8],
-) -> Vec<ResolvedBackgroundChange> {
-    let (files, movie) = list_song_dir_rel_files::<true, true, true>(song_dir);
-    resolve_bgchanges_with::<true, true, false>(
-        song_dir,
-        bgchanges_values(simfile_data),
-        &files,
-        || movie,
-        find_bg_delimiter,
-    )
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_sort_bgchanges(
-    changes: &mut [ResolvedBackgroundChange],
-    beats_ordered: bool,
-    legacy: bool,
-) {
-    if legacy {
-        sort_bgchanges::<false>(changes, beats_ordered);
-    } else {
-        sort_bgchanges::<true>(changes, beats_ordered);
-    }
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_bgchanges_legacy(
-    song_dir: &Path,
-    simfile_data: &[u8],
-) -> Vec<ResolvedBackgroundChange> {
-    resolve_bgchanges_legacy(song_dir, simfile_data)
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_bgchanges_double_find(
-    song_dir: &Path,
-    simfile_data: &[u8],
-) -> Vec<ResolvedBackgroundChange> {
-    resolve_bgchanges_double_find(song_dir, simfile_data)
+    let (files, movie) = list_song_dir_rel_files(song_dir);
+    resolve_bgchanges_with(song_dir, bgchanges_values(simfile_data), &files, || movie)
 }
 
 #[cfg(test)]
@@ -1499,14 +1029,12 @@ mod tests {
 
     use super::{
         BackgroundChangeTarget, BgFileCatalog, BgResolutionStatus, ResolvedBackgroundChange,
-        cmp_name_ci, for_each_bgchange_pair, for_each_bgchange_pair_legacy, is_dir_ci, is_file_ci,
-        join_rel, lc_name, list_image_candidates, match_bg_file,
-        resolve_background_changes_like_itg, resolve_bgchanges_legacy, resolve_music_path_like_itg,
-        resolve_song_assets, sort_bg_files, strip_newlines, upsert_bgchange,
+        is_dir_ci, is_file_ci, join_rel, match_bg_file, resolve_background_changes_like_itg,
+        resolve_music_path_like_itg, resolve_song_assets,
     };
 
     #[test]
-    fn preallocated_relative_join_matches_path_join() {
+    fn relative_join_handles_common_paths() {
         for base in [
             Path::new(""),
             Path::new("Songs/Pack/Song"),
@@ -1518,10 +1046,7 @@ mod tests {
                 "Visuals/Background,Layer.png",
                 "../movie.mp4",
             ] {
-                assert_eq!(
-                    join_rel::<true>(base, relative),
-                    join_rel::<false>(base, relative)
-                );
+                assert_eq!(join_rel(base, relative), base.join(relative));
             }
         }
     }
@@ -1547,138 +1072,6 @@ mod tests {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
-
-    fn match_bg_file_materialized<'a>(
-        changes: &'a str,
-        start: usize,
-        files: &[String],
-    ) -> Option<&'a str> {
-        for file in files {
-            let Some(head) = changes.get(start..start + file.len()) else {
-                continue;
-            };
-            if !head.eq_ignore_ascii_case(file) {
-                continue;
-            }
-            let next = start + file.len();
-            if matches!(changes.as_bytes().get(next), None | Some(b'=' | b',')) {
-                return Some(head);
-            }
-        }
-        None
-    }
-
-    fn split_bgchange_sets_materialized(changes: &str, files: &[String]) -> Vec<Vec<String>> {
-        let changes = strip_newlines(changes).into_owned();
-        if changes.is_empty() {
-            return Vec::new();
-        }
-        let mut out: Vec<Vec<String>> = Vec::new();
-        let mut start = 0usize;
-        let mut pnum = 0u8;
-        while start <= changes.len() {
-            if matches!(pnum, 1 | 7)
-                && let Some(found) = match_bg_file_materialized(&changes, start, files)
-            {
-                out.last_mut().unwrap().push(found.to_string());
-                start += found.len();
-                if let Some(&delimiter) = changes.as_bytes().get(start) {
-                    pnum = if delimiter == b'=' { pnum + 1 } else { 0 };
-                    start += 1;
-                }
-                continue;
-            }
-            if pnum == 0 {
-                out.push(Vec::new());
-            }
-            let remaining = &changes[start..];
-            let equals = remaining.find('=').map(|index| start + index);
-            let comma = remaining.find(',').map(|index| start + index);
-            let Some((end, next_pnum)) = equals
-                .zip(comma)
-                .map(|(equals, comma)| {
-                    if equals < comma {
-                        (equals, pnum + 1)
-                    } else {
-                        (comma, 0)
-                    }
-                })
-                .or_else(|| equals.map(|equals| (equals, pnum + 1)))
-                .or_else(|| comma.map(|comma| (comma, 0)))
-            else {
-                out.last_mut().unwrap().push(changes[start..].to_string());
-                break;
-            };
-            out.last_mut()
-                .unwrap()
-                .push(changes[start..end].to_string());
-            start = end + 1;
-            pnum = next_pnum;
-        }
-        out
-    }
-
-    fn assert_streamed_pairs_match(changes: &str, files: &[String]) {
-        let mut reference_files = files.to_vec();
-        reference_files
-            .sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| left.cmp(right)));
-        let expected = split_bgchange_sets_materialized(changes, &reference_files)
-            .into_iter()
-            .filter_map(|fields| Some((fields.first()?.clone(), fields.get(1)?.clone())))
-            .collect::<Vec<_>>();
-        let files = BgFileCatalog::from_files::<true>(files.to_vec());
-        let mut actual = Vec::new();
-        for_each_bgchange_pair(changes, &files, |start_beat, target, _| {
-            actual.push((start_beat.to_string(), target.to_string()));
-        });
-        let mut legacy = Vec::new();
-        for_each_bgchange_pair_legacy(changes, &files, |start_beat, target, _| {
-            legacy.push((start_beat.to_string(), target.to_string()));
-        });
-        assert_eq!(actual, expected, "changes={changes:?}");
-        assert_eq!(actual, legacy, "changes={changes:?}");
-    }
-
-    #[test]
-    fn streamed_bgchange_pairs_match_materialized_sets() {
-        let files = [
-            "Visuals/Background,Layer.png",
-            "Visuals/Overlay,Layer.png",
-            "Visuals/A=B, C.png",
-            "first.png",
-        ]
-        .map(str::to_string);
-        let cases = [
-            "",
-            "0=first.png",
-            "0=Visuals/Background,Layer.png=1.000=0=0=1=StretchNoLoop==",
-            concat!(
-                "0=first.png=1=0=0=0=0=Visuals/Overlay,Layer.png,",
-                "4=Visuals/A=B, C.png"
-            ),
-            "0=\nVisuals/Background,Layer.png,\r\n4=first.png",
-            ",0=,4,8=first.png,12=first.png=1=0=0=0=0=",
-        ];
-
-        for changes in cases {
-            assert_streamed_pairs_match(changes, &files);
-        }
-
-        let alphabet = b"01=,\n\r abcXYZ/";
-        let mut state = 0x7265_7373_7062_6763u64;
-        for case_index in 0..2_048 {
-            let len = case_index % 96;
-            let mut changes = String::with_capacity(len);
-            for _ in 0..len {
-                state = state
-                    .wrapping_mul(6_364_136_223_846_793_005)
-                    .wrapping_add(1);
-                changes.push(char::from(alphabet[state as usize % alphabet.len()]));
-            }
-            assert_streamed_pairs_match(&changes, &files);
-        }
-    }
-
     #[test]
     fn streamed_bgchanges_preserve_resolution_and_upsert_behavior() {
         let temp = TempDir::new();
@@ -1762,7 +1155,7 @@ mod tests {
 
     #[test]
     fn bg_file_catalog_only_indexes_unambiguous_or_exact_case_matches() {
-        let files = BgFileCatalog::from_files::<true>(
+        let files = BgFileCatalog::from_files(
             ["Alpha.png", "alpha.png", "Beta.png"]
                 .map(str::to_string)
                 .to_vec(),
@@ -1780,8 +1173,8 @@ mod tests {
     }
 
     #[test]
-    fn in_place_bg_file_sort_matches_stable_total_order() {
-        let mut stable = [
+    fn bg_file_sort_uses_length_then_name() {
+        let mut files = [
             "z/short.png",
             "Alpha.png",
             "alpha.png",
@@ -1794,12 +1187,12 @@ mod tests {
         ]
         .map(str::to_string)
         .to_vec();
-        let mut in_place = stable.clone();
-
-        sort_bg_files::<false>(&mut stable);
-        sort_bg_files::<true>(&mut in_place);
-
-        assert_eq!(in_place, stable);
+        super::sort_bg_files(&mut files);
+        assert!(
+            files
+                .windows(2)
+                .all(|pair| super::cmp_bg_file(&pair[0], &pair[1]).is_le())
+        );
     }
 
     #[test]
@@ -1834,7 +1227,7 @@ mod tests {
                     target: BackgroundChangeTarget::File(PathBuf::from(index.to_string())),
                 };
                 linear_upsert(&mut expected, change.clone());
-                upsert_bgchange::<false>(&mut actual, change, &mut beats_ordered, &mut None);
+                super::upsert_bgchange(&mut actual, change, &mut beats_ordered, &mut None);
             }
 
             assert_eq!(actual.len(), expected.len());
@@ -1846,7 +1239,7 @@ mod tests {
     }
 
     #[test]
-    fn allocation_free_name_comparison_matches_lowercase_keys() {
+    fn ascii_name_comparison_matches_lowercase_keys() {
         let paths = [
             PathBuf::from(""),
             PathBuf::from("Alpha.OGG"),
@@ -1860,8 +1253,10 @@ mod tests {
         for left in &paths {
             for right in &paths {
                 assert_eq!(
-                    cmp_name_ci(left, right),
-                    lc_name(left).cmp(&lc_name(right)),
+                    super::cmp_os_ci(left.as_os_str(), right.as_os_str()),
+                    left.to_string_lossy()
+                        .to_ascii_lowercase()
+                        .cmp(&right.to_string_lossy().to_ascii_lowercase()),
                     "left={left:?}, right={right:?}"
                 );
             }
@@ -1918,7 +1313,6 @@ mod tests {
                 resolve_background_changes_like_itg(&temp.0, simfile),
                 expected
             );
-            assert_eq!(resolve_bgchanges_legacy(&temp.0, simfile), expected);
         }
 
         let still = temp.0.join("still.png");
@@ -1932,12 +1326,10 @@ mod tests {
             resolve_background_changes_like_itg(&temp.0, simfile),
             expected
         );
-        assert_eq!(resolve_bgchanges_legacy(&temp.0, simfile), expected);
 
         std::fs::write(temp.0.join("Second.mkv"), [])
             .expect("second asset test movie should be writable");
         assert!(resolve_background_changes_like_itg(&temp.0, b"").is_empty());
-        assert!(resolve_bgchanges_legacy(&temp.0, b"").is_empty());
     }
 
     fn png_header(width: u32, height: u32) -> [u8; 24] {
@@ -1950,7 +1342,7 @@ mod tests {
     }
 
     #[test]
-    fn image_catalog_and_song_asset_selection_match_materialized_order() {
+    fn song_asset_selection_uses_name_and_dimension_hints() {
         let temp = TempDir::new();
         let hints = temp.0.join("Hints");
         std::fs::create_dir(&hints).expect("hint directory should be creatable");
@@ -1968,22 +1360,6 @@ mod tests {
         std::fs::write(hints.join("not-an-image.dat"), [])
             .expect("non-image fixture should be writable");
 
-        let mut expected_paths = std::fs::read_dir(&hints)
-            .expect("hint directory should be readable")
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| {
-                !super::is_mac_resource_fork(path)
-                    && path.is_file()
-                    && path
-                        .extension()
-                        .and_then(|extension| extension.to_str())
-                        .is_some_and(|extension| super::img_rank(extension).is_some())
-            })
-            .collect::<Vec<_>>();
-        expected_paths.sort_by_cached_key(|path| lc_name(path));
-        let actual_paths = list_image_candidates(&hints);
-        assert_eq!(actual_paths, expected_paths);
         assert_eq!(
             resolve_song_assets(&hints, "", ""),
             (

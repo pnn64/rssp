@@ -90,35 +90,10 @@ pub fn compute_chart_durations(
     extension: &str,
     offsets: TimingOffsets,
 ) -> Result<Vec<ChartDuration>, String> {
-    compute_chart_durations_impl::<true, true>(simfile_data, extension, offsets)
+    compute_chart_durations_impl(simfile_data, extension, offsets)
 }
 
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn chart_durations_owned(
-    simfile_data: &[u8],
-    extension: &str,
-    offsets: TimingOffsets,
-) -> Result<Vec<ChartDuration>, String> {
-    compute_chart_durations_impl::<false, true>(simfile_data, extension, offsets)
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn chart_durations_cache_for_bench(
-    simfile_data: &[u8],
-    extension: &str,
-    offsets: TimingOffsets,
-    cache: bool,
-) -> Result<Vec<ChartDuration>, String> {
-    if cache {
-        compute_chart_durations_impl::<true, true>(simfile_data, extension, offsets)
-    } else {
-        compute_chart_durations_impl::<true, false>(simfile_data, extension, offsets)
-    }
-}
-
-fn compute_chart_durations_impl<const BORROW: bool, const CACHE_TIMING: bool>(
+fn compute_chart_durations_impl(
     simfile_data: &[u8],
     extension: &str,
     offsets: TimingOffsets,
@@ -131,22 +106,22 @@ fn compute_chart_durations_impl<const BORROW: bool, const CACHE_TIMING: bool>(
     let song_offset = parse_offset_seconds(parsed_data.offset);
 
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"")).unwrap_or("");
-    let cleaned_global_bpms = clean_map_mode::<BORROW>(global_bpms_raw);
+    let cleaned_global_bpms = clean_map_mode::<true>(global_bpms_raw);
     let global_stops_raw = parsed_data
         .stops
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let cleaned_global_stops = clean_map_mode::<BORROW>(global_stops_raw);
+    let cleaned_global_stops = clean_map_mode::<true>(global_stops_raw);
     let global_delays_raw = parsed_data
         .delays
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let cleaned_global_delays = clean_map_mode::<BORROW>(global_delays_raw);
+    let cleaned_global_delays = clean_map_mode::<true>(global_delays_raw);
     let global_warps_raw = parsed_data
         .warps
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let cleaned_global_warps = clean_map_mode::<BORROW>(global_warps_raw);
+    let cleaned_global_warps = clean_map_mode::<true>(global_warps_raw);
 
     let entries = parsed_data.notes_list;
     let mut results = Vec::with_capacity(entries.len());
@@ -208,29 +183,28 @@ fn compute_chart_durations_impl<const BORROW: bool, const CACHE_TIMING: bool>(
         );
         let chart_offset = timing_src.chart_offset_seconds;
         let chart_bpms = if allow_steps_timing {
-            chart_map_mode::<BORROW>(entry.chart_bpms.as_deref())
+            chart_map_mode::<true>(entry.chart_bpms.as_deref())
         } else {
             None
         };
         let chart_stops = if allow_steps_timing {
-            chart_map_mode::<BORROW>(entry.chart_stops.as_deref())
+            chart_map_mode::<true>(entry.chart_stops.as_deref())
         } else {
             None
         };
         let chart_delays = if allow_steps_timing {
-            chart_map_mode::<BORROW>(entry.chart_delays.as_deref())
+            chart_map_mode::<true>(entry.chart_delays.as_deref())
         } else {
             None
         };
         let chart_warps = if allow_steps_timing {
-            chart_map_mode::<BORROW>(entry.chart_warps.as_deref())
+            chart_map_mode::<true>(entry.chart_warps.as_deref())
         } else {
             None
         };
-        let uncached_chart_timing;
         let timing = if timing_src.chart_has_own_timing {
             let key = duration_timing_key(entry);
-            if CACHE_TIMING && last_chart_key == Some(key) {
+            if last_chart_key == Some(key) {
                 last_chart_timing
                     .as_ref()
                     .expect("a cached timing key has timing data")
@@ -247,16 +221,11 @@ fn compute_chart_durations_impl<const BORROW: bool, const CACHE_TIMING: bool>(
                     timing_format,
                 );
                 let built = timing_data_from_segments(chart_offset, 0.0, &timing_segments);
-                if CACHE_TIMING {
-                    last_chart_key = Some(key);
-                    last_chart_timing = Some(built);
-                    last_chart_timing
-                        .as_ref()
-                        .expect("timing data was inserted with its key")
-                } else {
-                    uncached_chart_timing = built;
-                    &uncached_chart_timing
-                }
+                last_chart_key = Some(key);
+                last_chart_timing = Some(built);
+                last_chart_timing
+                    .as_ref()
+                    .expect("timing data was inserted with its key")
             }
         } else {
             global_timing.get_or_insert_with(|| {
@@ -288,7 +257,7 @@ fn compute_chart_durations_impl<const BORROW: bool, const CACHE_TIMING: bool>(
 
 #[cfg(test)]
 mod tests {
-    use super::{TimingOffsets, compute_chart_durations, compute_chart_durations_impl};
+    use super::{TimingOffsets, compute_chart_durations};
     use crate::timing::{
         TimingFormat, compute_timing_segments, get_time_for_beat_f32, resolve_chart_timing,
         timing_data_from_segments,
@@ -302,18 +271,6 @@ mod tests {
         let charts =
             compute_chart_durations(INHERITED_TIMING_FIXTURE, "ssc", TimingOffsets::default())
                 .expect("fixture should parse");
-        let owned = compute_chart_durations_impl::<false, true>(
-            INHERITED_TIMING_FIXTURE,
-            "ssc",
-            TimingOffsets::default(),
-        )
-        .expect("owned timing fixture should parse");
-        assert_eq!(charts.len(), owned.len());
-        for (actual, expected) in charts.iter().zip(&owned) {
-            assert_eq!(actual.step_type, expected.step_type);
-            assert_eq!(actual.difficulty, expected.difficulty);
-            assert_eq!(actual.duration_seconds, expected.duration_seconds);
-        }
         let difficulties: Vec<_> = charts
             .iter()
             .map(|chart| chart.difficulty.as_str())
@@ -342,20 +299,12 @@ mod tests {
             "#DIFFICULTY:Hard;\n#METER:8;\n#BPMS:0=180,8=90;\n",
             "#STOPS:4=0.25;\n#NOTES:\n1000\n0000\n0000\n0000\n;\n",
         );
-        let cached = compute_chart_durations(fixture.as_bytes(), "ssc", TimingOffsets::default())
-            .expect("cached fixture should parse");
-        let uncached = compute_chart_durations_impl::<true, false>(
-            fixture.as_bytes(),
-            "ssc",
-            TimingOffsets::default(),
-        )
-        .expect("uncached fixture should parse");
-        assert_eq!(cached.len(), uncached.len());
-        for (actual, expected) in cached.iter().zip(uncached) {
-            assert_eq!(actual.step_type, expected.step_type);
-            assert_eq!(actual.difficulty, expected.difficulty);
-            assert_eq!(actual.duration_seconds, expected.duration_seconds);
-        }
+        let charts = compute_chart_durations(fixture.as_bytes(), "ssc", TimingOffsets::default())
+            .expect("fixture should parse");
+        assert_eq!(charts.len(), 2);
+        assert_eq!(charts[0].difficulty, "Easy");
+        assert_eq!(charts[1].difficulty, "Hard");
+        assert_eq!(charts[0].duration_seconds, charts[1].duration_seconds);
     }
 
     #[test]

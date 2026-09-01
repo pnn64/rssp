@@ -30,57 +30,6 @@ pub fn compute_chart_peak_nps(
     simfile_data: &[u8],
     extension: &str,
 ) -> Result<Vec<ChartNpsInfo>, String> {
-    compute_chart_peak_nps_with::<true>(
-        simfile_data,
-        extension,
-        true,
-        |chart, lanes, timing, scratch| {
-            let densities = crate::stats::measure_densities_with_scratch(chart, lanes, scratch);
-            compute_peak_nps_with_timing(densities, timing)
-        },
-    )
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn compute_chart_peak_nps_legacy_for_bench(
-    simfile_data: &[u8],
-    extension: &str,
-) -> Result<Vec<ChartNpsInfo>, String> {
-    compute_chart_peak_nps_with::<true>(
-        simfile_data,
-        extension,
-        false,
-        |chart, lanes, timing, _| {
-            let densities = crate::stats::measure_densities(chart, lanes);
-            compute_peak_nps_with_timing(&densities, timing)
-        },
-    )
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn chart_peak_nps_owned(
-    simfile_data: &[u8],
-    extension: &str,
-) -> Result<Vec<ChartNpsInfo>, String> {
-    compute_chart_peak_nps_with::<false>(
-        simfile_data,
-        extension,
-        true,
-        |chart, lanes, timing, scratch| {
-            let densities = crate::stats::measure_densities_with_scratch(chart, lanes, scratch);
-            compute_peak_nps_with_timing(densities, timing)
-        },
-    )
-}
-
-fn compute_chart_peak_nps_with<const BORROW: bool>(
-    simfile_data: &[u8],
-    extension: &str,
-    reuse_densities: bool,
-    peak_nps: impl Fn(&[u8], usize, &TimingData, &mut crate::stats::DensityScratch) -> f64,
-) -> Result<Vec<ChartNpsInfo>, String> {
     let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
 
     let timing_format = timing_format_from_ext(extension);
@@ -89,58 +38,50 @@ fn compute_chart_peak_nps_with<const BORROW: bool>(
     let song_offset = parse_offset_seconds(parsed_data.offset);
 
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"")).unwrap_or("");
-    let cleaned_global_bpms = clean_map_mode::<BORROW>(global_bpms_raw);
+    let cleaned_global_bpms = clean_map_mode::<true>(global_bpms_raw);
     let global_stops_raw = parsed_data
         .stops
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let cleaned_global_stops = clean_map_mode::<BORROW>(global_stops_raw);
+    let cleaned_global_stops = clean_map_mode::<true>(global_stops_raw);
     let global_delays_raw = parsed_data
         .delays
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let cleaned_global_delays = clean_map_mode::<BORROW>(global_delays_raw);
+    let cleaned_global_delays = clean_map_mode::<true>(global_delays_raw);
     let global_warps_raw = parsed_data
         .warps
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let cleaned_global_warps = clean_map_mode::<BORROW>(global_warps_raw);
+    let cleaned_global_warps = clean_map_mode::<true>(global_warps_raw);
     let global_speeds_raw = parsed_data
         .speeds
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let cleaned_global_speeds = clean_map_mode::<BORROW>(global_speeds_raw);
+    let cleaned_global_speeds = clean_map_mode::<true>(global_speeds_raw);
     let global_scrolls_raw = parsed_data
         .scrolls
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let cleaned_global_scrolls = clean_map_mode::<BORROW>(global_scrolls_raw);
+    let cleaned_global_scrolls = clean_map_mode::<true>(global_scrolls_raw);
     let global_fakes_raw = parsed_data
         .fakes
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let cleaned_global_fakes = clean_map_mode::<BORROW>(global_fakes_raw);
+    let cleaned_global_fakes = clean_map_mode::<true>(global_fakes_raw);
 
     let entries = parsed_data.notes_list;
-    let density_capacity = if reuse_densities {
-        entries
-            .iter()
-            .filter_map(|entry| {
-                crate::supported_stepstype_lanes_bytes(entry.fields[0])
-                    .map(|lanes| crate::stats::density_capacity(entry.note_data.len(), lanes))
-            })
-            .max()
-            .unwrap_or(0)
-    } else {
-        0
-    };
+    let density_capacity = entries
+        .iter()
+        .filter_map(|entry| {
+            crate::supported_stepstype_lanes_bytes(entry.fields[0])
+                .map(|lanes| crate::stats::density_capacity(entry.note_data.len(), lanes))
+        })
+        .max()
+        .unwrap_or(0);
     let mut results = Vec::with_capacity(entries.len());
     let mut global_timing = None;
-    let mut density_scratch = if reuse_densities {
-        crate::stats::DensityScratch::with_capacity(density_capacity)
-    } else {
-        crate::stats::DensityScratch::default()
-    };
+    let mut density_scratch = crate::stats::DensityScratch::with_capacity(density_capacity);
 
     for entry in entries {
         if entry.field_count < 5 {
@@ -190,37 +131,37 @@ fn compute_chart_peak_nps_with<const BORROW: bool>(
         );
         let chart_offset = timing_src.chart_offset_seconds;
         let chart_bpms = if allow_steps_timing {
-            chart_map_mode::<BORROW>(entry.chart_bpms.as_deref())
+            chart_map_mode::<true>(entry.chart_bpms.as_deref())
         } else {
             None
         };
         let chart_stops = if allow_steps_timing {
-            chart_map_mode::<BORROW>(entry.chart_stops.as_deref())
+            chart_map_mode::<true>(entry.chart_stops.as_deref())
         } else {
             None
         };
         let chart_delays = if allow_steps_timing {
-            chart_map_mode::<BORROW>(entry.chart_delays.as_deref())
+            chart_map_mode::<true>(entry.chart_delays.as_deref())
         } else {
             None
         };
         let chart_warps = if allow_steps_timing {
-            chart_map_mode::<BORROW>(entry.chart_warps.as_deref())
+            chart_map_mode::<true>(entry.chart_warps.as_deref())
         } else {
             None
         };
         let chart_speeds = if allow_steps_timing {
-            chart_map_mode::<BORROW>(entry.chart_speeds.as_deref())
+            chart_map_mode::<true>(entry.chart_speeds.as_deref())
         } else {
             None
         };
         let chart_scrolls = if allow_steps_timing {
-            chart_map_mode::<BORROW>(entry.chart_scrolls.as_deref())
+            chart_map_mode::<true>(entry.chart_scrolls.as_deref())
         } else {
             None
         };
         let chart_fakes = if allow_steps_timing {
-            chart_map_mode::<BORROW>(entry.chart_fakes.as_deref())
+            chart_map_mode::<true>(entry.chart_fakes.as_deref())
         } else {
             None
         };
@@ -270,7 +211,9 @@ fn compute_chart_peak_nps_with<const BORROW: bool>(
             })
         };
 
-        let max_nps = peak_nps(chart_data, lanes, timing, &mut density_scratch);
+        let densities =
+            crate::stats::measure_densities_with_scratch(chart_data, lanes, &mut density_scratch);
+        let max_nps = compute_peak_nps_with_timing(densities, timing);
 
         results.push(ChartNpsInfo {
             step_type,
@@ -284,9 +227,7 @@ fn compute_chart_peak_nps_with<const BORROW: bool>(
 
 #[cfg(test)]
 mod batch_tests {
-    use super::{
-        compute_chart_peak_nps, compute_chart_peak_nps_with, compute_peak_nps_with_timing,
-    };
+    use super::compute_chart_peak_nps;
 
     const INHERITED_TIMING_FIXTURE: &[u8] =
         include_bytes!("../../rssp/benches/fixtures/camellia_mix.ssc");
@@ -308,43 +249,6 @@ mod batch_tests {
             assert_eq!(chart.step_type, "dance-single");
             assert_eq!(chart.difficulty, difficulty);
             assert!((chart.peak_nps - peak_nps).abs() < 1.0e-12);
-        }
-    }
-
-    #[test]
-    fn reused_batch_matches_materialized_densities() {
-        let expected = compute_chart_peak_nps_with::<true>(
-            INHERITED_TIMING_FIXTURE,
-            "ssc",
-            false,
-            |chart, lanes, timing, _| {
-                let densities = crate::stats::measure_densities(chart, lanes);
-                compute_peak_nps_with_timing(&densities, timing)
-            },
-        )
-        .expect("materialized analysis should succeed");
-        let actual = compute_chart_peak_nps(INHERITED_TIMING_FIXTURE, "ssc")
-            .expect("reused-buffer analysis should succeed");
-        let owned = compute_chart_peak_nps_with::<false>(
-            INHERITED_TIMING_FIXTURE,
-            "ssc",
-            true,
-            |chart, lanes, timing, scratch| {
-                let densities = crate::stats::measure_densities_with_scratch(chart, lanes, scratch);
-                compute_peak_nps_with_timing(densities, timing)
-            },
-        )
-        .expect("owned timing analysis should succeed");
-
-        assert_eq!(actual.len(), expected.len());
-        assert_eq!(actual.len(), owned.len());
-        for ((actual, expected), owned) in actual.iter().zip(expected).zip(owned) {
-            assert_eq!(actual.step_type, expected.step_type);
-            assert_eq!(actual.difficulty, expected.difficulty);
-            assert_eq!(actual.peak_nps, expected.peak_nps);
-            assert_eq!(actual.step_type, owned.step_type);
-            assert_eq!(actual.difficulty, owned.difficulty);
-            assert_eq!(actual.peak_nps, owned.peak_nps);
         }
     }
 }
@@ -515,35 +419,10 @@ pub fn get_nps_stats_in_place(nps: &mut [f64]) -> (f64, f64) {
 #[must_use]
 pub fn measure_equally_spaced(data: &[u8], lanes: usize) -> Vec<bool> {
     match lanes {
-        5 => equally_spaced_impl::<5, false>(data),
-        8 => equally_spaced_impl::<8, false>(data),
-        10 => equally_spaced_impl::<10, false>(data),
-        _ => equally_spaced_impl::<4, false>(data),
-    }
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn measure_equally_spaced_for_bench(
-    data: &[u8],
-    lanes: usize,
-    legacy_count: bool,
-) -> Vec<bool> {
-    macro_rules! measure {
-        ($lanes:literal) => {
-            if legacy_count {
-                equally_spaced_impl::<$lanes, true>(data)
-            } else {
-                equally_spaced_impl::<$lanes, false>(data)
-            }
-        };
-    }
-    match lanes {
-        5 => measure!(5),
-        8 => measure!(8),
-        10 => measure!(10),
-        _ => measure!(4),
+        5 => equally_spaced_impl::<5>(data),
+        8 => equally_spaced_impl::<8>(data),
+        10 => equally_spaced_impl::<10>(data),
+        _ => equally_spaced_impl::<4>(data),
     }
 }
 
@@ -552,12 +431,8 @@ const fn is_note(ch: u8) -> bool {
     matches!(ch, b'1' | b'2' | b'4')
 }
 
-fn equally_spaced_impl<const L: usize, const LEGACY_COUNT: bool>(data: &[u8]) -> Vec<bool> {
-    let measure_count = if LEGACY_COUNT {
-        data.iter().filter(|&&byte| byte == b',').count() + 1
-    } else {
-        crate::stats::count_byte(data, b',') + 1
-    };
+fn equally_spaced_impl<const L: usize>(data: &[u8]) -> Vec<bool> {
+    let measure_count = crate::stats::count_byte(data, b',') + 1;
     let mut results = Vec::with_capacity(measure_count);
     crate::stats::for_each_minimized_measure::<L, _>(data, |_, rows, _| {
         results.push(rows.iter().all(|row| row.iter().copied().any(is_note)));
@@ -568,47 +443,10 @@ fn equally_spaced_impl<const L: usize, const LEGACY_COUNT: bool>(data: &[u8]) ->
 #[cfg(test)]
 mod tests {
     use super::{
-        NPS_MEDIAN_SCAN_MIN, compute_measure_nps_vec_with_timing, compute_peak_nps_with_timing,
-        equally_spaced_impl, get_nps_stats, get_nps_stats_with_scratch, measure_equally_spaced,
+        NPS_MEDIAN_SCAN_MIN, compute_measure_nps_vec_with_timing, get_nps_stats,
+        get_nps_stats_with_scratch,
     };
     use crate::timing::{TimingFormat, compute_timing_segments, timing_data_from_segments};
-
-    fn equally_spaced_reference(data: &[u8], lanes: usize) -> Vec<bool> {
-        let lanes = if lanes == 8 { 8 } else { 4 };
-        let minimized = crate::stats::minimize_chart_for_hash(data, lanes);
-        let mut results = Vec::new();
-        let (mut rows, mut notes) = (0usize, 0usize);
-
-        for line in minimized.split(|&byte| byte == b'\n') {
-            if line.is_empty() {
-                continue;
-            }
-            if line[0] == b',' {
-                results.push(notes == rows);
-                rows = 0;
-                notes = 0;
-            } else if line.len() >= lanes {
-                rows += 1;
-                notes += usize::from(
-                    line[..lanes]
-                        .iter()
-                        .any(|&byte| matches!(byte, b'1' | b'2' | b'4')),
-                );
-            }
-        }
-        results.push(notes == rows);
-        results
-    }
-
-    #[test]
-    fn chunked_measure_count_matches_scalar_prepass() {
-        let data = b"1000\n0100\n0010\n0001\n,\n1100\n0000\n0011\n0000\n,comment\n;";
-        assert_eq!(
-            equally_spaced_impl::<4, false>(data),
-            equally_spaced_impl::<4, true>(data)
-        );
-    }
-
     #[test]
     fn nps_stats_empty() {
         assert_eq!(get_nps_stats(&[]), (0.0, 0.0));
@@ -642,59 +480,6 @@ mod tests {
         );
         assert_eq!(scratch.capacity(), capacity);
     }
-
-    #[test]
-    fn streaming_equally_spaced_matches_materialized_chart() {
-        let chart4 = b"\
-            1000\n\
-            0100\n\
-            0010\n\
-            0001\n\
-            ,\n\
-            ,\n\
-            2000\n\
-            0000\n\
-            3000\n\
-            0000\n;";
-        let chart8 = b"\
-            10000000\n\
-            00001000\n\
-            00100000\n\
-            00000001\n\
-            ,\n\
-            20000000\n\
-            00000000\n\
-            30000000\n;";
-        let chart5 = b"10000\n01000\n,\n20000\n00000\n30000\n;";
-        let chart10 = b"1000000000\n0000010000\n,\n2000000000\n0000000000\n3000000000\n;";
-
-        assert_eq!(
-            measure_equally_spaced(chart4, 4),
-            equally_spaced_reference(chart4, 4)
-        );
-        assert_eq!(
-            measure_equally_spaced(chart8, 8),
-            equally_spaced_reference(chart8, 8)
-        );
-
-        for (chart, lanes) in [
-            (chart4.as_slice(), 4),
-            (chart5.as_slice(), 5),
-            (chart8.as_slice(), 8),
-            (chart10.as_slice(), 10),
-        ] {
-            let minimized = crate::stats::minimize_chart_for_hash(chart, lanes);
-            let expected = measure_equally_spaced(&minimized, lanes);
-            let mut actual = Vec::new();
-            crate::stats::visit_measure_spacing(&minimized, lanes, |spaced| {
-                actual.push(spaced);
-                Ok::<(), std::convert::Infallible>(())
-            })
-            .expect("infallible spacing visitor should succeed");
-            assert_eq!(actual, expected);
-        }
-    }
-
     #[test]
     fn nps_stats_even_median() {
         assert_eq!(get_nps_stats(&[8.0, 2.0, 4.0, 16.0]), (16.0, 6.0));
@@ -744,36 +529,5 @@ mod tests {
             compute_measure_nps_vec_with_timing(&[16, 0, 32], &timing),
             vec![8.0, 0.0, 16.0]
         );
-    }
-
-    #[test]
-    fn peak_only_nps_matches_materialized_stats_for_fixed_and_variable_timing() {
-        let densities = [0, 16, 48, 1, 96, 24];
-        for stops in ["", "2.000=0.500,12.000=1.250"] {
-            let segments = compute_timing_segments(
-                None,
-                "0.000=120.000,8.000=180.000",
-                None,
-                stops,
-                None,
-                "",
-                None,
-                "",
-                None,
-                "",
-                None,
-                "",
-                None,
-                "",
-                TimingFormat::Ssc,
-                true,
-            );
-            let timing = timing_data_from_segments(0.0, 0.0, &segments);
-            let values = compute_measure_nps_vec_with_timing(&densities, &timing);
-
-            let actual = compute_peak_nps_with_timing(&densities, &timing);
-            let expected = get_nps_stats(&values).0;
-            assert!((actual - expected).abs() <= f64::EPSILON);
-        }
     }
 }

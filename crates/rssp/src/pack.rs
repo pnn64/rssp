@@ -71,18 +71,17 @@ struct CompactKey {
     original: u32,
 }
 
-// Direct comparison avoids three scratch allocations for small roots. The
-// crossover is benchmarked by `path_sort_ci_sizes` and `pack_sort_ci_small`;
-// larger inputs still cache lowercase keys once to avoid repeated comparisons.
+// Direct comparison avoids three scratch allocations for small roots; larger
+// inputs cache lowercase keys once to avoid repeated comparisons.
 const DIRECT_CI_SORT_MAX: usize = 4;
 
-fn sort_compact_ci<T, const IN_PLACE: bool, const DIRECT_SMALL: bool>(
+fn sort_compact_ci<T>(
     values: &mut [T],
     estimate: usize,
     mut append_key: impl FnMut(&T, &mut Vec<u8>),
     fallback: impl FnMut(&T, &T) -> std::cmp::Ordering,
 ) {
-    if DIRECT_SMALL && values.len() <= DIRECT_CI_SORT_MAX {
+    if values.len() <= DIRECT_CI_SORT_MAX {
         values.sort_by(fallback);
         return;
     }
@@ -110,18 +109,11 @@ fn sort_compact_ci<T, const IN_PLACE: bool, const DIRECT_SMALL: bool>(
         values.sort_by(fallback);
         return;
     }
-    if IN_PLACE {
-        keys.sort_unstable_by(|left, right| {
-            text[left.start as usize..left.end as usize]
-                .cmp(&text[right.start as usize..right.end as usize])
-                .then_with(|| left.original.cmp(&right.original))
-        });
-    } else {
-        keys.sort_by(|left, right| {
-            text[left.start as usize..left.end as usize]
-                .cmp(&text[right.start as usize..right.end as usize])
-        });
-    }
+    keys.sort_unstable_by(|left, right| {
+        text[left.start as usize..left.end as usize]
+            .cmp(&text[right.start as usize..right.end as usize])
+            .then_with(|| left.original.cmp(&right.original))
+    });
 
     let mut destinations = vec![0u32; values.len()];
     for (target, key) in keys.iter().enumerate() {
@@ -136,41 +128,12 @@ fn sort_compact_ci<T, const IN_PLACE: bool, const DIRECT_SMALL: bool>(
     }
 }
 
-#[cfg(any(test, feature = "profile"))]
-fn sort_paths_ci(paths: &mut [PathBuf]) {
-    sort_paths_ci_with::<true>(paths);
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn sort_paths_ci_with<const IN_PLACE: bool>(paths: &mut [PathBuf]) {
-    sort_paths_ci_mode::<IN_PLACE, true>(paths);
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn sort_paths_ci_mode<const IN_PLACE: bool, const DIRECT_SMALL: bool>(paths: &mut [PathBuf]) {
-    sort_compact_ci::<_, IN_PLACE, DIRECT_SMALL>(
-        paths,
-        24,
-        |path, text| {
-            if let Some(name) = path.file_name() {
-                text.extend(
-                    name.to_string_lossy()
-                        .as_bytes()
-                        .iter()
-                        .map(u8::to_ascii_lowercase),
-                );
-            }
-        },
-        |left, right| assets::cmp_name_ci(left, right),
-    );
-}
-
 fn sort_names_ci(names: &mut [OsString]) {
     names.sort_by(|left, right| assets::cmp_os_ci(left, right));
 }
 
-fn sort_packs_ci<const DIRECT_SMALL: bool>(packs: &mut [PackScan]) {
-    sort_compact_ci::<_, true, DIRECT_SMALL>(
+fn sort_packs_ci(packs: &mut [PackScan]) {
+    sort_compact_ci(
         packs,
         24,
         |pack, text| {
@@ -183,62 +146,6 @@ fn sort_packs_ci<const DIRECT_SMALL: bool>(packs: &mut [PackScan]) {
         },
         |left, right| assets::cmp_ascii_ci(left.group_name.as_bytes(), right.group_name.as_bytes()),
     );
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_sort_packs_ci(packs: &mut [PackScan], direct_small: bool) {
-    if direct_small {
-        sort_packs_ci::<true>(packs);
-    } else {
-        sort_packs_ci::<false>(packs);
-    }
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_sort_paths_ci(paths: &mut [PathBuf], legacy: bool) {
-    if legacy {
-        paths.sort_by_cached_key(|path| assets::lc_name(path));
-    } else {
-        sort_paths_ci(paths);
-    }
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_sort_paths_ci_in_place(paths: &mut [PathBuf], in_place: bool) {
-    if in_place {
-        sort_paths_ci_mode::<true, false>(paths);
-    } else {
-        sort_paths_ci_mode::<false, false>(paths);
-    }
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_sort_paths_ci_direct(paths: &mut [PathBuf]) {
-    paths.sort_by(|left, right| assets::cmp_name_ci(left, right));
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_sort_paths_ci_hybrid(paths: &mut [PathBuf]) {
-    sort_paths_ci_mode::<true, true>(paths);
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn should_replace(first: Option<&Path>, candidate: &Path) -> bool {
-    first.is_none_or(|current| assets::cmp_name_ci(candidate, current).is_lt())
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn keep_first_path(first: &mut Option<PathBuf>, candidate: PathBuf) {
-    if should_replace(first.as_deref(), &candidate) {
-        *first = Some(candidate);
-    }
-}
-
-#[cfg(feature = "profile")]
-fn keep_first_ref(first: &mut Option<PathBuf>, candidate: &Path) {
-    if should_replace(first.as_deref(), candidate) {
-        *first = Some(candidate.to_path_buf());
-    }
 }
 
 fn keep_first_name(first: &mut Option<OsString>, candidate: &OsStr) {
@@ -313,32 +220,7 @@ fn pack_ini_key(key: &str) -> PackIniKey {
     }
 }
 
-#[cfg(any(test, feature = "profile"))]
-fn pack_ini_key_sequential(key: &str) -> PackIniKey {
-    if key.eq_ignore_ascii_case("version") {
-        PackIniKey::Version
-    } else if key.eq_ignore_ascii_case("displaytitle") {
-        PackIniKey::DisplayTitle
-    } else if key.eq_ignore_ascii_case("sorttitle") {
-        PackIniKey::SortTitle
-    } else if key.eq_ignore_ascii_case("translittitle") {
-        PackIniKey::TranslitTitle
-    } else if key.eq_ignore_ascii_case("series") {
-        PackIniKey::Series
-    } else if key.eq_ignore_ascii_case("banner") {
-        PackIniKey::Banner
-    } else if key.eq_ignore_ascii_case("background") {
-        PackIniKey::Background
-    } else if key.eq_ignore_ascii_case("syncoffset") {
-        PackIniKey::SyncOffset
-    } else if key.eq_ignore_ascii_case("year") {
-        PackIniKey::Year
-    } else {
-        PackIniKey::Unknown
-    }
-}
-
-fn parse_pack_ini_with<'a, T: Default, const INDEXED_KEYS: bool>(
+fn parse_pack_ini_with<'a, T: Default>(
     text: &'a str,
     mut take_value: impl FnMut(&'a str) -> T,
 ) -> PackIniRaw<T> {
@@ -363,18 +245,7 @@ fn parse_pack_ini_with<'a, T: Default, const INDEXED_KEYS: bool>(
         };
         let key = k.trim();
         let value = v.trim();
-        let key = if INDEXED_KEYS {
-            pack_ini_key(key)
-        } else {
-            #[cfg(any(test, feature = "profile"))]
-            {
-                pack_ini_key_sequential(key)
-            }
-            #[cfg(not(any(test, feature = "profile")))]
-            {
-                unreachable!("sequential Pack.ini dispatch requires profile feature")
-            }
-        };
+        let key = pack_ini_key(key);
         match key {
             PackIniKey::Version => out.version = take_value(value),
             PackIniKey::DisplayTitle => out.display_title = take_value(value),
@@ -393,61 +264,7 @@ fn parse_pack_ini_with<'a, T: Default, const INDEXED_KEYS: bool>(
 }
 
 fn parse_pack_ini(text: &str) -> PackIniRaw<&str> {
-    parse_pack_ini_with::<_, true>(text, |value| value)
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn parse_pack_ini_owned(text: &str) -> PackIniRaw<String> {
-    parse_pack_ini_with::<_, false>(text, str::to_string)
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn parse_pack_ini_sequential(text: &str) -> PackIniRaw<&str> {
-    parse_pack_ini_with::<_, false>(text, |value| value)
-}
-
-#[cfg(feature = "profile")]
-fn pack_ini_len<T: AsRef<str>>(raw: &PackIniRaw<T>) -> usize {
-    raw.version.as_ref().len()
-        + raw.display_title.as_ref().len()
-        + raw.sort_title.as_ref().len()
-        + raw.translit_title.as_ref().len()
-        + raw.series.as_ref().len()
-        + raw.banner.as_ref().len()
-        + raw.background.as_ref().len()
-        + raw.sync_offset.as_ref().len()
-        + raw.year.as_ref().len()
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-#[must_use]
-pub fn profile_parse_pack_ini(text: &str, owned: bool) -> usize {
-    if owned {
-        let raw = parse_pack_ini_owned(text);
-        let total = pack_ini_len(&raw);
-        std::hint::black_box(raw);
-        total
-    } else {
-        let raw = parse_pack_ini(text);
-        let total = pack_ini_len(&raw);
-        std::hint::black_box(raw);
-        total
-    }
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-#[must_use]
-pub fn profile_parse_pack_ini_dispatch(text: &str, sequential: bool) -> usize {
-    let raw = if sequential {
-        parse_pack_ini_sequential(text)
-    } else {
-        parse_pack_ini(text)
-    };
-    let total = pack_ini_len(&raw);
-    std::hint::black_box(raw);
-    total
+    parse_pack_ini_with(text, |value| value)
 }
 
 fn pick_pack_parent_img(pack_dir: &Path, group_name: &str) -> Option<PathBuf> {
@@ -487,57 +304,6 @@ fn pick_pack_parent_img(pack_dir: &Path, group_name: &str) -> Option<PathBuf> {
     first.map(|(_, name)| parent.join(name))
 }
 
-#[cfg(feature = "profile")]
-fn pick_pack_parent_img_legacy(pack_dir: &Path, group_name: &str) -> Option<PathBuf> {
-    let parent = pack_dir.parent()?;
-    let entries = fs::read_dir(parent).ok()?;
-    let mut first = None;
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        if name.to_string_lossy().starts_with("._") {
-            continue;
-        }
-        let path = entry.path();
-        if !path.is_file()
-            || !path
-                .file_stem()
-                .is_some_and(|stem| assets::name_eq_ci(stem, group_name))
-        {
-            continue;
-        }
-        let Some(rank) = path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .and_then(assets::img_rank)
-        else {
-            continue;
-        };
-        if rank == 0 {
-            return Some(path);
-        }
-        if first
-            .as_ref()
-            .is_none_or(|(current_rank, _)| rank < *current_rank)
-        {
-            first = Some((rank, path));
-        }
-    }
-    first.map(|(_, path)| path)
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_pick_pack_parent_img(
-    pack_dir: &Path,
-    group_name: &str,
-    legacy: bool,
-) -> Option<PathBuf> {
-    if legacy {
-        pick_pack_parent_img_legacy(pack_dir, group_name)
-    } else {
-        pick_pack_parent_img(pack_dir, group_name)
-    }
-}
-
 fn pick_first_img(dir: &Path, mut matches: impl FnMut(&OsStr) -> bool) -> Option<PathBuf> {
     let entries = fs::read_dir(dir).ok()?;
     let mut first = None;
@@ -560,70 +326,9 @@ fn pick_first_img(dir: &Path, mut matches: impl FnMut(&OsStr) -> bool) -> Option
     first.map(|name| dir.join(name))
 }
 
-#[cfg(any(test, feature = "profile"))]
-fn pick_first_img_full_paths(
-    dir: &Path,
-    mut matches: impl FnMut(&Path) -> bool,
-) -> Option<PathBuf> {
-    let entries = fs::read_dir(dir).ok()?;
-    let mut first = None;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if assets::is_mac_resource_fork(&path) || !path.is_file() {
-            continue;
-        }
-        let Some(ext) = path.extension().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        if assets::img_rank(ext).is_none() {
-            continue;
-        }
-        if matches(&path) {
-            keep_first_path(&mut first, path);
-        }
-    }
-    first
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn pick_pack_dir_img(pack_dir: &Path) -> Option<PathBuf> {
-    pick_first_img_full_paths(pack_dir, |_| true)
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn pick_ini_img_legacy(pack_dir: &Path, hint: &str) -> Option<PathBuf> {
-    let hint = hint.trim();
-    if hint.is_empty() {
-        return None;
-    }
-    let hint = assets::to_slash_legacy(hint);
-    let (subdir, mask) = hint.rsplit_once('/').unwrap_or(("", hint.as_str()));
-    let dir = if subdir.is_empty() {
-        pack_dir.to_path_buf()
-    } else {
-        assets::is_dir_ci(pack_dir, subdir).unwrap_or_else(|| pack_dir.join(subdir))
-    };
-    pick_first_img_full_paths(&dir, |path| {
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| assets::match_mask_ci(name, mask))
-    })
-}
-
 fn normalized_img_hint(hint: &str) -> Option<std::borrow::Cow<'_, str>> {
     let hint = hint.trim();
     (!hint.is_empty()).then(|| assets::to_slash(hint))
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-#[must_use]
-pub fn profile_normalized_img_hint(hint: &str, legacy: bool) -> Option<std::borrow::Cow<'_, str>> {
-    if !legacy {
-        return normalized_img_hint(hint);
-    }
-    let hint = hint.trim();
-    (!hint.is_empty()).then(|| std::borrow::Cow::Owned(assets::to_slash_legacy(hint)))
 }
 
 fn split_img_hint(hint: &str) -> (&str, &str) {
@@ -652,20 +357,6 @@ fn pick_ini_img(
     })
 }
 
-#[cfg(feature = "profile")]
-pub(crate) fn profile_pick_subdir_img(
-    pack_dir: &Path,
-    hint: &str,
-    legacy: bool,
-) -> Option<PathBuf> {
-    if legacy {
-        pick_ini_img_legacy(pack_dir, hint)
-    } else {
-        let hint = normalized_img_hint(hint)?;
-        pick_ini_img(pack_dir, Some(&hint), None)
-    }
-}
-
 fn simfile_ext(path: &Path) -> Option<&'static str> {
     let extension = path.extension()?.to_str()?;
     if extension.eq_ignore_ascii_case("ssc") {
@@ -687,30 +378,6 @@ fn simfile_names(dir: &Path) -> io::Result<impl Iterator<Item = (&'static str, O
         }
         let extension = simfile_ext(name_path)?;
         assets::entry_is_file(&entry).then_some((extension, name))
-    }))
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn simfile_paths(dir: &Path) -> io::Result<impl Iterator<Item = (&'static str, PathBuf)> + '_> {
-    Ok(simfile_names(dir)?.map(move |(extension, name)| (extension, dir.join(name))))
-}
-
-#[cfg(feature = "profile")]
-fn simfile_paths_full_paths(
-    dir: &Path,
-) -> io::Result<impl Iterator<Item = (&'static str, PathBuf)>> {
-    Ok(fs::read_dir(dir)?.filter_map(|entry| {
-        let Ok(entry) = entry else {
-            return None;
-        };
-        let path = entry.path();
-        if assets::is_mac_resource_fork(&path) {
-            return None;
-        }
-        if !path.is_file() {
-            return None;
-        }
-        simfile_ext(&path).map(|extension| (extension, path))
     }))
 }
 
@@ -745,40 +412,6 @@ fn scan_song_dir_first(dir: &Path) -> Result<Option<SongScan>, ScanError> {
     }
 
     Ok(first_song_scan(dir, first_sm, first_ssc))
-}
-
-#[cfg(feature = "profile")]
-fn scan_song_dir_first_full_paths(dir: &Path) -> Result<Option<SongScan>, ScanError> {
-    let mut first_sm = None;
-    let mut first_ssc = None;
-    for (extension, path) in simfile_paths_full_paths(dir)? {
-        if extension == "ssc" {
-            keep_first_path(&mut first_ssc, path);
-        } else {
-            keep_first_path(&mut first_sm, path);
-        }
-    }
-
-    Ok(first_ssc
-        .map(|path| song_scan(dir, path, "ssc"))
-        .or_else(|| first_sm.map(|path| song_scan(dir, path, "sm"))))
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn scan_song_dir_duplicates_joined(
-    dir: &Path,
-    paths: impl Iterator<Item = (&'static str, PathBuf)>,
-) -> Result<Option<SongScan>, ScanError> {
-    let mut sms = Vec::new();
-    let mut sscs = Vec::new();
-    for (extension, path) in paths {
-        if extension == "ssc" {
-            sscs.push(path);
-        } else {
-            sms.push(path);
-        }
-    }
-    select_duplicate_scan(dir, sms, sscs)
 }
 
 fn scan_song_dir_duplicates(
@@ -818,39 +451,6 @@ fn push_simfile_name(names: &mut SimfileNames, name: OsString) {
     }
 }
 
-#[cfg(any(test, feature = "profile"))]
-fn select_duplicate_scan(
-    dir: &Path,
-    mut sms: Vec<PathBuf>,
-    mut sscs: Vec<PathBuf>,
-) -> Result<Option<SongScan>, ScanError> {
-    sort_paths_ci(&mut sms);
-    sort_paths_ci(&mut sscs);
-
-    if let Some(simfile) = sscs.pop() {
-        if !sscs.is_empty() {
-            sscs.push(simfile);
-            return Err(ScanError::DuplicateSimfile {
-                ext: "ssc",
-                paths: sscs,
-            });
-        }
-        return Ok(Some(song_scan(dir, simfile, "ssc")));
-    }
-
-    let Some(simfile) = sms.pop() else {
-        return Ok(None);
-    };
-    if !sms.is_empty() {
-        sms.push(simfile);
-        return Err(ScanError::DuplicateSimfile {
-            ext: "sm",
-            paths: sms,
-        });
-    }
-    Ok(Some(song_scan(dir, simfile, "sm")))
-}
-
 fn select_duplicate_names(
     dir: &Path,
     sms: SimfileNames,
@@ -876,54 +476,6 @@ fn duplicate_name_error(dir: &Path, ext: &'static str, mut names: Vec<OsString>)
         ext,
         paths: names.into_iter().map(|name| dir.join(name)).collect(),
     }
-}
-
-#[cfg(feature = "profile")]
-fn scan_song_dir_growing_names(
-    dir: &Path,
-    names: impl Iterator<Item = (&'static str, OsString)>,
-) -> Result<Option<SongScan>, ScanError> {
-    let mut sms = Vec::new();
-    let mut sscs = Vec::new();
-    for (extension, name) in names {
-        if extension == "ssc" {
-            sscs.push(name);
-        } else {
-            sms.push(name);
-        }
-    }
-    select_growing_names(dir, sms, sscs)
-}
-
-#[cfg(feature = "profile")]
-fn select_growing_names(
-    dir: &Path,
-    mut sms: Vec<OsString>,
-    mut sscs: Vec<OsString>,
-) -> Result<Option<SongScan>, ScanError> {
-    sort_names_ci(&mut sms);
-    sort_names_ci(&mut sscs);
-    if let Some(name) = sscs.pop() {
-        if !sscs.is_empty() {
-            sscs.push(name);
-            return Err(ScanError::DuplicateSimfile {
-                ext: "ssc",
-                paths: sscs.into_iter().map(|name| dir.join(name)).collect(),
-            });
-        }
-        return Ok(Some(song_scan(dir, dir.join(name), "ssc")));
-    }
-    let Some(name) = sms.pop() else {
-        return Ok(None);
-    };
-    if !sms.is_empty() {
-        sms.push(name);
-        return Err(ScanError::DuplicateSimfile {
-            ext: "sm",
-            paths: sms.into_iter().map(|name| dir.join(name)).collect(),
-        });
-    }
-    Ok(Some(song_scan(dir, dir.join(name), "sm")))
 }
 
 fn scan_tree_dir(dir: &Path, opt: ScanOpt) -> Result<(Option<SongScan>, Vec<OsString>), ScanError> {
@@ -988,51 +540,6 @@ pub fn scan_song_dir(dir: &Path, opt: ScanOpt) -> Result<Option<SongScan>, ScanE
     }
 }
 
-#[cfg(feature = "profile")]
-pub(crate) fn profile_scan_song_dir_full_paths(
-    dir: &Path,
-    opt: ScanOpt,
-) -> Result<Option<SongScan>, ScanError> {
-    if assets::is_mac_resource_fork(dir) {
-        return Ok(None);
-    }
-
-    match opt.dup {
-        DupPolicy::First => scan_song_dir_first_full_paths(dir),
-        DupPolicy::Error => scan_song_dir_duplicates_joined(dir, simfile_paths_full_paths(dir)?),
-    }
-}
-
-#[cfg(any(test, feature = "profile"))]
-pub(crate) fn profile_scan_song_dir_joined_paths(
-    dir: &Path,
-    opt: ScanOpt,
-) -> Result<Option<SongScan>, ScanError> {
-    if assets::is_mac_resource_fork(dir) {
-        return Ok(None);
-    }
-
-    match opt.dup {
-        DupPolicy::First => scan_song_dir_first(dir),
-        DupPolicy::Error => scan_song_dir_duplicates_joined(dir, simfile_paths(dir)?),
-    }
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_scan_song_dir_growing_names(
-    dir: &Path,
-    opt: ScanOpt,
-) -> Result<Option<SongScan>, ScanError> {
-    if assets::is_mac_resource_fork(dir) {
-        return Ok(None);
-    }
-
-    match opt.dup {
-        DupPolicy::First => scan_song_dir_first(dir),
-        DupPolicy::Error => scan_song_dir_growing_names(dir, simfile_names(dir)?),
-    }
-}
-
 struct PackRoot {
     banner: Option<PathBuf>,
     background: Option<PathBuf>,
@@ -1044,59 +551,6 @@ struct RootEntries {
     banner: Option<PathBuf>,
     background: Option<PathBuf>,
     songs: Vec<SongScan>,
-}
-
-#[cfg(feature = "profile")]
-fn scan_root_entries_full_paths(
-    dir: &Path,
-    opt: ScanOpt,
-    banner_mask: Option<&str>,
-    background_mask: Option<&str>,
-) -> Result<RootEntries, ScanError> {
-    let mut first_img = None;
-    let mut banner = None;
-    let mut background = None;
-    let mut songs = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let Ok(entry) = entry else {
-            continue;
-        };
-        let path = entry.path();
-        if assets::is_mac_resource_fork(&path) {
-            continue;
-        }
-        if path.is_dir() {
-            if let Some(song) = scan_song_dir(&path, opt)? {
-                songs.push(song);
-            }
-            continue;
-        }
-        if !path.is_file()
-            || path
-                .extension()
-                .and_then(|value| value.to_str())
-                .and_then(assets::img_rank)
-                .is_none()
-        {
-            continue;
-        }
-        keep_first_ref(&mut first_img, &path);
-        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        if banner_mask.is_some_and(|mask| assets::match_mask_ci(name, mask)) {
-            keep_first_ref(&mut banner, &path);
-        }
-        if background_mask.is_some_and(|mask| assets::match_mask_ci(name, mask)) {
-            keep_first_ref(&mut background, &path);
-        }
-    }
-    Ok(RootEntries {
-        first_img,
-        banner,
-        background,
-        songs,
-    })
 }
 
 /// Takes one worker-owned snapshot of a pack root and releases it when the
@@ -1190,89 +644,6 @@ fn scan_pack_root(
         background_hint.as_deref(),
         root,
     ))
-}
-
-#[cfg(feature = "profile")]
-fn scan_pack_root_full_paths(
-    dir: &Path,
-    opt: ScanOpt,
-    banner: &str,
-    background: &str,
-) -> Result<PackRoot, ScanError> {
-    let banner_hint = normalized_img_hint(banner);
-    let background_hint = normalized_img_hint(background);
-    let root = scan_root_entries_full_paths(
-        dir,
-        opt,
-        root_img_mask(banner_hint.as_deref()),
-        root_img_mask(background_hint.as_deref()),
-    )?;
-    Ok(finish_pack_root(
-        dir,
-        banner_hint.as_deref(),
-        background_hint.as_deref(),
-        root,
-    ))
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn scan_pack_root_legacy(
-    dir: &Path,
-    opt: ScanOpt,
-    banner: &str,
-    background: &str,
-) -> Result<PackRoot, ScanError> {
-    let ini_banner = pick_ini_img_legacy(dir, banner);
-    let background = pick_ini_img_legacy(dir, background);
-    let banner = ini_banner.or_else(|| pick_pack_dir_img(dir));
-    let mut songs = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let Ok(entry) = entry else {
-            continue;
-        };
-        let path = entry.path();
-        if assets::is_mac_resource_fork(&path) || !path.is_dir() {
-            continue;
-        }
-        if let Some(song) = scan_song_dir(&path, opt)? {
-            songs.push(song);
-        }
-    }
-    Ok(PackRoot {
-        banner,
-        background,
-        songs,
-    })
-}
-
-#[cfg(feature = "profile")]
-pub(crate) type ProfilePackRoot = (Option<PathBuf>, Option<PathBuf>, Vec<SongScan>);
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_pack_root(
-    dir: &Path,
-    opt: ScanOpt,
-    banner: &str,
-    background: &str,
-    legacy: bool,
-) -> Result<ProfilePackRoot, ScanError> {
-    let root = if legacy {
-        scan_pack_root_legacy(dir, opt, banner, background)?
-    } else {
-        scan_pack_root(dir, opt, banner, background)?
-    };
-    Ok((root.banner, root.background, root.songs))
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_pack_root_full_paths(
-    dir: &Path,
-    opt: ScanOpt,
-    banner: &str,
-    background: &str,
-) -> Result<ProfilePackRoot, ScanError> {
-    let root = scan_pack_root_full_paths(dir, opt, banner, background)?;
-    Ok((root.banner, root.background, root.songs))
 }
 
 pub fn scan_pack_dir(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, ScanError> {
@@ -1392,29 +763,7 @@ pub fn scan_songs_dir(dir: &Path, opt: ScanOpt) -> Result<Vec<PackScan>, ScanErr
             packs.push(pack);
         }
     }
-    sort_packs_ci::<true>(&mut packs);
-    Ok(packs)
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_scan_songs_dir_legacy(
-    dir: &Path,
-    opt: ScanOpt,
-) -> Result<Vec<PackScan>, ScanError> {
-    let mut packs = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let Ok(entry) = entry else {
-            continue;
-        };
-        let path = entry.path();
-        if assets::is_mac_resource_fork(&path) {
-            continue;
-        }
-        if let Some(pack) = scan_pack_dir(&path, opt)? {
-            packs.push(pack);
-        }
-    }
-    packs.sort_by_cached_key(|pack| pack.group_name.to_ascii_lowercase());
+    sort_packs_ci(&mut packs);
     Ok(packs)
 }
 
@@ -1444,48 +793,11 @@ pub fn find_simfiles(root: &Path, opt: ScanOpt) -> Vec<PathBuf> {
     out
 }
 
-#[cfg(feature = "profile")]
-pub(crate) fn profile_find_simfiles_legacy(root: &Path, opt: ScanOpt) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-
-    while let Some(dir) = stack.pop() {
-        if assets::is_mac_resource_fork(&dir) {
-            continue;
-        }
-        let Ok(song) = scan_song_dir(&dir, opt) else {
-            continue;
-        };
-        if let Some(song) = song {
-            out.push(song.simfile);
-            continue;
-        }
-
-        let Ok(entries) = fs::read_dir(&dir) else {
-            continue;
-        };
-        let mut subdirs: Vec<PathBuf> = entries
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| !assets::is_mac_resource_fork(path) && path.is_dir())
-            .collect();
-        sort_paths_ci(&mut subdirs);
-        for subdir in subdirs.into_iter().rev() {
-            stack.push(subdir);
-        }
-    }
-
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        DupPolicy, PackIniKey, PackIniRaw, PackScan, ScanError, ScanOpt, SyncPref, find_simfiles,
-        pack_ini_key, pack_ini_key_sequential, parse_pack_ini, parse_pack_ini_owned,
-        parse_pack_ini_sequential, pick_pack_parent_img, profile_scan_song_dir_joined_paths,
-        scan_pack_dir, scan_pack_root, scan_pack_root_legacy, scan_song_dir, scan_songs_dir,
-        sort_packs_ci, sort_paths_ci,
+        DupPolicy, PackIniRaw, ScanError, ScanOpt, find_simfiles, parse_pack_ini,
+        pick_pack_parent_img, scan_pack_dir, scan_pack_root, scan_song_dir, scan_songs_dir,
     };
     use crate::assets;
     use std::fs;
@@ -1496,63 +808,6 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
-    }
-
-    #[test]
-    fn compact_path_sort_matches_cached_keys() {
-        let mut expected = vec![
-            PathBuf::from("Songs/Alpha.ssc"),
-            PathBuf::from("Songs/alpha.SM"),
-            PathBuf::from("Songs/BETA.ssc"),
-            PathBuf::from("Songs/beta.ssc"),
-            PathBuf::from("Songs/éclair.ssc"),
-            PathBuf::from("Songs/Äther.sm"),
-        ];
-        let mut actual = expected.clone();
-        expected.sort_by_cached_key(|path| assets::lc_name(path));
-        sort_paths_ci(&mut actual);
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn direct_small_pack_sort_matches_compact_keys() {
-        for names in [
-            &[][..],
-            &["Only"][..],
-            &["beta", "Alpha", "alpha", "Zulu"][..],
-            &["beta", "Alpha", "alpha", "Zulu", "fifth"][..],
-        ] {
-            let packs = || {
-                names
-                    .iter()
-                    .map(|name| PackScan {
-                        dir: PathBuf::from(name),
-                        group_name: (*name).to_string(),
-                        display_title: String::new(),
-                        sort_title: String::new(),
-                        translit_title: String::new(),
-                        series: String::new(),
-                        year: 0,
-                        version: 0,
-                        has_pack_ini: false,
-                        sync_pref: SyncPref::Default,
-                        banner_path: None,
-                        background_path: None,
-                        songs: Vec::new(),
-                    })
-                    .collect::<Vec<_>>()
-            };
-            let mut compact = packs();
-            let mut hybrid = packs();
-            sort_packs_ci::<false>(&mut compact);
-            sort_packs_ci::<true>(&mut hybrid);
-            assert!(
-                compact
-                    .iter()
-                    .zip(&hybrid)
-                    .all(|(compact, hybrid)| compact.group_name == hybrid.group_name)
-            );
-        }
     }
 
     fn write_file(path: &Path) {
@@ -1614,20 +869,10 @@ mod tests {
         let opt = ScanOpt {
             dup: DupPolicy::Error,
         };
-        let previous = profile_scan_song_dir_joined_paths(&root, opt).unwrap_err();
         let error = scan_song_dir(&root, opt).unwrap_err();
-        let ScanError::DuplicateSimfile {
-            ext: previous_ext,
-            paths: previous_paths,
-        } = previous
-        else {
-            panic!("expected a prior duplicate simfile error");
-        };
         let ScanError::DuplicateSimfile { ext, paths } = error else {
             panic!("expected a duplicate simfile error");
         };
-        assert_eq!(ext, previous_ext);
-        assert_eq!(paths, previous_paths);
         assert_eq!(ext, "ssc");
         assert_eq!(
             paths,
@@ -1658,38 +903,6 @@ mod tests {
                 [Other]\n\
                 Year=1900\n";
         let parsed = parse_pack_ini(input);
-        let sequential = parse_pack_ini_sequential(input);
-        let owned = parse_pack_ini_owned(input);
-
-        assert_eq!(
-            parsed, sequential,
-            "indexed Pack.ini dispatch changed fields"
-        );
-        assert_eq!(
-            [
-                parsed.version,
-                parsed.display_title,
-                parsed.sort_title,
-                parsed.translit_title,
-                parsed.series,
-                parsed.banner,
-                parsed.background,
-                parsed.sync_offset,
-                parsed.year,
-            ],
-            [
-                owned.version.as_str(),
-                owned.display_title.as_str(),
-                owned.sort_title.as_str(),
-                owned.translit_title.as_str(),
-                owned.series.as_str(),
-                owned.banner.as_str(),
-                owned.background.as_str(),
-                owned.sync_offset.as_str(),
-                owned.year.as_str(),
-            ],
-            "borrowed Pack.ini parsing changed owned parser behavior"
-        );
 
         assert_eq!(
             parsed,
@@ -1705,30 +918,6 @@ mod tests {
                 year: "2026",
             }
         );
-    }
-
-    #[test]
-    fn indexed_pack_ini_keys_match_sequential_dispatch() {
-        for key in [
-            "VERSION",
-            "displaytitle",
-            "SortTitle",
-            "TRANSLITTITLE",
-            "series",
-            "Banner",
-            "BACKGROUND",
-            "syncOffset",
-            "Year",
-            "UnknownKey",
-            "",
-        ] {
-            assert_eq!(
-                pack_ini_key(key),
-                pack_ini_key_sequential(key),
-                "Pack.ini key dispatch changed for {key:?}"
-            );
-        }
-        assert_eq!(pack_ini_key("VERSION"), PackIniKey::Version);
     }
 
     #[test]
@@ -1800,7 +989,7 @@ mod tests {
     }
 
     #[test]
-    fn one_pass_pack_root_matches_repeated_scans() {
+    fn pack_root_selects_assets_and_songs() {
         let root = test_dir("one-pass-root-parity");
         for name in ["Zeta.png", "alpha.png", "backB.jpg", "backA.jpg"] {
             write_file(&root.join(name));
@@ -1826,19 +1015,11 @@ mod tests {
             ),
             ("missing*.png", "missing*.jpg", root.join("alpha.png"), None),
         ] {
-            let legacy =
-                scan_pack_root_legacy(&root, ScanOpt::default(), banner, background).unwrap();
-            let one_pass = scan_pack_root(&root, ScanOpt::default(), banner, background).unwrap();
-            assert_eq!(one_pass.banner, legacy.banner);
-            assert_eq!(one_pass.background, legacy.background);
-            assert_eq!(one_pass.banner, Some(expected_banner));
-            assert_eq!(one_pass.background, expected_background);
-            assert_eq!(one_pass.songs.len(), legacy.songs.len());
-            for (actual, expected) in one_pass.songs.iter().zip(&legacy.songs) {
-                assert_eq!(actual.dir, expected.dir);
-                assert_eq!(actual.simfile, expected.simfile);
-                assert_eq!(actual.extension, expected.extension);
-            }
+            let root_scan = scan_pack_root(&root, ScanOpt::default(), banner, background).unwrap();
+            assert_eq!(root_scan.banner, Some(expected_banner));
+            assert_eq!(root_scan.background, expected_background);
+            assert_eq!(root_scan.songs.len(), 2);
+            assert!(root_scan.songs.iter().all(|song| song.extension == "ssc"));
         }
 
         let _ = fs::remove_dir_all(root);

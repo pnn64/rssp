@@ -952,52 +952,6 @@ fn nan_difficulty(measures: f64, bpm_data: &[(i32, i32)]) -> f64 {
     interpolate_log(measures, 0.0, range_end, 0.0)
 }
 
-#[cfg(any(test, feature = "bench-support"))]
-fn calc_difficulty_legacy(measures: f64, bpm_data: &[(i32, i32)]) -> f64 {
-    if measures <= 0.0 || bpm_data.is_empty() {
-        return 0.0;
-    }
-
-    let min_measure_key = f64::from(bpm_data[0].0);
-    if measures < min_measure_key {
-        return extrapolate_downward(measures, min_measure_key, f64::from(bpm_data[0].1));
-    }
-
-    let base_difficulty = bpm_data
-        .iter()
-        .rev()
-        .find_map(|&(measure, difficulty)| {
-            (f64::from(measure) <= measures).then_some(f64::from(difficulty))
-        })
-        .unwrap_or(0.0);
-    let max_difficulty = f64::from(
-        bpm_data
-            .iter()
-            .map(|&(_, difficulty)| difficulty)
-            .max()
-            .unwrap_or(0),
-    );
-    let range_start = bpm_data
-        .iter()
-        .find_map(|&(measure, difficulty)| {
-            (f64::from(difficulty) == base_difficulty).then_some(f64::from(measure))
-        })
-        .unwrap_or(0.0);
-
-    if (base_difficulty - max_difficulty).abs() < f64::EPSILON {
-        scale_plateau(measures, range_start, base_difficulty)
-    } else {
-        let range_end = bpm_data
-            .iter()
-            .find_map(|&(measure, difficulty)| {
-                (f64::from(measure) > range_start && f64::from(difficulty) > base_difficulty)
-                    .then_some(f64::from(measure))
-            })
-            .unwrap_or(f64::INFINITY);
-        interpolate_log(measures, range_start, range_end, base_difficulty)
-    }
-}
-
 /// Finds bounding BPMs for interpolation without collecting all keys.
 #[inline(always)]
 fn find_bounding_bpms(bpm: f64, table: &DifficultyTable) -> (i32, i32) {
@@ -1028,16 +982,6 @@ fn find_bounding_bpms(bpm: f64, table: &DifficultyTable) -> (i32, i32) {
 }
 
 #[inline(always)]
-#[cfg(any(test, feature = "bench-support"))]
-fn bpm_measures(bpm: i32) -> &'static [(i32, i32)] {
-    let Some(idx) = bpm_row_index(bpm) else {
-        return &[];
-    };
-    debug_assert_eq!(DIFFICULTY_TABLE[idx].0, bpm);
-    &DIFFICULTY_TABLE[idx].1
-}
-
-#[inline(always)]
 fn bpm_row_index(bpm: i32) -> Option<usize> {
     ((MIN_BPM_KEY..=MAX_BPM_KEY).contains(&bpm) && (bpm - MIN_BPM_KEY) % BPM_KEY_STEP == 0)
         .then_some(((bpm - MIN_BPM_KEY) / BPM_KEY_STEP) as usize)
@@ -1057,26 +1001,6 @@ pub fn get_difficulty(bpm: f64, measures: f64) -> f64 {
     let diff_at_bpm2 =
         bpm_row_index(bpm2).map_or(0.0, |row| calculate_difficulty_for_bpm(measures, row));
 
-    let bpm_range = f64::from(bpm2 - bpm1);
-    if bpm_range == 0.0 {
-        return diff_at_bpm1;
-    }
-
-    let bpm_progress = (bpm - f64::from(bpm1)) / bpm_range;
-    (diff_at_bpm2 - diff_at_bpm1).mul_add(bpm_progress, diff_at_bpm1)
-}
-
-/// Previous table search retained only for comparative benchmarks.
-#[cfg(any(test, feature = "bench-support"))]
-#[doc(hidden)]
-pub fn get_difficulty_legacy_for_bench(bpm: f64, measures: f64) -> f64 {
-    let (bpm1, bpm2) = find_bounding_bpms(bpm, &DIFFICULTY_TABLE);
-    let diff_at_bpm1 = calc_difficulty_legacy(measures, bpm_measures(bpm1));
-    if bpm1 == bpm2 {
-        return diff_at_bpm1;
-    }
-
-    let diff_at_bpm2 = calc_difficulty_legacy(measures, bpm_measures(bpm2));
     let bpm_range = f64::from(bpm2 - bpm1);
     if bpm_range == 0.0 {
         return diff_at_bpm1;
@@ -1213,46 +1137,11 @@ pub fn compute_matrix_profile(
     box_matrix_profile(profile)
 }
 
-/// Legacy growable profile retained only for comparative benchmarks.
-#[cfg(any(test, feature = "bench-support"))]
-#[doc(hidden)]
-pub fn compute_matrix_profile_legacy_for_bench(
-    measure_densities: &[usize],
-    bpm_map: &[(f64, f64)],
-) -> Vec<MatrixRatingInput> {
-    let mut profile = Vec::new();
-    fill_matrix_profile(&mut profile, measure_densities, bpm_map);
-    profile
-}
-
-/// Reserved growable profile retained only to isolate reservation benchmarks.
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn compute_matrix_profile_reserved_for_bench(
-    measure_densities: &[usize],
-    bpm_map: &[(f64, f64)],
-) -> Vec<MatrixRatingInput> {
-    let mut profile = Vec::with_capacity(matrix_profile_capacity(measure_densities, bpm_map));
-    fill_matrix_profile(&mut profile, measure_densities, bpm_map);
-    profile
-}
-
 fn matrix_profile_capacity(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> usize {
     measure_densities
         .len()
         .min(bpm_map.len().saturating_mul(4))
         .min(MAX_PROFILE_RESERVE)
-}
-
-#[cfg(any(test, feature = "bench-support"))]
-fn fill_matrix_profile(
-    profile: &mut Vec<MatrixRatingInput>,
-    measure_densities: &[usize],
-    bpm_map: &[(f64, f64)],
-) {
-    for_each_matrix_input(measure_densities, bpm_map, |input| profile.push(input));
-    sort_matrix_inputs(profile);
-    profile.dedup();
 }
 
 fn box_bounded_profile<const N: usize>(
@@ -1288,22 +1177,6 @@ fn dedup_matrix_inputs(inputs: &mut [MatrixRatingInput]) -> usize {
 /// Reevaluates a compact Matrix profile after scaling its effective BPMs by `music_rate`.
 pub fn matrix_rating_at_rate(profile: &[MatrixRatingInput], music_rate: f64) -> f64 {
     matrix_rating_at_valid_rate(profile, valid_music_rate(music_rate))
-}
-
-/// Previous Matrix profile evaluation retained only for comparative benchmarks.
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn matrix_rating_at_rate_legacy_for_bench(
-    profile: &[MatrixRatingInput],
-    music_rate: f64,
-) -> f64 {
-    let rate = valid_music_rate(music_rate);
-    profile.iter().fold(0.0f64, |best, input| {
-        best.max(get_difficulty_legacy_for_bench(
-            input.effective_bpm * rate,
-            input.measures as f64,
-        ))
-    })
 }
 
 #[inline(always)]
@@ -1480,46 +1353,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn lookup_difficulty_matches_legacy_search() {
-        let measures = [
-            f64::NAN,
-            -1.0,
-            0.0,
-            0.5,
-            1.0,
-            2.0,
-            3.0,
-            4.0,
-            7.0,
-            8.0,
-            15.0,
-            16.0,
-            31.0,
-            32.0,
-            63.0,
-            64.0,
-            127.0,
-            128.0,
-            255.0,
-            256.0,
-            511.0,
-            512.0,
-            1_024.0,
-            f64::INFINITY,
-        ];
-        for quarter_bpm in -400..=3_200 {
-            let bpm = f64::from(quarter_bpm) * 0.25;
-            for &measure in &measures {
-                assert_eq!(
-                    get_difficulty(bpm, measure).to_bits(),
-                    get_difficulty_legacy_for_bench(bpm, measure).to_bits(),
-                    "difficulty changed at {bpm} BPM and {measure} measures"
-                );
-            }
-        }
-    }
-
     fn matrix_rating_generic(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> f64 {
         let mut keys: Vec<(u8, u64)> = Vec::with_capacity(measure_densities.len());
         for_each_measure_bpm(measure_densities.len(), bpm_map, 4.0, |idx, bpm| {
@@ -1693,12 +1526,6 @@ mod tests {
                 })
                 .collect();
             let profile = compute_matrix_profile(&densities, &bpm_map);
-            assert_eq!(
-                profile.as_slice(),
-                compute_matrix_profile_legacy_for_bench(&densities, &bpm_map),
-                "profile inputs changed for {segment_count} segments"
-            );
-
             for rate in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0] {
                 let scaled_bpms: Vec<_> = bpm_map
                     .iter()

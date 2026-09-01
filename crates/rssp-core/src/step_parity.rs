@@ -86,8 +86,6 @@ const LEFT_FOOT_MASK: u8 = FOOT_MASKS[1] | FOOT_MASKS[2];
 const RIGHT_FOOT_MASK: u8 = FOOT_MASKS[3] | FOOT_MASKS[4];
 // Exact permutation totals for the fixed dance-single and dance-double layouts.
 const PERM_TOTALS: [usize; 9] = [0, 0, 0, 0, 85, 0, 0, 0, 517];
-#[cfg(feature = "bench-support")]
-const PERM_CAP: [usize; 9] = [1, 4, 12, 24, 24, 0, 0, 0, 0];
 const OTHER_PART_OF_FOOT: [Foot; NUM_FEET] = [
     Foot::None,
     Foot::LeftToe,
@@ -117,8 +115,6 @@ struct RowStateMap {
     entries: Vec<RowMapEntry>,
     epoch: u32,
     mask: usize,
-    #[cfg(feature = "bench-support")]
-    legacy_hash: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -169,23 +165,11 @@ const fn row_map_hash_for_key<const COLS: usize>(key: u32) -> usize {
     }
 }
 
-#[cfg(feature = "bench-support")]
-const fn row_map_hash_legacy<const COLS: usize>(key: u32) -> usize {
-    let hash = row_map_hash(key);
-    if COLS == MAX_COLUMNS && key >> 28 == 0 {
-        hash ^ (hash >> 16)
-    } else {
-        hash
-    }
-}
-
 const fn row_map_new() -> RowStateMap {
     RowStateMap {
         entries: Vec::new(),
         epoch: 1,
         mask: 0,
-        #[cfg(feature = "bench-support")]
-        legacy_hash: false,
     }
 }
 
@@ -230,13 +214,6 @@ fn row_map_probe<const COLS: usize, const LAYER_LOCAL: bool>(
     key: u32,
 ) -> RowMapProbe {
     debug_assert!(map.mask != 0);
-    #[cfg(feature = "bench-support")]
-    let hash = if map.legacy_hash {
-        row_map_hash_legacy::<COLS>(key)
-    } else {
-        row_map_hash_for_key::<COLS>(key)
-    };
-    #[cfg(not(feature = "bench-support"))]
     let hash = row_map_hash_for_key::<COLS>(key);
     let mut idx = hash & map.mask;
     loop {
@@ -738,33 +715,8 @@ fn state_from_key<const COLS: usize>(key: u32) -> State {
         };
     }
 
-    state_from_key_scalar::<COLS>(key)
+    unreachable!("step parity supports only four or eight columns")
 }
-
-fn state_from_key_scalar<const COLS: usize>(key: u32) -> State {
-    let mut combined_columns = [Foot::None; MAX_COLUMNS];
-    let mut where_the_feet_are = [INVALID_COLUMN; NUM_FEET];
-    let mut occupied_mask = 0u8;
-    let mut column = 0usize;
-    while column < COLS {
-        let foot = FOOT_FROM_KEY_BITS[((key >> (column * 3)) & 0b111) as usize];
-        combined_columns[column] = foot;
-        if foot != Foot::None {
-            where_the_feet_are[foot_idx(foot)] = column as i8;
-            occupied_mask |= 1u8 << column;
-        }
-        column += 1;
-    }
-
-    State {
-        combined_columns,
-        where_the_feet_are,
-        occupied_mask,
-        moved_mask: ((key >> 24) & 0x0f) as u8,
-        holding_mask: ((key >> 28) & 0x0f) as u8,
-    }
-}
-
 #[inline(always)]
 const fn foot_moved(s: &State, pair: &FootPair) -> bool {
     let mask = FOOT_MASKS[foot_idx(pair.heel)] | FOOT_MASKS[foot_idx(pair.toe)];
@@ -982,82 +934,6 @@ fn calc_tap_cost<const COLS: usize>(
     }
     if initial_col != INVALID_COLUMN {
         cost += ctx.movement[initial_col as usize];
-    }
-    cost
-}
-
-#[cfg(any(test, feature = "bench-support"))]
-fn calc_tap_cost_legacy(
-    layout: &StageLayout,
-    initial: &StateBase4,
-    result_key: u32,
-    hit_col: usize,
-    side_hit: bool,
-    elapsed: f32,
-    left_moved_not_holding: bool,
-    right_moved_not_holding: bool,
-    prev_row_has_live_hold: bool,
-    facing_cost: f32,
-    spin_cost: f32,
-) -> f32 {
-    let moved_mask = ((result_key >> 24) & 0x0f) as u8;
-    let moved = moved_mask != 0;
-    let moved_idx = if moved {
-        moved_mask.trailing_zeros() as usize + 1
-    } else {
-        0
-    };
-    let moved_foot = if moved {
-        FEET[moved_idx - 1]
-    } else {
-        Foot::None
-    };
-    let moved_left = moved_mask & LEFT_FOOT_MASK != 0;
-    let prev_moved = if moved_left {
-        left_moved_not_holding
-    } else {
-        right_moved_not_holding
-    };
-    let did_jump = left_moved_not_holding && right_moved_not_holding;
-    let jacked =
-        moved && !did_jump && prev_moved && initial.combined_columns[hit_col] == moved_foot;
-
-    let mut cost = 0.0;
-    if moved && !did_jump && !jacked && prev_moved && !prev_row_has_live_hold {
-        cost += DOUBLESTEP_WEIGHT;
-    }
-    cost += facing_cost;
-    cost += spin_cost;
-    if moved && (SLOW_FOOTSWITCH_THRESHOLD..SLOW_FOOTSWITCH_IGNORE).contains(&elapsed) {
-        let initial_foot = initial.combined_columns[hit_col];
-        if initial_foot != Foot::None
-            && initial_foot != moved_foot
-            && initial_foot != OTHER_PART_OF_FOOT[moved_idx]
-        {
-            let scaled = elapsed - SLOW_FOOTSWITCH_THRESHOLD;
-            cost += (scaled / (SLOW_FOOTSWITCH_THRESHOLD + scaled)) * FOOTSWITCH_WEIGHT;
-        }
-    }
-    if side_hit && moved {
-        let initial_foot = initial.combined_columns[hit_col];
-        if initial_foot != moved_foot
-            && initial_foot != Foot::None
-            && moved_mask & FOOT_MASKS[foot_idx(initial_foot)] == 0
-        {
-            cost += SIDESWITCH_WEIGHT;
-        }
-    }
-    if moved && jacked && elapsed < JACK_THRESHOLD {
-        let scaled = JACK_THRESHOLD - elapsed;
-        if scaled > 0.0 {
-            cost += (1.0 / scaled - 1.0 / JACK_THRESHOLD) * JACK_WEIGHT;
-        }
-    }
-    if moved {
-        let initial_col = initial.where_the_feet_are[moved_idx];
-        if initial_col != INVALID_COLUMN {
-            cost += layout_movement_cost(layout, initial_col as usize, hit_col) / elapsed;
-        }
     }
     cost
 }
@@ -1390,46 +1266,6 @@ struct StepParityGenerator {
     single_node_density: usize,
     // Row-build state shared by every row instead of 32 endpoint bytes per row.
     active_hold_ends: [f32; MAX_COLUMNS],
-    #[cfg(feature = "bench-support")]
-    legacy_tap_path: bool,
-    #[cfg(feature = "bench-support")]
-    legacy_arena_growth: bool,
-    #[cfg(feature = "bench-support")]
-    legacy_double_decode: bool,
-    #[cfg(feature = "bench-support")]
-    legacy_double_result: bool,
-    #[cfg(feature = "bench-support")]
-    legacy_double_tap_key: bool,
-    #[cfg(feature = "bench-support")]
-    legacy_double_tap_cost: bool,
-}
-
-#[cfg(feature = "bench-support")]
-#[derive(Clone, Copy)]
-struct LegacyNode {
-    state_key: u32,
-    pred: u32,
-    cost: f32,
-}
-
-#[cfg(feature = "bench-support")]
-struct LegacyDp {
-    nodes: Vec<LegacyNode>,
-    prev_ids: Vec<usize>,
-    next_ids: Vec<usize>,
-    state_map: RowStateMap,
-}
-
-#[cfg(feature = "bench-support")]
-impl Default for LegacyDp {
-    fn default() -> Self {
-        Self {
-            nodes: Vec::new(),
-            prev_ids: Vec::new(),
-            next_ids: Vec::new(),
-            state_map: row_map_new(),
-        }
-    }
 }
 
 fn parity_gen(cache: &'static LayoutCache, reserve_single: bool) -> StepParityGenerator {
@@ -1460,18 +1296,6 @@ fn parity_gen(cache: &'static LayoutCache, reserve_single: bool) -> StepParityGe
         },
         single_node_density: 0,
         active_hold_ends: [HOLD_END_NONE; MAX_COLUMNS],
-        #[cfg(feature = "bench-support")]
-        legacy_tap_path: false,
-        #[cfg(feature = "bench-support")]
-        legacy_arena_growth: false,
-        #[cfg(feature = "bench-support")]
-        legacy_double_decode: false,
-        #[cfg(feature = "bench-support")]
-        legacy_double_result: false,
-        #[cfg(feature = "bench-support")]
-        legacy_double_tap_key: false,
-        #[cfg(feature = "bench-support")]
-        legacy_double_tap_cost: false,
     }
 }
 
@@ -1525,12 +1349,6 @@ fn parity_reserve(g: &mut StepParityGenerator) {
             .saturating_mul(g.single_node_density)
             .min(SINGLE_NODE_WARM_MAX)
             .max(node_floor);
-        #[cfg(feature = "bench-support")]
-        let target = if g.legacy_arena_growth {
-            node_floor
-        } else {
-            target
-        };
         if target > g.single_nodes.capacity() && g.single_node_density != 0 {
             g.single_nodes = Vec::new();
             g.single_nodes.reserve_exact(target);
@@ -1650,60 +1468,6 @@ fn row_nonzero_mask<const LANES: usize>(row: &[u8; LANES], cols: usize) -> u8 {
     }
     mask
 }
-
-fn fill_hold_heads_from_arrays<const LANES: usize, const HOLD_COLS: usize>(
-    rows: &[[u8; LANES]],
-    row_to_beat: &[f32],
-    cols: usize,
-    out: &mut Vec<[f32; HOLD_COLS]>,
-) {
-    out.clear();
-    if cols == 0 || cols > 8 {
-        return;
-    }
-    let copy_len = cols.min(LANES);
-    debug_assert!(copy_len <= HOLD_COLS);
-    out.resize(rows.len(), [HOLD_END_NONE; HOLD_COLS]);
-    let mut hold_start_idx = [usize::MAX; MAX_COLUMNS];
-    let mut hold_start_row = [0i32; MAX_COLUMNS];
-    let mut hold_start_beat = [0.0f32; MAX_COLUMNS];
-
-    for (idx, row) in rows.iter().enumerate() {
-        let mut nonzero_mask = row_nonzero_mask(row, copy_len);
-        if nonzero_mask == 0 {
-            continue;
-        }
-        let (row_i32, beat) = row_quantized(row_to_beat[idx]);
-        while nonzero_mask != 0 {
-            let c = nonzero_mask.trailing_zeros() as usize;
-            nonzero_mask &= nonzero_mask - 1;
-            let ch = row[c];
-            if ch == b'1' {
-                hold_start_idx[c] = usize::MAX;
-                continue;
-            }
-            if ch == b'2' || ch == b'4' {
-                hold_start_idx[c] = idx;
-                hold_start_row[c] = row_i32;
-                hold_start_beat[c] = beat;
-                continue;
-            }
-            if ch == b'3' {
-                let start_idx = hold_start_idx[c];
-                if start_idx != usize::MAX {
-                    let len = (row_i32 - hold_start_row[c]) as f32 / ROWS_PER_BEAT as f32;
-                    out[start_idx][c] = hold_start_beat[c] + len;
-                    hold_start_idx[c] = usize::MAX;
-                }
-                continue;
-            }
-            if matches!(ch, b'L' | b'M' | b'F') {
-                hold_start_idx[c] = usize::MAX;
-            }
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 struct SparseHoldHead {
     row: usize,
@@ -1877,43 +1641,6 @@ fn parity_create_no_hold_rows<const LANES: usize>(
         parity_create_rows_no_holds::<LANES, true>(g, rows, row_to_beat, timing, cols);
     }
 }
-
-fn parity_create_rows_from_arrays<const LANES: usize, const HOLD_COLS: usize>(
-    g: &mut StepParityGenerator,
-    hold_heads: &mut Vec<[f32; HOLD_COLS]>,
-    rows: &[[u8; LANES]],
-    row_to_beat: &[f32],
-    timing: &TimingData,
-    cols: usize,
-    has_holds: bool,
-) {
-    if !has_holds {
-        hold_heads.clear();
-        parity_create_no_hold_rows(g, rows, row_to_beat, timing, cols);
-        return;
-    }
-
-    if timing_fakes(timing).is_empty() {
-        parity_create_rows_holds::<LANES, HOLD_COLS, false>(
-            g,
-            hold_heads,
-            rows,
-            row_to_beat,
-            timing,
-            cols,
-        );
-    } else {
-        parity_create_rows_holds::<LANES, HOLD_COLS, true>(
-            g,
-            hold_heads,
-            rows,
-            row_to_beat,
-            timing,
-            cols,
-        );
-    }
-}
-
 #[inline(always)]
 fn tap_only_mask<const LANES: usize>(row: &[u8; LANES], cols: usize) -> Option<u8> {
     let mut mask = 0u8;
@@ -1957,26 +1684,6 @@ fn parity_create_tap_rows_fixed<const LANES: usize>(
     }
     true
 }
-
-fn parity_create_rows_holds<const LANES: usize, const HOLD_COLS: usize, const HAS_FAKES: bool>(
-    g: &mut StepParityGenerator,
-    hold_heads: &mut Vec<[f32; HOLD_COLS]>,
-    rows: &[[u8; LANES]],
-    row_to_beat: &[f32],
-    timing: &TimingData,
-    cols: usize,
-) {
-    fill_hold_heads_from_arrays(rows, row_to_beat, cols, hold_heads);
-    parity_create_rows_holds_with::<LANES, HAS_FAKES>(
-        g,
-        rows,
-        row_to_beat,
-        timing,
-        cols,
-        |idx, col| hold_heads[idx][col],
-    );
-}
-
 fn parity_create_rows_sparse<const LANES: usize>(
     g: &mut StepParityGenerator,
     hold_heads: &mut Vec<SparseHoldHead>,
@@ -2133,23 +1840,6 @@ fn rows_have_holds<const LANES: usize>(rows: &[[u8; LANES]], cols: usize) -> boo
             .any(|&ch| matches!(ch, b'2' | b'4'))
     })
 }
-
-fn parity_analyze_rows<const LANES: usize, const HOLD_COLS: usize>(
-    g: &mut StepParityGenerator,
-    hold_heads: &mut Vec<[f32; HOLD_COLS]>,
-    rows: &[[u8; LANES]],
-    row_to_beat: &[f32],
-    timing: &TimingData,
-    cols: usize,
-    has_holds: bool,
-) -> bool {
-    parity_reset(g, cols);
-    g.rows.reserve(rows.len());
-    parity_create_rows_from_arrays(g, hold_heads, rows, row_to_beat, timing, cols, has_holds);
-    parity_reserve(g);
-    parity_finish(g)
-}
-
 fn parity_analyze_sparse<const LANES: usize>(
     g: &mut StepParityGenerator,
     hold_heads: &mut Vec<SparseHoldHead>,
@@ -2236,10 +1926,6 @@ fn parity_state_key<const COLS: usize>(g: &StepParityGenerator, id: usize) -> u3
 
 #[inline(always)]
 fn parity_decode_state<const COLS: usize>(_g: &StepParityGenerator, key: u32) -> State {
-    #[cfg(feature = "bench-support")]
-    if COLS == 8 && _g.legacy_double_decode {
-        return state_from_key_scalar::<COLS>(key);
-    }
     state_from_key::<COLS>(key)
 }
 
@@ -2358,79 +2044,6 @@ fn parity_tap_row4(
     }
 }
 
-#[cfg(feature = "bench-support")]
-fn parity_tap_row4_legacy(
-    g: &mut StepParityGenerator,
-    perms: &[FootPlacement],
-    prev_start: usize,
-    start_id: usize,
-    next_start: usize,
-    tap_col: usize,
-    side_hit: bool,
-    elapsed: f32,
-    prev_row_has_live_hold: bool,
-    costs_nonnegative: bool,
-    facing_cost4: &[f32],
-    spin_class4: &[u8],
-) {
-    for j in 0..g.prev_links.len() {
-        let init_id = prev_start + j;
-        let init_key = if init_id == start_id {
-            0
-        } else {
-            parity_state_key::<4>(g, init_id)
-        };
-        let initial = if init_id == start_id {
-            &START_BASE4
-        } else {
-            &STATE_BASE4[init_key as usize & (SINGLE_STATE_COUNT - 1)]
-        };
-        let init_cost = g.prev_links[j].cost;
-        let moved_mask = ((init_key >> 24) & 0x0f) as u8;
-        let holding_mask = ((init_key >> 28) & 0x0f) as u8;
-        let moved_not_holding = moved_mask & !holding_mask;
-        let left_moved = moved_not_holding & LEFT_FOOT_MASK != 0;
-        let right_moved = moved_not_holding & RIGHT_FOOT_MASK != 0;
-
-        for perm in perms {
-            let key = parity_result_tap_key4_legacy(init_key, perm, tap_col);
-            let cost_idx = match row_map_probe::<4, true>(&g.state_map, key) {
-                RowMapProbe::Found(index) => index,
-                RowMapProbe::Vacant(slot) => {
-                    let id = parity_add_node::<4>(g, key);
-                    let index = g.next_links.len();
-                    debug_assert_eq!(id, next_start + index);
-                    g.next_links.push(LayerLink { cost: f32::MAX });
-                    row_map_insert_at::<4, true>(&mut g.state_map, slot, key, index);
-                    index
-                }
-            };
-            let best_cost = g.next_links[cost_idx].cost;
-            if costs_nonnegative && init_cost >= best_cost {
-                continue;
-            }
-            let cost = init_cost
-                + calc_tap_cost_legacy(
-                    g.layout,
-                    initial,
-                    key,
-                    tap_col,
-                    side_hit,
-                    elapsed,
-                    left_moved,
-                    right_moved,
-                    prev_row_has_live_hold,
-                    facing_cost4[key as usize & (SINGLE_STATE_COUNT - 1)],
-                    cached_spin_cost4::<true>(spin_class4, init_key, key),
-                );
-            if cost < best_cost {
-                g.next_links[cost_idx].cost = cost;
-                parity_set_pred::<4>(g, next_start + cost_idx, init_id as u32);
-            }
-        }
-    }
-}
-
 // Dance-double taps keep their complete map/prune/update loop separate so
 // jump and hold rows carry none of the specialized cost path in their icache.
 fn parity_tap_row8(
@@ -2468,29 +2081,7 @@ fn parity_tap_row8(
             } else {
                 Foot::None
             };
-            #[cfg(feature = "bench-support")]
-            let active_mask = if tap_col < MAX_COLUMNS {
-                1u8 << tap_col
-            } else {
-                0
-            };
-            #[cfg(feature = "bench-support")]
-            let (result, key) = if g.legacy_double_result {
-                let (result, _, key) =
-                    parity_result_state_no_holds::<8>(&initial, perm, active_mask);
-                (Some(result), key)
-            } else if g.legacy_double_tap_key {
-                let (_, key) = parity_result_key8_no_holds(&initial, init_key, perm, active_mask);
-                (None, key)
-            } else {
-                let (_, key) = parity_result_tap_key8(&initial, init_key, moved_foot, tap_col);
-                (None, key)
-            };
-            #[cfg(not(feature = "bench-support"))]
-            let (result, key) = {
-                let (_, key) = parity_result_tap_key8(&initial, init_key, moved_foot, tap_col);
-                (None::<State>, key)
-            };
+            let (_, key) = parity_result_tap_key8(&initial, init_key, moved_foot, tap_col);
             let cost_idx = match row_map_probe::<8, true>(&g.state_map, key) {
                 RowMapProbe::Found(index) => index,
                 RowMapProbe::Vacant(slot) => {
@@ -2506,7 +2097,7 @@ fn parity_tap_row8(
             if costs_nonnegative && init_cost >= best_cost {
                 continue;
             }
-            let result = result.unwrap_or_else(|| state_from_key::<8>(key));
+            let result = state_from_key::<8>(key);
             let initial_hit = if moved_foot == Foot::None {
                 Foot::None
             } else {
@@ -2647,13 +2238,7 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
             && !row_ctx.has_hold
             && !row_ctx.multi_active
             && row.note_count < 2;
-        #[cfg(feature = "bench-support")]
-        let direct_tap = COLS == 4 && simple_tap && !g.legacy_tap_path;
-        #[cfg(not(feature = "bench-support"))]
         let direct_tap = COLS == 4 && simple_tap;
-        #[cfg(feature = "bench-support")]
-        let direct_double_tap = COLS == 8 && simple_tap && !g.legacy_double_tap_cost;
-        #[cfg(not(feature = "bench-support"))]
         let direct_double_tap = COLS == 8 && simple_tap;
         let perms = if direct_tap {
             &[][..]
@@ -2677,38 +2262,6 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
         g.next_links.reserve(layer_estimate);
 
         if COLS == 4 && simple_tap {
-            #[cfg(feature = "bench-support")]
-            if g.legacy_tap_path {
-                parity_tap_row4_legacy(
-                    g,
-                    perms,
-                    prev_start,
-                    start_id,
-                    next_start,
-                    tap_col,
-                    side_hit,
-                    elapsed,
-                    prev_row_has_live_hold,
-                    costs_nonnegative,
-                    facing_cost4,
-                    spin_class4,
-                );
-            } else {
-                parity_tap_row4(
-                    g,
-                    prev_start,
-                    start_id,
-                    next_start,
-                    tap_col,
-                    side_hit,
-                    elapsed,
-                    prev_row_has_live_hold,
-                    costs_nonnegative,
-                    facing_cost4,
-                    spin_class4,
-                );
-            }
-            #[cfg(not(feature = "bench-support"))]
             parity_tap_row4(
                 g,
                 prev_start,
@@ -2770,88 +2323,33 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                 let left_moved_not_holding = foot_moved_not_holding(&init_state, &LEFT_PAIR);
                 let right_moved_not_holding = foot_moved_not_holding(&init_state, &RIGHT_PAIR);
                 for perm in perms {
-                    let (result, hit, key) = if COLS == 4 {
+                    let (hit, key) = if COLS == 4 {
                         let (hit, key) = if hold_mask == 0 {
                             parity_result_key4::<false>(&init_state, perm, 0, active_mask)
                         } else {
                             parity_result_key4::<true>(&init_state, perm, hold_mask, active_mask)
                         };
-                        (None, hit, key)
+                        (hit, key)
                     } else if hold_mask == 0 {
-                        #[cfg(feature = "bench-support")]
-                        if g.legacy_double_result {
-                            let (result, hit, key) = parity_result_state_no_holds::<COLS>(
-                                &init_state,
-                                perm,
-                                active_mask,
-                            );
-                            (Some(result), hit, key)
+                        let (hit, key) = if simple_tap {
+                            let foot = if tap_col < MAX_COLUMNS {
+                                perm[tap_col]
+                            } else {
+                                Foot::None
+                            };
+                            parity_result_tap_key8(&init_state, init_key, foot, tap_col)
                         } else {
-                            let (hit, key) = if simple_tap && !g.legacy_double_tap_key {
-                                let foot = if tap_col < MAX_COLUMNS {
-                                    perm[tap_col]
-                                } else {
-                                    Foot::None
-                                };
-                                parity_result_tap_key8(&init_state, init_key, foot, tap_col)
-                            } else {
-                                parity_result_key8_no_holds(
-                                    &init_state,
-                                    init_key,
-                                    perm,
-                                    active_mask,
-                                )
-                            };
-                            (None, hit, key)
-                        }
-                        #[cfg(not(feature = "bench-support"))]
-                        {
-                            let (hit, key) = if simple_tap {
-                                let foot = if tap_col < MAX_COLUMNS {
-                                    perm[tap_col]
-                                } else {
-                                    Foot::None
-                                };
-                                parity_result_tap_key8(&init_state, init_key, foot, tap_col)
-                            } else {
-                                parity_result_key8_no_holds(
-                                    &init_state,
-                                    init_key,
-                                    perm,
-                                    active_mask,
-                                )
-                            };
-                            (None, hit, key)
-                        }
+                            parity_result_key8_no_holds(&init_state, init_key, perm, active_mask)
+                        };
+                        (hit, key)
                     } else {
-                        #[cfg(feature = "bench-support")]
-                        if g.legacy_double_result {
-                            let (result, hit, key) = parity_result_state::<COLS>(
-                                &init_state,
-                                perm,
-                                hold_mask,
-                                active_mask,
-                            );
-                            (Some(result), hit, key)
-                        } else {
-                            let (hit, key) = parity_result_key8_with_holds(
-                                &init_state,
-                                perm,
-                                hold_mask,
-                                active_mask,
-                            );
-                            (None, hit, key)
-                        }
-                        #[cfg(not(feature = "bench-support"))]
-                        {
-                            let (hit, key) = parity_result_key8_with_holds(
-                                &init_state,
-                                perm,
-                                hold_mask,
-                                active_mask,
-                            );
-                            (None, hit, key)
-                        }
+                        let (hit, key) = parity_result_key8_with_holds(
+                            &init_state,
+                            perm,
+                            hold_mask,
+                            active_mask,
+                        );
+                        (hit, key)
                     };
                     let cost_idx = match row_map_probe::<COLS, true>(&g.state_map, key) {
                         RowMapProbe::Found(index) => index,
@@ -2883,7 +2381,7 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
                                 cached_spin_cost4::<false>(spin_class4, init_key, key),
                             )
                         } else {
-                            let result = result.unwrap_or_else(|| state_from_key::<COLS>(key));
+                            let result = state_from_key::<COLS>(key);
                             calc_action_cost::<false>(
                                 layout,
                                 &init_state,
@@ -2972,292 +2470,6 @@ fn parity_dp_rows<const COLS: usize>(g: &mut StepParityGenerator) -> Option<usiz
     }
     best
 }
-
-#[cfg(feature = "bench-support")]
-fn legacy_add_node(dp: &mut LegacyDp, state_key: u32) -> usize {
-    let id = dp.nodes.len();
-    dp.nodes.push(LegacyNode {
-        state_key,
-        pred: u32::MAX,
-        cost: f32::MAX,
-    });
-    id
-}
-
-#[cfg(feature = "bench-support")]
-fn legacy_dp_rows<const COLS: usize>(
-    g: &mut StepParityGenerator,
-    dp: &mut LegacyDp,
-) -> Option<usize> {
-    const RESERVE_SAMPLE_ROWS: usize = 64;
-
-    dp.nodes.clear();
-    let start_id = legacy_add_node(dp, 0);
-    dp.nodes[start_id].cost = 0.0;
-    dp.prev_ids.clear();
-    dp.prev_ids.push(start_id);
-    dp.next_ids.clear();
-
-    let mut prev_second = g.rows.first().map_or(-1.0, |row| row.second - 1.0);
-    for i in 0..g.rows.len() {
-        let row_second = g.rows[i].second;
-        let hold_mask = g.rows[i].hold_mask;
-        let elapsed = row_second - prev_second;
-        prev_second = row_second;
-        let costs_nonnegative = elapsed >= 0.0;
-        let prev_row_has_live_hold = i > 0 && row_has_live_hold(&g.rows[i - 1]);
-        let perms = parity_perms_for_row(g, i);
-        let estimate = dp.prev_ids.len().saturating_mul(perms.len());
-        dp.next_ids.clear();
-        row_map_reset::<COLS, false>(&mut dp.state_map, estimate);
-        dp.next_ids.reserve(estimate);
-        let row = g.rows[i];
-        let row_ctx = row_cost_ctx(&row, g.layout);
-        let active_mask = row_ctx.active_mask;
-
-        for j in 0..dp.prev_ids.len() {
-            let init_id = dp.prev_ids[j];
-            let init_state = if init_id == start_id {
-                state_new()
-            } else {
-                state_from_key_scalar::<COLS>(dp.nodes[init_id].state_key)
-            };
-            let init_cost = dp.nodes[init_id].cost;
-            let left_moved_not_holding = foot_moved_not_holding(&init_state, &LEFT_PAIR);
-            let right_moved_not_holding = foot_moved_not_holding(&init_state, &RIGHT_PAIR);
-            for perm in perms {
-                let (result, hit, key) = if hold_mask == 0 {
-                    parity_result_state_no_holds::<COLS>(&init_state, perm, active_mask)
-                } else {
-                    parity_result_state::<COLS>(&init_state, perm, hold_mask, active_mask)
-                };
-                let res_id = match row_map_probe::<COLS, false>(&dp.state_map, key) {
-                    RowMapProbe::Found(id) => id,
-                    RowMapProbe::Vacant(slot) => {
-                        let id = legacy_add_node(dp, key);
-                        dp.next_ids.push(id);
-                        row_map_insert_at::<COLS, false>(&mut dp.state_map, slot, key, id);
-                        id
-                    }
-                };
-                if costs_nonnegative && init_cost >= dp.nodes[res_id].cost {
-                    continue;
-                }
-                let cost = init_cost
-                    + calc_action_cost::<false>(
-                        g.layout,
-                        &init_state,
-                        &result,
-                        perm,
-                        hit,
-                        &row,
-                        row_ctx,
-                        elapsed,
-                        left_moved_not_holding,
-                        right_moved_not_holding,
-                        prev_row_has_live_hold,
-                        0.0,
-                        0.0,
-                    );
-                if cost < dp.nodes[res_id].cost {
-                    dp.nodes[res_id].cost = cost;
-                    dp.nodes[res_id].pred = init_id as u32;
-                }
-            }
-        }
-
-        std::mem::swap(&mut dp.prev_ids, &mut dp.next_ids);
-        if i + 1 == RESERVE_SAMPLE_ROWS && g.rows.len() > RESERVE_SAMPLE_ROWS {
-            let states_per_row = dp.nodes.len().div_ceil(RESERVE_SAMPLE_ROWS);
-            let expected = states_per_row.saturating_mul(g.rows.len());
-            dp.nodes.reserve(expected.saturating_sub(dp.nodes.len()));
-        }
-    }
-
-    dp.prev_ids
-        .iter()
-        .copied()
-        .min_by(|&a, &b| dp.nodes[a].cost.total_cmp(&dp.nodes[b].cost))
-}
-
-#[cfg(feature = "bench-support")]
-fn legacy_backtrack(g: &mut StepParityGenerator, dp: &LegacyDp, mut cur: usize) -> bool {
-    let rows = g.rows.len();
-    g.result_keys.resize(rows, 0);
-    for write in (0..rows).rev() {
-        g.result_keys[write] = dp.nodes[cur].state_key;
-        let pred = dp.nodes[cur].pred;
-        if pred == u32::MAX {
-            g.result_keys.clear();
-            return false;
-        }
-        cur = pred as usize;
-    }
-    let ok = cur == 0;
-    if !ok {
-        g.result_keys.clear();
-    }
-    ok
-}
-
-#[cfg(feature = "bench-support")]
-fn legacy_finish(g: &mut StepParityGenerator, dp: &mut LegacyDp) -> bool {
-    if g.rows.is_empty() {
-        return false;
-    }
-    let best = match g.column_count {
-        4 => legacy_dp_rows::<4>(g, dp),
-        8 => legacy_dp_rows::<8>(g, dp),
-        _ => None,
-    };
-    match (g.column_count, best) {
-        (4 | 8, Some(best)) => legacy_backtrack(g, dp, best),
-        _ => false,
-    }
-}
-
-fn parity_result_state<const COLS: usize>(
-    initial: &State,
-    cols: &FootPlacement,
-    hold_mask: u8,
-    active_mask: u8,
-) -> (State, [i8; NUM_FEET], u32) {
-    let (mut combined, mut hit) = ([Foot::None; MAX_COLUMNS], [INVALID_COLUMN; NUM_FEET]);
-    let (mut moved_mask, mut holding_mask) = (0u8, 0u8);
-    let mut mask = active_mask;
-    while mask != 0 {
-        let i = mask.trailing_zeros() as usize;
-        mask &= mask - 1;
-        if i >= COLS {
-            continue;
-        }
-        let foot = cols[i];
-        if foot == Foot::None {
-            continue;
-        }
-        combined[i] = foot;
-        let fi = foot_idx(foot);
-        hit[fi] = i as i8;
-        let fm = FOOT_MASKS[fi];
-        let bit = 1u8 << i;
-        if (hold_mask & bit) != 0 {
-            holding_mask |= fm;
-        }
-        if (hold_mask & bit) == 0 || initial.combined_columns[i] != foot {
-            moved_mask |= fm;
-        }
-    }
-
-    let (moved_left, moved_right) = (
-        (moved_mask & LEFT_FOOT_MASK) != 0,
-        (moved_mask & RIGHT_FOOT_MASK) != 0,
-    );
-    let (mut where_the_feet_are, mut comb_p, mut occupied_mask) =
-        ([INVALID_COLUMN; NUM_FEET], 0u32, 0u8);
-    for i in 0..COLS {
-        let mut foot = combined[i];
-        if foot == Foot::None {
-            let prev = initial.combined_columns[i];
-            foot = match prev {
-                Foot::LeftHeel | Foot::RightHeel
-                    if (moved_mask & FOOT_MASKS[foot_idx(prev)]) == 0 =>
-                {
-                    prev
-                }
-                Foot::LeftToe if !moved_left => prev,
-                Foot::RightToe if !moved_right => prev,
-                _ => Foot::None,
-            };
-        }
-        combined[i] = foot;
-        comb_p |= (foot as u32) << (i * 3);
-        if foot != Foot::None {
-            where_the_feet_are[foot_idx(foot)] = i as i8;
-            occupied_mask |= 1u8 << i;
-        }
-    }
-
-    let key = comb_p | (u32::from(moved_mask) << 24) | (u32::from(holding_mask) << 28);
-    (
-        State {
-            combined_columns: combined,
-            where_the_feet_are,
-            occupied_mask,
-            moved_mask,
-            holding_mask,
-        },
-        hit,
-        key,
-    )
-}
-
-fn parity_result_state_no_holds<const COLS: usize>(
-    initial: &State,
-    cols: &FootPlacement,
-    active_mask: u8,
-) -> (State, [i8; NUM_FEET], u32) {
-    let (mut combined, mut hit) = ([Foot::None; MAX_COLUMNS], [INVALID_COLUMN; NUM_FEET]);
-    let mut moved_mask = 0u8;
-    let mut mask = active_mask;
-    while mask != 0 {
-        let i = mask.trailing_zeros() as usize;
-        mask &= mask - 1;
-        if i >= COLS {
-            continue;
-        }
-        let foot = cols[i];
-        if foot == Foot::None {
-            continue;
-        }
-        combined[i] = foot;
-        let fi = foot_idx(foot);
-        hit[fi] = i as i8;
-        moved_mask |= FOOT_MASKS[fi];
-    }
-
-    let (moved_left, moved_right) = (
-        (moved_mask & LEFT_FOOT_MASK) != 0,
-        (moved_mask & RIGHT_FOOT_MASK) != 0,
-    );
-    let (mut where_the_feet_are, mut comb_p, mut occupied_mask) =
-        ([INVALID_COLUMN; NUM_FEET], 0u32, 0u8);
-    for i in 0..COLS {
-        let mut foot = combined[i];
-        if foot == Foot::None {
-            let prev = initial.combined_columns[i];
-            foot = match prev {
-                Foot::LeftHeel | Foot::RightHeel
-                    if (moved_mask & FOOT_MASKS[foot_idx(prev)]) == 0 =>
-                {
-                    prev
-                }
-                Foot::LeftToe if !moved_left => prev,
-                Foot::RightToe if !moved_right => prev,
-                _ => Foot::None,
-            };
-        }
-        combined[i] = foot;
-        comb_p |= (foot as u32) << (i * 3);
-        if foot != Foot::None {
-            where_the_feet_are[foot_idx(foot)] = i as i8;
-            occupied_mask |= 1u8 << i;
-        }
-    }
-
-    let key = comb_p | (u32::from(moved_mask) << 24);
-    (
-        State {
-            combined_columns: combined,
-            where_the_feet_are,
-            occupied_mask,
-            moved_mask,
-            holding_mask: 0,
-        },
-        hit,
-        key,
-    )
-}
-
 #[inline(always)]
 fn parity_result_key8_no_holds(
     initial: &State,
@@ -3423,21 +2635,6 @@ fn parity_result_tap_key4(initial_key: u32, foot: Foot, hit_col: usize) -> u32 {
         return initial_key & (SINGLE_STATE_COUNT - 1) as u32;
     }
 
-    let fi = foot_idx(foot);
-    let moved_mask = FOOT_MASKS[fi];
-    let base = initial_key as usize & (SINGLE_STATE_COUNT - 1);
-    let combined = u32::from(TAP_BASE4[base * 16 + hit_col * 4 + fi - 1]);
-    combined | (u32::from(moved_mask) << 24)
-}
-
-#[cfg(feature = "bench-support")]
-#[inline(always)]
-fn parity_result_tap_key4_legacy(initial_key: u32, cols: &FootPlacement, hit_col: usize) -> u32 {
-    if hit_col >= SINGLE_COLS || cols[hit_col] == Foot::None {
-        return initial_key & (SINGLE_STATE_COUNT - 1) as u32;
-    }
-
-    let foot = cols[hit_col];
     let fi = foot_idx(foot);
     let moved_mask = FOOT_MASKS[fi];
     let base = initial_key as usize & (SINGLE_STATE_COUNT - 1);
@@ -4088,18 +3285,6 @@ fn is_footswitch(prev: Foot, curr: Foot) -> bool {
 }
 
 // --- Parsing ---
-
-#[cfg(any(test, feature = "bench-support"))]
-#[derive(Clone)]
-struct ParsedRow {
-    chars: [u8; 8],
-    columns: u8,
-    mask: u8,
-    row: i32,
-    beat: f32,
-    second: f32,
-}
-
 // Process-lifetime analysis cache, initialized through OnceLock and immutable
 // afterwards, so concurrent readers need no locks. Callers may warm it by
 // creating parity scratch at load time; a first-use miss only enumerates the
@@ -4224,90 +3409,6 @@ fn build_perm_table(layout: &StageLayout) -> PermTable {
     }
 }
 
-#[cfg(feature = "bench-support")]
-fn build_legacy_perm_table(layout: &StageLayout) -> [Box<[FootPlacement]>; 256] {
-    let col_count = layout_cols(layout);
-    std::array::from_fn(|mask| {
-        let bits = mask.count_ones() as usize;
-        if bits > 4 {
-            return Vec::new().into_boxed_slice();
-        }
-
-        let mut cols = [Foot::None; MAX_COLUMNS];
-        let mut perms = Vec::with_capacity(PERM_CAP[bits]);
-        permute_row(
-            layout,
-            mask as u8,
-            &mut cols,
-            0,
-            col_count,
-            0,
-            &mut |placement| perms.push(placement),
-        );
-        perms.into_boxed_slice()
-    })
-}
-
-#[cfg(feature = "bench-support")]
-fn perm_fingerprint<'a>(
-    mask_count: usize,
-    mut get: impl FnMut(u8) -> &'a [FootPlacement],
-) -> (usize, u64) {
-    let mut entries = 0usize;
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for mask in 0..mask_count {
-        let perms = get(mask as u8);
-        entries += perms.len();
-        hash = (hash ^ mask as u64).wrapping_mul(0x0100_0000_01b3);
-        hash = (hash ^ perms.len() as u64).wrapping_mul(0x0100_0000_01b3);
-        for placement in perms {
-            for &foot in placement {
-                hash = (hash ^ foot as u64).wrapping_mul(0x0100_0000_01b3);
-            }
-        }
-    }
-    (entries, hash)
-}
-
-#[cfg(feature = "bench-support")]
-fn perm_layout(lanes: usize) -> Option<StageLayout> {
-    match lanes {
-        4 => Some(dance_single_layout()),
-        8 => Some(dance_double_layout()),
-        _ => None,
-    }
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn legacy_perm_build_for_bench(lanes: usize) -> Option<(usize, u64)> {
-    let layout = perm_layout(lanes)?;
-    let table = build_legacy_perm_table(&layout);
-    Some(perm_fingerprint(1usize << lanes, |mask| {
-        table[mask as usize].as_ref()
-    }))
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn packed_perm_build_for_bench(lanes: usize) -> Option<(usize, u64)> {
-    let layout = perm_layout(lanes)?;
-    let table = build_perm_table(&layout);
-    Some(perm_fingerprint(1usize << lanes, |mask| table.get(mask)))
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn perm_builds_match_for_bench(lanes: usize) -> bool {
-    let Some(layout) = perm_layout(lanes) else {
-        return false;
-    };
-    let mask_count = 1usize << lanes;
-    let legacy = build_legacy_perm_table(&layout);
-    let packed = build_perm_table(&layout);
-    (0..mask_count).all(|mask| legacy[mask].as_ref() == packed.get(mask as u8))
-}
-
 fn dance_single_cache() -> &'static LayoutCache {
     static CACHE: OnceLock<LayoutCache> = OnceLock::new();
     CACHE.get_or_init(|| layout_cache_new(dance_single_layout()))
@@ -4370,64 +3471,6 @@ fn obj_mask(line: &[u8]) -> u8 {
     }
     mask
 }
-
-#[cfg(any(test, feature = "bench-support"))]
-fn parse_rows<F>(data: &[u8], cols: usize, mut get_second: F) -> Vec<ParsedRow>
-where
-    F: FnMut(f32) -> f32,
-{
-    let mut rows = Vec::new();
-    if cols == 0 || cols > 8 {
-        return rows;
-    }
-
-    let mut measure_idx = 0usize;
-    let mut lines: Vec<&[u8]> = Vec::new();
-    for measure in data.split(|&b| b == b',') {
-        lines.clear();
-        for line in measure.split(|&b| b == b'\n') {
-            let line = trim_ws(line);
-            if !line.is_empty() {
-                lines.push(line);
-            }
-        }
-        if lines.is_empty() {
-            measure_idx += 1;
-            continue;
-        }
-
-        let num = lines.len();
-        let start = measure_idx as f32 * 4.0;
-        let step = 4.0 / num as f32;
-
-        for (j, &line) in lines.iter().enumerate() {
-            let copy = line.len().min(cols);
-            let mask = obj_mask(&line[..copy]);
-            if mask == 0 {
-                continue;
-            }
-
-            let beat = (j as f32).mul_add(step, start);
-            let note_row = beat_to_note_row_f32(beat);
-            let beat = note_row as f32 / ROWS_PER_BEAT as f32;
-            let second = get_second(beat);
-
-            let mut chars = [b'0'; 8];
-            chars[..copy].copy_from_slice(&line[..copy]);
-            rows.push(ParsedRow {
-                chars,
-                columns: cols as u8,
-                mask,
-                row: note_row,
-                beat,
-                second,
-            });
-        }
-        measure_idx += 1;
-    }
-    rows
-}
-
 #[inline(always)]
 fn invalidate_hold(
     notes: &mut Vec<IntermediateNoteData>,
@@ -4525,48 +3568,6 @@ fn parse_note_char(
         _ => {}
     }
 }
-
-#[cfg(any(test, feature = "bench-support"))]
-fn build_notes(rows: &[ParsedRow], timing: Option<&TimingData>) -> Vec<IntermediateNoteData> {
-    let cols = rows.first().map_or(0, |r| r.columns as usize);
-    if cols == 0 {
-        return Vec::new();
-    }
-
-    let mut hold_idx = [usize::MAX; MAX_COLUMNS];
-    let mut hold_row = [0i32; MAX_COLUMNS];
-    let mut notes: Vec<IntermediateNoteData> = Vec::with_capacity(rows.len());
-    let mut fake_cursor = timing.map(FakeRowCursor::new);
-
-    for row in rows {
-        let row_fake = fake_cursor
-            .as_mut()
-            .is_some_and(|cursor| cursor.is_fake(row.row));
-
-        let mut mask = row.mask;
-        while mask != 0 {
-            let c = mask.trailing_zeros() as usize;
-            mask &= mask - 1;
-            parse_note_char(
-                &mut notes,
-                &mut hold_idx,
-                &mut hold_row,
-                row.chars[c],
-                c,
-                row.row,
-                row.beat,
-                row.second,
-                row_fake,
-            );
-        }
-    }
-
-    for col in 0..cols {
-        invalidate_hold(&mut notes, &mut hold_idx, col);
-    }
-    notes
-}
-
 fn build_notes_fused<F>(
     data: &[u8],
     cols: usize,
@@ -4681,53 +3682,6 @@ where
     )
 }
 
-#[cfg(feature = "bench-support")]
-fn note_fingerprint(notes: &[IntermediateNoteData]) -> (usize, u64) {
-    let hash = notes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, note| {
-        [
-            note.note_type as u64,
-            note.col as u64,
-            u64::from(note.beat.to_bits()),
-            u64::from(note.hold_length.to_bits()),
-            note.fake as u64,
-            u64::from(note.second.to_bits()),
-        ]
-        .into_iter()
-        .fold(hash, |hash, value| {
-            (hash ^ value).wrapping_mul(0x0000_0100_0000_01b3)
-        })
-    });
-    (notes.len(), hash)
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn parse_notes_for_bench(data: &[u8], lanes: usize, fused: bool) -> (usize, u64) {
-    let notes = if fused {
-        build_notes_fused(data, lanes, None, |beat| beat * 0.4)
-    } else {
-        build_notes(&parse_rows(data, lanes, |beat| beat * 0.4), None)
-    };
-    note_fingerprint(&notes)
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn analyze_note_data_for_bench(data: &[u8], lanes: usize, fused: bool) -> TechCounts {
-    let Some(cache) = layout_for_lanes(lanes) else {
-        return TechCounts::default();
-    };
-    let cols = layout_cols(&cache.layout);
-    let notes = if fused {
-        build_notes_fused(data, cols, None, |beat| beat * 0.4)
-    } else {
-        build_notes(&parse_rows(data, cols, |beat| beat * 0.4), None)
-    };
-    analyze_notes(cache, notes, cols)
-}
-
 #[must_use]
 pub fn analyze_lanes(
     minimized_note_data: &[u8],
@@ -4801,201 +3755,12 @@ pub struct TimingRowsScratch<const LANES: usize> {
     hold_heads: Vec<SparseHoldHead>,
 }
 
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub struct GrowingTimingScratch<const LANES: usize> {
-    generator: StepParityGenerator,
-    hold_heads: Vec<SparseHoldHead>,
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub struct DenseHoldTimingScratch<const LANES: usize> {
-    generator: StepParityGenerator,
-    hold_heads: Vec<[f32; LANES]>,
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub struct WideHoldTimingRowsScratch<const LANES: usize> {
-    generator: StepParityGenerator,
-    hold_heads: Vec<[f32; MAX_COLUMNS]>,
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub struct LegacyTimingRowsScratch<const LANES: usize> {
-    generator: StepParityGenerator,
-    hold_heads: Vec<[f32; MAX_COLUMNS]>,
-    dp: LegacyDp,
-}
-
 pub fn timing_rows_scratch<const LANES: usize>() -> Option<TimingRowsScratch<LANES>> {
     let cache = layout_for_lanes(LANES)?;
     Some(TimingRowsScratch {
         generator: parity_gen(cache, true),
         hold_heads: Vec::new(),
     })
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn growing_timing_scratch<const LANES: usize>() -> Option<GrowingTimingScratch<LANES>> {
-    let cache = layout_for_lanes(LANES)?;
-    Some(GrowingTimingScratch {
-        generator: parity_gen(cache, false),
-        hold_heads: Vec::new(),
-    })
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn dense_hold_timing_scratch<const LANES: usize>() -> Option<DenseHoldTimingScratch<LANES>> {
-    let cache = layout_for_lanes(LANES)?;
-    Some(DenseHoldTimingScratch {
-        generator: parity_gen(cache, true),
-        hold_heads: Vec::new(),
-    })
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn wide_hold_timing_rows_scratch<const LANES: usize>()
--> Option<WideHoldTimingRowsScratch<LANES>> {
-    let cache = layout_for_lanes(LANES)?;
-    Some(WideHoldTimingRowsScratch {
-        generator: parity_gen(cache, true),
-        hold_heads: Vec::new(),
-    })
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn legacy_timing_rows_scratch<const LANES: usize>() -> Option<LegacyTimingRowsScratch<LANES>> {
-    let cache = layout_for_lanes(LANES)?;
-    Some(LegacyTimingRowsScratch {
-        generator: parity_gen(cache, true),
-        hold_heads: Vec::new(),
-        dp: LegacyDp::default(),
-    })
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn analyze_timing_rows_legacy_for_bench<const LANES: usize>(
-    rows: &[[u8; LANES]],
-    row_to_beat: &[f32],
-    timing: &TimingData,
-    has_holds: bool,
-    scratch: &mut LegacyTimingRowsScratch<LANES>,
-) -> TechCounts {
-    let cols = layout_cols(scratch.generator.layout);
-    parity_reset(&mut scratch.generator, cols);
-    scratch.generator.rows.reserve(rows.len());
-    parity_create_rows_from_arrays(
-        &mut scratch.generator,
-        &mut scratch.hold_heads,
-        rows,
-        row_to_beat,
-        timing,
-        cols,
-        has_holds,
-    );
-    if !legacy_finish(&mut scratch.generator, &mut scratch.dp) {
-        return TechCounts::default();
-    }
-    calculate_tech_counts(
-        &scratch.generator.rows,
-        &scratch.generator.result_keys,
-        scratch.generator.layout,
-    )
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn analyze_timing_rows_wide_holds_for_bench<const LANES: usize>(
-    rows: &[[u8; LANES]],
-    row_to_beat: &[f32],
-    timing: &TimingData,
-    has_holds: bool,
-    scratch: &mut WideHoldTimingRowsScratch<LANES>,
-) -> TechCounts {
-    let cols = layout_cols(scratch.generator.layout);
-    if !parity_analyze_rows(
-        &mut scratch.generator,
-        &mut scratch.hold_heads,
-        rows,
-        row_to_beat,
-        timing,
-        cols,
-        has_holds,
-    ) {
-        return TechCounts::default();
-    }
-    calculate_tech_counts(
-        &scratch.generator.rows,
-        &scratch.generator.result_keys,
-        scratch.generator.layout,
-    )
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn analyze_dense_holds_for_bench<const LANES: usize>(
-    rows: &[[u8; LANES]],
-    row_to_beat: &[f32],
-    timing: &TimingData,
-    has_holds: bool,
-    scratch: &mut DenseHoldTimingScratch<LANES>,
-) -> TechCounts {
-    let cols = layout_cols(scratch.generator.layout);
-    if !parity_analyze_rows(
-        &mut scratch.generator,
-        &mut scratch.hold_heads,
-        rows,
-        row_to_beat,
-        timing,
-        cols,
-        has_holds,
-    ) {
-        return TechCounts::default();
-    }
-    calculate_tech_counts(
-        &scratch.generator.rows,
-        &scratch.generator.result_keys,
-        scratch.generator.layout,
-    )
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn analyze_growing_for_bench<const LANES: usize>(
-    rows: &[[u8; LANES]],
-    row_to_beat: &[f32],
-    timing: &TimingData,
-    has_holds: bool,
-    scratch: &mut GrowingTimingScratch<LANES>,
-) -> TechCounts {
-    let cols = layout_cols(scratch.generator.layout);
-    if !parity_analyze_sparse(
-        &mut scratch.generator,
-        &mut scratch.hold_heads,
-        rows,
-        row_to_beat,
-        timing,
-        cols,
-        has_holds,
-    ) {
-        return TechCounts::default();
-    }
-    calculate_tech_counts(
-        &scratch.generator.rows,
-        &scratch.generator.result_keys,
-        scratch.generator.layout,
-    )
 }
 
 pub fn analyze_timing_rows<const LANES: usize>(
@@ -5032,111 +3797,6 @@ pub fn analyze_timing_rows_known_holds<const LANES: usize>(
         &scratch.generator.result_keys,
         scratch.generator.layout,
     )
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn analyze_timing_rows_tap_path_for_bench<const LANES: usize>(
-    rows: &[[u8; LANES]],
-    row_to_beat: &[f32],
-    timing: &TimingData,
-    has_holds: bool,
-    legacy_tap_path: bool,
-    scratch: &mut TimingRowsScratch<LANES>,
-) -> TechCounts {
-    scratch.generator.legacy_tap_path = legacy_tap_path;
-    analyze_timing_rows_known_holds(rows, row_to_beat, timing, has_holds, scratch)
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn analyze_timing_rows_hash_for_bench<const LANES: usize>(
-    rows: &[[u8; LANES]],
-    row_to_beat: &[f32],
-    timing: &TimingData,
-    has_holds: bool,
-    legacy_hash: bool,
-    scratch: &mut TimingRowsScratch<LANES>,
-) -> TechCounts {
-    scratch.generator.state_map.legacy_hash = legacy_hash;
-    analyze_timing_rows_known_holds(rows, row_to_beat, timing, has_holds, scratch)
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn analyze_arena_for_bench<const LANES: usize>(
-    rows: &[[u8; LANES]],
-    row_to_beat: &[f32],
-    timing: &TimingData,
-    has_holds: bool,
-    legacy_growth: bool,
-    scratch: &mut TimingRowsScratch<LANES>,
-) -> TechCounts {
-    scratch.generator.legacy_arena_growth = legacy_growth;
-    analyze_timing_rows_known_holds(rows, row_to_beat, timing, has_holds, scratch)
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn analyze_double_decode_for_bench<const LANES: usize>(
-    rows: &[[u8; LANES]],
-    row_to_beat: &[f32],
-    timing: &TimingData,
-    has_holds: bool,
-    legacy_decode: bool,
-    scratch: &mut TimingRowsScratch<LANES>,
-) -> TechCounts {
-    scratch.generator.legacy_double_decode = legacy_decode;
-    analyze_timing_rows_known_holds(rows, row_to_beat, timing, has_holds, scratch)
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn analyze_double_result_for_bench<const LANES: usize>(
-    rows: &[[u8; LANES]],
-    row_to_beat: &[f32],
-    timing: &TimingData,
-    has_holds: bool,
-    legacy_result: bool,
-    scratch: &mut TimingRowsScratch<LANES>,
-) -> TechCounts {
-    scratch.generator.legacy_double_result = legacy_result;
-    analyze_timing_rows_known_holds(rows, row_to_beat, timing, has_holds, scratch)
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn analyze_double_tap_key_for_bench<const LANES: usize>(
-    rows: &[[u8; LANES]],
-    row_to_beat: &[f32],
-    timing: &TimingData,
-    has_holds: bool,
-    legacy_key: bool,
-    scratch: &mut TimingRowsScratch<LANES>,
-) -> TechCounts {
-    scratch.generator.legacy_double_tap_key = legacy_key;
-    analyze_timing_rows_known_holds(rows, row_to_beat, timing, has_holds, scratch)
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn analyze_double_tap_cost_for_bench<const LANES: usize>(
-    rows: &[[u8; LANES]],
-    row_to_beat: &[f32],
-    timing: &TimingData,
-    has_holds: bool,
-    legacy_cost: bool,
-    scratch: &mut TimingRowsScratch<LANES>,
-) -> TechCounts {
-    scratch.generator.legacy_double_tap_cost = legacy_cost;
-    analyze_timing_rows_known_holds(rows, row_to_beat, timing, has_holds, scratch)
 }
 
 pub fn analyze_and_annotate_timing_rows<const LANES: usize>(
@@ -5305,42 +3965,6 @@ mod tests {
             true,
         )
     }
-
-    #[test]
-    fn fused_note_build_matches_materialized_rows() {
-        let timing = timing_data_from_chart_data(
-            0.0,
-            0.0,
-            None,
-            "0.000=120.000",
-            None,
-            "",
-            None,
-            "",
-            None,
-            "",
-            None,
-            "",
-            None,
-            "",
-            None,
-            "1.000=1.000",
-            TimingFormat::Ssc,
-            true,
-        );
-        let data = b"2000\n0100\n3001\n0000\n,\n000M\nL000\n0011\nF000\n,\n0200\n0001\n";
-        let materialized = build_notes(&parse_rows(data, 4, |beat| beat * 0.4), Some(&timing));
-        let fused = build_notes_fused(data, 4, Some(&timing), |beat| beat * 0.4);
-        assert_eq!(fused, materialized);
-        assert!(fused.iter().any(|note| note.fake));
-        assert!(
-            fused
-                .iter()
-                .any(|note| note.note_type == TapNoteType::HoldHead)
-        );
-        assert!(fused.iter().any(|note| note.note_type == TapNoteType::Mine));
-    }
-
     #[test]
     fn hot_storage_stays_compact() {
         assert_eq!(std::mem::size_of::<Row>(), 16);
@@ -5478,401 +4102,6 @@ mod tests {
             true,
         );
     }
-
-    #[cfg(feature = "bench-support")]
-    #[test]
-    fn compact_arena_matches_legacy_solver() {
-        let rows = [
-            [b'1', b'0', b'0', b'0'],
-            [b'0', b'1', b'0', b'0'],
-            [b'0', b'0', b'1', b'0'],
-            [b'0', b'0', b'0', b'1'],
-            [b'1', b'1', b'0', b'0'],
-            [b'0', b'0', b'1', b'1'],
-        ];
-        let beats = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25];
-        let timing = basic_timing();
-        let mut compact = timing_rows_scratch::<4>().expect("dance-single layout exists");
-        let mut legacy = legacy_timing_rows_scratch::<4>().expect("dance-single layout exists");
-
-        assert_eq!(
-            analyze_timing_rows_known_holds(&rows, &beats, &timing, false, &mut compact),
-            analyze_timing_rows_legacy_for_bench(&rows, &beats, &timing, false, &mut legacy),
-        );
-    }
-
-    #[cfg(feature = "bench-support")]
-    #[test]
-    fn sparse_and_dense_hold_storage_match() {
-        let rows = [
-            [b'2', b'0', b'2', b'0'],
-            [b'0', b'1', b'0', b'0'],
-            [b'3', b'0', b'0', b'1'],
-            [b'0', b'2', b'3', b'0'],
-            [b'1', b'3', b'0', b'0'],
-        ];
-        let beats = [0.0, 0.25, 0.5, 0.75, 1.0];
-        let timing = basic_timing();
-        let mut sparse = timing_rows_scratch::<4>().expect("dance-single layout");
-        let mut dense = dense_hold_timing_scratch::<4>().expect("dance-single layout");
-        let mut wide = wide_hold_timing_rows_scratch::<4>().expect("dance-single layout");
-
-        let dense_counts = analyze_dense_holds_for_bench(&rows, &beats, &timing, true, &mut dense);
-        assert_eq!(
-            analyze_timing_rows_known_holds(&rows, &beats, &timing, true, &mut sparse),
-            dense_counts,
-        );
-        assert_eq!(
-            dense_counts,
-            analyze_timing_rows_wide_holds_for_bench(&rows, &beats, &timing, true, &mut wide),
-        );
-    }
-
-    #[cfg(feature = "bench-support")]
-    #[test]
-    fn primed_workspace_matches_growth() {
-        let rows = [
-            [b'1', b'0', b'0', b'0'],
-            [b'0', b'0', b'1', b'0'],
-            [b'1', b'1', b'0', b'0'],
-            [b'0', b'0', b'1', b'1'],
-            [b'0', b'1', b'0', b'0'],
-        ];
-        let beats = [0.0, 0.25, 0.5, 0.75, 1.0];
-        let timing = basic_timing();
-        let mut reserved = timing_rows_scratch::<4>().expect("dance-single layout");
-        let mut growing = growing_timing_scratch::<4>().expect("dance-single layout");
-
-        assert_eq!(reserved.generator.prev_links.capacity(), SINGLE_WORK_CAP);
-        assert_eq!(reserved.generator.next_links.capacity(), SINGLE_WORK_CAP);
-        assert_eq!(
-            reserved.generator.state_map.entries.len(),
-            row_map_cap(SINGLE_WORK_CAP)
-        );
-        assert_eq!(
-            analyze_timing_rows_known_holds(&rows, &beats, &timing, false, &mut reserved),
-            analyze_growing_for_bench(&rows, &beats, &timing, false, &mut growing),
-        );
-    }
-
-    #[cfg(feature = "bench-support")]
-    #[test]
-    fn primed_arena_matches_sampled_growth() {
-        const MASKS: [u8; 6] = [0b0001, 0b0100, 0b0011, 0b1000, 0b0010, 0b1100];
-        let rows: Vec<[u8; 4]> = (0..96)
-            .map(|idx| {
-                let mask = MASKS[idx % MASKS.len()];
-                std::array::from_fn(|col| if mask & (1 << col) == 0 { b'0' } else { b'1' })
-            })
-            .collect();
-        let beats: Vec<_> = (0..96).map(|idx| idx as f32 * 0.25).collect();
-        let timing = basic_timing();
-        let mut sampled = timing_rows_scratch::<4>().expect("dance-single layout");
-        let mut primed = timing_rows_scratch::<4>().expect("dance-single layout");
-        let _ = analyze_arena_for_bench(
-            &rows[..24],
-            &beats[..24],
-            &timing,
-            false,
-            true,
-            &mut sampled,
-        );
-        let _ = analyze_arena_for_bench(
-            &rows[..24],
-            &beats[..24],
-            &timing,
-            false,
-            false,
-            &mut primed,
-        );
-
-        assert_eq!(
-            analyze_arena_for_bench(&rows, &beats, &timing, false, true, &mut sampled),
-            analyze_arena_for_bench(&rows, &beats, &timing, false, false, &mut primed),
-        );
-    }
-
-    #[test]
-    fn chunked_double_decode_matches_scalar() {
-        let mut key = 0x9e37_79b9u32;
-        for _ in 0..65_536 {
-            assert_eq!(state_from_key::<8>(key), state_from_key_scalar::<8>(key));
-            key = key.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        }
-    }
-
-    #[cfg(feature = "bench-support")]
-    #[test]
-    fn chunked_double_solver_matches_scalar_decode() {
-        let rows = [
-            *b"10000000",
-            *b"00001000",
-            *b"01000010",
-            *b"20000000",
-            *b"00010001",
-            *b"00000100",
-            *b"30000000",
-            *b"10000001",
-        ];
-        let beats = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75];
-        let timing = basic_timing();
-        let mut scalar = timing_rows_scratch::<8>().expect("dance-double layout");
-        let mut chunked = timing_rows_scratch::<8>().expect("dance-double layout");
-
-        assert_eq!(
-            analyze_double_decode_for_bench(&rows, &beats, &timing, true, true, &mut scalar),
-            analyze_double_decode_for_bench(&rows, &beats, &timing, true, false, &mut chunked),
-        );
-    }
-
-    #[test]
-    fn packed_double_result_matches_materialized_state() {
-        let cache = dance_double_cache();
-        let mut initial_states = vec![(state_new(), 0u32)];
-        for active_mask in [1u8, 8, 16, 128, 17, 129, 36, 66, 136] {
-            for placement in cache.perm_table.get(active_mask) {
-                let (state, _, key) =
-                    parity_result_state_no_holds::<8>(&state_new(), placement, active_mask);
-                initial_states.push((state, key));
-                let hold_mask = active_mask & 0b0101_0101;
-                if hold_mask != 0 {
-                    let (state, _, key) =
-                        parity_result_state::<8>(&state_new(), placement, hold_mask, active_mask);
-                    initial_states.push((state, key));
-                }
-            }
-        }
-
-        for (initial, initial_key) in initial_states {
-            for active_mask in 0u8..=u8::MAX {
-                let permutations = cache.perm_table.get(active_mask);
-                let permutations = if permutations.is_empty() {
-                    &NO_PERMS
-                } else {
-                    permutations
-                };
-                for placement in permutations {
-                    let (state, expected_hit, expected_key) =
-                        parity_result_state_no_holds::<8>(&initial, placement, active_mask);
-                    let (hit, key) =
-                        parity_result_key8_no_holds(&initial, initial_key, placement, active_mask);
-                    assert_eq!((hit, key), (expected_hit, expected_key));
-                    assert_eq!(state_from_key::<8>(key), state);
-
-                    for hold_mask in [
-                        active_mask,
-                        active_mask & 0b0101_0101,
-                        active_mask & 0b1010_1010,
-                    ] {
-                        let (state, expected_hit, expected_key) =
-                            parity_result_state::<8>(&initial, placement, hold_mask, active_mask);
-                        let (hit, key) = parity_result_key8_with_holds(
-                            &initial,
-                            placement,
-                            hold_mask,
-                            active_mask,
-                        );
-                        assert_eq!((hit, key), (expected_hit, expected_key));
-                        assert_eq!(state_from_key::<8>(key), state);
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn double_tap_key_matches_general_key() {
-        let cache = dance_double_cache();
-        let mut initial_states = vec![(state_new(), 0u32)];
-        for active_mask in [1u8, 8, 16, 128, 17, 36, 66, 129, 136] {
-            for placement in cache.perm_table.get(active_mask) {
-                let (state, _, key) =
-                    parity_result_state_no_holds::<8>(&state_new(), placement, active_mask);
-                initial_states.push((state, key));
-            }
-        }
-
-        for (initial, initial_key) in initial_states {
-            for tap_col in 0..=MAX_COLUMNS {
-                for foot in [
-                    Foot::None,
-                    Foot::LeftHeel,
-                    Foot::LeftToe,
-                    Foot::RightHeel,
-                    Foot::RightToe,
-                ] {
-                    let mut placement = NO_PERMS[0];
-                    let active_mask = if tap_col < MAX_COLUMNS {
-                        placement[tap_col] = foot;
-                        1 << tap_col
-                    } else {
-                        0
-                    };
-                    assert_eq!(
-                        parity_result_tap_key8(&initial, initial_key, foot, tap_col),
-                        parity_result_key8_no_holds(&initial, initial_key, &placement, active_mask,),
-                    );
-                }
-            }
-        }
-    }
-
-    #[cfg(feature = "bench-support")]
-    #[test]
-    fn packed_double_solver_matches_materialized_results() {
-        const MASKS: [u8; 6] = [
-            0b0000_0001,
-            0b0001_0000,
-            0b0001_0001,
-            0b1000_0000,
-            0b0000_1000,
-            0b1000_1000,
-        ];
-        let rows: Vec<[u8; 8]> = (0..96)
-            .map(|idx| {
-                let mask = MASKS[idx % MASKS.len()];
-                std::array::from_fn(|col| if mask & (1 << col) == 0 { b'0' } else { b'1' })
-            })
-            .collect();
-        let beats: Vec<_> = (0..96).map(|idx| idx as f32 * 0.25).collect();
-        let timing = basic_timing();
-        let mut materialized = timing_rows_scratch::<8>().expect("dance-double layout");
-        let mut packed = timing_rows_scratch::<8>().expect("dance-double layout");
-
-        assert_eq!(
-            analyze_double_result_for_bench(&rows, &beats, &timing, false, true, &mut materialized,),
-            analyze_double_result_for_bench(&rows, &beats, &timing, false, false, &mut packed),
-        );
-
-        let hold_rows = [
-            *b"10000000",
-            *b"00001000",
-            *b"01000010",
-            *b"20000000",
-            *b"00010001",
-            *b"00000100",
-            *b"30000000",
-            *b"10000001",
-        ];
-        let hold_beats = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75];
-        assert_eq!(
-            analyze_double_result_for_bench(
-                &hold_rows,
-                &hold_beats,
-                &timing,
-                true,
-                true,
-                &mut materialized,
-            ),
-            analyze_double_result_for_bench(
-                &hold_rows,
-                &hold_beats,
-                &timing,
-                true,
-                false,
-                &mut packed,
-            ),
-        );
-    }
-
-    #[cfg(feature = "bench-support")]
-    #[test]
-    fn double_tap_solver_matches_general_key() {
-        const MASKS: [u8; 6] = [1, 16, 128, 8, 17, 136];
-        let rows: Vec<[u8; 8]> = (0..96)
-            .map(|idx| {
-                let mask = MASKS[idx % MASKS.len()];
-                std::array::from_fn(|col| if mask & (1 << col) == 0 { b'0' } else { b'1' })
-            })
-            .collect();
-        let beats: Vec<_> = (0..96).map(|idx| idx as f32 * 0.25).collect();
-        let timing = basic_timing();
-        let mut general = timing_rows_scratch::<8>().expect("dance-double layout");
-        let mut direct = timing_rows_scratch::<8>().expect("dance-double layout");
-
-        assert_eq!(
-            analyze_double_tap_key_for_bench(&rows, &beats, &timing, false, true, &mut general,),
-            analyze_double_tap_key_for_bench(&rows, &beats, &timing, false, false, &mut direct,),
-        );
-
-        let hold_rows = [
-            *b"20000000",
-            *b"00001000",
-            *b"01000010",
-            *b"00010001",
-            *b"30000000",
-            *b"10000001",
-        ];
-        let hold_beats = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25];
-        assert_eq!(
-            analyze_double_tap_key_for_bench(
-                &hold_rows,
-                &hold_beats,
-                &timing,
-                true,
-                true,
-                &mut general,
-            ),
-            analyze_double_tap_key_for_bench(
-                &hold_rows,
-                &hold_beats,
-                &timing,
-                true,
-                false,
-                &mut direct,
-            ),
-        );
-    }
-
-    #[cfg(feature = "bench-support")]
-    #[test]
-    fn double_tap_solver_matches_general_cost() {
-        const MASKS: [u8; 6] = [1, 16, 128, 8, 17, 136];
-        let rows: Vec<[u8; 8]> = (0..96)
-            .map(|idx| {
-                let mask = MASKS[idx % MASKS.len()];
-                std::array::from_fn(|col| if mask & (1 << col) == 0 { b'0' } else { b'1' })
-            })
-            .collect();
-        let beats: Vec<_> = (0..96).map(|idx| idx as f32 * 0.25).collect();
-        let timing = basic_timing();
-        let mut general = timing_rows_scratch::<8>().expect("dance-double layout");
-        let mut direct = timing_rows_scratch::<8>().expect("dance-double layout");
-
-        assert_eq!(
-            analyze_double_tap_cost_for_bench(&rows, &beats, &timing, false, true, &mut general,),
-            analyze_double_tap_cost_for_bench(&rows, &beats, &timing, false, false, &mut direct,),
-        );
-
-        let hold_rows = [
-            *b"20000000",
-            *b"00001000",
-            *b"01000010",
-            *b"00010001",
-            *b"30000000",
-            *b"10000001",
-        ];
-        let hold_beats = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25];
-        assert_eq!(
-            analyze_double_tap_cost_for_bench(
-                &hold_rows,
-                &hold_beats,
-                &timing,
-                true,
-                true,
-                &mut general,
-            ),
-            analyze_double_tap_cost_for_bench(
-                &hold_rows,
-                &hold_beats,
-                &timing,
-                true,
-                false,
-                &mut direct,
-            ),
-        );
-    }
-
     #[test]
     fn invalid_hold_rows_match_lanes_path() {
         assert_rows_match_lanes(
@@ -6148,67 +4377,6 @@ mod tests {
         }
         assert_eq!(summed, counts);
     }
-
-    #[test]
-    fn packed_state_keys_round_trip_transition_states() {
-        let mut placement = [Foot::None; MAX_COLUMNS];
-        placement[0] = Foot::LeftHeel;
-        placement[1] = Foot::RightHeel;
-
-        let (no_holds, _, no_holds_key) =
-            parity_result_state_no_holds::<4>(&state_new(), &placement, 0b0011);
-        assert_eq!(state_from_key::<4>(no_holds_key), no_holds);
-
-        let (with_hold, _, with_hold_key) =
-            parity_result_state::<4>(&state_new(), &placement, 0b0001, 0b0011);
-        assert_eq!(state_from_key::<4>(with_hold_key), with_hold);
-
-        // A failed/empty placement can legitimately produce key zero. It is
-        // distinct from the synthetic starting state because its foot
-        // positions use INVALID_COLUMN rather than ITGmania's initial zeros.
-        let (zero_state, _, zero_key) =
-            parity_result_state_no_holds::<4>(&state_new(), &NO_PERMS[0], 0b0001);
-        assert_eq!(zero_key, 0);
-        assert_eq!(state_from_key::<4>(zero_key), zero_state);
-        assert_ne!(zero_state, state_new());
-    }
-
-    #[test]
-    fn single_state_tables_match_scalar_calculation() {
-        let cache = dance_single_cache();
-        let facing_cost4 = facing_cost4(&cache.layout);
-        let spin_class4 = spin_class4(&cache.layout);
-        for key in 0..SINGLE_STATE_COUNT as u32 {
-            let table_state = state_from_key::<4>(key);
-            assert_eq!(table_state, state_from_key_scalar::<4>(key));
-            assert_eq!(
-                facing_cost4[key as usize].to_bits(),
-                calc_facing_cost(&cache.layout, &table_state).to_bits()
-            );
-            assert_eq!(
-                spin_class4[key as usize],
-                spin_class(&cache.layout, &table_state, false)
-                    | (spin_class(&cache.layout, &table_state, true) << 2)
-            );
-        }
-
-        let mut initial_keys = [None; 3];
-        for (key, &classes) in spin_class4.iter().enumerate() {
-            let initial = usize::from(classes & 0b11);
-            if initial < initial_keys.len() {
-                initial_keys[initial].get_or_insert(key as u32);
-            }
-        }
-        for initial_key in initial_keys.into_iter().flatten() {
-            for result_key in 0..SINGLE_STATE_COUNT as u32 {
-                assert_eq!(
-                    cached_spin_cost4::<true>(spin_class4, initial_key, result_key).to_bits(),
-                    cached_spin_cost4::<false>(spin_class4, initial_key, result_key).to_bits()
-                );
-            }
-        }
-    }
-
     #[test]
     fn foot_side_arithmetic_matches_hold_switch_classification() {
         let feet = [
@@ -6230,325 +4398,6 @@ mod tests {
             }
         }
     }
-
-    #[test]
-    fn specialized_column_transitions_agree_for_single_panel_states() {
-        let cache = dance_single_cache();
-        for active_mask in [0u8, 1, 2, 4, 8] {
-            let hit_col = active_mask.trailing_zeros() as usize;
-            let expected: &[Foot] = if active_mask == 0 {
-                &IDLE_FEET
-            } else {
-                &TAP_FEET
-            };
-            let permutations = cache.perm_table.get(active_mask);
-            assert_eq!(permutations.len(), expected.len());
-            for (placement, &foot) in permutations.iter().zip(expected) {
-                assert_eq!(placement.get(hit_col).copied().unwrap_or(Foot::None), foot);
-            }
-        }
-        let canonical_state = |state: &State, key: u32| {
-            let mut seen = 0u8;
-            let mut canonical = 0u32;
-            let unique = state.combined_columns[..4]
-                .iter()
-                .enumerate()
-                .all(|(column, &foot)| {
-                    let mask = FOOT_MASKS[foot_idx(foot)];
-                    let unique = seen & mask == 0;
-                    seen |= mask;
-                    canonical |= (foot as u32) << (column * 3);
-                    unique
-                });
-            unique && canonical == key & (SINGLE_STATE_COUNT - 1) as u32
-        };
-        let initial_states = std::iter::once((state_new(), 0))
-            .chain((0..SINGLE_STATE_COUNT as u32).map(|key| (state_from_key::<4>(key), key)));
-
-        for (initial, initial_key) in initial_states {
-            let initial_canonical = canonical_state(&initial, initial_key);
-            for active_mask in 0u8..16 {
-                let permutations = cache.perm_table.get(active_mask);
-                let permutations = if permutations.is_empty() {
-                    &NO_PERMS
-                } else {
-                    permutations
-                };
-                for placement in permutations {
-                    let no_holds =
-                        parity_result_state_no_holds::<4>(&initial, placement, active_mask);
-                    if initial_canonical {
-                        assert!(canonical_state(&no_holds.0, no_holds.2));
-                    }
-                    assert_eq!(
-                        no_holds,
-                        parity_result_state_no_holds::<8>(&initial, placement, active_mask)
-                    );
-                    assert_eq!(
-                        parity_result_key4::<false>(&initial, placement, 0, active_mask),
-                        (no_holds.1, no_holds.2)
-                    );
-                    if active_mask.count_ones() <= 1 && initial_canonical {
-                        assert_eq!(
-                            parity_result_tap_key4(
-                                initial_key,
-                                placement
-                                    .get(active_mask.trailing_zeros() as usize)
-                                    .copied()
-                                    .unwrap_or(Foot::None),
-                                active_mask.trailing_zeros() as usize,
-                            ),
-                            no_holds.2,
-                            "initial={initial_key:#x} active={active_mask:#x} placement={placement:?}"
-                        );
-                    }
-                    let hold_mask = active_mask & 0b0101;
-                    let with_holds =
-                        parity_result_state::<4>(&initial, placement, hold_mask, active_mask);
-                    if initial_canonical {
-                        assert!(canonical_state(&with_holds.0, with_holds.2));
-                    }
-                    assert_eq!(
-                        with_holds,
-                        parity_result_state::<8>(&initial, placement, hold_mask, active_mask)
-                    );
-                    assert_eq!(
-                        parity_result_key4::<true>(&initial, placement, hold_mask, active_mask,),
-                        (with_holds.1, with_holds.2)
-                    );
-                }
-            }
-        }
-
-        let mut max_states = 0usize;
-        let mut max_row = (0u8, 0u8);
-        for active_mask in 0u8..16 {
-            let permutations = cache.perm_table.get(active_mask);
-            let permutations = if permutations.is_empty() {
-                &NO_PERMS
-            } else {
-                permutations
-            };
-            for hold_mask in 0u8..16 {
-                if hold_mask & !active_mask != 0 {
-                    continue;
-                }
-                let mut keys = Vec::new();
-                for initial_key in 0..SINGLE_STATE_COUNT as u32 {
-                    let initial = state_from_key::<4>(initial_key);
-                    for placement in permutations {
-                        keys.push(
-                            parity_result_key4::<true>(&initial, placement, hold_mask, active_mask)
-                                .1,
-                        );
-                    }
-                }
-                keys.sort_unstable();
-                keys.dedup();
-                if keys.len() > max_states {
-                    max_states = keys.len();
-                    max_row = (active_mask, hold_mask);
-                }
-            }
-        }
-        assert!(
-            max_states <= SINGLE_LAYER_MAX,
-            "single row {max_row:?} produced {max_states} states"
-        );
-    }
-
-    #[test]
-    fn simple_tap_cost_matches_general_path() {
-        let cache = dance_single_cache();
-        let facing_costs = facing_cost4(&cache.layout);
-        let spin_classes = spin_class4(&cache.layout);
-        let mut initial_states = Vec::with_capacity(1 + SINGLE_STATE_COUNT * 16);
-        initial_states.push((state_new(), 0));
-        for base_key in 0..SINGLE_STATE_COUNT as u32 {
-            for moved_mask in [0u8, 1, 2, 3, 4, 8, 12, 15] {
-                for holding_mask in [0, moved_mask] {
-                    let key =
-                        base_key | (u32::from(moved_mask) << 24) | (u32::from(holding_mask) << 28);
-                    initial_states.push((state_from_key::<4>(key), key));
-                }
-            }
-        }
-
-        for (initial, initial_key) in initial_states {
-            let left_moved = foot_moved_not_holding(&initial, &LEFT_PAIR);
-            let right_moved = foot_moved_not_holding(&initial, &RIGHT_PAIR);
-            for active_mask in [0, 1, 2, 4, 8] {
-                let mut row = row_new();
-                row.note_mask = active_mask;
-                row.tech_mask = active_mask;
-                row.note_count = active_mask.count_ones() as u8;
-                let row_ctx = row_cost_ctx(&row, &cache.layout);
-                let permutations = cache.perm_table.get(active_mask);
-                let permutations = if permutations.is_empty() {
-                    &NO_PERMS
-                } else {
-                    permutations
-                };
-
-                for placement in permutations {
-                    let (result, hit, key) =
-                        parity_result_state_no_holds::<4>(&initial, placement, active_mask);
-                    let initial_base = StateBase4 {
-                        combined_columns: std::array::from_fn(|i| initial.combined_columns[i]),
-                        where_the_feet_are: initial.where_the_feet_are,
-                        occupied_mask: initial.occupied_mask,
-                    };
-                    for elapsed in [0.05, 0.25, 0.5] {
-                        let facing = facing_costs[key as usize & (SINGLE_STATE_COUNT - 1)];
-                        let hit_col = active_mask.trailing_zeros() as usize;
-                        let cost_ctx = tap_cost_ctx::<SINGLE_COLS>(&cache.layout, hit_col, elapsed);
-                        let moved_foot = placement.get(hit_col).copied().unwrap_or(Foot::None);
-                        let spin = cached_spin_cost4::<true>(spin_classes, initial_key, key);
-                        let initial_hit = if moved_foot == Foot::None {
-                            Foot::None
-                        } else {
-                            initial.combined_columns[hit_col]
-                        };
-                        let initial_col = if moved_foot == Foot::None {
-                            INVALID_COLUMN
-                        } else {
-                            initial.where_the_feet_are[foot_idx(moved_foot)]
-                        };
-                        let simple = calc_tap_cost(
-                            initial_hit,
-                            initial_col,
-                            moved_foot,
-                            row_ctx.side_mask != 0,
-                            left_moved,
-                            right_moved,
-                            false,
-                            facing,
-                            spin,
-                            &cost_ctx,
-                        );
-                        let legacy = calc_tap_cost_legacy(
-                            &cache.layout,
-                            &initial_base,
-                            key,
-                            hit_col,
-                            row_ctx.side_mask != 0,
-                            elapsed,
-                            left_moved,
-                            right_moved,
-                            false,
-                            facing,
-                            cached_spin_cost4::<true>(spin_classes, initial_key, key),
-                        );
-                        let general = calc_action_cost::<false>(
-                            &cache.layout,
-                            &initial,
-                            &result,
-                            placement,
-                            hit,
-                            &row,
-                            row_ctx,
-                            elapsed,
-                            left_moved,
-                            right_moved,
-                            false,
-                            0.0,
-                            0.0,
-                        );
-                        assert_eq!(simple.to_bits(), legacy.to_bits());
-                        assert_eq!(simple.to_bits(), general.to_bits());
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn double_tap_cost_matches_general_path() {
-        let cache = dance_double_cache();
-        let mut initial_states = vec![state_new()];
-        for active_mask in [1u8, 8, 16, 128, 17, 36, 66, 129, 136] {
-            for placement in cache.perm_table.get(active_mask) {
-                let (state, _, _) =
-                    parity_result_state_no_holds::<8>(&state_new(), placement, active_mask);
-                initial_states.push(state);
-                let hold_mask = active_mask & 0b0101_0101;
-                if hold_mask != 0 {
-                    let (state, _, _) =
-                        parity_result_state::<8>(&state_new(), placement, hold_mask, active_mask);
-                    initial_states.push(state);
-                }
-            }
-        }
-
-        for initial in initial_states {
-            let left_moved = foot_moved_not_holding(&initial, &LEFT_PAIR);
-            let right_moved = foot_moved_not_holding(&initial, &RIGHT_PAIR);
-            for active_mask in [0u8, 1, 2, 4, 8, 16, 32, 64, 128] {
-                let mut row = row_new();
-                row.note_mask = active_mask;
-                row.tech_mask = active_mask;
-                row.note_count = active_mask.count_ones() as u8;
-                let row_ctx = row_cost_ctx(&row, &cache.layout);
-                let permutations = cache.perm_table.get(active_mask);
-                let permutations = if permutations.is_empty() {
-                    &NO_PERMS
-                } else {
-                    permutations
-                };
-
-                for placement in permutations {
-                    let (result, hit, _) =
-                        parity_result_state_no_holds::<8>(&initial, placement, active_mask);
-                    let hit_col = active_mask.trailing_zeros() as usize;
-                    let moved_foot = placement.get(hit_col).copied().unwrap_or(Foot::None);
-                    let initial_hit = if moved_foot == Foot::None {
-                        Foot::None
-                    } else {
-                        initial.combined_columns[hit_col]
-                    };
-                    let initial_col = if moved_foot == Foot::None {
-                        INVALID_COLUMN
-                    } else {
-                        initial.where_the_feet_are[foot_idx(moved_foot)]
-                    };
-                    for elapsed in [0.05, 0.25, 0.5] {
-                        let cost_ctx = tap_cost_ctx::<MAX_COLUMNS>(&cache.layout, hit_col, elapsed);
-                        for prev_row_has_live_hold in [false, true] {
-                            let simple = calc_tap_cost(
-                                initial_hit,
-                                initial_col,
-                                moved_foot,
-                                row_ctx.side_mask != 0,
-                                left_moved,
-                                right_moved,
-                                prev_row_has_live_hold,
-                                calc_facing_cost(&cache.layout, &result),
-                                calc_spin_cost(&cache.layout, &initial, &result),
-                                &cost_ctx,
-                            );
-                            let general = calc_action_cost::<false>(
-                                &cache.layout,
-                                &initial,
-                                &result,
-                                placement,
-                                hit,
-                                &row,
-                                row_ctx,
-                                elapsed,
-                                left_moved,
-                                right_moved,
-                                prev_row_has_live_hold,
-                                0.0,
-                                0.0,
-                            );
-                            assert_eq!(simple.to_bits(), general.to_bits());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     #[test]
     fn annotation_rows_align_with_parity_rows() {
         let data = b"1000

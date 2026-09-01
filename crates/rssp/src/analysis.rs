@@ -11,10 +11,10 @@ use crate::stats;
 use crate::step_parity;
 
 use crate::bpm::{
-    clean_and_normalize_float_digits, clean_and_normalize_speeds_float_digits, clean_norm_map_cow,
-    clean_norm_speeds_cow, clean_timing_map_cow, compute_bpm_range_and_stats,
-    compute_bpm_range_and_stats_with_scratch, compute_measure_nps_vec_with_timing,
-    compute_tier_bpm, get_nps_stats_with_scratch, normalize_float_digits,
+    clean_and_normalize_float_digits, clean_norm_map_cow, clean_norm_speeds_cow,
+    clean_timing_map_cow, compute_bpm_range_and_stats_with_scratch,
+    compute_measure_nps_vec_with_timing, compute_tier_bpm, get_nps_stats_with_scratch,
+    normalize_float_digits,
 };
 use crate::hash::compute_chart_hash_pair;
 use crate::math::{round_dp, round_sig_figs_6};
@@ -236,22 +236,12 @@ fn chart_timing_tag_pair(tag: Option<&[u8]>) -> (Option<String>, Option<String>)
     (raw, norm)
 }
 
-fn clean_norm_map<const BORROW: bool>(param: &str) -> (Cow<'_, str>, String) {
-    if BORROW {
-        clean_norm_map_cow(param)
-    } else {
-        let (cleaned, normalized) = clean_and_normalize_float_digits(param);
-        (Cow::Owned(cleaned), normalized)
-    }
+fn clean_norm_map(param: &str) -> (Cow<'_, str>, String) {
+    clean_norm_map_cow(param)
 }
 
-fn clean_norm_speeds<const BORROW: bool>(param: &str) -> (Cow<'_, str>, String) {
-    if BORROW {
-        clean_norm_speeds_cow(param)
-    } else {
-        let (cleaned, normalized) = clean_and_normalize_speeds_float_digits(param);
-        (Cow::Owned(cleaned), normalized)
-    }
+fn clean_norm_speeds(param: &str) -> (Cow<'_, str>, String) {
+    clean_norm_speeds_cow(param)
 }
 
 fn chart_display_bpm_tag(tag: Option<&[u8]>) -> Option<String> {
@@ -281,15 +271,6 @@ fn decode_unescape_owned(bytes: &[u8]) -> String {
 
 fn selectable_value(tag: Option<&[u8]>) -> bool {
     tag.is_none_or(|bytes| decode_unescape(bytes) != "NO")
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_selectable(tag: Option<&[u8]>, legacy: bool) -> bool {
-    if legacy {
-        tag.map(decode_unescape_owned).unwrap_or_default() != "NO"
-    } else {
-        selectable_value(tag)
-    }
 }
 
 fn trim_owned(value: &mut String) {
@@ -607,32 +588,8 @@ fn chart_metadata_strings(
     }
 }
 
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-#[inline(always)]
-#[must_use]
-pub fn profile_chart_metadata_strings(
-    fields: [&[u8]; 5],
-    chart_name: Option<&[u8]>,
-    timing_format: TimingFormat,
-    ssc_version: f32,
-    extension: &str,
-) -> (String, String, String, String, String, String, String) {
-    let metadata =
-        chart_metadata_strings(fields, chart_name, timing_format, ssc_version, extension);
-    (
-        metadata.step_type,
-        metadata.step_artist,
-        metadata.description,
-        metadata.chart_name,
-        metadata.difficulty,
-        metadata.rating,
-        metadata.tech_notation,
-    )
-}
-
 /// Processes a single chart's data to produce a `ChartSummary`.
-fn build_chart_summary<'a, const REUSE_BPMS: bool, const CACHE_TIMING: bool>(
+fn build_chart_summary<'a>(
     entry: &'a ParsedChartEntry<'_>,
     global_attacks_opt: Option<&[u8]>,
     global_bpms_raw: &str,
@@ -871,7 +828,7 @@ fn build_chart_summary<'a, const REUSE_BPMS: bool, const CACHE_TIMING: bool>(
     let chart_has_own_timing = timing_src.chart_has_own_timing;
     let timing_key = chart_has_own_timing.then(|| chart_timing_key(entry));
     let timing_segments = if chart_has_own_timing {
-        if CACHE_TIMING && chart_timing_cache.key == timing_key {
+        if chart_timing_cache.key == timing_key {
             Arc::clone(
                 chart_timing_cache
                     .segments
@@ -897,30 +854,22 @@ fn build_chart_summary<'a, const REUSE_BPMS: bool, const CACHE_TIMING: bool>(
                 timing_format,
                 true,
             ));
-            if CACHE_TIMING {
-                chart_timing_cache.key = timing_key;
-                chart_timing_cache.segments = Some(Arc::clone(&segments));
-                chart_timing_cache.timing = None;
-            }
+            chart_timing_cache.key = timing_key;
+            chart_timing_cache.segments = Some(Arc::clone(&segments));
+            chart_timing_cache.timing = None;
             segments
         }
     } else {
         Arc::clone(global_timing_segments)
     };
-    let owned_bpm_map;
     let bpm_map = if chart_has_own_timing {
         let bpms = timing_segments
             .bpms
             .iter()
             .map(|(beat, bpm)| (f64::from(*beat), f64::from(*bpm)));
-        if REUSE_BPMS {
-            chart_bpm_scratch.clear();
-            chart_bpm_scratch.extend(bpms);
-            chart_bpm_scratch.as_slice()
-        } else {
-            owned_bpm_map = bpms.collect::<Vec<_>>();
-            owned_bpm_map.as_slice()
-        }
+        chart_bpm_scratch.clear();
+        chart_bpm_scratch.extend(bpms);
+        chart_bpm_scratch.as_slice()
     } else {
         global_bpm_map
     };
@@ -959,16 +908,10 @@ fn build_chart_summary<'a, const REUSE_BPMS: bool, const CACHE_TIMING: bool>(
     let custom_patterns =
         pattern_analysis.map_or_else(Vec::new, |analysis| analysis.custom_patterns);
 
-    let uncached_chart_timing;
     let timing = if chart_has_own_timing {
-        if CACHE_TIMING {
-            chart_timing_cache.timing.get_or_insert_with(|| {
-                timing_data_from_segments(chart_offset, 0.0, &timing_segments)
-            })
-        } else {
-            uncached_chart_timing = timing_data_from_segments(chart_offset, 0.0, &timing_segments);
-            &uncached_chart_timing
-        }
+        chart_timing_cache
+            .timing
+            .get_or_insert_with(|| timing_data_from_segments(chart_offset, 0.0, &timing_segments))
     } else {
         global_timing.get_or_insert_with(|| {
             timing_data_from_segments(song_offset, 0.0, global_timing_segments)
@@ -1179,7 +1122,7 @@ pub fn analyze_with_scratch(
     options: &AnalysisOptions,
     scratch: &mut AnalysisScratch,
 ) -> Result<SimfileSummary, String> {
-    analyze_with_scratch_impl::<true, true, true, (), fn(ParsedChartNote)>(
+    analyze_with_scratch_impl::<(), fn(ParsedChartNote)>(
         simfile_data,
         extension,
         options,
@@ -1202,7 +1145,7 @@ pub fn analyze_prepared_in(
     prepared: &PreparedAnalysis,
     scratch: &mut AnalysisScratch,
 ) -> Result<SimfileSummary, String> {
-    analyze_with_scratch_impl::<true, true, true, (), fn(ParsedChartNote)>(
+    analyze_with_scratch_impl::<(), fn(ParsedChartNote)>(
         simfile_data,
         extension,
         &prepared.options,
@@ -1231,7 +1174,7 @@ pub fn analyze_prepared_in_with_notes<T>(
     chart_notes: &mut Vec<Vec<T>>,
     mut map_note: impl FnMut(ParsedChartNote) -> T,
 ) -> Result<SimfileSummary, String> {
-    analyze_with_scratch_impl::<true, true, true, T, _>(
+    analyze_with_scratch_impl::<T, _>(
         simfile_data,
         extension,
         &prepared.options,
@@ -1242,80 +1185,7 @@ pub fn analyze_prepared_in_with_notes<T>(
     )
 }
 
-#[cfg(feature = "profile")]
-pub(crate) fn profile_analyze_with_allocating_bpms(
-    simfile_data: &[u8],
-    extension: &str,
-    options: &AnalysisOptions,
-    scratch: &mut AnalysisScratch,
-) -> Result<SimfileSummary, String> {
-    analyze_with_scratch_impl::<false, true, true, (), fn(ParsedChartNote)>(
-        simfile_data,
-        extension,
-        options,
-        scratch,
-        None,
-        None,
-        None,
-    )
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_analyze_owned(
-    simfile_data: &[u8],
-    extension: &str,
-    options: &AnalysisOptions,
-    scratch: &mut AnalysisScratch,
-) -> Result<SimfileSummary, String> {
-    analyze_with_scratch_impl::<true, false, true, (), fn(ParsedChartNote)>(
-        simfile_data,
-        extension,
-        options,
-        scratch,
-        None,
-        None,
-        None,
-    )
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_analyze_timing_cache(
-    simfile_data: &[u8],
-    extension: &str,
-    options: &AnalysisOptions,
-    scratch: &mut AnalysisScratch,
-    cache: bool,
-) -> Result<SimfileSummary, String> {
-    if cache {
-        analyze_with_scratch_impl::<true, true, true, (), fn(ParsedChartNote)>(
-            simfile_data,
-            extension,
-            options,
-            scratch,
-            None,
-            None,
-            None,
-        )
-    } else {
-        analyze_with_scratch_impl::<true, true, false, (), fn(ParsedChartNote)>(
-            simfile_data,
-            extension,
-            options,
-            scratch,
-            None,
-            None,
-            None,
-        )
-    }
-}
-
-fn analyze_with_scratch_impl<
-    const REUSE_BPMS: bool,
-    const BORROW_TIMING: bool,
-    const CACHE_TIMING: bool,
-    T,
-    MapNote: FnMut(ParsedChartNote) -> T,
->(
+fn analyze_with_scratch_impl<T, MapNote: FnMut(ParsedChartNote) -> T>(
     simfile_data: &[u8],
     extension: &str,
     options: &AnalysisOptions,
@@ -1445,44 +1315,37 @@ fn analyze_with_scratch_impl<
         .unwrap_or(0.0);
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"<invalid-bpms>"))
         .unwrap_or("<invalid-bpms>");
-    let (cleaned_global_bpms, normalized_global_bpms) =
-        clean_norm_map::<BORROW_TIMING>(global_bpms_raw);
+    let (cleaned_global_bpms, normalized_global_bpms) = clean_norm_map(global_bpms_raw);
     let global_stops_raw = parsed_data
         .stops
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let (cleaned_global_stops, normalized_global_stops) =
-        clean_norm_map::<BORROW_TIMING>(global_stops_raw);
+    let (cleaned_global_stops, normalized_global_stops) = clean_norm_map(global_stops_raw);
     let global_delays_raw = parsed_data
         .delays
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let (cleaned_global_delays, normalized_global_delays) =
-        clean_norm_map::<BORROW_TIMING>(global_delays_raw);
+    let (cleaned_global_delays, normalized_global_delays) = clean_norm_map(global_delays_raw);
     let global_warps_raw = parsed_data
         .warps
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let (cleaned_global_warps, normalized_global_warps) =
-        clean_norm_map::<BORROW_TIMING>(global_warps_raw);
+    let (cleaned_global_warps, normalized_global_warps) = clean_norm_map(global_warps_raw);
     let global_speeds_raw = parsed_data
         .speeds
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let (cleaned_global_speeds, normalized_global_speeds) =
-        clean_norm_speeds::<BORROW_TIMING>(global_speeds_raw);
+    let (cleaned_global_speeds, normalized_global_speeds) = clean_norm_speeds(global_speeds_raw);
     let global_scrolls_raw = parsed_data
         .scrolls
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let (cleaned_global_scrolls, normalized_global_scrolls) =
-        clean_norm_map::<BORROW_TIMING>(global_scrolls_raw);
+    let (cleaned_global_scrolls, normalized_global_scrolls) = clean_norm_map(global_scrolls_raw);
     let global_fakes_raw = parsed_data
         .fakes
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let (cleaned_global_fakes, normalized_global_fakes) =
-        clean_norm_map::<BORROW_TIMING>(global_fakes_raw);
+    let (cleaned_global_fakes, normalized_global_fakes) = clean_norm_map(global_fakes_raw);
     let normalized_global_time_signatures = parsed_data
         .time_signatures
         .and_then(|b| std::str::from_utf8(b).ok())
@@ -1567,20 +1430,11 @@ fn analyze_with_scratch_impl<
         .bpms
         .iter()
         .map(|(beat, bpm)| (f64::from(*beat), f64::from(*bpm)));
-    let owned_global_bpm_map;
-    let global_bpm_map = if REUSE_BPMS {
-        scratch.global_bpm_map.clear();
-        scratch.global_bpm_map.extend(global_bpms);
-        scratch.global_bpm_map.as_slice()
-    } else {
-        owned_global_bpm_map = global_bpms.collect::<Vec<_>>();
-        owned_global_bpm_map.as_slice()
-    };
-    let (min_bpm_i32, max_bpm_i32, median_bpm_raw, average_bpm_raw) = if REUSE_BPMS {
-        compute_bpm_range_and_stats_with_scratch(global_bpm_map, &mut scratch.bpm_values)
-    } else {
-        compute_bpm_range_and_stats(global_bpm_map)
-    };
+    scratch.global_bpm_map.clear();
+    scratch.global_bpm_map.extend(global_bpms);
+    let global_bpm_map = scratch.global_bpm_map.as_slice();
+    let (min_bpm_i32, max_bpm_i32, median_bpm_raw, average_bpm_raw) =
+        compute_bpm_range_and_stats_with_scratch(global_bpm_map, &mut scratch.bpm_values);
     let median_bpm = round_dp(median_bpm_raw, 2);
     let average_bpm = round_dp(average_bpm_raw, 2);
     let global_attacks_opt = parsed_data.attacks.as_deref();
@@ -1599,7 +1453,7 @@ fn analyze_with_scratch_impl<
     let options_ref = &options;
     let compiled_custom_patterns_ref = compiled_custom_patterns;
     for entry in &entries {
-        if let Some((summary, chart_length)) = build_chart_summary::<REUSE_BPMS, CACHE_TIMING>(
+        if let Some((summary, chart_length)) = build_chart_summary(
             entry,
             global_attacks_opt,
             &cleaned_global_bpms,
@@ -1711,13 +1565,6 @@ pub fn compute_all_hashes(
     simfile_data: &[u8],
     extension: &str,
 ) -> Result<Vec<ChartHashInfo>, String> {
-    compute_all_hashes_impl::<true>(simfile_data, extension)
-}
-
-fn compute_all_hashes_impl<const REUSE_ROWS: bool>(
-    simfile_data: &[u8],
-    extension: &str,
-) -> Result<Vec<ChartHashInfo>, String> {
     // 1. Parse the file structure (fast, just byte slicing)
     let parsed_data = extract_sections(simfile_data, extension).map_err(|e| e.to_string())?;
     let timing_format = timing_format_from_ext(extension);
@@ -1766,16 +1613,12 @@ fn compute_all_hashes_impl<const REUSE_ROWS: bool>(
         );
 
         // 5. Minimize rows directly into SHA-1 without materializing the chart.
-        let hash = if REUSE_ROWS {
-            crate::hash::compute_note_data_hash_with_scratch(
-                chart_data,
-                lanes,
-                bpms_to_use.as_ref(),
-                &mut hash_scratch,
-            )
-        } else {
-            crate::hash::compute_note_data_hash(chart_data, lanes, bpms_to_use.as_ref())
-        };
+        let hash = crate::hash::compute_note_data_hash_with_scratch(
+            chart_data,
+            lanes,
+            bpms_to_use.as_ref(),
+            &mut hash_scratch,
+        );
 
         results.push(ChartHashInfo {
             step_type,
@@ -1787,34 +1630,14 @@ fn compute_all_hashes_impl<const REUSE_ROWS: bool>(
     Ok(results)
 }
 
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-pub fn profile_compute_all_hashes(
-    simfile_data: &[u8],
-    extension: &str,
-    legacy: bool,
-) -> Result<Vec<ChartHashInfo>, String> {
-    if legacy {
-        compute_all_hashes_impl::<false>(simfile_data, extension)
-    } else {
-        compute_all_hashes_impl::<true>(simfile_data, extension)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        AnalysisOptions, AnalysisScratch, ChartMetadataStrings, ChartNoteType, ParsedChartNote,
-        PreparedAnalysis, analyze, analyze_prepared_in, analyze_prepared_in_with_notes,
-        analyze_with_scratch, analyze_with_scratch_impl, chart_metadata_strings,
-        compute_all_hashes, compute_all_hashes_impl, decode_trim_owned, decode_unescape_owned,
+        AnalysisOptions, AnalysisScratch, ChartNoteType, ParsedChartNote, PreparedAnalysis,
+        analyze, analyze_prepared_in, analyze_prepared_in_with_notes, analyze_with_scratch,
+        compute_all_hashes, decode_trim_owned, decode_unescape_owned,
     };
-    use crate::parse::{
-        decode_bytes, normalize_chart_desc, normalize_chart_name, unescape_tag, unescape_trim,
-    };
-    use crate::tech::parse_tech_notation;
-    use crate::{resolve_difficulty_label, timing::TimingFormat};
-    use std::borrow::Cow;
+    use crate::parse::{decode_bytes, unescape_tag};
 
     const FIXTURE: &[u8] = include_bytes!("../benches/fixtures/hash_fixture.ssc");
 
@@ -1831,17 +1654,7 @@ mod tests {
             compute_note_annotations: true,
             ..AnalysisOptions::default()
         };
-        let mut legacy_scratch = AnalysisScratch::default();
-        let expected = analyze_with_scratch_impl::<false, false, false, (), fn(ParsedChartNote)>(
-            FIXTURE,
-            "ssc",
-            &options,
-            &mut legacy_scratch,
-            None,
-            None,
-            None,
-        )
-        .expect("legacy analysis should succeed");
+        let expected = analyze(FIXTURE, "ssc", &options).expect("analysis should succeed");
         let mut scratch = AnalysisScratch::default();
 
         let first = analyze_with_scratch(FIXTURE, "ssc", &options, &mut scratch)
@@ -1878,16 +1691,8 @@ mod tests {
             "#BPMS:0=150,4=200;\n#NOTES:\n1000\n0100\n0010\n0001\n;\n"
         )
         .as_bytes();
-        let expected = analyze_with_scratch_impl::<false, false, false, (), fn(ParsedChartNote)>(
-            LOCAL_TIMING,
-            "ssc",
-            &options,
-            &mut legacy_scratch,
-            None,
-            None,
-            None,
-        )
-        .expect("legacy local timing analysis should succeed");
+        let expected =
+            analyze(LOCAL_TIMING, "ssc", &options).expect("local timing analysis should succeed");
         let first = analyze_with_scratch(LOCAL_TIMING, "ssc", &options, &mut scratch)
             .expect("local timing analysis should succeed");
         let chart_capacity = scratch.chart_bpm_map.capacity();
@@ -1928,22 +1733,10 @@ mod tests {
             compute_pattern_counts: false,
             ..AnalysisOptions::default()
         };
-        let mut uncached_scratch = AnalysisScratch::default();
-        let expected = analyze_with_scratch_impl::<true, true, false, (), fn(ParsedChartNote)>(
-            REPEATED_TIMING,
-            "ssc",
-            &options,
-            &mut uncached_scratch,
-            None,
-            None,
-            None,
-        )
-        .expect("uncached repeated timing analysis should succeed");
         let mut cached_scratch = AnalysisScratch::default();
         let actual = analyze_with_scratch(REPEATED_TIMING, "ssc", &options, &mut cached_scratch)
             .expect("cached repeated timing analysis should succeed");
 
-        assert_eq!(json(&actual), json(&expected));
         assert_eq!(actual.charts.len(), 3);
         assert!(std::sync::Arc::ptr_eq(
             &actual.charts[0].timing_segments,
@@ -2085,13 +1878,13 @@ mod tests {
             Some("0.000=120.000,4.000=151.000")
         );
 
-        let mut legacy = summary.clone();
-        legacy
+        let mut without_cache = summary.clone();
+        without_cache
             .charts
             .first_mut()
             .expect("chart BPM fixture should contain a chart")
             .chart_bpms_norm = None;
-        assert_eq!(json(&summary), json(&legacy));
+        assert_eq!(json(&summary), json(&without_cache));
     }
 
     #[test]
@@ -2113,116 +1906,6 @@ mod tests {
             assert_eq!(decode_trim_owned(bytes), decoded.trim());
         }
     }
-
-    fn materialized_chart_metadata(
-        fields: [&[u8]; 5],
-        chart_name: Option<&[u8]>,
-        timing_format: TimingFormat,
-        ssc_version: f32,
-        extension: &str,
-    ) -> ChartMetadataStrings {
-        let step_type = unescape_trim(decode_bytes(fields[0]).as_ref());
-        let description_raw = unescape_trim(decode_bytes(fields[1]).as_ref());
-        let chart_name_raw = chart_name.map_or_else(String::new, |bytes| {
-            unescape_trim(decode_bytes(bytes).as_ref())
-        });
-        let description = normalize_chart_desc(description_raw.clone(), timing_format, ssc_version);
-        let chart_name =
-            normalize_chart_name(chart_name_raw, &description_raw, timing_format, ssc_version);
-        let difficulty_raw = unescape_trim(decode_bytes(fields[2]).as_ref());
-        let rating = unescape_trim(decode_bytes(fields[3]).as_ref());
-        let difficulty =
-            resolve_difficulty_label(&difficulty_raw, &description, &rating, extension);
-        let is_ssc = extension.eq_ignore_ascii_case("ssc");
-        let credit_decoded = if is_ssc {
-            decode_bytes(fields[4])
-        } else {
-            Cow::Borrowed("")
-        };
-        let credit = unescape_tag(credit_decoded.as_ref());
-        let tech_notation = parse_tech_notation(credit.as_ref(), &description);
-        let step_artist = if is_ssc {
-            credit.into_owned()
-        } else {
-            description.clone()
-        };
-
-        ChartMetadataStrings {
-            step_type,
-            step_artist,
-            description,
-            chart_name,
-            difficulty,
-            rating,
-            tech_notation,
-        }
-    }
-
-    #[test]
-    fn borrowed_chart_metadata_matches_materialized_pipeline() {
-        let cases = [
-            (
-                [
-                    b" dance-single " as &[u8],
-                    b" BR+ Description ",
-                    b"Hard",
-                    b"12",
-                    b"Artist\\: Name",
-                ],
-                Some(b" Modern\\: Name " as &[u8]),
-                TimingFormat::Ssc,
-                0.83,
-                "ssc",
-            ),
-            (
-                [
-                    b"dance-single" as &[u8],
-                    b" Legacy Description ",
-                    b"Challenge",
-                    b"10",
-                    b"Credit",
-                ],
-                Some(b"Ignored Chart Name" as &[u8]),
-                TimingFormat::Ssc,
-                0.70,
-                "ssc",
-            ),
-            (
-                [
-                    b"dance-single" as &[u8],
-                    b" smaniac ",
-                    b"Hard",
-                    b"13",
-                    b"0,0,0,0,0",
-                ],
-                None,
-                TimingFormat::Sm,
-                0.0,
-                "sm",
-            ),
-            (
-                [
-                    b"dance-single" as &[u8],
-                    b"\x93CP1252\x94",
-                    b"Expert",
-                    b" 9 ",
-                    b"\x96 Credit",
-                ],
-                Some(b"\x93Name\x94" as &[u8]),
-                TimingFormat::Ssc,
-                0.83,
-                "SSC",
-            ),
-        ];
-
-        for (fields, chart_name, timing_format, version, extension) in cases {
-            assert_eq!(
-                chart_metadata_strings(fields, chart_name, timing_format, version, extension,),
-                materialized_chart_metadata(fields, chart_name, timing_format, version, extension,)
-            );
-        }
-    }
-
     #[test]
     fn combined_parity_outputs_match_independent_analysis_options() {
         let counts = analyze(FIXTURE, "ssc", &AnalysisOptions::default())
@@ -2266,17 +1949,9 @@ mod tests {
     #[test]
     fn batch_hashes_match_analysis_outputs() {
         let hashes = compute_all_hashes(FIXTURE, "ssc").expect("hashing should succeed");
-        let legacy = compute_all_hashes_impl::<false>(FIXTURE, "ssc")
-            .expect("legacy hashing should succeed");
         let summary =
             analyze(FIXTURE, "ssc", &AnalysisOptions::default()).expect("analysis should succeed");
 
-        assert_eq!(hashes.len(), legacy.len());
-        for (hash, old) in hashes.iter().zip(&legacy) {
-            assert_eq!(hash.step_type, old.step_type);
-            assert_eq!(hash.difficulty, old.difficulty);
-            assert_eq!(hash.hash, old.hash);
-        }
         assert_eq!(hashes.len(), summary.charts.len());
         for (hash, chart) in hashes.iter().zip(&summary.charts) {
             assert_eq!(hash.step_type, chart.step_type_str);

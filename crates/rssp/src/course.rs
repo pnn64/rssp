@@ -183,11 +183,6 @@ fn normalize_stepstype(raw: &str) -> Cow<'_, str> {
     Cow::Owned(normalized)
 }
 
-#[cfg(feature = "profile")]
-fn normalize_stepstype_legacy(raw: &str) -> String {
-    raw.trim().to_ascii_lowercase().replace('_', "-")
-}
-
 #[inline(always)]
 const fn norm_step_byte(byte: u8) -> u8 {
     if byte == b'_' {
@@ -203,31 +198,6 @@ fn stepstype_eq(raw: &str, normalized: &str) -> bool {
         .bytes()
         .map(norm_step_byte)
         .eq(normalized.bytes())
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-#[must_use]
-pub fn profile_stepstype_eq_legacy(raw: &str, normalized: &str) -> bool {
-    normalize_stepstype_legacy(raw) == normalized
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-#[must_use]
-pub fn profile_stepstype_eq(raw: &str, normalized: &str) -> bool {
-    stepstype_eq(raw, normalized)
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-#[must_use]
-pub fn profile_normalize_stepstype(raw: &str, legacy: bool) -> Cow<'_, str> {
-    if legacy {
-        Cow::Owned(normalize_stepstype_legacy(raw))
-    } else {
-        normalize_stepstype(raw)
-    }
 }
 
 const fn diff_from_idx(idx: i32) -> Difficulty {
@@ -284,14 +254,6 @@ fn list_capacity(block: &[u8], delim: u8) -> usize {
         return 0;
     }
     1 + block.iter().filter(|&&byte| byte == delim).count()
-}
-
-#[cfg(feature = "profile")]
-#[inline(always)]
-fn split_unescaped(block: &[u8], delim: u8) -> Vec<&[u8]> {
-    let mut out = Vec::new();
-    visit_unescaped(block, delim, |item| out.push(item));
-    out
 }
 
 fn split_pair(block: &[u8], delim: u8) -> Option<(&[u8], &[u8])> {
@@ -376,11 +338,6 @@ fn decode_trimmed(bytes: &[u8]) -> Cow<'_, str> {
 fn parse_repeat(raw: &[u8]) -> bool {
     raw.windows(3)
         .any(|window| window.eq_ignore_ascii_case(b"yes"))
-}
-
-#[cfg(feature = "profile")]
-fn parse_repeat_legacy(raw: &[u8]) -> bool {
-    decode_trim(raw).to_ascii_lowercase().contains("yes")
 }
 
 fn parse_sort_pick(raw: &str) -> Option<(SongSort, i32)> {
@@ -535,12 +492,6 @@ fn apply_song_mods(mut secret: bool, mods_raw: &str) -> (bool, bool, i32, String
     (secret, no_difficult, gain_lives, out_mods)
 }
 
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-pub fn profile_song_mods(secret: bool, mods_raw: &str) -> (bool, bool, i32, String) {
-    apply_song_mods(secret, mods_raw)
-}
-
 fn parse_song_entry(value: &[u8]) -> CourseEntry {
     let [song_raw, diff_raw, mods_raw] = split_entry_fields(value);
     let song_text = decode_trimmed(song_raw);
@@ -561,13 +512,11 @@ fn parse_song_entry(value: &[u8]) -> CourseEntry {
     }
 }
 
-fn parse_select_list<const TIGHT_CAPACITY: bool>(raw: &[u8], out: &mut Vec<String>) -> bool {
+fn parse_select_list(raw: &[u8], out: &mut Vec<String>) -> bool {
     if raw.is_empty() {
         return false;
     }
-    if TIGHT_CAPACITY {
-        out.reserve_exact(list_capacity(raw, b','));
-    }
+    out.reserve_exact(list_capacity(raw, b','));
     visit_unescaped(raw, b',', |item| {
         out.push(decode_unescape_trim(item).into_owned());
     });
@@ -636,41 +585,22 @@ fn apply_select_mods(entry: &mut CourseEntry, raw: &[u8]) {
     entry.modifiers = modifiers;
 }
 
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-pub fn profile_select_mods(raw: &[u8]) -> (bool, bool, String) {
-    let mut entry = CourseEntry {
-        song: CourseSong::RandomAny,
-        steps: StepsSpec::Unknown { raw: String::new() },
-        modifiers: String::new(),
-        secret: false,
-        no_difficult: false,
-        gain_seconds: 0.0,
-        gain_lives: -1,
-    };
-    apply_select_mods(&mut entry, raw);
-    (entry.secret, entry.no_difficult, entry.modifiers)
-}
-
-fn apply_select_param<const TIGHT_CAPACITY: bool>(
-    entry: &mut CourseEntry,
-    param: &[u8],
-) -> Option<()> {
+fn apply_select_param(entry: &mut CourseEntry, param: &[u8]) -> Option<()> {
     let (name_raw, value) = split_pair(param, b'=')?;
     let name = decode_trimmed(name_raw);
     let CourseSong::Select(select) = &mut entry.song else {
         unreachable!("SONGSELECT parser always constructs selection criteria");
     };
     if name.eq_ignore_ascii_case("TITLE") {
-        parse_select_list::<TIGHT_CAPACITY>(value, &mut select.titles).then_some(())?;
+        parse_select_list(value, &mut select.titles).then_some(())?;
     } else if name.eq_ignore_ascii_case("GROUP") {
-        parse_select_list::<TIGHT_CAPACITY>(value, &mut select.groups).then_some(())?;
+        parse_select_list(value, &mut select.groups).then_some(())?;
     } else if name.eq_ignore_ascii_case("ARTIST") {
-        parse_select_list::<TIGHT_CAPACITY>(value, &mut select.artists).then_some(())?;
+        parse_select_list(value, &mut select.artists).then_some(())?;
     } else if name.eq_ignore_ascii_case("GENRE") {
-        parse_select_list::<TIGHT_CAPACITY>(value, &mut select.genres).then_some(())?;
+        parse_select_list(value, &mut select.genres).then_some(())?;
     } else if name.eq_ignore_ascii_case("DIFFICULTY") {
-        if TIGHT_CAPACITY && !value.is_empty() {
+        if !value.is_empty() {
             select
                 .difficulties
                 .reserve_exact(list_capacity(value, b','));
@@ -702,7 +632,7 @@ fn apply_select_param<const TIGHT_CAPACITY: bool>(
     Some(())
 }
 
-fn parse_song_select<const TIGHT_CAPACITY: bool>(raw: &[u8]) -> Option<CourseEntry> {
+fn parse_song_select(raw: &[u8]) -> Option<CourseEntry> {
     let mut entry = CourseEntry {
         song: CourseSong::Select(SongSelect::default()),
         steps: StepsSpec::Unknown { raw: String::new() },
@@ -715,7 +645,7 @@ fn parse_song_select<const TIGHT_CAPACITY: bool>(raw: &[u8]) -> Option<CourseEnt
     let mut valid = true;
     visit_unescaped(raw, b':', |param| {
         if valid {
-            valid = apply_select_param::<TIGHT_CAPACITY>(&mut entry, param).is_some();
+            valid = apply_select_param(&mut entry, param).is_some();
         }
     });
     valid.then_some(entry)
@@ -752,83 +682,12 @@ fn parse_course_meter_tag(value: &[u8], meters: &mut [Option<i32>; 6]) {
     }
 }
 
-#[cfg(feature = "profile")]
-fn parse_course_meter_tag_legacy(value: &[u8], meters: &mut [Option<i32>; 6]) {
-    let params = split_unescaped(value, b':');
-    if params.is_empty() {
-        return;
-    }
-
-    if params.len() == 1 {
-        let meter = decode_trim(params[0]).parse::<i32>().unwrap_or(0).max(0);
-        meters[Difficulty::Medium as usize] = Some(meter);
-        return;
-    }
-
-    let mut i = 0usize;
-    while i + 1 < params.len() {
-        let diff_raw = decode_trim(params[i]);
-        let meter_raw = decode_trim(params[i + 1]);
-        if let Some(diff) = parse_course_difficulty(&diff_raw)
-            && let Ok(meter) = meter_raw.parse::<i32>()
-        {
-            meters[diff as usize] = Some(meter.max(0));
-        }
-        i += 2;
-    }
-}
-
-#[cfg(any(test, feature = "profile"))]
-#[inline(always)]
-fn has_banner_prefix_old(path: &Path, stem_lc: &str, ext: &str) -> bool {
-    if !path.is_file() {
-        return false;
-    }
-    let Some(path_ext) = path.extension().and_then(|s| s.to_str()) else {
-        return false;
-    };
-    if !path_ext.eq_ignore_ascii_case(ext) {
-        return false;
-    }
-    let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) else {
-        return false;
-    };
-    file_stem.to_ascii_lowercase().starts_with(stem_lc)
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn push_banner_matches_old(dir: &Path, stem_lc: &str, ext: &str, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    let mut matches: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| has_banner_prefix_old(p, stem_lc, ext))
-        .collect();
-    matches.sort_by_cached_key(|p| assets::lc_name(p));
-    out.extend(matches);
-}
-
 #[inline(always)]
 fn starts_ascii_ci(actual: &str, expected: &str) -> bool {
     actual
         .as_bytes()
         .get(..expected.len())
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case(expected.as_bytes()))
-}
-
-#[cfg(feature = "profile")]
-fn banner_rank(path: &Path, course_stem: &str) -> Option<usize> {
-    if !path.is_file() {
-        return None;
-    }
-    let path_ext = path.extension()?.to_str()?;
-    let rank = COURSE_BANNER_EXTS
-        .iter()
-        .position(|ext| path_ext.eq_ignore_ascii_case(ext))?;
-    let file_stem = path.file_stem()?.to_str()?;
-    starts_ascii_ci(file_stem, course_stem).then_some(rank)
 }
 
 fn banner_name_rank(name: &OsStr, course_stem: &str) -> Option<usize> {
@@ -839,71 +698,6 @@ fn banner_name_rank(name: &OsStr, course_stem: &str) -> Option<usize> {
         .position(|ext| path_ext.eq_ignore_ascii_case(ext))?;
     let file_stem = path.file_stem()?.to_str()?;
     starts_ascii_ci(file_stem, course_stem).then_some(rank)
-}
-
-#[cfg(any(test, feature = "profile"))]
-fn resolve_banner_old(course_path: &Path, banner_tag: &str) -> Option<PathBuf> {
-    let banner_tag = banner_tag.trim();
-    if !banner_tag.is_empty() {
-        let tag_path = Path::new(banner_tag);
-        if tag_path.is_absolute() {
-            return tag_path.is_file().then_some(tag_path.to_path_buf());
-        }
-        let parent = course_path.parent().unwrap_or_else(|| Path::new(""));
-        let joined = parent.join(tag_path);
-        return joined.is_file().then_some(joined);
-    }
-
-    let parent = course_path.parent().unwrap_or_else(|| Path::new(""));
-    let stem_lc = course_path
-        .file_stem()?
-        .to_string_lossy()
-        .to_ascii_lowercase();
-    if stem_lc.is_empty() {
-        return None;
-    }
-
-    let mut possible = Vec::new();
-    for ext in COURSE_BANNER_EXTS {
-        push_banner_matches_old(parent, &stem_lc, ext, &mut possible);
-    }
-    possible.into_iter().next()
-}
-
-#[cfg(feature = "profile")]
-fn resolve_banner_full_paths(course_path: &Path, banner_tag: &str) -> Option<PathBuf> {
-    let banner_tag = banner_tag.trim();
-    if !banner_tag.is_empty() {
-        let tag_path = Path::new(banner_tag);
-        if tag_path.is_absolute() {
-            return tag_path.is_file().then_some(tag_path.to_path_buf());
-        }
-        let parent = course_path.parent().unwrap_or_else(|| Path::new(""));
-        let joined = parent.join(tag_path);
-        return joined.is_file().then_some(joined);
-    }
-
-    let parent = course_path.parent().unwrap_or_else(|| Path::new(""));
-    let course_stem = course_path.file_stem()?.to_string_lossy();
-    if course_stem.is_empty() {
-        return None;
-    }
-
-    let entries = std::fs::read_dir(parent).ok()?;
-    let mut possible: [Option<PathBuf>; COURSE_BANNER_EXTS.len()] = Default::default();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(rank) = banner_rank(&path, &course_stem) else {
-            continue;
-        };
-        if possible[rank]
-            .as_deref()
-            .is_none_or(|current| assets::cmp_name_ci(&path, current).is_lt())
-        {
-            possible[rank] = Some(path);
-        }
-    }
-    possible.into_iter().flatten().next()
 }
 
 #[must_use]
@@ -949,28 +743,6 @@ pub fn resolve_course_banner_path(course_path: &Path, banner_tag: &str) -> Optio
         .map(|name| parent.join(name))
 }
 
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-#[must_use]
-pub fn profile_course_banner(
-    course_path: &Path,
-    banner_tag: &str,
-    legacy: bool,
-) -> Option<PathBuf> {
-    if legacy {
-        resolve_banner_old(course_path, banner_tag)
-    } else {
-        resolve_course_banner_path(course_path, banner_tag)
-    }
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-#[must_use]
-pub fn profile_course_banner_full_paths(course_path: &Path, banner_tag: &str) -> Option<PathBuf> {
-    resolve_banner_full_paths(course_path, banner_tag)
-}
-
 // Bound speculative storage derived from untrusted course text.
 const MAX_COURSE_RESERVE: usize = 64;
 
@@ -982,14 +754,14 @@ fn course_reserve_len(data_len: usize, start: usize, next: usize) -> usize {
         .clamp(1, MAX_COURSE_RESERVE)
 }
 
-fn push_course_entry<const RESERVE_ENTRIES: bool>(
+fn push_course_entry(
     entries: &mut Vec<CourseEntry>,
     entry: CourseEntry,
     data_len: usize,
     start: usize,
     next: usize,
 ) {
-    if RESERVE_ENTRIES && entries.capacity() == 0 {
+    if entries.capacity() == 0 {
         entries.reserve_exact(course_reserve_len(data_len, start, next));
     }
     entries.push(entry);
@@ -1029,43 +801,7 @@ fn course_tag(name: &[u8]) -> CourseTag {
     }
 }
 
-#[cfg(any(test, feature = "profile"))]
-fn course_tag_sequential(name: &[u8]) -> CourseTag {
-    if name.eq_ignore_ascii_case(b"COURSE") {
-        CourseTag::Course
-    } else if name.eq_ignore_ascii_case(b"COURSETRANSLIT") {
-        CourseTag::CourseTranslit
-    } else if name.eq_ignore_ascii_case(b"SCRIPTER") {
-        CourseTag::Scripter
-    } else if name.eq_ignore_ascii_case(b"DESCRIPTION") {
-        CourseTag::Description
-    } else if name.eq_ignore_ascii_case(b"REPEAT") {
-        CourseTag::Repeat
-    } else if name.eq_ignore_ascii_case(b"BANNER") {
-        CourseTag::Banner
-    } else if name.eq_ignore_ascii_case(b"BACKGROUND") {
-        CourseTag::Background
-    } else if name.eq_ignore_ascii_case(b"LIVES") {
-        CourseTag::Lives
-    } else if name.eq_ignore_ascii_case(b"METER") {
-        CourseTag::Meter
-    } else if name.eq_ignore_ascii_case(b"SONG") {
-        CourseTag::Song
-    } else if name.eq_ignore_ascii_case(b"SONGSELECT") {
-        CourseTag::SongSelect
-    } else {
-        CourseTag::Unknown
-    }
-}
-
-fn parse_crs_with<
-    const LEGACY: bool,
-    const RESERVE_ENTRIES: bool,
-    const INDEXED_TAGS: bool,
-    const TIGHT_SELECT_CAPACITY: bool,
->(
-    data: &[u8],
-) -> Result<CourseFile, String> {
+fn parse_crs_impl(data: &[u8]) -> Result<CourseFile, String> {
     let mut name = String::new();
     let mut name_translit = String::new();
     let mut scripter = String::new();
@@ -1097,52 +833,19 @@ fn parse_crs_with<
         let value = &s[value_start..value_start + value_end];
         i += value_start + adv;
 
-        let tag = if INDEXED_TAGS {
-            course_tag(name_bytes)
-        } else {
-            #[cfg(any(test, feature = "profile"))]
-            {
-                course_tag_sequential(name_bytes)
-            }
-            #[cfg(not(any(test, feature = "profile")))]
-            {
-                unreachable!("sequential tag dispatch requires profile feature")
-            }
-        };
+        let tag = course_tag(name_bytes);
 
         match tag {
             CourseTag::Course => name = decode_trim(value),
             CourseTag::CourseTranslit => name_translit = decode_trim(value),
             CourseTag::Scripter => scripter = decode_trim(value),
             CourseTag::Description => description = decode_trim(value),
-            CourseTag::Repeat => {
-                repeat = if LEGACY {
-                    #[cfg(feature = "profile")]
-                    {
-                        parse_repeat_legacy(value)
-                    }
-                    #[cfg(not(feature = "profile"))]
-                    {
-                        unreachable!("legacy parser requires profile feature")
-                    }
-                } else {
-                    parse_repeat(value)
-                };
-            }
+            CourseTag::Repeat => repeat = parse_repeat(value),
             CourseTag::Banner => banner = decode_trim(value),
             CourseTag::Background => background = decode_trim(value),
             CourseTag::Lives => lives = decode_trim(value).parse::<i32>().unwrap_or(0).max(0),
-            CourseTag::Meter => {
-                if LEGACY {
-                    #[cfg(feature = "profile")]
-                    parse_course_meter_tag_legacy(value, &mut meters);
-                    #[cfg(not(feature = "profile"))]
-                    unreachable!("legacy parser requires profile feature");
-                } else {
-                    parse_course_meter_tag(value, &mut meters);
-                }
-            }
-            CourseTag::Song => push_course_entry::<RESERVE_ENTRIES>(
+            CourseTag::Meter => parse_course_meter_tag(value, &mut meters),
+            CourseTag::Song => push_course_entry(
                 &mut entries,
                 parse_song_entry(value),
                 data.len(),
@@ -1150,14 +853,8 @@ fn parse_crs_with<
                 i,
             ),
             CourseTag::SongSelect => {
-                if let Some(entry) = parse_song_select::<TIGHT_SELECT_CAPACITY>(value) {
-                    push_course_entry::<RESERVE_ENTRIES>(
-                        &mut entries,
-                        entry,
-                        data.len(),
-                        tag_start,
-                        i,
-                    );
+                if let Some(entry) = parse_song_select(value) {
+                    push_course_entry(&mut entries, entry, data.len(), tag_start, i);
                 }
             }
             CourseTag::Unknown => {}
@@ -1183,50 +880,7 @@ fn parse_crs_with<
 }
 
 pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
-    parse_crs_with::<false, true, true, true>(data)
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-pub fn profile_parse_crs(data: &[u8], legacy: bool) -> Result<CourseFile, String> {
-    if legacy {
-        parse_crs_with::<true, true, true, true>(data)
-    } else {
-        parse_crs_with::<false, true, true, true>(data)
-    }
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-pub fn profile_parse_crs_reserve(data: &[u8], legacy_growth: bool) -> Result<CourseFile, String> {
-    if legacy_growth {
-        parse_crs_with::<false, false, true, true>(data)
-    } else {
-        parse_crs_with::<false, true, true, true>(data)
-    }
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-pub fn profile_parse_crs_select_lists(
-    data: &[u8],
-    growing_lists: bool,
-) -> Result<CourseFile, String> {
-    if growing_lists {
-        parse_crs_with::<false, true, true, false>(data)
-    } else {
-        parse_crs_with::<false, true, true, true>(data)
-    }
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-pub fn profile_parse_crs_dispatch(data: &[u8], sequential: bool) -> Result<CourseFile, String> {
-    if sequential {
-        parse_crs_with::<false, true, false, true>(data)
-    } else {
-        parse_crs_with::<false, true, true, true>(data)
-    }
+    parse_crs_impl(data)
 }
 
 const fn empty_timing_segments() -> TimingSegments {
@@ -1326,32 +980,6 @@ fn merge_custom_patterns(
     }
 }
 
-#[cfg(feature = "profile")]
-pub(crate) fn profile_merge_custom_patterns_legacy(
-    total: &mut Vec<crate::patterns::CustomPatternSummary>,
-    chart: &[crate::patterns::CustomPatternSummary],
-) {
-    for custom in chart {
-        if let Some(existing) = total
-            .iter_mut()
-            .find(|entry| entry.pattern == custom.pattern)
-        {
-            existing.count += custom.count;
-        } else {
-            total.push(custom.clone());
-        }
-    }
-    total.sort_by(|left, right| left.pattern.cmp(&right.pattern));
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn profile_merge_custom_patterns(
-    total: &mut Vec<crate::patterns::CustomPatternSummary>,
-    chart: &[crate::patterns::CustomPatternSummary],
-) {
-    merge_custom_patterns(total, chart);
-}
-
 fn add_course_chart(total: &mut ChartSummary, chart: &ChartSummary) {
     total.stats.total_arrows += chart.stats.total_arrows;
     total.stats.left += chart.stats.left;
@@ -1417,46 +1045,6 @@ fn course_title(title: &str, subtitle: &str) -> String {
     }
 }
 
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-#[must_use]
-pub fn profile_course_title(title: &str, subtitle: &str, prealloc: bool) -> String {
-    if prealloc {
-        course_title(title, subtitle)
-    } else if subtitle.is_empty() {
-        title.to_owned()
-    } else {
-        format!("{title} {subtitle}")
-    }
-}
-
-#[cfg(feature = "profile")]
-fn simfile_translit_full_title(data: &[u8], ext: &str) -> Option<String> {
-    let parsed = extract_sections(data, ext).ok()?;
-    let title = parsed
-        .title_translit
-        .or(parsed.title)
-        .map(|b| {
-            let decoded = decode_bytes(b);
-            let unescaped = unescape_tag(decoded.as_ref());
-            clean_tag(unescaped.as_ref()).into_owned()
-        })
-        .unwrap_or_default();
-    let subtitle = parsed
-        .subtitle_translit
-        .or(parsed.subtitle)
-        .map(|b| unescape_tag(decode_bytes(b).as_ref()).into_owned())
-        .unwrap_or_default();
-
-    let title = title.trim();
-    let subtitle = subtitle.trim();
-    if subtitle.is_empty() {
-        Some(title.to_string())
-    } else {
-        Some(format!("{title} {subtitle}"))
-    }
-}
-
 fn title_parts_eq(title: &str, subtitle: &str, expected: &str) -> bool {
     if subtitle.is_empty() {
         return title.eq_ignore_ascii_case(expected);
@@ -1490,22 +1078,6 @@ fn simfile_translit_title_eq(data: &[u8], ext: &str, expected: &str) -> Option<b
         subtitle_unescaped.trim(),
         expected,
     ))
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-#[must_use]
-pub fn profile_simfile_title_eq(
-    data: &[u8],
-    ext: &str,
-    expected: &str,
-    legacy: bool,
-) -> Option<bool> {
-    if legacy {
-        simfile_translit_full_title(data, ext).map(|title| title.eq_ignore_ascii_case(expected))
-    } else {
-        simfile_translit_title_eq(data, ext, expected)
-    }
 }
 
 fn song_dir_name(dir: &Path) -> String {
@@ -1568,83 +1140,6 @@ fn resolve_song_dir(songs_dir: &Path, group: Option<&str>, song: &str) -> Option
         }
     }
     None
-}
-
-#[cfg(feature = "profile")]
-fn resolve_song_dir_legacy(songs_dir: &Path, group: Option<&str>, song: &str) -> Option<PathBuf> {
-    let song = song.trim();
-    if song.is_empty() {
-        return None;
-    }
-
-    if let Some(group) = group.map(str::trim).filter(|g| !g.is_empty()) {
-        let group_dir = assets::is_dir_ci(songs_dir, group).or_else(|| {
-            let path = songs_dir.join(group);
-            path.is_dir().then_some(path)
-        })?;
-        let direct = assets::is_dir_ci(&group_dir, song).or_else(|| {
-            let path = group_dir.join(song);
-            path.is_dir().then_some(path)
-        });
-        if direct.is_some() {
-            return direct;
-        }
-
-        let entries = std::fs::read_dir(&group_dir).ok()?;
-        let mut subdirs: Vec<PathBuf> = entries
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| path.is_dir())
-            .collect();
-        subdirs.sort_by_cached_key(|path| {
-            path.file_name()
-                .map(|name| name.to_string_lossy().to_ascii_lowercase())
-        });
-        for dir in subdirs {
-            let scan = pack::scan_song_dir(&dir, pack::ScanOpt::default()).ok()??;
-            let sim = simfile::open(&scan.simfile).ok()?;
-            let title = simfile_translit_full_title(&sim.data, sim.extension)?;
-            if title.eq_ignore_ascii_case(song) {
-                return Some(dir);
-            }
-        }
-        return None;
-    }
-
-    let entries = std::fs::read_dir(songs_dir).ok()?;
-    let mut groups: Vec<PathBuf> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .collect();
-    groups.sort_by_cached_key(|path| {
-        path.file_name()
-            .map(|name| name.to_string_lossy().to_ascii_lowercase())
-    });
-    for group_dir in groups {
-        if let Some(dir) = assets::is_dir_ci(&group_dir, song).or_else(|| {
-            let path = group_dir.join(song);
-            path.is_dir().then_some(path)
-        }) {
-            return Some(dir);
-        }
-    }
-    None
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-pub fn profile_resolve_song_dir(
-    songs_dir: &Path,
-    group: Option<&str>,
-    song: &str,
-    legacy: bool,
-) -> Option<PathBuf> {
-    if legacy {
-        resolve_song_dir_legacy(songs_dir, group, song)
-    } else {
-        resolve_song_dir(songs_dir, group, song)
-    }
 }
 
 fn guess_songs_dir(course_path: &Path) -> Option<PathBuf> {
@@ -1770,49 +1265,6 @@ fn collect_small_course_hashes<T>(
     out
 }
 
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-#[must_use]
-pub fn profile_dedup_hashes(values: &[String], std_hash: bool) -> Vec<String> {
-    fn collect<S: BuildHasher + Default>(values: &[String]) -> Vec<String> {
-        let mut out = Vec::new();
-        let mut seen = HashSet::with_hasher(S::default());
-        for value in values {
-            dedup_push(&mut out, &mut seen, value);
-        }
-        out
-    }
-
-    if std_hash {
-        collect::<std::collections::hash_map::RandomState>(values)
-    } else {
-        collect::<foldhash::fast::RandomState>(values)
-    }
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-#[must_use]
-pub fn profile_dedup_hashes_reserved(values: &[String]) -> Vec<String> {
-    let mut out = Vec::with_capacity(course_hash_capacity(values.len()));
-    let mut seen = CourseHashSet::default();
-    for value in values {
-        dedup_push(&mut out, &mut seen, value);
-    }
-    out
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-#[must_use]
-pub fn profile_dedup_hashes_adaptive(values: &[String]) -> Vec<String> {
-    if values.len() > ADAPTIVE_HASH_MAX {
-        profile_dedup_hashes_reserved(values)
-    } else {
-        collect_small_course_hashes(values, String::as_str)
-    }
-}
-
 fn analyze_course_song(
     path: &Path,
     prepared: &PreparedAnalysis,
@@ -1829,245 +1281,13 @@ pub fn analyze_crs_path(
     course_difficulty: &str,
     options: AnalysisOptions,
 ) -> Result<CourseSummary, String> {
-    analyze_crs_path_impl::<true, true, true, true, true, true>(
+    analyze_crs_path_impl(
         course_path,
         songs_dir,
         target_step_type,
         course_difficulty,
         options,
-        false,
     )
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-pub fn analyze_crs_path_cache_all_for_bench(
-    course_path: &Path,
-    songs_dir: Option<&Path>,
-    target_step_type: &str,
-    course_difficulty: &str,
-    options: AnalysisOptions,
-) -> Result<CourseSummary, String> {
-    analyze_crs_path_impl::<true, true, true, true, true, true>(
-        course_path,
-        songs_dir,
-        target_step_type,
-        course_difficulty,
-        options,
-        true,
-    )
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-pub fn profile_analyze_crs(
-    course_path: &Path,
-    songs_dir: Option<&Path>,
-    target_step_type: &str,
-    course_difficulty: &str,
-    options: AnalysisOptions,
-    song_key_cache: bool,
-) -> Result<CourseSummary, String> {
-    if song_key_cache {
-        analyze_crs_path_impl::<true, false, false, false, true, true>(
-            course_path,
-            songs_dir,
-            target_step_type,
-            course_difficulty,
-            options,
-            false,
-        )
-    } else {
-        analyze_crs_path_impl::<false, false, false, false, true, true>(
-            course_path,
-            songs_dir,
-            target_step_type,
-            course_difficulty,
-            options,
-            false,
-        )
-    }
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-pub fn profile_analyze_groups(
-    course_path: &Path,
-    songs_dir: Option<&Path>,
-    target_step_type: &str,
-    course_difficulty: &str,
-    options: AnalysisOptions,
-    group_cache: bool,
-) -> Result<CourseSummary, String> {
-    if group_cache {
-        analyze_crs_path_impl::<true, true, false, false, true, true>(
-            course_path,
-            songs_dir,
-            target_step_type,
-            course_difficulty,
-            options,
-            false,
-        )
-    } else {
-        analyze_crs_path_impl::<true, false, false, false, true, true>(
-            course_path,
-            songs_dir,
-            target_step_type,
-            course_difficulty,
-            options,
-            false,
-        )
-    }
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-pub fn profile_analyze_catalog(
-    course_path: &Path,
-    songs_dir: Option<&Path>,
-    target_step_type: &str,
-    course_difficulty: &str,
-    options: AnalysisOptions,
-    group_catalog: bool,
-) -> Result<CourseSummary, String> {
-    if group_catalog {
-        analyze_crs_path_impl::<true, true, true, false, true, true>(
-            course_path,
-            songs_dir,
-            target_step_type,
-            course_difficulty,
-            options,
-            false,
-        )
-    } else {
-        analyze_crs_path_impl::<true, true, false, false, true, true>(
-            course_path,
-            songs_dir,
-            target_step_type,
-            course_difficulty,
-            options,
-            false,
-        )
-    }
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-pub fn profile_catalog_dirs(
-    course_path: &Path,
-    songs_dir: Option<&Path>,
-    target_step_type: &str,
-    course_difficulty: &str,
-    options: AnalysisOptions,
-    trust_catalog: bool,
-) -> Result<CourseSummary, String> {
-    if trust_catalog {
-        analyze_crs_path_impl::<true, true, true, true, true, true>(
-            course_path,
-            songs_dir,
-            target_step_type,
-            course_difficulty,
-            options,
-            false,
-        )
-    } else {
-        analyze_crs_path_impl::<true, true, true, false, true, true>(
-            course_path,
-            songs_dir,
-            target_step_type,
-            course_difficulty,
-            options,
-            false,
-        )
-    }
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-pub fn profile_course_nps(
-    course_path: &Path,
-    songs_dir: Option<&Path>,
-    target_step_type: &str,
-    course_difficulty: &str,
-    options: AnalysisOptions,
-    prealloc_nps: bool,
-) -> Result<CourseSummary, String> {
-    if prealloc_nps {
-        analyze_crs_path_impl::<true, true, true, true, true, true>(
-            course_path,
-            songs_dir,
-            target_step_type,
-            course_difficulty,
-            options,
-            false,
-        )
-    } else {
-        analyze_crs_path_impl::<true, true, true, true, false, true>(
-            course_path,
-            songs_dir,
-            target_step_type,
-            course_difficulty,
-            options,
-            false,
-        )
-    }
-}
-
-#[cfg(feature = "profile")]
-#[doc(hidden)]
-pub fn profile_course_titles(
-    course_path: &Path,
-    songs_dir: Option<&Path>,
-    target_step_type: &str,
-    course_difficulty: &str,
-    options: AnalysisOptions,
-    prealloc_title: bool,
-) -> Result<CourseSummary, String> {
-    if prealloc_title {
-        analyze_crs_path_impl::<true, true, true, true, true, true>(
-            course_path,
-            songs_dir,
-            target_step_type,
-            course_difficulty,
-            options,
-            false,
-        )
-    } else {
-        analyze_crs_path_impl::<true, true, true, true, true, false>(
-            course_path,
-            songs_dir,
-            target_step_type,
-            course_difficulty,
-            options,
-            false,
-        )
-    }
-}
-
-fn resolve_course_song<'a, const GROUP_CACHE: bool>(
-    songs_dir: &Path,
-    group: Option<&'a str>,
-    song: &str,
-    last_group: &mut Option<(&'a str, PathBuf)>,
-) -> Option<PathBuf> {
-    if !GROUP_CACHE {
-        return resolve_song_dir(songs_dir, group, song);
-    }
-
-    let song = song.trim();
-    if song.is_empty() {
-        return None;
-    }
-    let Some(group) = group.map(str::trim).filter(|group| !group.is_empty()) else {
-        return resolve_song_dir(songs_dir, None, song);
-    };
-    if !last_group
-        .as_ref()
-        .is_some_and(|(cached, _)| *cached == group)
-    {
-        *last_group = Some((group, find_named_dir(songs_dir, group)?));
-    }
-    resolve_group_song(&last_group.as_ref()?.1, song)
 }
 
 struct GroupCatalog<'a> {
@@ -2087,7 +1307,7 @@ fn catalog_group(dir: &Path) -> Option<Vec<OsString>> {
     Some(songs)
 }
 
-fn resolve_catalog_song<'a, const TRUST_CATALOG: bool>(
+fn resolve_catalog_song<'a>(
     songs_dir: &Path,
     group: Option<&'a str>,
     song: &str,
@@ -2116,32 +1336,20 @@ fn resolve_catalog_song<'a, const TRUST_CATALOG: bool>(
     for name in &cached.songs {
         if !name.to_string_lossy().starts_with("._") && assets::name_eq_ci(name, song) {
             let path = cached.dir.join(name);
-            if TRUST_CATALOG || path.is_dir() {
-                return Some(path);
-            }
+            return Some(path);
         }
     }
     resolve_group_song(&cached.dir, song)
 }
 
-fn resolve_course_simfile<
-    'a,
-    const GROUP_CACHE: bool,
-    const GROUP_CATALOG: bool,
-    const TRUST_CATALOG: bool,
->(
+fn resolve_course_simfile<'a>(
     songs_dir: &Path,
     group: Option<&'a str>,
     song: &str,
-    last_group: &mut Option<(&'a str, PathBuf)>,
     group_catalog: &mut Option<GroupCatalog<'a>>,
 ) -> Result<(PathBuf, PathBuf), String> {
-    let song_dir = if GROUP_CATALOG {
-        resolve_catalog_song::<TRUST_CATALOG>(songs_dir, group, song, group_catalog)
-    } else {
-        resolve_course_song::<GROUP_CACHE>(songs_dir, group, song, last_group)
-    }
-    .ok_or_else(|| format!("Song not found: {song}"))?;
+    let song_dir = resolve_catalog_song(songs_dir, group, song, group_catalog)
+        .ok_or_else(|| format!("Song not found: {song}"))?;
     let scan = pack::scan_song_dir(&song_dir, pack::ScanOpt::default())
         .map_err(|e| format!("Failed scanning {}: {e:?}", song_dir.display()))?;
     let simfile = scan
@@ -2150,20 +1358,12 @@ fn resolve_course_simfile<
     Ok((song_dir, simfile))
 }
 
-fn analyze_crs_path_impl<
-    const SONG_KEY_CACHE: bool,
-    const GROUP_CACHE: bool,
-    const GROUP_CATALOG: bool,
-    const TRUST_CATALOG: bool,
-    const PREALLOC_NPS: bool,
-    const PREALLOC_TITLE: bool,
->(
+fn analyze_crs_path_impl(
     course_path: &Path,
     songs_dir: Option<&Path>,
     target_step_type: &str,
     course_difficulty: &str,
     options: AnalysisOptions,
-    cache_all: bool,
 ) -> Result<CourseSummary, String> {
     let start = Instant::now();
     let data = std::fs::read(course_path).map_err(|e| e.to_string())?;
@@ -2182,12 +1382,10 @@ fn analyze_crs_path_impl<
 
     let entry_count = course.entries.len();
     let mut song_uses: HashMap<(Option<&str>, &str), usize> = HashMap::new();
-    if !cache_all {
-        song_uses.reserve(entry_count);
-        for entry in &course.entries {
-            if let CourseSong::Fixed { group, song } = &entry.song {
-                *song_uses.entry((group.as_deref(), song)).or_default() += 1;
-            }
+    song_uses.reserve(entry_count);
+    for entry in &course.entries {
+        if let CourseSong::Fixed { group, song } = &entry.song {
+            *song_uses.entry((group.as_deref(), song)).or_default() += 1;
         }
     }
     let repeated_songs = song_uses.values().filter(|&&uses| uses > 1).count();
@@ -2201,20 +1399,9 @@ fn analyze_crs_path_impl<
     // - Eviction/destruction: no eviction; entries drop on return, off gameplay frames.
     // - Instrumentation: allocation_perf tracks peak heap; no persistent counters needed.
     // - Worst-frame cost: none during gameplay; a miss costs one simfile analysis here.
-    let cache_capacity = if cache_all {
-        entry_count
-    } else {
-        repeated_songs.min(MAX_CACHED_SIMS)
-    };
-    let mut path_cache: HashMap<PathBuf, SimfileSummary> =
-        HashMap::with_capacity(if SONG_KEY_CACHE { 0 } else { cache_capacity });
+    let cache_capacity = repeated_songs.min(MAX_CACHED_SIMS);
     let mut song_cache: HashMap<(Option<&str>, &str), (String, SimfileSummary)> =
-        HashMap::with_capacity(if SONG_KEY_CACHE { cache_capacity } else { 0 });
-    // Worker-local, single-course, one-entry group path cache. The first named
-    // group warms it; a change replaces it in O(1), and hits skip the Songs-root
-    // scan. It drops after load-time analysis, so no miss or destruction reaches
-    // gameplay; allocation benchmarks instrument its peak and worst-case cost.
-    let mut last_group = None;
+        HashMap::with_capacity(cache_capacity);
     // - Owner/thread safety/lifetime: worker-local, unshared, one course analysis.
     // - Capacity/warmup: one group's confirmed child directories, loaded on first use.
     // - Miss/overflow: use the exact resolver; directory size bounds stored names.
@@ -2249,15 +1436,10 @@ fn analyze_crs_path_impl<
         };
 
         let song_key = (group.as_deref(), song.as_str());
-        let cache_song = cache_all || song_uses.get(&song_key).is_some_and(|&uses| uses > 1);
-        let cache_len = if SONG_KEY_CACHE {
-            song_cache.len()
-        } else {
-            path_cache.len()
-        };
-        let cache_has_room = cache_all || cache_len < MAX_CACHED_SIMS;
+        let cache_song = song_uses.get(&song_key).is_some_and(|&uses| uses > 1);
+        let cache_has_room = song_cache.len() < MAX_CACHED_SIMS;
         let uncached_sim;
-        let (sim, song_dir): (&SimfileSummary, String) = if cache_song && SONG_KEY_CACHE {
+        let (sim, song_dir): (&SimfileSummary, String) = if cache_song {
             match song_cache.entry(song_key) {
                 Entry::Occupied(entry) => {
                     let cached = entry.into_mut();
@@ -2265,14 +1447,12 @@ fn analyze_crs_path_impl<
                     (&cached.1, dir_name)
                 }
                 Entry::Vacant(entry) if cache_has_room => {
-                    let (dir, path) =
-                        resolve_course_simfile::<GROUP_CACHE, GROUP_CATALOG, TRUST_CATALOG>(
-                            &base_songs_dir,
-                            song_key.0,
-                            song_key.1,
-                            &mut last_group,
-                            &mut group_catalog,
-                        )?;
+                    let (dir, path) = resolve_course_simfile(
+                        &base_songs_dir,
+                        song_key.0,
+                        song_key.1,
+                        &mut group_catalog,
+                    )?;
                     let dir_name = song_dir_name(&dir);
                     let summary = analyze_course_song(&path, &prepared, &mut analysis_scratch)?;
                     let cached = entry.insert((dir_name.clone(), summary));
@@ -2280,46 +1460,21 @@ fn analyze_crs_path_impl<
                 }
                 Entry::Vacant(entry) => {
                     drop(entry);
-                    let (dir, path) =
-                        resolve_course_simfile::<GROUP_CACHE, GROUP_CATALOG, TRUST_CATALOG>(
-                            &base_songs_dir,
-                            song_key.0,
-                            song_key.1,
-                            &mut last_group,
-                            &mut group_catalog,
-                        )?;
+                    let (dir, path) = resolve_course_simfile(
+                        &base_songs_dir,
+                        song_key.0,
+                        song_key.1,
+                        &mut group_catalog,
+                    )?;
                     uncached_sim = analyze_course_song(&path, &prepared, &mut analysis_scratch)?;
                     (&uncached_sim, song_dir_name(&dir))
                 }
             }
-        } else if cache_song {
-            let (dir, path) = resolve_course_simfile::<GROUP_CACHE, GROUP_CATALOG, TRUST_CATALOG>(
-                &base_songs_dir,
-                song_key.0,
-                song_key.1,
-                &mut last_group,
-                &mut group_catalog,
-            )?;
-            let dir_name = song_dir_name(&dir);
-            match path_cache.entry(path) {
-                Entry::Occupied(entry) => (entry.into_mut(), dir_name),
-                Entry::Vacant(entry) if cache_has_room => {
-                    let summary =
-                        analyze_course_song(entry.key(), &prepared, &mut analysis_scratch)?;
-                    (entry.insert(summary), dir_name)
-                }
-                Entry::Vacant(entry) => {
-                    let path = entry.into_key();
-                    uncached_sim = analyze_course_song(&path, &prepared, &mut analysis_scratch)?;
-                    (&uncached_sim, dir_name)
-                }
-            }
         } else {
-            let (dir, path) = resolve_course_simfile::<GROUP_CACHE, GROUP_CATALOG, TRUST_CATALOG>(
+            let (dir, path) = resolve_course_simfile(
                 &base_songs_dir,
                 song_key.0,
                 song_key.1,
-                &mut last_group,
                 &mut group_catalog,
             )?;
             uncached_sim = analyze_course_song(&path, &prepared, &mut analysis_scratch)?;
@@ -2351,7 +1506,7 @@ fn analyze_crs_path_impl<
         }
 
         meters.push(parse_meter(&chart.rating_str));
-        if PREALLOC_NPS && measure_nps_all.capacity() == 0 {
+        if measure_nps_all.capacity() == 0 {
             // Worker-local and single-course: estimate the final measure count from
             // the first chart, then release this buffer before returning to gameplay.
             measure_nps_all.reserve_exact(chart.measure_nps_vec.len().saturating_mul(entry_count));
@@ -2359,13 +1514,7 @@ fn analyze_crs_path_impl<
         measure_nps_all.extend_from_slice(&chart.measure_nps_vec);
 
         entries.push(CourseEntrySummary {
-            song: if PREALLOC_TITLE {
-                course_title(&sim.title_str, &sim.subtitle_str)
-            } else if sim.subtitle_str.is_empty() {
-                sim.title_str.clone()
-            } else {
-                format!("{} {}", sim.title_str, sim.subtitle_str)
-            },
+            song: course_title(&sim.title_str, &sim.subtitle_str),
             song_dir,
             step_type: chart.step_type_str.clone(),
             difficulty: chart.difficulty_str.clone(),
@@ -2431,11 +1580,9 @@ fn analyze_crs_path_impl<
 mod tests {
     use super::{
         CourseHashSet, CourseSong, CourseTag, Difficulty, SongSort, analyze_crs_path,
-        analyze_crs_path_impl, collect_small_course_hashes, course_tag, course_tag_sequential,
-        course_title, dedup_push, merge_custom_patterns, normalize_stepstype, parse_crs,
-        parse_crs_with, parse_song_select, stepstype_eq,
+        collect_small_course_hashes, course_tag, course_title, dedup_push, merge_custom_patterns,
+        normalize_stepstype, parse_crs, parse_song_select, stepstype_eq,
     };
-    use std::collections::HashSet;
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -2451,29 +1598,11 @@ mod tests {
     }
 
     #[test]
-    fn indexed_course_tags_match_sequential_dispatch() {
-        for tag in [
-            "COURSE",
-            "coursetranslit",
-            "Scripter",
-            "DESCRIPTION",
-            "repeat",
-            "Banner",
-            "BACKGROUND",
-            "lives",
-            "Meter",
-            "SONG",
-            "songselect",
-            "UNKNOWN",
-            "",
-        ] {
-            assert_eq!(
-                course_tag(tag.as_bytes()),
-                course_tag_sequential(tag.as_bytes()),
-                "course tag dispatch changed for {tag:?}"
-            );
-        }
-        assert_eq!(course_tag(b"SONG"), CourseTag::Song);
+    fn course_tags_are_case_insensitive() {
+        assert_eq!(course_tag(b"COURSE"), CourseTag::Course);
+        assert_eq!(course_tag(b"song"), CourseTag::Song);
+        assert_eq!(course_tag(b"SongSelect"), CourseTag::SongSelect);
+        assert_eq!(course_tag(b"UNKNOWN"), CourseTag::Unknown);
     }
 
     #[test]
@@ -2546,14 +1675,8 @@ mod tests {
         }
     }
 
-    fn dedup_push_materialized(output: &mut Vec<String>, seen: &mut HashSet<String>, value: &str) {
-        if !value.is_empty() && seen.insert(value.to_string()) {
-            output.push(value.to_string());
-        }
-    }
-
     #[test]
-    fn compact_hash_dedup_matches_materialized_strings() {
+    fn compact_hash_dedup_preserves_first_occurrence() {
         let values = [
             "",
             "0123456789abcdef",
@@ -2563,29 +1686,31 @@ mod tests {
             "short",
             "é234567890abcdef",
         ];
-        let mut expected = Vec::new();
-        let mut expected_seen = HashSet::new();
         let mut actual = Vec::new();
         let mut actual_seen = CourseHashSet::default();
 
         for value in values {
-            dedup_push_materialized(&mut expected, &mut expected_seen, value);
             dedup_push(&mut actual, &mut actual_seen, value);
         }
 
-        assert_eq!(actual, expected);
+        assert_eq!(
+            actual,
+            [
+                "0123456789abcdef",
+                "fedcba9876543210",
+                "short",
+                "é234567890abcdef"
+            ]
+        );
 
         let values: Vec<_> = (0..64)
             .map(|index| format!("{:016x}", index % 48))
             .collect();
-        let mut expected = Vec::new();
-        let mut expected_seen = HashSet::new();
-        for value in &values {
-            dedup_push_materialized(&mut expected, &mut expected_seen, value);
-        }
         assert_eq!(
             collect_small_course_hashes(&values, String::as_str),
-            expected
+            (0..48)
+                .map(|index| format!("{index:016x}"))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -2665,35 +1790,27 @@ mod tests {
     }
 
     #[test]
-    fn songselect_entry_reserve_matches_growing_vector() {
+    fn songselect_entry_reserve_handles_many_entries() {
         let mut data = b"#COURSE:Selection Reserve;\n".to_vec();
         for index in 0..64 {
             data.extend_from_slice(
                 format!("#SONGSELECT:TITLE=Song {index}:GROUP=Group A,Group B;\n").as_bytes(),
             );
         }
-        let growing = parse_crs_with::<false, false, true, true>(&data)
-            .expect("growing selection course should parse");
-        let reserved = parse_crs_with::<false, true, true, true>(&data)
-            .expect("reserved selection course should parse");
-
-        assert_eq!(reserved.entries, growing.entries);
-        assert_eq!(reserved.entries.len(), 64);
+        let course = parse_crs(&data).expect("selection course should parse");
+        assert_eq!(course.entries.len(), 64);
     }
 
     #[test]
-    fn songselect_tight_list_capacity_preserves_values() {
+    fn songselect_preserves_list_values() {
         let raw = concat!(
             "TITLE=First,Second\\, Mix:TITLE=Third:",
             "GROUP=Group A,Group B:ARTIST=Artist:GENRE=Pop,Rock:",
             "DIFFICULTY=Easy,invalid,Challenge"
         )
         .as_bytes();
-        let growing = parse_song_select::<false>(raw).expect("growing selection should parse");
-        let tight = parse_song_select::<true>(raw).expect("tight selection should parse");
-
-        assert_eq!(tight, growing);
-        let CourseSong::Select(select) = tight.song else {
+        let parsed = parse_song_select(raw).expect("selection should parse");
+        let CourseSong::Select(select) = parsed.song else {
             panic!("selection parser should produce selection criteria");
         };
         assert_eq!(select.titles, ["First", "Second, Mix", "Third"]);
@@ -2742,51 +1859,6 @@ mod tests {
             compute_tech_counts: false,
             ..crate::AnalysisOptions::default()
         };
-        let path_cached = analyze_crs_path_impl::<false, false, false, false, true, true>(
-            &course_path,
-            Some(&songs_dir),
-            "dance-single",
-            "Medium",
-            options.clone(),
-            false,
-        )
-        .expect("path-key cache should analyze");
-        let group_uncached = analyze_crs_path_impl::<true, false, false, false, true, true>(
-            &course_path,
-            Some(&songs_dir),
-            "dance-single",
-            "Medium",
-            options.clone(),
-            false,
-        )
-        .expect("uncached group lookup should analyze");
-        let catalog_checked = analyze_crs_path_impl::<true, true, true, false, true, true>(
-            &course_path,
-            Some(&songs_dir),
-            "dance-single",
-            "Medium",
-            options.clone(),
-            false,
-        )
-        .expect("rechecked group catalog should analyze");
-        let nps_growing = analyze_crs_path_impl::<true, true, true, true, false, true>(
-            &course_path,
-            Some(&songs_dir),
-            "dance-single",
-            "Medium",
-            options.clone(),
-            false,
-        )
-        .expect("growing NPS buffer should analyze");
-        let title_formatted = analyze_crs_path_impl::<true, true, true, true, true, false>(
-            &course_path,
-            Some(&songs_dir),
-            "dance-single",
-            "Medium",
-            options.clone(),
-            false,
-        )
-        .expect("formatted course titles should analyze");
         let summary = analyze_crs_path(
             &course_path,
             Some(&songs_dir),
@@ -2812,53 +1884,5 @@ mod tests {
         assert!(summary.chart.custom_patterns.is_empty());
         assert!(!summary.pattern_counts_enabled);
         assert!(!summary.tech_counts_enabled);
-
-        let mut expected_json = Vec::new();
-        let mut uncached_json = Vec::new();
-        let mut checked_json = Vec::new();
-        let mut growing_json = Vec::new();
-        let mut formatted_json = Vec::new();
-        let mut actual_json = Vec::new();
-        crate::report::write_course_reports(
-            &path_cached,
-            crate::report::OutputMode::JSON,
-            &mut expected_json,
-        )
-        .expect("path-key cache summary should serialize");
-        crate::report::write_course_reports(
-            &group_uncached,
-            crate::report::OutputMode::JSON,
-            &mut uncached_json,
-        )
-        .expect("uncached group summary should serialize");
-        crate::report::write_course_reports(
-            &catalog_checked,
-            crate::report::OutputMode::JSON,
-            &mut checked_json,
-        )
-        .expect("rechecked catalog summary should serialize");
-        crate::report::write_course_reports(
-            &nps_growing,
-            crate::report::OutputMode::JSON,
-            &mut growing_json,
-        )
-        .expect("growing NPS summary should serialize");
-        crate::report::write_course_reports(
-            &title_formatted,
-            crate::report::OutputMode::JSON,
-            &mut formatted_json,
-        )
-        .expect("formatted course title summary should serialize");
-        crate::report::write_course_reports(
-            &summary,
-            crate::report::OutputMode::JSON,
-            &mut actual_json,
-        )
-        .expect("repeated-only cache summary should serialize");
-        assert_eq!(actual_json, checked_json);
-        assert_eq!(actual_json, growing_json);
-        assert_eq!(actual_json, formatted_json);
-        assert_eq!(actual_json, uncached_json);
-        assert_eq!(actual_json, expected_json);
     }
 }

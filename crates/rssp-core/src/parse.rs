@@ -618,7 +618,7 @@ fn try_tag_adv<'a>(s: &'a [u8], tag: &[u8], nl: bool, out: &mut Option<&'a [u8]>
 }
 
 #[inline]
-fn try_tag_append<'a, const PRESIZE: bool>(
+fn try_tag_append<'a>(
     s: &'a [u8],
     tag: &[u8],
     nl: bool,
@@ -630,7 +630,7 @@ fn try_tag_append<'a, const PRESIZE: bool>(
     let (value, adv) = parse_tag_val(s, tag.len(), nl)?;
     *out = Some(match out.take() {
         None => Cow::Borrowed(value),
-        Some(Cow::Borrowed(previous)) if PRESIZE => {
+        Some(Cow::Borrowed(previous)) => {
             let mut joined = Vec::with_capacity(previous.len() + 1 + value.len());
             joined.extend_from_slice(previous);
             joined.push(b':');
@@ -654,12 +654,6 @@ macro_rules! try_tags {
     }};
 }
 
-macro_rules! try_header_tags {
-    ($s:expr, $i:expr, $o:expr, [ $( ($tag:expr, $field:ident, $on:expr) ),* $(,)? ]) => {{
-        $( if let Some(a) = try_tag_step($s, $tag, &mut $o.$field, $on) { $i += a; continue; } )*
-    }};
-}
-
 macro_rules! return_tags {
     ($s:expr, $o:expr, [ $( ($tag:expr, $field:ident, $nl:expr) ),* $(,)? ]) => {{
         $( if let Some(advance) = try_tag_adv($s, $tag, $nl, &mut $o.$field) {
@@ -677,15 +671,10 @@ macro_rules! return_header_tags {
 }
 
 #[inline(never)]
-fn dispatch_notedata_tag<'a, const PRESIZE: bool>(
-    s: &'a [u8],
-    out: &mut NotedataFields<'a>,
-) -> Option<usize> {
+fn dispatch_notedata_tag<'a>(s: &'a [u8], out: &mut NotedataFields<'a>) -> Option<usize> {
     match s.get(1).map_or(0, u8::to_ascii_uppercase) {
         b'A' => {
-            if let Some(advance) =
-                try_tag_append::<PRESIZE>(s, b"#ATTACKS:", true, &mut out.chart_attacks)
-            {
+            if let Some(advance) = try_tag_append(s, b"#ATTACKS:", true, &mut out.chart_attacks) {
                 return Some(advance);
             }
         }
@@ -751,16 +740,14 @@ fn dispatch_notedata_tag<'a, const PRESIZE: bool>(
 }
 
 #[inline(never)]
-fn dispatch_header_tag<'a, const PRESIZE: bool>(
+fn dispatch_header_tag<'a>(
     s: &'a [u8],
     ssc: bool,
     out: &mut ParsedSimfileData<'a>,
 ) -> Option<usize> {
     match s.get(1).map_or(0, u8::to_ascii_uppercase) {
         b'A' => {
-            if let Some(advance) =
-                try_tag_append::<PRESIZE>(s, b"#ATTACKS:", true, &mut out.attacks)
-            {
+            if let Some(advance) = try_tag_append(s, b"#ATTACKS:", true, &mut out.attacks) {
                 return Some(advance);
             }
             return_header_tags!(
@@ -860,10 +847,7 @@ fn dispatch_header_tag<'a, const PRESIZE: bool>(
     None
 }
 
-fn parse_notedata_entry<const DISPATCH: bool, const PRESIZE: bool>(
-    data: &[u8],
-    start: usize,
-) -> (Option<ParsedChartEntry<'_>>, usize) {
+fn parse_notedata_entry(data: &[u8], start: usize) -> (Option<ParsedChartEntry<'_>>, usize) {
     let mut out = NotedataFields::default();
     let mut i = start;
 
@@ -886,9 +870,8 @@ fn parse_notedata_entry<const DISPATCH: bool, const PRESIZE: bool>(
             continue;
         }
 
-        if DISPATCH
-            && s.get(1)
-                .is_some_and(|byte| byte.eq_ignore_ascii_case(&b'N'))
+        if s.get(1)
+            .is_some_and(|byte| byte.eq_ignore_ascii_case(&b'N'))
         {
             try_tags!(
                 s,
@@ -897,50 +880,9 @@ fn parse_notedata_entry<const DISPATCH: bool, const PRESIZE: bool>(
                 [(b"#NOTES:", notes, true), (b"#NOTES2:", notes2, true)]
             );
         }
-        if DISPATCH {
-            if let Some(advance) = dispatch_notedata_tag::<PRESIZE>(s, &mut out) {
-                i += advance;
-                continue;
-            }
-        } else {
-            if let Some(adv) =
-                try_tag_append::<PRESIZE>(s, b"#ATTACKS:", true, &mut out.chart_attacks)
-            {
-                i += adv;
-                continue;
-            }
-            try_tags!(
-                s,
-                i,
-                out,
-                [
-                    (b"#STEPSTYPE:", step_type, false),
-                    (b"#CHARTNAME:", chart_name, false),
-                    (b"#CHARTSTYLE:", chart_style, false),
-                    (b"#DESCRIPTION:", description, false),
-                    (b"#CREDIT:", credit, false),
-                    (b"#DIFFICULTY:", difficulty, false),
-                    (b"#METER:", meter, false),
-                    (b"#NOTES:", notes, true),
-                    (b"#NOTES2:", notes2, true),
-                    (b"#MUSIC:", chart_music, true),
-                    (b"#BPMS:", chart_bpms, true),
-                    (b"#STOPS:", chart_stops, true),
-                    (b"#FREEZES:", chart_freezes, true),
-                    (b"#DELAYS:", chart_delays, true),
-                    (b"#WARPS:", chart_warps, true),
-                    (b"#SPEEDS:", chart_speeds, true),
-                    (b"#SCROLLS:", chart_scrolls, true),
-                    (b"#FAKES:", chart_fakes, true),
-                    (b"#OFFSET:", chart_offset, true),
-                    (b"#DISPLAYBPM:", chart_display_bpm, true),
-                    (b"#TIMESIGNATURES:", chart_time_signatures, true),
-                    (b"#LABELS:", chart_labels, true),
-                    (b"#TICKCOUNTS:", chart_tickcounts, true),
-                    (b"#COMBOS:", chart_combos, true),
-                    (b"#RADARVALUES:", chart_radar_values, true),
-                ]
-            );
+        if let Some(advance) = dispatch_notedata_tag(s, &mut out) {
+            i += advance;
+            continue;
         }
         i += 1;
     }
@@ -996,60 +938,10 @@ fn chart_reserve_len(data_len: usize, start: usize, next: usize) -> usize {
 }
 
 pub fn extract_sections<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfileData<'a>> {
-    extract_sections_impl::<true, true, true>(data, ext)
+    extract_sections_impl(data, ext)
 }
 
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn extract_sections_for_bench<'a>(
-    data: &'a [u8],
-    ext: &str,
-    legacy_dispatch: bool,
-) -> io::Result<ParsedSimfileData<'a>> {
-    if legacy_dispatch {
-        extract_sections_impl::<false, true, true>(data, ext)
-    } else {
-        extract_sections_impl::<true, true, true>(data, ext)
-    }
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn extract_sections_reserve_for_bench<'a>(
-    data: &'a [u8],
-    ext: &str,
-    legacy_growth: bool,
-) -> io::Result<ParsedSimfileData<'a>> {
-    if legacy_growth {
-        extract_sections_impl::<true, false, true>(data, ext)
-    } else {
-        extract_sections_impl::<true, true, true>(data, ext)
-    }
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-pub fn extract_sections_append_for_bench<'a>(
-    data: &'a [u8],
-    ext: &str,
-    legacy_append: bool,
-) -> io::Result<ParsedSimfileData<'a>> {
-    if legacy_append {
-        extract_sections_impl::<true, true, false>(data, ext)
-    } else {
-        extract_sections_impl::<true, true, true>(data, ext)
-    }
-}
-
-fn extract_sections_impl<
-    'a,
-    const DISPATCH: bool,
-    const RESERVE_CHARTS: bool,
-    const PRESIZE: bool,
->(
-    data: &'a [u8],
-    ext: &str,
-) -> io::Result<ParsedSimfileData<'a>> {
+fn extract_sections_impl<'a>(data: &'a [u8], ext: &str) -> io::Result<ParsedSimfileData<'a>> {
     let ssc = extension_is_ssc(ext)?;
 
     let mut r = ParsedSimfileData::default();
@@ -1064,9 +956,9 @@ fn extract_sections_impl<
 
         // SSC notedata block
         if ssc && starts_with_ci(s, b"#NOTEDATA:") {
-            let (entry, next) = parse_notedata_entry::<DISPATCH, PRESIZE>(data, i);
+            let (entry, next) = parse_notedata_entry(data, i);
             if let Some(entry) = entry {
-                if RESERVE_CHARTS && r.notes_list.capacity() == 0 {
+                if r.notes_list.capacity() == 0 {
                     r.notes_list
                         .reserve_exact(chart_reserve_len(data.len(), i, next));
                 }
@@ -1089,7 +981,7 @@ fn extract_sections_impl<
                 let start = i + tag_len;
                 let (field_count, fields, note_data, next) = split_sm_notes(data, start);
                 if field_count == 5 {
-                    if RESERVE_CHARTS && r.notes_list.capacity() == 0 {
+                    if r.notes_list.capacity() == 0 {
                         r.notes_list
                             .reserve_exact(chart_reserve_len(data.len(), i, next));
                     }
@@ -1105,63 +997,9 @@ fn extract_sections_impl<
             }
         }
 
-        if DISPATCH {
-            if let Some(advance) = dispatch_header_tag::<PRESIZE>(s, ssc, &mut r) {
-                i += advance;
-                continue;
-            }
-        } else {
-            if let Some(adv) = try_tag_append::<PRESIZE>(s, b"#ATTACKS:", true, &mut r.attacks) {
-                i += adv;
-                continue;
-            }
-            try_header_tags!(
-                s,
-                i,
-                r,
-                [
-                    (b"#TITLE:", title, true),
-                    (b"#SUBTITLE:", subtitle, true),
-                    (b"#ARTIST:", artist, true),
-                    (b"#GENRE:", genre, true),
-                    (b"#TITLETRANSLIT:", title_translit, true),
-                    (b"#SUBTITLETRANSLIT:", subtitle_translit, true),
-                    (b"#ARTISTTRANSLIT:", artist_translit, true),
-                    (b"#VERSION:", version, true),
-                    (b"#OFFSET:", offset, true),
-                    (b"#BPMS:", bpms, true),
-                    (b"#STOPS:", stops, true),
-                    (b"#FREEZES:", stops, true),
-                    (b"#DELAYS:", delays, true),
-                    (b"#TIMESIGNATURES:", time_signatures, true),
-                    (b"#TICKCOUNTS:", tickcounts, true),
-                    (b"#BANNER:", banner, true),
-                    (b"#BACKGROUND:", background, true),
-                    (b"#CDTITLE:", cdtitle, true),
-                    (b"#JACKET:", jacket, true),
-                    (b"#MUSIC:", music, true),
-                    (b"#SAMPLESTART:", sample_start, true),
-                    (b"#SAMPLELENGTH:", sample_length, true),
-                    (b"#DISPLAYBPM:", display_bpm, true),
-                    (b"#SELECTABLE:", selectable, true),
-                    (b"#LYRICSPATH:", lyricspath, true),
-                    (b"#CREDIT:", credit, true),
-                    (b"#BGCHANGES:", bgchanges, true),
-                    (b"#FGCHANGES:", fgchanges, true),
-                    (b"#KEYSOUNDS:", keysounds, true),
-                    (b"#ORIGIN:", origin, ssc),
-                    (b"#PREVIEWVID:", previewvid, ssc),
-                    (b"#CDIMAGE:", cdimage, ssc),
-                    (b"#DISCIMAGE:", discimage, ssc),
-                    (b"#FAKES:", fakes, ssc),
-                    (b"#WARPS:", warps, ssc),
-                    (b"#SPEEDS:", speeds, ssc),
-                    (b"#SCROLLS:", scrolls, ssc),
-                    (b"#LABELS:", labels, ssc),
-                    (b"#COMBOS:", combos, ssc),
-                    (b"#LASTSECONDHINT:", last_second_hint, ssc),
-                ]
-            );
+        if let Some(advance) = dispatch_header_tag(s, ssc, &mut r) {
+            i += advance;
+            continue;
         }
         i += 1;
     }
@@ -1220,10 +1058,6 @@ pub fn bgchanges_values(data: &[u8]) -> impl Iterator<Item = &[u8]> {
         }
         None
     })
-}
-
-pub fn extract_bgchanges_values(data: &[u8]) -> Vec<&[u8]> {
-    bgchanges_values(data).collect()
 }
 
 #[must_use]
@@ -1374,8 +1208,7 @@ mod tests {
     use std::borrow::Cow;
 
     use super::{
-        bgchanges_values, decode_cp1252, decode_unescape_trim, extract_bgchanges_values,
-        extract_sections, extract_sections_impl, parse_version, unescape_trim_cow,
+        decode_cp1252, decode_unescape_trim, extract_sections, parse_version, unescape_trim_cow,
     };
     use crate::timing::{STEPFILE_VERSION_NUMBER, TimingFormat};
 
@@ -1397,26 +1230,26 @@ mod tests {
         )
         .as_bytes();
         let current = extract_sections(data, "ssc").expect("fixture should parse");
-        let legacy = extract_sections_impl::<false, true, true>(data, "ssc")
-            .expect("legacy fixture should parse");
-
         assert_eq!(current.title, Some(&b"Mixed Case"[..]));
         assert_eq!(current.attacks.as_deref(), Some(&b"first:second"[..]));
         assert_eq!(current.notes_list.len(), 1);
-        assert_eq!(current.notes_list[0].fields, legacy.notes_list[0].fields);
+        assert_eq!(
+            current.notes_list[0].fields,
+            [
+                &b"dance-single"[..],
+                &b"dispatch"[..],
+                &b"Challenge"[..],
+                &b"12"[..],
+                &b"Author"[..],
+            ]
+        );
         assert_eq!(
             current.notes_list[0].chart_display_bpm.as_deref(),
             Some(&b"120:180"[..])
         );
-        assert_eq!(current.title, legacy.title);
-        assert_eq!(current.attacks, legacy.attacks);
-        assert_eq!(
-            current.notes_list[0].chart_display_bpm,
-            legacy.notes_list[0].chart_display_bpm
-        );
         assert_eq!(
             current.notes_list[0].note_data,
-            legacy.notes_list[0].note_data
+            b"\n1000\n0100\n0010\n0001\n"
         );
     }
 
@@ -1498,30 +1331,6 @@ mod tests {
             b"TIME=0:END=9999:MODS=overhead:\
               TIME=0.241:END=0.438:MODS=*1.875 15% invert:\
               TIME=0.338:END=0.515:MODS=*1.946 no invert"
-        );
-    }
-
-    #[test]
-    fn streamed_bgchanges_match_collected_values() {
-        let data = b"#TITLE:Backgrounds;\n\
-#BGCHANGES:0=first.png;\n\
-#BGCHANGES2:ignored;\n\
-#ANIMATIONS:4=second.mp4;\n\
-#BGCHANGES1:8=third.png;\n\
-#BGCHANGESX:ignored;\n\
-#BGCHANGES:unterminated";
-        let previous = extract_bgchanges_values(data);
-        let streamed: Vec<_> = bgchanges_values(data).collect();
-
-        assert_eq!(streamed, previous);
-        assert_eq!(
-            streamed,
-            [
-                &b"0=first.png"[..],
-                &b"4=second.mp4"[..],
-                &b"8=third.png"[..],
-                &b"unterminated"[..],
-            ]
         );
     }
 

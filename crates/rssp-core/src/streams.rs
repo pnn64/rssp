@@ -316,10 +316,10 @@ pub fn compute_stream_outputs_with_scratch(
     (String, String, String),
     (String, String, String),
 ) {
-    compute_stream_outputs_impl::<true>(measures, tokens)
+    compute_stream_outputs_impl(measures, tokens)
 }
 
-fn compute_stream_outputs_impl<const FUSED: bool>(
+fn compute_stream_outputs_impl(
     measures: &[usize],
     tokens: &mut Vec<Token>,
 ) -> (
@@ -336,32 +336,9 @@ fn compute_stream_outputs_impl<const FUSED: bool>(
         );
     }
 
-    let sn = if FUSED {
-        format_breakdown_tokens3(tokens)
-    } else {
-        format_breakdown_tokens3_legacy(tokens)
-    };
+    let sn = format_breakdown_tokens3(tokens);
     let standard = format_stream_tokens3(tokens);
     (counts, sn, standard)
-}
-
-#[cfg(feature = "bench-support")]
-#[doc(hidden)]
-#[must_use]
-pub fn compute_stream_outputs_profile(
-    measures: &[usize],
-    tokens: &mut Vec<Token>,
-    fused: bool,
-) -> (
-    StreamCounts,
-    (String, String, String),
-    (String, String, String),
-) {
-    if fused {
-        compute_stream_outputs_impl::<true>(measures, tokens)
-    } else {
-        compute_stream_outputs_impl::<false>(measures, tokens)
-    }
 }
 
 #[must_use]
@@ -382,14 +359,6 @@ pub fn generate_breakdowns(measures: &[usize]) -> (String, String, String) {
 
     let tokens = tokenize(&measures[start..=end]);
     format_breakdown_tokens3(&tokens)
-}
-
-fn format_breakdown_tokens3_legacy(tokens: &[Token]) -> (String, String, String) {
-    (
-        format_breakdown_tokens(tokens, BreakdownMode::Detailed),
-        format_breakdown_tokens(tokens, BreakdownMode::Partial),
-        format_breakdown_tokens(tokens, BreakdownMode::Simplified),
-    )
 }
 
 #[derive(Clone, Copy)]

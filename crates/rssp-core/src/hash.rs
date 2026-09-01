@@ -558,8 +558,7 @@ pub fn compute_note_data_hash_with_scratch(
 
 #[cfg(test)]
 mod tests {
-    use super::{NoteHashScratch, compute_note_data_hash_with_scratch};
-    use super::{compute_chart_hash, compute_chart_hash_pair, compute_note_data_hash};
+    use super::{compute_chart_hash, compute_chart_hash_pair};
 
     #[test]
     fn chart_hash_pair_matches_individual_hashes() {
@@ -569,32 +568,5 @@ mod tests {
 
         assert_eq!(hash, compute_chart_hash(chart, bpms));
         assert_eq!(neutral, compute_chart_hash(chart, "0.000=0.000"));
-    }
-
-    #[test]
-    fn streamed_note_hash_matches_materialized_minimization() {
-        let cases: [(&[u8], usize); 4] = [
-            (b"// comment\n1000\n0000\n0100\n,\n0010\n0001\n;\n", 4),
-            (b"10000000\n00000000\n,\n00001000\n;\n", 8),
-            (b"\n,\n0000\n,\n;\n", 4),
-            (b" 1000 trailing\n0100\r\n", 4),
-        ];
-        let bpms = "0.000=120.000,64.000=180.000";
-
-        let mut scratch = NoteHashScratch::default();
-        for (note_data, lanes) in cases {
-            let mut minimized = crate::stats::minimize_chart_for_hash(note_data, lanes);
-            if let Some(pos) = minimized.iter().rposition(|&byte| byte != b'\n') {
-                minimized.truncate(pos + 1);
-            }
-            assert_eq!(
-                compute_note_data_hash(note_data, lanes, bpms),
-                compute_chart_hash(&minimized, bpms)
-            );
-            assert_eq!(
-                compute_note_data_hash_with_scratch(note_data, lanes, bpms, &mut scratch),
-                compute_chart_hash(&minimized, bpms)
-            );
-        }
     }
 }
