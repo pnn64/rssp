@@ -3387,14 +3387,19 @@ fn run_course_analyze_phase(
     );
 }
 
-fn run_course_parse_phase(input: &[u8], phase: &str, iterations: usize, legacy: bool) {
+fn run_course_parse_phase(input: &[u8], phase: &str, iterations: usize, mode: u8) {
     reset_counters();
     let before = Counters::read();
     let start = Instant::now();
     let mut checksum = 0usize;
     for _ in 0..iterations {
-        let parsed =
-            rssp::course::profile_parse_crs(black_box(input), legacy).expect("course should parse");
+        let parsed = match mode {
+            0 => rssp::course::profile_parse_crs(black_box(input), true),
+            1 => rssp::course::profile_parse_crs(black_box(input), false),
+            2 => rssp::course::profile_parse_crs_dispatch(black_box(input), true),
+            _ => rssp::course::profile_parse_crs_dispatch(black_box(input), false),
+        }
+        .expect("course should parse");
         checksum = checksum.wrapping_add(parsed.entries.len());
         black_box(parsed);
     }
@@ -3431,9 +3436,12 @@ fn run_course_parse_alloc(iterations: usize) {
         rssp::course::profile_parse_crs(&input, false).expect("benchmark course should parse");
     let legacy = rssp::course::profile_parse_crs(&input, true)
         .expect("legacy benchmark course should parse");
+    let sequential = rssp::course::profile_parse_crs_dispatch(&input, true)
+        .expect("sequential dispatch course should parse");
     assert_eq!(current.entries, legacy.entries);
     assert_eq!(current.repeat, legacy.repeat);
     assert_eq!(current.meters, legacy.meters);
+    course_bench::assert_same_course(&current, &sequential);
     assert_eq!(current.entries.len(), course_bench::SONG_COUNT);
     assert!(current.repeat);
     assert_eq!(
@@ -3441,8 +3449,10 @@ fn run_course_parse_alloc(iterations: usize) {
         [Some(3), Some(6), Some(9), Some(12), Some(15), Some(18)]
     );
 
-    run_course_parse_phase(&input, "legacy-control-allocs", iterations, true);
-    run_course_parse_phase(&input, "stream-control-fields", iterations, false);
+    run_course_parse_phase(&input, "legacy-control-allocs", iterations, 0);
+    run_course_parse_phase(&input, "stream-control-fields", iterations, 1);
+    run_course_parse_phase(&input, "sequential-tag-dispatch", iterations, 2);
+    run_course_parse_phase(&input, "indexed-tag-dispatch", iterations, 3);
 }
 
 fn run_course_entry_reserve_phase(

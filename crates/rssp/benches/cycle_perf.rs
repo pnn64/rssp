@@ -1705,6 +1705,8 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         .expect("legacy benchmark course should parse");
     let current_course = rssp::course::profile_parse_crs(&course_input, false)
         .expect("benchmark course should parse");
+    let sequential_course = rssp::course::profile_parse_crs_dispatch(&course_input, true)
+        .expect("sequential dispatch course should parse");
     assert_eq!(current_course.name, legacy_course.name);
     assert_eq!(current_course.name_translit, legacy_course.name_translit);
     assert_eq!(current_course.scripter, legacy_course.scripter);
@@ -1715,6 +1717,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     assert_eq!(current_course.lives, legacy_course.lives);
     assert_eq!(current_course.meters, legacy_course.meters);
     assert_eq!(current_course.entries, legacy_course.entries);
+    course_bench::assert_same_course(&current_course, &sequential_course);
     let select_input = course_bench::select_input();
     let course_options = course_bench::fast_options();
     let pack_fixture = pack_bench::PackFixture::new();
@@ -2569,6 +2572,22 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         b.iter(|| {
             black_box(
                 rssp::course::profile_parse_crs(black_box(&course_input), false)
+                    .expect("benchmark course should parse"),
+            );
+        });
+    });
+    course_parse.bench_function("sequential_tag_dispatch", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::course::profile_parse_crs_dispatch(black_box(&course_input), true)
+                    .expect("benchmark course should parse"),
+            );
+        });
+    });
+    course_parse.bench_function("indexed_tag_dispatch", |b| {
+        b.iter(|| {
+            black_box(
+                rssp::course::profile_parse_crs_dispatch(black_box(&course_input), false)
                     .expect("benchmark course should parse"),
             );
         });

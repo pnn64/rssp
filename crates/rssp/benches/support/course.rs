@@ -61,7 +61,7 @@ pub fn parse_input(entry_count: usize) -> Vec<u8> {
     course.into_bytes()
 }
 
-fn assert_same_course(left: &rssp::course::CourseFile, right: &rssp::course::CourseFile) {
+pub fn assert_same_course(left: &rssp::course::CourseFile, right: &rssp::course::CourseFile) {
     assert_eq!(left.name, right.name);
     assert_eq!(left.name_translit, right.name_translit);
     assert_eq!(left.scripter, right.scripter);

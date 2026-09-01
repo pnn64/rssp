@@ -977,7 +977,70 @@ fn push_course_entry<const RESERVE_ENTRIES: bool>(
     entries.push(entry);
 }
 
-fn parse_crs_with<const LEGACY: bool, const RESERVE_ENTRIES: bool>(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CourseTag {
+    Course,
+    CourseTranslit,
+    Scripter,
+    Description,
+    Repeat,
+    Banner,
+    Background,
+    Lives,
+    Meter,
+    Song,
+    SongSelect,
+    Unknown,
+}
+
+#[inline(always)]
+fn course_tag(name: &[u8]) -> CourseTag {
+    match name.len() {
+        4 if name.eq_ignore_ascii_case(b"SONG") => CourseTag::Song,
+        5 if name.eq_ignore_ascii_case(b"LIVES") => CourseTag::Lives,
+        5 if name.eq_ignore_ascii_case(b"METER") => CourseTag::Meter,
+        6 if name.eq_ignore_ascii_case(b"COURSE") => CourseTag::Course,
+        6 if name.eq_ignore_ascii_case(b"REPEAT") => CourseTag::Repeat,
+        6 if name.eq_ignore_ascii_case(b"BANNER") => CourseTag::Banner,
+        8 if name.eq_ignore_ascii_case(b"SCRIPTER") => CourseTag::Scripter,
+        10 if name.eq_ignore_ascii_case(b"BACKGROUND") => CourseTag::Background,
+        10 if name.eq_ignore_ascii_case(b"SONGSELECT") => CourseTag::SongSelect,
+        11 if name.eq_ignore_ascii_case(b"DESCRIPTION") => CourseTag::Description,
+        14 if name.eq_ignore_ascii_case(b"COURSETRANSLIT") => CourseTag::CourseTranslit,
+        _ => CourseTag::Unknown,
+    }
+}
+
+#[cfg(any(test, feature = "profile"))]
+fn course_tag_sequential(name: &[u8]) -> CourseTag {
+    if name.eq_ignore_ascii_case(b"COURSE") {
+        CourseTag::Course
+    } else if name.eq_ignore_ascii_case(b"COURSETRANSLIT") {
+        CourseTag::CourseTranslit
+    } else if name.eq_ignore_ascii_case(b"SCRIPTER") {
+        CourseTag::Scripter
+    } else if name.eq_ignore_ascii_case(b"DESCRIPTION") {
+        CourseTag::Description
+    } else if name.eq_ignore_ascii_case(b"REPEAT") {
+        CourseTag::Repeat
+    } else if name.eq_ignore_ascii_case(b"BANNER") {
+        CourseTag::Banner
+    } else if name.eq_ignore_ascii_case(b"BACKGROUND") {
+        CourseTag::Background
+    } else if name.eq_ignore_ascii_case(b"LIVES") {
+        CourseTag::Lives
+    } else if name.eq_ignore_ascii_case(b"METER") {
+        CourseTag::Meter
+    } else if name.eq_ignore_ascii_case(b"SONG") {
+        CourseTag::Song
+    } else if name.eq_ignore_ascii_case(b"SONGSELECT") {
+        CourseTag::SongSelect
+    } else {
+        CourseTag::Unknown
+    }
+}
+
+fn parse_crs_with<const LEGACY: bool, const RESERVE_ENTRIES: bool, const INDEXED_TAGS: bool>(
     data: &[u8],
 ) -> Result<CourseFile, String> {
     let mut name = String::new();
@@ -1011,74 +1074,64 @@ fn parse_crs_with<const LEGACY: bool, const RESERVE_ENTRIES: bool>(
         let value = &s[value_start..value_start + value_end];
         i += value_start + adv;
 
-        if name_bytes.eq_ignore_ascii_case(b"COURSE") {
-            name = decode_trim(value);
-            continue;
-        }
-        if name_bytes.eq_ignore_ascii_case(b"COURSETRANSLIT") {
-            name_translit = decode_trim(value);
-            continue;
-        }
-        if name_bytes.eq_ignore_ascii_case(b"SCRIPTER") {
-            scripter = decode_trim(value);
-            continue;
-        }
-        if name_bytes.eq_ignore_ascii_case(b"DESCRIPTION") {
-            description = decode_trim(value);
-            continue;
-        }
-        if name_bytes.eq_ignore_ascii_case(b"REPEAT") {
-            repeat = if LEGACY {
-                #[cfg(feature = "profile")]
-                {
-                    parse_repeat_legacy(value)
-                }
-                #[cfg(not(feature = "profile"))]
-                {
-                    unreachable!("legacy parser requires profile feature")
-                }
-            } else {
-                parse_repeat(value)
-            };
-            continue;
-        }
-        if name_bytes.eq_ignore_ascii_case(b"BANNER") {
-            banner = decode_trim(value);
-            continue;
-        }
-        if name_bytes.eq_ignore_ascii_case(b"BACKGROUND") {
-            background = decode_trim(value);
-            continue;
-        }
-        if name_bytes.eq_ignore_ascii_case(b"LIVES") {
-            lives = decode_trim(value).parse::<i32>().unwrap_or(0).max(0);
-            continue;
-        }
-        if name_bytes.eq_ignore_ascii_case(b"METER") {
-            if LEGACY {
-                #[cfg(feature = "profile")]
-                parse_course_meter_tag_legacy(value, &mut meters);
-                #[cfg(not(feature = "profile"))]
-                unreachable!("legacy parser requires profile feature");
-            } else {
-                parse_course_meter_tag(value, &mut meters);
+        let tag = if INDEXED_TAGS {
+            course_tag(name_bytes)
+        } else {
+            #[cfg(any(test, feature = "profile"))]
+            {
+                course_tag_sequential(name_bytes)
             }
-            continue;
-        }
-        if name_bytes.eq_ignore_ascii_case(b"SONG") {
-            push_course_entry::<RESERVE_ENTRIES>(
+            #[cfg(not(any(test, feature = "profile")))]
+            {
+                unreachable!("sequential tag dispatch requires profile feature")
+            }
+        };
+
+        match tag {
+            CourseTag::Course => name = decode_trim(value),
+            CourseTag::CourseTranslit => name_translit = decode_trim(value),
+            CourseTag::Scripter => scripter = decode_trim(value),
+            CourseTag::Description => description = decode_trim(value),
+            CourseTag::Repeat => {
+                repeat = if LEGACY {
+                    #[cfg(feature = "profile")]
+                    {
+                        parse_repeat_legacy(value)
+                    }
+                    #[cfg(not(feature = "profile"))]
+                    {
+                        unreachable!("legacy parser requires profile feature")
+                    }
+                } else {
+                    parse_repeat(value)
+                };
+            }
+            CourseTag::Banner => banner = decode_trim(value),
+            CourseTag::Background => background = decode_trim(value),
+            CourseTag::Lives => lives = decode_trim(value).parse::<i32>().unwrap_or(0).max(0),
+            CourseTag::Meter => {
+                if LEGACY {
+                    #[cfg(feature = "profile")]
+                    parse_course_meter_tag_legacy(value, &mut meters);
+                    #[cfg(not(feature = "profile"))]
+                    unreachable!("legacy parser requires profile feature");
+                } else {
+                    parse_course_meter_tag(value, &mut meters);
+                }
+            }
+            CourseTag::Song => push_course_entry::<RESERVE_ENTRIES>(
                 &mut entries,
                 parse_song_entry(value),
                 data.len(),
                 tag_start,
                 i,
-            );
-            continue;
-        }
-        if name_bytes.eq_ignore_ascii_case(b"SONGSELECT") {
-            if let Some(entry) = parse_song_select(value) {
-                entries.push(entry);
+            ),
+            CourseTag::SongSelect => {
+                if let Some(entry) = parse_song_select(value) {
+                    entries.push(entry);
+                }
             }
+            CourseTag::Unknown => {}
         }
     }
 
@@ -1101,16 +1154,16 @@ fn parse_crs_with<const LEGACY: bool, const RESERVE_ENTRIES: bool>(
 }
 
 pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
-    parse_crs_with::<false, true>(data)
+    parse_crs_with::<false, true, true>(data)
 }
 
 #[cfg(feature = "profile")]
 #[doc(hidden)]
 pub fn profile_parse_crs(data: &[u8], legacy: bool) -> Result<CourseFile, String> {
     if legacy {
-        parse_crs_with::<true, true>(data)
+        parse_crs_with::<true, true, true>(data)
     } else {
-        parse_crs_with::<false, true>(data)
+        parse_crs_with::<false, true, true>(data)
     }
 }
 
@@ -1118,9 +1171,19 @@ pub fn profile_parse_crs(data: &[u8], legacy: bool) -> Result<CourseFile, String
 #[doc(hidden)]
 pub fn profile_parse_crs_reserve(data: &[u8], legacy_growth: bool) -> Result<CourseFile, String> {
     if legacy_growth {
-        parse_crs_with::<false, false>(data)
+        parse_crs_with::<false, false, true>(data)
     } else {
-        parse_crs_with::<false, true>(data)
+        parse_crs_with::<false, true, true>(data)
+    }
+}
+
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+pub fn profile_parse_crs_dispatch(data: &[u8], sequential: bool) -> Result<CourseFile, String> {
+    if sequential {
+        parse_crs_with::<false, true, false>(data)
+    } else {
+        parse_crs_with::<false, true, true>(data)
     }
 }
 
@@ -1934,12 +1997,38 @@ fn analyze_crs_path_impl(
 #[cfg(test)]
 mod tests {
     use super::{
-        CourseHashSet, CourseSong, Difficulty, SongSort, analyze_crs_path, analyze_crs_path_impl,
-        collect_small_course_hashes, dedup_push, merge_custom_patterns, normalize_stepstype,
-        parse_crs, stepstype_eq,
+        CourseHashSet, CourseSong, CourseTag, Difficulty, SongSort, analyze_crs_path,
+        analyze_crs_path_impl, collect_small_course_hashes, course_tag, course_tag_sequential,
+        dedup_push, merge_custom_patterns, normalize_stepstype, parse_crs, stepstype_eq,
     };
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn indexed_course_tags_match_sequential_dispatch() {
+        for tag in [
+            "COURSE",
+            "coursetranslit",
+            "Scripter",
+            "DESCRIPTION",
+            "repeat",
+            "Banner",
+            "BACKGROUND",
+            "lives",
+            "Meter",
+            "SONG",
+            "songselect",
+            "UNKNOWN",
+            "",
+        ] {
+            assert_eq!(
+                course_tag(tag.as_bytes()),
+                course_tag_sequential(tag.as_bytes()),
+                "course tag dispatch changed for {tag:?}"
+            );
+        }
+        assert_eq!(course_tag(b"SONG"), CourseTag::Song);
+    }
 
     #[test]
     fn custom_pattern_merge_is_sorted_and_accumulates() {
