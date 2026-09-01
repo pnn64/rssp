@@ -779,14 +779,12 @@ impl BgResolutionStatus {
 }
 
 impl BgFileCatalog {
-    fn from_files(mut files: Vec<String>) -> Self {
-        files.sort_by(|left, right| {
-            bg_file_bucket(left)
-                .cmp(&bg_file_bucket(right))
-                .then_with(|| right.len().cmp(&left.len()))
-                .then_with(|| left.cmp(right))
-        });
+    fn from_files<const IN_PLACE: bool>(mut files: Vec<String>) -> Self {
+        sort_bg_files::<IN_PLACE>(&mut files);
+        Self::from_sorted(files)
+    }
 
+    fn from_sorted(files: Vec<String>) -> Self {
         let mut bucket_ranges = [(0, 0); 256];
         for (index, file) in files.iter().enumerate() {
             let range = &mut bucket_ranges[bg_file_bucket(file)];
@@ -803,6 +801,30 @@ impl BgFileCatalog {
     }
 }
 
+fn cmp_bg_file(left: &String, right: &String) -> std::cmp::Ordering {
+    bg_file_bucket(left)
+        .cmp(&bg_file_bucket(right))
+        .then_with(|| right.len().cmp(&left.len()))
+        .then_with(|| left.cmp(right))
+}
+
+fn sort_bg_files<const IN_PLACE: bool>(files: &mut [String]) {
+    if IN_PLACE {
+        files.sort_unstable_by(cmp_bg_file);
+    } else {
+        files.sort_by(cmp_bg_file);
+    }
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_sort_bg_files(files: &mut [String], in_place: bool) {
+    if in_place {
+        sort_bg_files::<true>(files);
+    } else {
+        sort_bg_files::<false>(files);
+    }
+}
+
 #[inline(always)]
 fn bg_file_bucket(file: &str) -> usize {
     file.as_bytes()
@@ -811,7 +833,11 @@ fn bg_file_bucket(file: &str) -> usize {
         .map_or(0, |byte| byte.to_ascii_lowercase() as usize)
 }
 
-fn list_song_dir_rel_files<const TRACK_MOVIE: bool, const CACHE_ENTRY_TYPE: bool>(
+fn list_song_dir_rel_files<
+    const TRACK_MOVIE: bool,
+    const CACHE_ENTRY_TYPE: bool,
+    const IN_PLACE_SORT: bool,
+>(
     song_dir: &Path,
 ) -> (BgFileCatalog, Option<PathBuf>) {
     let mut dirs = vec![song_dir.to_path_buf()];
@@ -861,7 +887,10 @@ fn list_song_dir_rel_files<const TRACK_MOVIE: bool, const CACHE_ENTRY_TYPE: bool
             }
         }
     }
-    (BgFileCatalog::from_files(files), only_movie)
+    (
+        BgFileCatalog::from_files::<IN_PLACE_SORT>(files),
+        only_movie,
+    )
 }
 
 fn strip_newlines(s: &str) -> Cow<'_, str> {
@@ -1303,7 +1332,14 @@ pub fn resolve_background_changes_like_itg(
     song_dir: &Path,
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
-    let (files, movie) = list_song_dir_rel_files::<true, true>(song_dir);
+    resolve_bgchanges_catalog_sort::<true>(song_dir, simfile_data)
+}
+
+fn resolve_bgchanges_catalog_sort<const IN_PLACE_SORT: bool>(
+    song_dir: &Path,
+    simfile_data: &[u8],
+) -> Vec<ResolvedBackgroundChange> {
+    let (files, movie) = list_song_dir_rel_files::<true, true, IN_PLACE_SORT>(song_dir);
     resolve_bgchanges_with::<true, true, true>(
         song_dir,
         bgchanges_values(simfile_data),
@@ -1313,9 +1349,22 @@ pub fn resolve_background_changes_like_itg(
     )
 }
 
+#[cfg(feature = "profile")]
+pub(crate) fn profile_bgchanges_catalog_sort(
+    song_dir: &Path,
+    simfile_data: &[u8],
+    in_place: bool,
+) -> Vec<ResolvedBackgroundChange> {
+    if in_place {
+        resolve_bgchanges_catalog_sort::<true>(song_dir, simfile_data)
+    } else {
+        resolve_bgchanges_catalog_sort::<false>(song_dir, simfile_data)
+    }
+}
+
 #[cfg(any(test, feature = "profile"))]
 fn resolve_bgchanges_legacy(song_dir: &Path, simfile_data: &[u8]) -> Vec<ResolvedBackgroundChange> {
-    let (files, _) = list_song_dir_rel_files::<false, true>(song_dir);
+    let (files, _) = list_song_dir_rel_files::<false, true, true>(song_dir);
     resolve_bgchanges_with::<true, false, true>(
         song_dir,
         extract_bgchanges_values(simfile_data),
@@ -1330,7 +1379,7 @@ fn resolve_bgchanges_double_find(
     song_dir: &Path,
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
-    let (files, movie) = list_song_dir_rel_files::<true, true>(song_dir);
+    let (files, movie) = list_song_dir_rel_files::<true, true, true>(song_dir);
     resolve_bgchanges_with::<true, false, true>(
         song_dir,
         extract_bgchanges_values(simfile_data),
@@ -1345,7 +1394,7 @@ pub(crate) fn profile_bgchanges_materialized(
     song_dir: &Path,
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
-    let (files, movie) = list_song_dir_rel_files::<true, true>(song_dir);
+    let (files, movie) = list_song_dir_rel_files::<true, true, true>(song_dir);
     resolve_bgchanges_with::<true, false, true>(
         song_dir,
         extract_bgchanges_values(simfile_data),
@@ -1360,7 +1409,7 @@ pub(crate) fn profile_bgchanges_linear_upsert(
     song_dir: &Path,
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
-    let (files, movie) = list_song_dir_rel_files::<true, true>(song_dir);
+    let (files, movie) = list_song_dir_rel_files::<true, true, true>(song_dir);
     resolve_bgchanges_with::<false, false, true>(
         song_dir,
         bgchanges_values(simfile_data),
@@ -1375,7 +1424,7 @@ pub(crate) fn profile_bgchanges_path_metadata(
     song_dir: &Path,
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
-    let (files, movie) = list_song_dir_rel_files::<true, false>(song_dir);
+    let (files, movie) = list_song_dir_rel_files::<true, false, true>(song_dir);
     resolve_bgchanges_with::<true, false, true>(
         song_dir,
         bgchanges_values(simfile_data),
@@ -1390,7 +1439,7 @@ pub(crate) fn profile_bgchanges_always_sort(
     song_dir: &Path,
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
-    let (files, movie) = list_song_dir_rel_files::<true, true>(song_dir);
+    let (files, movie) = list_song_dir_rel_files::<true, true, true>(song_dir);
     resolve_bgchanges_with::<true, false, true>(
         song_dir,
         bgchanges_values(simfile_data),
@@ -1405,7 +1454,7 @@ pub(crate) fn profile_bgchanges_growing_paths(
     song_dir: &Path,
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
-    let (files, movie) = list_song_dir_rel_files::<true, true>(song_dir);
+    let (files, movie) = list_song_dir_rel_files::<true, true, true>(song_dir);
     resolve_bgchanges_with::<true, true, false>(
         song_dir,
         bgchanges_values(simfile_data),
@@ -1453,7 +1502,7 @@ mod tests {
         cmp_name_ci, for_each_bgchange_pair, for_each_bgchange_pair_legacy, is_dir_ci, is_file_ci,
         join_rel, lc_name, list_image_candidates, match_bg_file,
         resolve_background_changes_like_itg, resolve_bgchanges_legacy, resolve_music_path_like_itg,
-        resolve_song_assets, strip_newlines, upsert_bgchange,
+        resolve_song_assets, sort_bg_files, strip_newlines, upsert_bgchange,
     };
 
     #[test]
@@ -1577,7 +1626,7 @@ mod tests {
             .into_iter()
             .filter_map(|fields| Some((fields.first()?.clone(), fields.get(1)?.clone())))
             .collect::<Vec<_>>();
-        let files = BgFileCatalog::from_files(files.to_vec());
+        let files = BgFileCatalog::from_files::<true>(files.to_vec());
         let mut actual = Vec::new();
         for_each_bgchange_pair(changes, &files, |start_beat, target, _| {
             actual.push((start_beat.to_string(), target.to_string()));
@@ -1713,7 +1762,7 @@ mod tests {
 
     #[test]
     fn bg_file_catalog_only_indexes_unambiguous_or_exact_case_matches() {
-        let files = BgFileCatalog::from_files(
+        let files = BgFileCatalog::from_files::<true>(
             ["Alpha.png", "alpha.png", "Beta.png"]
                 .map(str::to_string)
                 .to_vec(),
@@ -1728,6 +1777,29 @@ mod tests {
             "alpha.png"
         );
         assert!(match_bg_file("0=missing.png,", 2, &files).is_none());
+    }
+
+    #[test]
+    fn in_place_bg_file_sort_matches_stable_total_order() {
+        let mut stable = [
+            "z/short.png",
+            "Alpha.png",
+            "alpha.png",
+            "A/longer-name.png",
+            "beta.png",
+            "Beta.png",
+            "alpha.png",
+            "Æ/visual.png",
+            "",
+        ]
+        .map(str::to_string)
+        .to_vec();
+        let mut in_place = stable.clone();
+
+        sort_bg_files::<false>(&mut stable);
+        sort_bg_files::<true>(&mut in_place);
+
+        assert_eq!(in_place, stable);
     }
 
     #[test]

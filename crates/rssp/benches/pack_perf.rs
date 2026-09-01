@@ -330,6 +330,9 @@ fn bench_background_changes(c: &mut Criterion) {
     let fixture = assets_bench::AssetFixture::with_movies(1);
     fixture.assert_background_behavior();
     fixture.assert_catalog_behavior();
+    fixture.assert_catalog_sort_behavior();
+    assets_bench::assert_bg_catalog_sort_behavior();
+    let bg_catalog_files = assets_bench::bg_catalog_files();
     let unordered = fixture.unordered_simfile();
     fixture.assert_unordered_behavior(&unordered);
     print_background_change_pairs(fixture.song_dir(), &unordered);
@@ -357,6 +360,23 @@ fn bench_background_changes(c: &mut Criterion) {
         });
     });
     path_join.finish();
+
+    let mut file_sort = c.benchmark_group("background_file_catalog_sort");
+    file_sort.sample_size(100);
+    file_sort.measurement_time(Duration::from_secs(3));
+    file_sort.throughput(Throughput::Elements(
+        assets_bench::BG_CATALOG_FILE_COUNT as u64,
+    ));
+    for (name, in_place) in [("stable", false), ("in_place", true)] {
+        file_sort.bench_function(name, |b| {
+            b.iter_batched(
+                || bg_catalog_files.clone(),
+                |mut files| rssp::profile::sort_bg_files(black_box(&mut files), in_place),
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    file_sort.finish();
 
     let mut group = c.benchmark_group("background_changes");
     group.sample_size(30);
@@ -395,6 +415,23 @@ fn bench_background_changes(c: &mut Criterion) {
         });
     });
     group.finish();
+
+    let mut catalog_sort = c.benchmark_group("background_catalog_sort");
+    catalog_sort.sample_size(30);
+    catalog_sort.measurement_time(Duration::from_secs(3));
+    catalog_sort.throughput(Throughput::Elements(assets_bench::CHANGE_COUNT as u64));
+    for (name, in_place) in [("stable", false), ("in_place", true)] {
+        catalog_sort.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(rssp::profile::background_changes_catalog_sort(
+                    black_box(fixture.song_dir()),
+                    black_box(fixture.simfile()),
+                    in_place,
+                ))
+            });
+        });
+    }
+    catalog_sort.finish();
 
     let mut catalog = c.benchmark_group("background_catalog_entry_type");
     catalog.sample_size(30);

@@ -16,6 +16,34 @@ pub const DELIMITER_FIELD_COUNT: usize = 4_096;
 pub const REL_PATH_COUNT: usize = 256;
 pub const REL_COMPONENT_COUNT: usize = 4_096;
 pub const BG_TAG_COUNT: usize = 256;
+pub const BG_CATALOG_FILE_COUNT: usize = 4_096;
+
+pub fn bg_catalog_files() -> Vec<String> {
+    (0..BG_CATALOG_FILE_COUNT)
+        .map(|index| {
+            let shuffled = index * 4_051 % BG_CATALOG_FILE_COUNT;
+            let bucket = char::from(b'A' + (shuffled % 26) as u8);
+            let padding = "x".repeat(shuffled % 48);
+            format!(
+                "{bucket}/{padding}/Background-{:04}.{}",
+                shuffled % 997,
+                if shuffled.is_multiple_of(3) {
+                    "PNG"
+                } else {
+                    "mp4"
+                }
+            )
+        })
+        .collect()
+}
+
+pub fn assert_bg_catalog_sort_behavior() {
+    let mut stable = bg_catalog_files();
+    let mut in_place = stable.clone();
+    rssp::profile::sort_bg_files(&mut stable, false);
+    rssp::profile::sort_bg_files(&mut in_place, true);
+    assert_eq!(in_place, stable);
+}
 
 pub fn bgchange_tags() -> Vec<u8> {
     let mut input = String::with_capacity(BG_TAG_COUNT * 40);
@@ -266,6 +294,15 @@ impl AssetFixture {
             assert_eq!(
                 rssp::assets::resolve_background_changes_like_itg(&self.root, simfile),
                 rssp::profile::background_changes_path_metadata(&self.root, simfile),
+            );
+        }
+    }
+
+    pub fn assert_catalog_sort_behavior(&self) {
+        for simfile in [self.simfile.as_slice(), b"".as_slice()] {
+            assert_eq!(
+                rssp::profile::background_changes_catalog_sort(&self.root, simfile, true),
+                rssp::profile::background_changes_catalog_sort(&self.root, simfile, false),
             );
         }
     }

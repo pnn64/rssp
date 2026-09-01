@@ -51,6 +51,10 @@ pub mod profile {
         crate::pack::profile_sort_paths_ci_in_place(paths, in_place);
     }
 
+    pub fn sort_bg_files(files: &mut [String], in_place: bool) {
+        crate::assets::profile_sort_bg_files(files, in_place);
+    }
+
     #[must_use]
     pub fn match_mask_ci(name: &str, mask: &str) -> bool {
         crate::assets::match_mask_ci(name, mask)
@@ -248,6 +252,15 @@ pub mod profile {
         simfile_data: &[u8],
     ) -> Vec<crate::assets::ResolvedBackgroundChange> {
         crate::assets::profile_bgchanges_growing_paths(song_dir, simfile_data)
+    }
+
+    #[must_use]
+    pub fn background_changes_catalog_sort(
+        song_dir: &Path,
+        simfile_data: &[u8],
+        in_place: bool,
+    ) -> Vec<crate::assets::ResolvedBackgroundChange> {
+        crate::assets::profile_bgchanges_catalog_sort(song_dir, simfile_data, in_place)
     }
 
     pub fn sort_background_changes(

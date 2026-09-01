@@ -1740,6 +1740,9 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let asset_fixture = assets_bench::AssetFixture::with_movies(1);
     asset_fixture.assert_background_behavior();
     asset_fixture.assert_catalog_behavior();
+    asset_fixture.assert_catalog_sort_behavior();
+    assets_bench::assert_bg_catalog_sort_behavior();
+    let bg_catalog_files = assets_bench::bg_catalog_files();
     assets_bench::assert_bgchange_sort_behavior();
     let mut ordered_sort_legacy = assets_bench::ordered_changes();
     let mut ordered_sort_current = assets_bench::ordered_changes();
@@ -3200,6 +3203,23 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     background_path.finish();
     print_path_join_pairs(asset_fixture.song_dir());
 
+    let mut bg_file_sort = c.benchmark_group("cycles/background_file_catalog_sort");
+    bg_file_sort.sample_size(100);
+    bg_file_sort.measurement_time(Duration::from_secs(3));
+    bg_file_sort.throughput(Throughput::Elements(
+        assets_bench::BG_CATALOG_FILE_COUNT as u64,
+    ));
+    for (name, in_place) in [("stable", false), ("in_place", true)] {
+        bg_file_sort.bench_function(name, |b| {
+            b.iter_batched(
+                || bg_catalog_files.clone(),
+                |mut files| rssp::profile::sort_bg_files(black_box(&mut files), in_place),
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    bg_file_sort.finish();
+
     let mut background = c.benchmark_group("cycles/background_changes");
     background.sample_size(20);
     background.measurement_time(Duration::from_secs(3));
@@ -3253,6 +3273,23 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     });
     background.finish();
+
+    let mut bg_catalog_sort = c.benchmark_group("cycles/background_catalog_sort");
+    bg_catalog_sort.sample_size(20);
+    bg_catalog_sort.measurement_time(Duration::from_secs(3));
+    bg_catalog_sort.throughput(Throughput::Elements(assets_bench::CHANGE_COUNT as u64));
+    for (name, in_place) in [("stable", false), ("in_place", true)] {
+        bg_catalog_sort.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(rssp::profile::background_changes_catalog_sort(
+                    black_box(asset_fixture.song_dir()),
+                    black_box(asset_fixture.simfile()),
+                    in_place,
+                ))
+            });
+        });
+    }
+    bg_catalog_sort.finish();
 
     let mut background_sort = c.benchmark_group("cycles/background_ordered_sort");
     background_sort.sample_size(100);
