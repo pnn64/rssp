@@ -1503,6 +1503,15 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     let matrix_bpms: Vec<_> = (0..1_024)
         .map(|idx| (idx as f64 * 8.0, 60.0 + idx as f64 * 0.125))
         .collect();
+    let matrix_profile = rssp::matrix::compute_matrix_profile(&matrix_densities, &matrix_bpms);
+    let matrix_queries: Vec<_> = (0..4_096)
+        .map(|index| {
+            (
+                40.0 + (index % 2_048) as f64 * 0.25,
+                [1.0, 4.0, 16.0, 64.0, 256.0, 1_024.0][index % 6],
+            )
+        })
+        .collect();
     let nps_values: Vec<_> = (0..1_025)
         .map(|idx| ((idx * 37) % 257) as f64 / 7.0)
         .collect();
@@ -2065,6 +2074,39 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
                 black_box(&matrix_densities),
                 black_box(&matrix_bpms),
             ));
+        });
+    });
+    optimizations.throughput(Throughput::Elements(matrix_queries.len() as u64));
+    optimizations.bench_function("matrix_difficulty_legacy", |b| {
+        b.iter(|| {
+            let mut total = 0.0;
+            for &(bpm, measures) in black_box(&matrix_queries) {
+                total += rssp::matrix::get_difficulty_legacy_for_bench(bpm, measures);
+            }
+            black_box(total);
+        });
+    });
+    optimizations.bench_function("matrix_difficulty_lookup", |b| {
+        b.iter(|| {
+            let mut total = 0.0;
+            for &(bpm, measures) in black_box(&matrix_queries) {
+                total += rssp::matrix::get_difficulty(bpm, measures);
+            }
+            black_box(total);
+        });
+    });
+    optimizations.throughput(Throughput::Elements(matrix_profile.len() as u64));
+    optimizations.bench_function("matrix_rate_rating_legacy", |b| {
+        b.iter(|| {
+            black_box(rssp::matrix::matrix_rating_at_rate_legacy_for_bench(
+                black_box(&matrix_profile),
+                black_box(1.25),
+            ));
+        });
+    });
+    optimizations.bench_function("matrix_rate_rating_lookup", |b| {
+        b.iter(|| {
+            black_box(matrix_profile.rating_at_rate(black_box(1.25)));
         });
     });
     const NPS_BATCH: usize = 256;

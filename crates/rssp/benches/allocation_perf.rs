@@ -6649,6 +6649,53 @@ fn run_matrix_alloc_phase<T>(
     );
 }
 
+fn run_matrix_rating_phase(
+    phase: &str,
+    iterations: usize,
+    profiles: &[rssp::matrix::MatrixProfile],
+    legacy: bool,
+) {
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0u64;
+    for _ in 0..iterations {
+        for profile in profiles {
+            let rating = if legacy {
+                rssp::matrix::matrix_rating_at_rate_legacy_for_bench(profile, 1.25)
+            } else {
+                profile.rating_at_rate(1.25)
+            };
+            checksum = checksum.wrapping_add(rating.to_bits());
+        }
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    let entries = profiles.iter().map(|profile| profile.len()).sum::<usize>() as f64 * divisor;
+    println!(
+        concat!(
+            "mode=matrix-rating phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_entries_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        entries / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
 fn run_matrix_alloc(iterations: usize) {
     let inputs = matrix_alloc_inputs();
     let legacy_profiles: Vec<_> = inputs
@@ -6688,6 +6735,8 @@ fn run_matrix_alloc(iterations: usize) {
     run_matrix_alloc_phase("optimized", iterations, &inputs, |densities, bpm_map| {
         rssp::matrix::compute_matrix_profile(densities, bpm_map)
     });
+    run_matrix_rating_phase("legacy-search", iterations, &profiles, true);
+    run_matrix_rating_phase("compile-time-lookup", iterations, &profiles, false);
 }
 
 fn run_elapsed_phase(

@@ -48,6 +48,9 @@ const BPM_KEY_STEP: i32 = 10;
 const HASH_AGGREGATION_MIN_SEGMENTS: usize = 32;
 // Caps speculative profile reservation at one 4 KiB page of 16-byte inputs.
 const MAX_PROFILE_RESERVE: usize = 256;
+const MAX_MATRIX_MEASURES: usize = 512;
+const MEASURE_LOOKUP_LEN: usize = MAX_MATRIX_MEASURES + 1;
+const NO_RANGE_END: u8 = u8::MAX;
 
 /// Static difficulty table for matrix rating interpolation.
 const DIFFICULTY_TABLE: DifficultyTable = [
@@ -827,6 +830,60 @@ const DIFFICULTY_TABLE: DifficultyTable = [
     ),
 ];
 
+const fn build_measure_index() -> [[u8; MEASURE_LOOKUP_LEN]; DIFFICULTY_TABLE.len()] {
+    let mut lookup = [[0u8; MEASURE_LOOKUP_LEN]; DIFFICULTY_TABLE.len()];
+    let mut row = 0usize;
+    while row < DIFFICULTY_TABLE.len() {
+        let measures = &DIFFICULTY_TABLE[row].1;
+        let mut measure = 0usize;
+        let mut index = 0usize;
+        while measure < MEASURE_LOOKUP_LEN {
+            while index + 1 < measures.len() && measures[index + 1].0 <= measure as i32 {
+                index += 1;
+            }
+            lookup[row][measure] = index as u8;
+            measure += 1;
+        }
+        row += 1;
+    }
+    lookup
+}
+
+const fn build_difficulty_ranges() -> [[(u8, u8); 13]; DIFFICULTY_TABLE.len()] {
+    let mut ranges = [[(0u8, NO_RANGE_END); 13]; DIFFICULTY_TABLE.len()];
+    let mut row = 0usize;
+    while row < DIFFICULTY_TABLE.len() {
+        let measures = &DIFFICULTY_TABLE[row].1;
+        let mut index = 0usize;
+        while index < measures.len() {
+            let difficulty = measures[index].1;
+            let mut start = index;
+            while start > 0 && measures[start - 1].1 == difficulty {
+                start -= 1;
+            }
+            let mut end = index + 1;
+            while end < measures.len() && measures[end].1 <= difficulty {
+                end += 1;
+            }
+            ranges[row][index] = (
+                start as u8,
+                if end < measures.len() {
+                    end as u8
+                } else {
+                    NO_RANGE_END
+                },
+            );
+            index += 1;
+        }
+        row += 1;
+    }
+    ranges
+}
+
+// Compile-time, immutable 23 KiB lookup: no startup or per-rating allocation.
+static MEASURE_INDEX: [[u8; MEASURE_LOOKUP_LEN]; DIFFICULTY_TABLE.len()] = build_measure_index();
+static DIFFICULTY_RANGES: [[(u8, u8); 13]; DIFFICULTY_TABLE.len()] = build_difficulty_ranges();
+
 /// Computes downward extrapolation for low measures.
 #[inline(always)]
 fn extrapolate_downward(measures: f64, min_measure_key: f64, min_difficulty: f64) -> f64 {
@@ -861,7 +918,42 @@ fn scale_plateau(measures: f64, plateau_start_m: f64, base_difficulty: f64) -> f
 }
 
 /// Calculates difficulty for a given BPM row, handling extrapolation and plateaus.
-fn calculate_difficulty_for_bpm(measures: f64, bpm_data: &[(i32, i32)]) -> f64 {
+fn calculate_difficulty_for_bpm(measures: f64, row: usize) -> f64 {
+    if measures <= 0.0 {
+        return 0.0;
+    }
+
+    let bpm_data = &DIFFICULTY_TABLE[row].1;
+    let min_measure_key = f64::from(bpm_data[0].0);
+    if measures < min_measure_key {
+        return extrapolate_downward(measures, min_measure_key, f64::from(bpm_data[0].1));
+    }
+    if measures.is_nan() {
+        return nan_difficulty(measures, bpm_data);
+    }
+
+    let measure_idx = (measures as usize).min(MAX_MATRIX_MEASURES);
+    let base_idx = usize::from(MEASURE_INDEX[row][measure_idx]);
+    let base_difficulty = bpm_data[base_idx].1;
+    let (range_start_idx, range_end_idx) = DIFFICULTY_RANGES[row][base_idx];
+    let range_start = f64::from(bpm_data[usize::from(range_start_idx)].0);
+
+    if range_end_idx == NO_RANGE_END {
+        scale_plateau(measures, range_start, f64::from(base_difficulty))
+    } else {
+        let range_end = f64::from(bpm_data[usize::from(range_end_idx)].0);
+        interpolate_log(measures, range_start, range_end, f64::from(base_difficulty))
+    }
+}
+
+#[cold]
+fn nan_difficulty(measures: f64, bpm_data: &[(i32, i32)]) -> f64 {
+    let range_end = f64::from(bpm_data[0].0);
+    interpolate_log(measures, 0.0, range_end, 0.0)
+}
+
+#[cfg(any(test, feature = "bench-support"))]
+fn calc_difficulty_legacy(measures: f64, bpm_data: &[(i32, i32)]) -> f64 {
     if measures <= 0.0 || bpm_data.is_empty() {
         return 0.0;
     }
@@ -936,27 +1028,55 @@ fn find_bounding_bpms(bpm: f64, table: &DifficultyTable) -> (i32, i32) {
 }
 
 #[inline(always)]
+#[cfg(any(test, feature = "bench-support"))]
 fn bpm_measures(bpm: i32) -> &'static [(i32, i32)] {
-    if !(MIN_BPM_KEY..=MAX_BPM_KEY).contains(&bpm) || (bpm - MIN_BPM_KEY) % BPM_KEY_STEP != 0 {
+    let Some(idx) = bpm_row_index(bpm) else {
         return &[];
-    }
-    let idx = ((bpm - MIN_BPM_KEY) / BPM_KEY_STEP) as usize;
+    };
     debug_assert_eq!(DIFFICULTY_TABLE[idx].0, bpm);
     &DIFFICULTY_TABLE[idx].1
+}
+
+#[inline(always)]
+fn bpm_row_index(bpm: i32) -> Option<usize> {
+    ((MIN_BPM_KEY..=MAX_BPM_KEY).contains(&bpm) && (bpm - MIN_BPM_KEY) % BPM_KEY_STEP == 0)
+        .then_some(((bpm - MIN_BPM_KEY) / BPM_KEY_STEP) as usize)
 }
 
 /// Interpolates difficulty between two BPM rows.
 pub fn get_difficulty(bpm: f64, measures: f64) -> f64 {
     let (bpm1, bpm2) = find_bounding_bpms(bpm, &DIFFICULTY_TABLE);
 
-    let diff_at_bpm1 = calculate_difficulty_for_bpm(measures, bpm_measures(bpm1));
+    let diff_at_bpm1 =
+        bpm_row_index(bpm1).map_or(0.0, |row| calculate_difficulty_for_bpm(measures, row));
 
     if bpm1 == bpm2 {
         return diff_at_bpm1;
     }
 
-    let diff_at_bpm2 = calculate_difficulty_for_bpm(measures, bpm_measures(bpm2));
+    let diff_at_bpm2 =
+        bpm_row_index(bpm2).map_or(0.0, |row| calculate_difficulty_for_bpm(measures, row));
 
+    let bpm_range = f64::from(bpm2 - bpm1);
+    if bpm_range == 0.0 {
+        return diff_at_bpm1;
+    }
+
+    let bpm_progress = (bpm - f64::from(bpm1)) / bpm_range;
+    (diff_at_bpm2 - diff_at_bpm1).mul_add(bpm_progress, diff_at_bpm1)
+}
+
+/// Previous table search retained only for comparative benchmarks.
+#[cfg(any(test, feature = "bench-support"))]
+#[doc(hidden)]
+pub fn get_difficulty_legacy_for_bench(bpm: f64, measures: f64) -> f64 {
+    let (bpm1, bpm2) = find_bounding_bpms(bpm, &DIFFICULTY_TABLE);
+    let diff_at_bpm1 = calc_difficulty_legacy(measures, bpm_measures(bpm1));
+    if bpm1 == bpm2 {
+        return diff_at_bpm1;
+    }
+
+    let diff_at_bpm2 = calc_difficulty_legacy(measures, bpm_measures(bpm2));
     let bpm_range = f64::from(bpm2 - bpm1);
     if bpm_range == 0.0 {
         return diff_at_bpm1;
@@ -1170,6 +1290,22 @@ pub fn matrix_rating_at_rate(profile: &[MatrixRatingInput], music_rate: f64) -> 
     matrix_rating_at_valid_rate(profile, valid_music_rate(music_rate))
 }
 
+/// Previous Matrix profile evaluation retained only for comparative benchmarks.
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn matrix_rating_at_rate_legacy_for_bench(
+    profile: &[MatrixRatingInput],
+    music_rate: f64,
+) -> f64 {
+    let rate = valid_music_rate(music_rate);
+    profile.iter().fold(0.0f64, |best, input| {
+        best.max(get_difficulty_legacy_for_bench(
+            input.effective_bpm * rate,
+            input.measures as f64,
+        ))
+    })
+}
+
 #[inline(always)]
 fn valid_music_rate(music_rate: f64) -> f64 {
     if music_rate.is_finite() && music_rate > 0.0 {
@@ -1326,6 +1462,63 @@ fn emit_matrix_counts(bpm_bits: u64, counts: [usize; 4], emit: &mut impl FnMut(M
 mod tests {
     use super::*;
     use crate::bpm::for_each_measure_bpm;
+
+    #[test]
+    fn difficulty_table_is_monotonic() {
+        for &(bpm, ref row) in &DIFFICULTY_TABLE {
+            assert!(
+                row.windows(2)
+                    .all(|pair| pair[0].0 < pair[1].0 && pair[0].1 <= pair[1].1),
+                "difficulty row invariant changed at {bpm} BPM"
+            );
+            assert!(
+                row.last().is_some_and(|&(measures, _)| {
+                    usize::try_from(measures).is_ok_and(|value| value <= MAX_MATRIX_MEASURES)
+                }),
+                "difficulty lookup is too short at {bpm} BPM"
+            );
+        }
+    }
+
+    #[test]
+    fn lookup_difficulty_matches_legacy_search() {
+        let measures = [
+            f64::NAN,
+            -1.0,
+            0.0,
+            0.5,
+            1.0,
+            2.0,
+            3.0,
+            4.0,
+            7.0,
+            8.0,
+            15.0,
+            16.0,
+            31.0,
+            32.0,
+            63.0,
+            64.0,
+            127.0,
+            128.0,
+            255.0,
+            256.0,
+            511.0,
+            512.0,
+            1_024.0,
+            f64::INFINITY,
+        ];
+        for quarter_bpm in -400..=3_200 {
+            let bpm = f64::from(quarter_bpm) * 0.25;
+            for &measure in &measures {
+                assert_eq!(
+                    get_difficulty(bpm, measure).to_bits(),
+                    get_difficulty_legacy_for_bench(bpm, measure).to_bits(),
+                    "difficulty changed at {bpm} BPM and {measure} measures"
+                );
+            }
+        }
+    }
 
     fn matrix_rating_generic(measure_densities: &[usize], bpm_map: &[(f64, f64)]) -> f64 {
         let mut keys: Vec<(u8, u64)> = Vec::with_capacity(measure_densities.len());

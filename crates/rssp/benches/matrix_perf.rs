@@ -93,5 +93,73 @@ fn bench_matrix_profile(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_matrix_profile);
+fn bench_difficulty(c: &mut Criterion) {
+    let queries: Vec<_> = (0..4_096)
+        .map(|index| {
+            (
+                40.0 + (index % 2_048) as f64 * 0.25,
+                [1.0, 4.0, 16.0, 64.0, 256.0, 1_024.0][index % 6],
+            )
+        })
+        .collect();
+    let mut group = c.benchmark_group("matrix_difficulty");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(2));
+    group.throughput(Throughput::Elements(queries.len() as u64));
+    group.bench_function("legacy_search", |b| {
+        b.iter(|| {
+            let mut total = 0.0;
+            for &(bpm, measures) in black_box(&queries) {
+                total += rssp::matrix::get_difficulty_legacy_for_bench(bpm, measures);
+            }
+            black_box(total);
+        });
+    });
+    group.bench_function("compile_time_lookup", |b| {
+        b.iter(|| {
+            let mut total = 0.0;
+            for &(bpm, measures) in black_box(&queries) {
+                total += rssp::matrix::get_difficulty(bpm, measures);
+            }
+            black_box(total);
+        });
+    });
+    group.finish();
+
+    let profiles: Vec<_> = build_inputs()
+        .into_iter()
+        .map(|input| rssp::matrix::compute_matrix_profile(&input.densities, &input.bpm_map))
+        .collect();
+    let entries = profiles.iter().map(|profile| profile.len()).sum::<usize>();
+    let rates = [0.75, 1.0, 1.25, 1.5];
+    let mut group = c.benchmark_group("matrix_rate_rating");
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(2));
+    group.throughput(Throughput::Elements((entries * rates.len()) as u64));
+    group.bench_function("legacy_search", |b| {
+        b.iter(|| {
+            let mut total = 0.0;
+            for &rate in &rates {
+                for profile in &profiles {
+                    total += rssp::matrix::matrix_rating_at_rate_legacy_for_bench(profile, rate);
+                }
+            }
+            black_box(total);
+        });
+    });
+    group.bench_function("compile_time_lookup", |b| {
+        b.iter(|| {
+            let mut total = 0.0;
+            for &rate in &rates {
+                for profile in &profiles {
+                    total += profile.rating_at_rate(rate);
+                }
+            }
+            black_box(total);
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(benches, bench_matrix_profile, bench_difficulty);
 criterion_main!(benches);
