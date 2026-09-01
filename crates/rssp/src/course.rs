@@ -1467,6 +1467,30 @@ fn sorted_dir_names(dir: &Path) -> Option<Vec<OsString>> {
     Some(names)
 }
 
+fn find_named_dir(parent: &Path, name: &str) -> Option<PathBuf> {
+    assets::is_dir_ci(parent, name).or_else(|| {
+        let path = parent.join(name);
+        path.is_dir().then_some(path)
+    })
+}
+
+fn resolve_group_song(group_dir: &Path, song: &str) -> Option<PathBuf> {
+    let direct = find_named_dir(group_dir, song);
+    if direct.is_some() {
+        return direct;
+    }
+
+    for name in sorted_dir_names(group_dir)? {
+        let dir = group_dir.join(name);
+        let scan = pack::scan_song_dir(&dir, pack::ScanOpt::default()).ok()??;
+        let sim = simfile::open(&scan.simfile).ok()?;
+        if simfile_translit_title_eq(&sim.data, sim.extension, song)? {
+            return Some(dir);
+        }
+    }
+    None
+}
+
 fn resolve_song_dir(songs_dir: &Path, group: Option<&str>, song: &str) -> Option<PathBuf> {
     let song = song.trim();
     if song.is_empty() {
@@ -1474,36 +1498,13 @@ fn resolve_song_dir(songs_dir: &Path, group: Option<&str>, song: &str) -> Option
     }
 
     if let Some(group) = group.map(str::trim).filter(|g| !g.is_empty()) {
-        let group_dir = assets::is_dir_ci(songs_dir, group).or_else(|| {
-            let p = songs_dir.join(group);
-            p.is_dir().then_some(p)
-        })?;
-
-        let direct = assets::is_dir_ci(&group_dir, song).or_else(|| {
-            let p = group_dir.join(song);
-            p.is_dir().then_some(p)
-        });
-        if direct.is_some() {
-            return direct;
-        }
-
-        for name in sorted_dir_names(&group_dir)? {
-            let dir = group_dir.join(name);
-            let scan = pack::scan_song_dir(&dir, pack::ScanOpt::default()).ok()??;
-            let sim = simfile::open(&scan.simfile).ok()?;
-            if simfile_translit_title_eq(&sim.data, sim.extension, song)? {
-                return Some(dir);
-            }
-        }
-        return None;
+        let group_dir = find_named_dir(songs_dir, group)?;
+        return resolve_group_song(&group_dir, song);
     }
 
     for name in sorted_dir_names(songs_dir)? {
         let group_dir = songs_dir.join(name);
-        if let Some(dir) = assets::is_dir_ci(&group_dir, song).or_else(|| {
-            let p = group_dir.join(song);
-            p.is_dir().then_some(p)
-        }) {
+        if let Some(dir) = find_named_dir(&group_dir, song) {
             return Some(dir);
         }
     }
@@ -1769,7 +1770,7 @@ pub fn analyze_crs_path(
     course_difficulty: &str,
     options: AnalysisOptions,
 ) -> Result<CourseSummary, String> {
-    analyze_crs_path_impl::<true>(
+    analyze_crs_path_impl::<true, true>(
         course_path,
         songs_dir,
         target_step_type,
@@ -1788,7 +1789,7 @@ pub fn analyze_crs_path_cache_all_for_bench(
     course_difficulty: &str,
     options: AnalysisOptions,
 ) -> Result<CourseSummary, String> {
-    analyze_crs_path_impl::<true>(
+    analyze_crs_path_impl::<true, true>(
         course_path,
         songs_dir,
         target_step_type,
@@ -1809,7 +1810,7 @@ pub fn profile_analyze_crs(
     song_key_cache: bool,
 ) -> Result<CourseSummary, String> {
     if song_key_cache {
-        analyze_crs_path_impl::<true>(
+        analyze_crs_path_impl::<true, false>(
             course_path,
             songs_dir,
             target_step_type,
@@ -1818,7 +1819,7 @@ pub fn profile_analyze_crs(
             false,
         )
     } else {
-        analyze_crs_path_impl::<false>(
+        analyze_crs_path_impl::<false, false>(
             course_path,
             songs_dir,
             target_step_type,
@@ -1829,12 +1830,70 @@ pub fn profile_analyze_crs(
     }
 }
 
-fn resolve_course_simfile(
+#[cfg(feature = "profile")]
+#[doc(hidden)]
+pub fn profile_analyze_groups(
+    course_path: &Path,
+    songs_dir: Option<&Path>,
+    target_step_type: &str,
+    course_difficulty: &str,
+    options: AnalysisOptions,
+    group_cache: bool,
+) -> Result<CourseSummary, String> {
+    if group_cache {
+        analyze_crs_path_impl::<true, true>(
+            course_path,
+            songs_dir,
+            target_step_type,
+            course_difficulty,
+            options,
+            false,
+        )
+    } else {
+        analyze_crs_path_impl::<true, false>(
+            course_path,
+            songs_dir,
+            target_step_type,
+            course_difficulty,
+            options,
+            false,
+        )
+    }
+}
+
+fn resolve_course_song<'a, const GROUP_CACHE: bool>(
     songs_dir: &Path,
-    group: Option<&str>,
+    group: Option<&'a str>,
     song: &str,
+    last_group: &mut Option<(&'a str, PathBuf)>,
+) -> Option<PathBuf> {
+    if !GROUP_CACHE {
+        return resolve_song_dir(songs_dir, group, song);
+    }
+
+    let song = song.trim();
+    if song.is_empty() {
+        return None;
+    }
+    let Some(group) = group.map(str::trim).filter(|group| !group.is_empty()) else {
+        return resolve_song_dir(songs_dir, None, song);
+    };
+    if !last_group
+        .as_ref()
+        .is_some_and(|(cached, _)| *cached == group)
+    {
+        *last_group = Some((group, find_named_dir(songs_dir, group)?));
+    }
+    resolve_group_song(&last_group.as_ref()?.1, song)
+}
+
+fn resolve_course_simfile<'a, const GROUP_CACHE: bool>(
+    songs_dir: &Path,
+    group: Option<&'a str>,
+    song: &str,
+    last_group: &mut Option<(&'a str, PathBuf)>,
 ) -> Result<(PathBuf, PathBuf), String> {
-    let song_dir = resolve_song_dir(songs_dir, group, song)
+    let song_dir = resolve_course_song::<GROUP_CACHE>(songs_dir, group, song, last_group)
         .ok_or_else(|| format!("Song not found: {song}"))?;
     let scan = pack::scan_song_dir(&song_dir, pack::ScanOpt::default())
         .map_err(|e| format!("Failed scanning {}: {e:?}", song_dir.display()))?;
@@ -1844,7 +1903,7 @@ fn resolve_course_simfile(
     Ok((song_dir, simfile))
 }
 
-fn analyze_crs_path_impl<const SONG_KEY_CACHE: bool>(
+fn analyze_crs_path_impl<const SONG_KEY_CACHE: bool, const GROUP_CACHE: bool>(
     course_path: &Path,
     songs_dir: Option<&Path>,
     target_step_type: &str,
@@ -1897,6 +1956,11 @@ fn analyze_crs_path_impl<const SONG_KEY_CACHE: bool>(
         HashMap::with_capacity(if SONG_KEY_CACHE { 0 } else { cache_capacity });
     let mut song_cache: HashMap<(Option<&str>, &str), (String, SimfileSummary)> =
         HashMap::with_capacity(if SONG_KEY_CACHE { cache_capacity } else { 0 });
+    // Worker-local, single-course, one-entry group path cache. The first named
+    // group warms it; a change replaces it in O(1), and hits skip the Songs-root
+    // scan. It drops after load-time analysis, so no miss or destruction reaches
+    // gameplay; allocation benchmarks instrument its peak and worst-case cost.
+    let mut last_group = None;
     let mut entries = Vec::with_capacity(entry_count);
     let mut hash_list = Vec::new();
     let mut hash_seen = CourseHashSet::default();
@@ -1940,8 +2004,12 @@ fn analyze_crs_path_impl<const SONG_KEY_CACHE: bool>(
                     (&cached.1, dir_name)
                 }
                 Entry::Vacant(entry) if cache_has_room => {
-                    let (dir, path) =
-                        resolve_course_simfile(&base_songs_dir, song_key.0, song_key.1)?;
+                    let (dir, path) = resolve_course_simfile::<GROUP_CACHE>(
+                        &base_songs_dir,
+                        song_key.0,
+                        song_key.1,
+                        &mut last_group,
+                    )?;
                     let dir_name = song_dir_name(&dir);
                     let summary = analyze_course_song(&path, &prepared, &mut analysis_scratch)?;
                     let cached = entry.insert((dir_name.clone(), summary));
@@ -1949,14 +2017,23 @@ fn analyze_crs_path_impl<const SONG_KEY_CACHE: bool>(
                 }
                 Entry::Vacant(entry) => {
                     drop(entry);
-                    let (dir, path) =
-                        resolve_course_simfile(&base_songs_dir, song_key.0, song_key.1)?;
+                    let (dir, path) = resolve_course_simfile::<GROUP_CACHE>(
+                        &base_songs_dir,
+                        song_key.0,
+                        song_key.1,
+                        &mut last_group,
+                    )?;
                     uncached_sim = analyze_course_song(&path, &prepared, &mut analysis_scratch)?;
                     (&uncached_sim, song_dir_name(&dir))
                 }
             }
         } else if cache_song {
-            let (dir, path) = resolve_course_simfile(&base_songs_dir, song_key.0, song_key.1)?;
+            let (dir, path) = resolve_course_simfile::<GROUP_CACHE>(
+                &base_songs_dir,
+                song_key.0,
+                song_key.1,
+                &mut last_group,
+            )?;
             let dir_name = song_dir_name(&dir);
             match path_cache.entry(path) {
                 Entry::Occupied(entry) => (entry.into_mut(), dir_name),
@@ -1972,7 +2049,12 @@ fn analyze_crs_path_impl<const SONG_KEY_CACHE: bool>(
                 }
             }
         } else {
-            let (dir, path) = resolve_course_simfile(&base_songs_dir, song_key.0, song_key.1)?;
+            let (dir, path) = resolve_course_simfile::<GROUP_CACHE>(
+                &base_songs_dir,
+                song_key.0,
+                song_key.1,
+                &mut last_group,
+            )?;
             uncached_sim = analyze_course_song(&path, &prepared, &mut analysis_scratch)?;
             (&uncached_sim, song_dir_name(&dir))
         };
@@ -2295,14 +2377,18 @@ mod tests {
     fn course_analysis_caches_songs_and_deduplicates_hashes() {
         let root = TempRoot::new();
         let songs_dir = root.path().join("Songs");
-        let group_dir = songs_dir.join("Group");
-        std::fs::create_dir_all(&group_dir).expect("group directory should be creatable");
-
-        for song in ["SongA", "SongB"] {
-            let song_dir = group_dir.join(song);
-            std::fs::create_dir(&song_dir).expect("song directory should be creatable");
-            std::fs::write(song_dir.join(format!("{song}.ssc")), SIMFILE)
-                .expect("simfile should be writable");
+        for (group, songs) in [
+            ("Group", &["SongA", "SongB"][..]),
+            ("Other", &["SongC"][..]),
+        ] {
+            let group_dir = songs_dir.join(group);
+            std::fs::create_dir_all(&group_dir).expect("group directory should be creatable");
+            for song in songs {
+                let song_dir = group_dir.join(song);
+                std::fs::create_dir(&song_dir).expect("song directory should be creatable");
+                std::fs::write(song_dir.join(format!("{song}.ssc")), SIMFILE)
+                    .expect("simfile should be writable");
+            }
         }
         let course_path = root.path().join("test.crs");
         std::fs::write(
@@ -2311,6 +2397,7 @@ mod tests {
                 "#COURSE:Optimization Test;\n",
                 "#SONG:Group/SongA:Challenge:;\n",
                 "#SONG:Group/SongB:Challenge:;\n",
+                "#SONG:Other/SongC:Challenge:;\n",
                 "#SONG:Group/SongA:Challenge:;\n",
             ),
         )
@@ -2322,7 +2409,7 @@ mod tests {
             compute_tech_counts: false,
             ..crate::AnalysisOptions::default()
         };
-        let path_cached = analyze_crs_path_impl::<false>(
+        let path_cached = analyze_crs_path_impl::<false, false>(
             &course_path,
             Some(&songs_dir),
             "dance-single",
@@ -2331,6 +2418,15 @@ mod tests {
             false,
         )
         .expect("path-key cache should analyze");
+        let group_uncached = analyze_crs_path_impl::<true, false>(
+            &course_path,
+            Some(&songs_dir),
+            "dance-single",
+            "Medium",
+            options.clone(),
+            false,
+        )
+        .expect("uncached group lookup should analyze");
         let summary = analyze_crs_path(
             &course_path,
             Some(&songs_dir),
@@ -2341,10 +2437,11 @@ mod tests {
         .expect("course should analyze");
 
         assert_eq!(summary.course, "Optimization Test");
-        assert_eq!(summary.entries.len(), 3);
+        assert_eq!(summary.entries.len(), 4);
         assert_eq!(summary.entries[0].song_dir, "SongA");
         assert_eq!(summary.entries[1].song_dir, "SongB");
-        assert_eq!(summary.entries[2].song_dir, "SongA");
+        assert_eq!(summary.entries[2].song_dir, "SongC");
+        assert_eq!(summary.entries[3].song_dir, "SongA");
         assert_eq!(summary.sha1_hashes.len(), 1);
         assert_eq!(summary.bpm_neutral_sha1_hashes.len(), 1);
         assert_eq!(summary.chart.short_hash, summary.sha1_hashes[0]);
@@ -2357,6 +2454,7 @@ mod tests {
         assert!(!summary.tech_counts_enabled);
 
         let mut expected_json = Vec::new();
+        let mut uncached_json = Vec::new();
         let mut actual_json = Vec::new();
         crate::report::write_course_reports(
             &path_cached,
@@ -2365,11 +2463,18 @@ mod tests {
         )
         .expect("path-key cache summary should serialize");
         crate::report::write_course_reports(
+            &group_uncached,
+            crate::report::OutputMode::JSON,
+            &mut uncached_json,
+        )
+        .expect("uncached group summary should serialize");
+        crate::report::write_course_reports(
             &summary,
             crate::report::OutputMode::JSON,
             &mut actual_json,
         )
         .expect("repeated-only cache summary should serialize");
+        assert_eq!(actual_json, uncached_json);
         assert_eq!(actual_json, expected_json);
     }
 }

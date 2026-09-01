@@ -301,6 +301,32 @@ impl CourseFixture {
         .expect("song-key cache summary should serialize");
         assert_eq!(actual, expected);
     }
+
+    pub fn assert_group_cache(&self) {
+        let analyze = |group_cache| {
+            rssp::course::profile_analyze_groups(
+                &self.course_path,
+                Some(&self.songs_dir),
+                "dance-single",
+                "Medium",
+                fast_options(),
+                group_cache,
+            )
+            .expect("course group cache fixture should analyze")
+        };
+        let uncached = analyze(false);
+        let cached = analyze(true);
+        let (mut expected, mut actual) = (Vec::new(), Vec::new());
+        rssp::report::write_course_reports(
+            &uncached,
+            rssp::report::OutputMode::JSON,
+            &mut expected,
+        )
+        .expect("uncached group summary should serialize");
+        rssp::report::write_course_reports(&cached, rssp::report::OutputMode::JSON, &mut actual)
+            .expect("cached group summary should serialize");
+        assert_eq!(actual, expected);
+    }
 }
 
 impl Drop for CourseFixture {

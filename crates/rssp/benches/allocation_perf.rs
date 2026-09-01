@@ -3661,6 +3661,7 @@ fn run_course_analyze_alloc(iterations: usize) {
     let fixture = course_bench::CourseFixture::new();
     let repeated = course_bench::CourseFixture::repeated();
     let options = course_bench::clone_heavy_options();
+    fixture.assert_group_cache();
     repeated.assert_song_cache();
     run_course_analyze_phase(
         "cache-all",
@@ -3694,6 +3695,19 @@ fn run_course_analyze_alloc(iterations: usize) {
             .expect("benchmark course should analyze")
         },
     );
+    for (phase, group_cache) in [("group-cache-off", false), ("group-cache-on", true)] {
+        run_course_analyze_phase(phase, iterations, &fixture, &options, |fixture, options| {
+            rssp::course::profile_analyze_groups(
+                fixture.course_path(),
+                Some(fixture.songs_dir()),
+                "dance-single",
+                "Medium",
+                options,
+                group_cache,
+            )
+            .expect("group cache benchmark course should analyze")
+        });
+    }
     for (phase, song_key_cache) in [("repeat-path-key", false), ("repeat-song-key", true)] {
         run_course_analyze_phase(
             phase,
