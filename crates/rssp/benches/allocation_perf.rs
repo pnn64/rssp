@@ -2385,9 +2385,53 @@ fn run_bpm_stats_alloc_phase(
     );
 }
 
+fn run_small_bpm_sort_alloc_phase(phase: &str, iterations: usize, in_place: bool) {
+    let mut values: Vec<_> = bpm_summary_bench::small_fixture()
+        .into_iter()
+        .map(|(_, bpm)| bpm)
+        .collect();
+    bpm_summary_bench::stats_sort(&mut values, in_place);
+    reset_counters();
+    let before = Counters::read();
+    let start = Instant::now();
+    let mut checksum = 0u64;
+    for _ in 0..iterations {
+        values.reverse();
+        let result = bpm_summary_bench::stats_sort(black_box(&mut values), in_place);
+        checksum = checksum
+            .wrapping_add(result.0.to_bits())
+            .wrapping_add(result.1.to_bits());
+    }
+    let elapsed = start.elapsed();
+    let after = Counters::read();
+    let divisor = iterations as f64;
+    println!(
+        concat!(
+            "mode=bpm-small-sort phase={} iters={} checksum={} elapsed_s={:.6} ",
+            "throughput_entries_s={:.3} alloc_calls_per_iter={:.1} ",
+            "dealloc_calls_per_iter={:.1} realloc_calls_per_iter={:.1} ",
+            "alloc_bytes_per_iter={:.1} realloc_bytes_per_iter={:.1} ",
+            "live_growth_bytes={} peak_live_growth_bytes={}"
+        ),
+        phase,
+        iterations,
+        black_box(checksum),
+        elapsed.as_secs_f64(),
+        bpm_summary_bench::SMALL_ENTRY_COUNT as f64 * divisor / elapsed.as_secs_f64(),
+        (after.alloc_calls - before.alloc_calls) as f64 / divisor,
+        (after.dealloc_calls - before.dealloc_calls) as f64 / divisor,
+        (after.realloc_calls - before.realloc_calls) as f64 / divisor,
+        (after.alloc_bytes - before.alloc_bytes) as f64 / divisor,
+        (after.realloc_bytes - before.realloc_bytes) as f64 / divisor,
+        after.live_bytes as isize - before.live_bytes as isize,
+        after.peak_live_bytes.saturating_sub(before.live_bytes),
+    );
+}
+
 fn run_bpm_stats_alloc(iterations: usize) {
     let map = bpm_summary_bench::fixture();
     bpm_summary_bench::assert_behavior(&map);
+    bpm_summary_bench::assert_sort_behavior();
     let mut legacy_values = Vec::with_capacity(map.len());
     run_bpm_stats_alloc_phase("sum-after-fill", iterations, &map, |map| {
         bpm_summary_bench::compute(map, &mut legacy_values, true)
@@ -2395,6 +2439,18 @@ fn run_bpm_stats_alloc(iterations: usize) {
     let mut fused_values = Vec::with_capacity(map.len());
     run_bpm_stats_alloc_phase("sum-while-fill", iterations, &map, |map| {
         bpm_summary_bench::compute(map, &mut fused_values, false)
+    });
+
+    run_small_bpm_sort_alloc_phase("stable", iterations, false);
+    run_small_bpm_sort_alloc_phase("in-place", iterations, true);
+    let small_map = bpm_summary_bench::small_fixture();
+    let mut stable_small_values = Vec::with_capacity(small_map.len());
+    run_bpm_stats_alloc_phase("small-stable-sort", iterations, &small_map, |map| {
+        bpm_summary_bench::compute_sort(map, &mut stable_small_values, false)
+    });
+    let mut in_place_small_values = Vec::with_capacity(small_map.len());
+    run_bpm_stats_alloc_phase("small-in-place-sort", iterations, &small_map, |map| {
+        bpm_summary_bench::compute_sort(map, &mut in_place_small_values, true)
     });
 }
 

@@ -1532,6 +1532,9 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         .collect();
     let bpm_stats_map = bpm_summary_bench::fixture();
     bpm_summary_bench::assert_behavior(&bpm_stats_map);
+    bpm_summary_bench::assert_sort_behavior();
+    let small_bpm_map = bpm_summary_bench::small_fixture();
+    let small_bpm_values: Vec<_> = small_bpm_map.iter().map(|&(_, bpm)| bpm).collect();
     let mut legacy_bpm_values = Vec::with_capacity(bpm_stats_map.len());
     let mut fused_bpm_values = Vec::with_capacity(bpm_stats_map.len());
     let mut nps_scratch = Vec::new();
@@ -2500,6 +2503,54 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
         });
     }
     bpm_stats.finish();
+
+    let mut small_bpm_sort = c.benchmark_group("cycles/bpm_small_stats_sort_63");
+    small_bpm_sort.sample_size(100);
+    small_bpm_sort.measurement_time(Duration::from_secs(3));
+    small_bpm_sort.throughput(Throughput::Elements(
+        bpm_summary_bench::SMALL_ENTRY_COUNT as u64,
+    ));
+    for (phase, in_place) in [("stable", false), ("in_place", true)] {
+        small_bpm_sort.bench_function(phase, |b| {
+            b.iter_batched(
+                || small_bpm_values.clone(),
+                |mut values| {
+                    black_box(bpm_summary_bench::stats_sort(
+                        black_box(&mut values),
+                        in_place,
+                    ))
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    small_bpm_sort.finish();
+
+    let mut stable_small_bpms = Vec::with_capacity(small_bpm_map.len());
+    let mut in_place_small_bpms = Vec::with_capacity(small_bpm_map.len());
+    let mut small_bpm_summary = c.benchmark_group("cycles/bpm_small_summary_sort_63");
+    small_bpm_summary.sample_size(100);
+    small_bpm_summary.measurement_time(Duration::from_secs(3));
+    small_bpm_summary.throughput(Throughput::Elements(
+        bpm_summary_bench::SMALL_ENTRY_COUNT as u64,
+    ));
+    for (phase, in_place) in [("stable", false), ("in_place", true)] {
+        let values = if in_place {
+            &mut in_place_small_bpms
+        } else {
+            &mut stable_small_bpms
+        };
+        small_bpm_summary.bench_function(phase, |b| {
+            b.iter(|| {
+                black_box(bpm_summary_bench::compute_sort(
+                    black_box(&small_bpm_map),
+                    black_box(values),
+                    in_place,
+                ))
+            });
+        });
+    }
+    small_bpm_summary.finish();
 
     let elapsed_fixture = elapsed_bench::ElapsedFixture::new();
     elapsed_bench::assert_behavior(&elapsed_fixture);

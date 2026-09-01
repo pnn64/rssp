@@ -1146,7 +1146,7 @@ pub fn compute_bpm_stats(values: &[f64]) -> (f64, f64) {
     } else {
         filtered.extend_from_slice(values);
     }
-    bpm_stats_from_values::<false>(&mut filtered, all_values_are_displayable, 0.0)
+    bpm_stats_from_values::<false, true>(&mut filtered, all_values_are_displayable, 0.0)
 }
 
 #[must_use]
@@ -1164,7 +1164,7 @@ pub fn compute_bpm_map_stats(map: &[(f64, f64)]) -> (f64, f64) {
     if !all_values_are_displayable {
         filtered.extend(map.iter().map(|&(_, bpm)| bpm));
     }
-    bpm_stats_from_values::<false>(&mut filtered, all_values_are_displayable, 0.0)
+    bpm_stats_from_values::<false, true>(&mut filtered, all_values_are_displayable, 0.0)
 }
 
 #[must_use]
@@ -1182,10 +1182,11 @@ pub fn compute_bpm_range_and_stats_with_scratch(
     map: &[(f64, f64)],
     values: &mut Vec<f64>,
 ) -> (i32, i32, f64, f64) {
-    compute_bpm_summary::<true>(map, values)
+    compute_bpm_summary::<true, true>(map, values)
 }
 
 const BPM_SELECTION_MIN: usize = 64;
+const BPM_UNSTABLE_SORT_MIN: usize = 40;
 
 fn fill_display_bpms<const SUM: bool>(
     map: &[(f64, f64)],
@@ -1205,7 +1206,7 @@ fn fill_display_bpms<const SUM: bool>(
     (min, max, sum)
 }
 
-fn compute_bpm_summary<const FUSE_SUM: bool>(
+fn compute_bpm_summary<const FUSE_SUM: bool, const IN_PLACE_SORT: bool>(
     map: &[(f64, f64)],
     values: &mut Vec<f64>,
 ) -> (i32, i32, f64, f64) {
@@ -1233,7 +1234,7 @@ fn compute_bpm_summary<const FUSE_SUM: bool>(
     }
 
     let (median, average) =
-        bpm_stats_from_values::<FUSE_SUM>(values, all_values_are_displayable, sum);
+        bpm_stats_from_values::<FUSE_SUM, IN_PLACE_SORT>(values, all_values_are_displayable, sum);
     (
         min.max(0.0).round() as i32,
         max.max(0.0).round() as i32,
@@ -1250,13 +1251,37 @@ pub fn compute_bpm_summary_for_bench(
     legacy: bool,
 ) -> (i32, i32, f64, f64) {
     if legacy {
-        compute_bpm_summary::<false>(map, values)
+        compute_bpm_summary::<false, true>(map, values)
     } else {
-        compute_bpm_summary::<true>(map, values)
+        compute_bpm_summary::<true, true>(map, values)
     }
 }
 
-fn bpm_stats_from_values<const PRECOMPUTED_SUM: bool>(
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn compute_bpm_summary_sort_for_bench(
+    map: &[(f64, f64)],
+    values: &mut Vec<f64>,
+    in_place: bool,
+) -> (i32, i32, f64, f64) {
+    if in_place {
+        compute_bpm_summary::<true, true>(map, values)
+    } else {
+        compute_bpm_summary::<true, false>(map, values)
+    }
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub fn compute_small_bpm_stats_for_bench(values: &mut [f64], in_place: bool) -> (f64, f64) {
+    if in_place {
+        bpm_stats_from_values::<false, true>(values, true, 0.0)
+    } else {
+        bpm_stats_from_values::<false, false>(values, true, 0.0)
+    }
+}
+
+fn bpm_stats_from_values<const PRECOMPUTED_SUM: bool, const IN_PLACE_SORT: bool>(
     values: &mut [f64],
     can_select: bool,
     sum: f64,
@@ -1287,7 +1312,14 @@ fn bpm_stats_from_values<const PRECOMPUTED_SUM: bool>(
         return (median, average);
     }
 
-    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    if IN_PLACE_SORT && can_select && values.len() >= BPM_UNSTABLE_SORT_MIN {
+        values.sort_unstable_by(|a, b| {
+            a.partial_cmp(b)
+                .expect("display BPM values are finite numbers")
+        });
+    } else {
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    }
     let median = if values.len().is_multiple_of(2) {
         f64::midpoint(values[values.len() / 2 - 1], values[values.len() / 2])
     } else {
@@ -1626,6 +1658,32 @@ mod tests {
                 .map(|(idx, &bpm)| (idx as f64 * 4.0, bpm))
                 .collect();
             assert_eq!(compute_bpm_map_stats(&map), compute_bpm_stats(&values));
+        }
+    }
+
+    #[test]
+    fn in_place_small_bpm_stats_match_stable_sort() {
+        let cases = [
+            vec![120.0],
+            vec![180.0, 120.0, 180.0, 60.0],
+            (0..BPM_UNSTABLE_SORT_MIN - 1)
+                .map(|index| 60.125 + ((index * 37) % 211) as f64 / 8.0)
+                .collect(),
+            (0..BPM_UNSTABLE_SORT_MIN)
+                .map(|index| 60.125 + ((index * 37) % 211) as f64 / 8.0)
+                .collect(),
+            (0..BPM_SELECTION_MIN - 1)
+                .map(|index| 60.125 + ((index * 37) % 211) as f64 / 8.0)
+                .collect(),
+        ];
+
+        for mut stable in cases {
+            let mut in_place = stable.clone();
+            let expected = bpm_stats_from_values::<false, false>(&mut stable, true, 0.0);
+            let actual = bpm_stats_from_values::<false, true>(&mut in_place, true, 0.0);
+            assert_eq!(actual.0.to_bits(), expected.0.to_bits());
+            assert_eq!(actual.1.to_bits(), expected.1.to_bits());
+            assert_eq!(in_place, stable);
         }
     }
 

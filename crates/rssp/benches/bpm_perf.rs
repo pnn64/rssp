@@ -1,4 +1,4 @@
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::fmt::Write as _;
 use std::hint::black_box;
 use std::time::Duration;
@@ -514,6 +514,7 @@ fn bench_display_bpm(c: &mut Criterion) {
 fn bench_bpm_stats(c: &mut Criterion) {
     let map = bpm_summary_bench::fixture();
     bpm_summary_bench::assert_behavior(&map);
+    bpm_summary_bench::assert_sort_behavior();
     let mut legacy_values = Vec::with_capacity(map.len());
     let mut fused_values = Vec::with_capacity(map.len());
 
@@ -538,6 +539,93 @@ fn bench_bpm_stats(c: &mut Criterion) {
         });
     }
     group.finish();
+
+    let small_map = bpm_summary_bench::small_fixture();
+    let small_values: Vec<_> = small_map.iter().map(|&(_, bpm)| bpm).collect();
+    let mut sort = c.benchmark_group("bpm_small_stats_sort_63");
+    sort.sample_size(100);
+    sort.measurement_time(Duration::from_secs(3));
+    sort.throughput(criterion::Throughput::Elements(
+        bpm_summary_bench::SMALL_ENTRY_COUNT as u64,
+    ));
+    for (phase, in_place) in [("stable", false), ("in_place", true)] {
+        sort.bench_function(phase, |b| {
+            b.iter_batched(
+                || small_values.clone(),
+                |mut values| {
+                    black_box(bpm_summary_bench::stats_sort(
+                        black_box(&mut values),
+                        in_place,
+                    ))
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    sort.finish();
+
+    let mut sizes = c.benchmark_group("bpm_stats_sort_sizes");
+    sizes.sample_size(100);
+    sizes.measurement_time(Duration::from_secs(2));
+    for size in [
+        2,
+        4,
+        8,
+        16,
+        24,
+        32,
+        40,
+        48,
+        56,
+        bpm_summary_bench::SMALL_ENTRY_COUNT,
+    ] {
+        let values: Vec<_> = bpm_summary_bench::fixture_len(size)
+            .into_iter()
+            .map(|(_, bpm)| bpm)
+            .collect();
+        sizes.throughput(criterion::Throughput::Elements(size as u64));
+        for (phase, in_place) in [("stable", false), ("in_place", true)] {
+            sizes.bench_with_input(BenchmarkId::new(phase, size), &values, |b, values| {
+                b.iter_batched(
+                    || values.clone(),
+                    |mut values| {
+                        black_box(bpm_summary_bench::stats_sort(
+                            black_box(&mut values),
+                            in_place,
+                        ))
+                    },
+                    BatchSize::SmallInput,
+                );
+            });
+        }
+    }
+    sizes.finish();
+
+    let mut stable_values = Vec::with_capacity(small_map.len());
+    let mut in_place_values = Vec::with_capacity(small_map.len());
+    let mut summary = c.benchmark_group("bpm_small_summary_sort_63");
+    summary.sample_size(100);
+    summary.measurement_time(Duration::from_secs(3));
+    summary.throughput(criterion::Throughput::Elements(
+        bpm_summary_bench::SMALL_ENTRY_COUNT as u64,
+    ));
+    for (phase, in_place) in [("stable", false), ("in_place", true)] {
+        let values = if in_place {
+            &mut in_place_values
+        } else {
+            &mut stable_values
+        };
+        summary.bench_function(phase, |b| {
+            b.iter(|| {
+                black_box(bpm_summary_bench::compute_sort(
+                    black_box(&small_map),
+                    black_box(values),
+                    in_place,
+                ))
+            });
+        });
+    }
+    summary.finish();
 }
 
 fn mine_chart(measures: usize, rows_per_measure: usize) -> Vec<u8> {
