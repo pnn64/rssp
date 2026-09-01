@@ -881,6 +881,71 @@ fn print_timing_triple_pairs(fixture: &report_timing_bench::TimingTextFixture) {
 }
 
 #[cfg(windows)]
+fn stream_output_cycles(
+    measures: &[usize],
+    tokens: &mut Vec<rssp::streams::Token>,
+    fused: bool,
+) -> u64 {
+    const ITERATIONS: usize = 128;
+    let start = platform::read_cycles();
+    for _ in 0..ITERATIONS {
+        black_box(rssp::streams::compute_stream_outputs_profile(
+            black_box(measures),
+            black_box(tokens),
+            fused,
+        ));
+    }
+    platform::read_cycles() - start
+}
+
+#[cfg(windows)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "paired cycle ratios need floating-point division"
+)]
+fn print_stream_output_pairs(measures: &[usize]) {
+    const SAMPLES: usize = 31;
+    let mut legacy_tokens = Vec::new();
+    let mut fused_tokens = Vec::new();
+    assert_eq!(
+        rssp::streams::compute_stream_outputs_profile(measures, &mut legacy_tokens, false),
+        rssp::streams::compute_stream_outputs_profile(measures, &mut fused_tokens, true),
+    );
+    let mut legacy = [0u64; SAMPLES];
+    let mut fused = [0u64; SAMPLES];
+    let mut ratios = [0.0f64; SAMPLES];
+    for sample in 0..SAMPLES {
+        let (legacy_cycles, fused_cycles) = if sample.is_multiple_of(2) {
+            (
+                stream_output_cycles(measures, &mut legacy_tokens, false),
+                stream_output_cycles(measures, &mut fused_tokens, true),
+            )
+        } else {
+            let fused_cycles = stream_output_cycles(measures, &mut fused_tokens, true);
+            let legacy_cycles = stream_output_cycles(measures, &mut legacy_tokens, false);
+            (legacy_cycles, fused_cycles)
+        };
+        legacy[sample] = legacy_cycles;
+        fused[sample] = fused_cycles;
+        ratios[sample] = fused_cycles as f64 / legacy_cycles as f64;
+    }
+    legacy.sort_unstable();
+    fused.sort_unstable();
+    ratios.sort_by(f64::total_cmp);
+    let mid = SAMPLES / 2;
+    eprintln!(
+        concat!(
+            "stream_outputs paired_samples={} three_pass_median_cycles={} ",
+            "fused_median_cycles={} median_change={:+.3}%"
+        ),
+        SAMPLES,
+        legacy[mid],
+        fused[mid],
+        (ratios[mid] - 1.0) * 100.0,
+    );
+}
+
+#[cfg(windows)]
 fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     const ENTRIES: usize = 4_096;
     let cpu = platform::stabilize_thread();
@@ -1783,6 +1848,7 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             _ => 0,
         })
         .collect();
+    print_stream_output_pairs(&stream_densities);
     let matrix_densities: Vec<_> = (0..2_048).map(|idx| [16, 20, 24, 32][idx & 3]).collect();
     let matrix_bpms: Vec<_> = (0..1_024)
         .map(|idx| (idx as f64 * 8.0, 60.0 + idx as f64 * 0.125))
@@ -2382,11 +2448,22 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
             )));
         });
     });
-    optimizations.bench_function("stream_outputs_reused", |b| {
+    optimizations.bench_function("stream_outputs_reused_three_pass", |b| {
         b.iter(|| {
-            black_box(rssp::stats::compute_stream_outputs_with_scratch(
+            black_box(rssp::streams::compute_stream_outputs_profile(
                 black_box(&stream_densities),
                 black_box(&mut stream_tokens),
+                false,
+            ));
+        });
+    });
+    let mut fused_stream_tokens = Vec::new();
+    optimizations.bench_function("stream_outputs_reused_fused", |b| {
+        b.iter(|| {
+            black_box(rssp::streams::compute_stream_outputs_profile(
+                black_box(&stream_densities),
+                black_box(&mut fused_stream_tokens),
+                true,
             ));
         });
     });

@@ -176,12 +176,23 @@ fn bench_combined_stream_outputs(c: &mut Criterion) {
             black_box(rssp::stats::compute_stream_outputs(black_box(&densities)));
         });
     });
-    let mut tokens = Vec::new();
-    group.bench_function("reused_tokens", |b| {
+    let mut legacy_tokens = Vec::new();
+    group.bench_function("reused_tokens_three_pass", |b| {
         b.iter(|| {
-            black_box(rssp::stats::compute_stream_outputs_with_scratch(
+            black_box(rssp::streams::compute_stream_outputs_profile(
                 black_box(&densities),
-                black_box(&mut tokens),
+                black_box(&mut legacy_tokens),
+                false,
+            ));
+        });
+    });
+    let mut fused_tokens = Vec::new();
+    group.bench_function("reused_tokens_fused", |b| {
+        b.iter(|| {
+            black_box(rssp::streams::compute_stream_outputs_profile(
+                black_box(&densities),
+                black_box(&mut fused_tokens),
+                true,
             ));
         });
     });

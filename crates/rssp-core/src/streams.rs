@@ -316,6 +316,17 @@ pub fn compute_stream_outputs_with_scratch(
     (String, String, String),
     (String, String, String),
 ) {
+    compute_stream_outputs_impl::<true>(measures, tokens)
+}
+
+fn compute_stream_outputs_impl<const FUSED: bool>(
+    measures: &[usize],
+    tokens: &mut Vec<Token>,
+) -> (
+    StreamCounts,
+    (String, String, String),
+    (String, String, String),
+) {
     let counts = compute_stream_counts_and_tokens(measures, tokens);
     if tokens.is_empty() {
         return (
@@ -325,13 +336,32 @@ pub fn compute_stream_outputs_with_scratch(
         );
     }
 
-    let sn = (
-        format_breakdown_tokens(tokens, BreakdownMode::Detailed),
-        format_breakdown_tokens(tokens, BreakdownMode::Partial),
-        format_breakdown_tokens(tokens, BreakdownMode::Simplified),
-    );
+    let sn = if FUSED {
+        format_breakdown_tokens3(tokens)
+    } else {
+        format_breakdown_tokens3_legacy(tokens)
+    };
     let standard = format_stream_tokens3(tokens);
     (counts, sn, standard)
+}
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[must_use]
+pub fn compute_stream_outputs_profile(
+    measures: &[usize],
+    tokens: &mut Vec<Token>,
+    fused: bool,
+) -> (
+    StreamCounts,
+    (String, String, String),
+    (String, String, String),
+) {
+    if fused {
+        compute_stream_outputs_impl::<true>(measures, tokens)
+    } else {
+        compute_stream_outputs_impl::<false>(measures, tokens)
+    }
 }
 
 #[must_use]
@@ -351,11 +381,138 @@ pub fn generate_breakdowns(measures: &[usize]) -> (String, String, String) {
     };
 
     let tokens = tokenize(&measures[start..=end]);
+    format_breakdown_tokens3(&tokens)
+}
+
+fn format_breakdown_tokens3_legacy(tokens: &[Token]) -> (String, String, String) {
     (
-        format_breakdown_tokens(&tokens, BreakdownMode::Detailed),
-        format_breakdown_tokens(&tokens, BreakdownMode::Partial),
-        format_breakdown_tokens(&tokens, BreakdownMode::Simplified),
+        format_breakdown_tokens(tokens, BreakdownMode::Detailed),
+        format_breakdown_tokens(tokens, BreakdownMode::Partial),
+        format_breakdown_tokens(tokens, BreakdownMode::Simplified),
     )
+}
+
+#[derive(Clone, Copy)]
+struct PendingRun {
+    category: RunDensity,
+    len: usize,
+    star: bool,
+}
+
+fn write_breakdown_run(out: &mut String, run: PendingRun) {
+    if !out.is_empty() {
+        out.push(' ');
+    }
+    write_run(out, run.category, run.len, run.star);
+}
+
+fn flush_pending(out: &mut String, pending: &mut Option<PendingRun>) {
+    if let Some(run) = pending.take() {
+        write_breakdown_run(out, run);
+    }
+}
+
+fn push_pending<const SIMPLIFIED: bool>(
+    out: &mut String,
+    pending: &mut Option<PendingRun>,
+    gap: &mut usize,
+    category: RunDensity,
+    len: usize,
+) {
+    let Some(mut run) = pending.take() else {
+        *pending = Some(PendingRun {
+            category,
+            len,
+            star: false,
+        });
+        *gap = 0;
+        return;
+    };
+    let merge_limit = if SIMPLIFIED { 4 } else { 1 };
+    if *gap != 0 && *gap <= merge_limit && run.category == category {
+        run.len += *gap + len;
+        run.star = true;
+        *pending = Some(run);
+    } else {
+        if SIMPLIFIED && (2..=4).contains(gap) {
+            run.len += *gap;
+            run.star = true;
+        }
+        write_breakdown_run(out, run);
+        *pending = Some(PendingRun {
+            category,
+            len,
+            star: false,
+        });
+    }
+    *gap = 0;
+}
+
+// Render all SN variants while each compact token is hot in cache. Partial
+// and simplified runs stay pending until the following gap determines whether
+// they merge; detailed output can be emitted immediately.
+fn format_breakdown_tokens3(tokens: &[Token]) -> (String, String, String) {
+    let cap = tokens.len().saturating_mul(TOKEN_TEXT_CAP);
+    let mut detailed = String::with_capacity(cap);
+    let mut partial = String::with_capacity(cap);
+    let mut simplified = String::with_capacity(cap);
+    let mut partial_run = None;
+    let mut simplified_run = None;
+    let mut partial_gap = 0usize;
+    let mut simplified_gap = 0usize;
+
+    for &token in tokens {
+        match token {
+            Token::Run(category, len) => {
+                write_breakdown_run(
+                    &mut detailed,
+                    PendingRun {
+                        category,
+                        len,
+                        star: false,
+                    },
+                );
+                push_pending::<false>(
+                    &mut partial,
+                    &mut partial_run,
+                    &mut partial_gap,
+                    category,
+                    len,
+                );
+                push_pending::<true>(
+                    &mut simplified,
+                    &mut simplified_run,
+                    &mut simplified_gap,
+                    category,
+                    len,
+                );
+            }
+            Token::Break(len) => {
+                format_break(&mut detailed, len, BreakdownMode::Detailed);
+
+                if partial_gap != 0 || len > 1 {
+                    flush_pending(&mut partial, &mut partial_run);
+                }
+                partial_gap = len;
+                if len > 1 {
+                    format_break(&mut partial, len, BreakdownMode::Partial);
+                    partial_gap = 0;
+                }
+
+                if simplified_gap != 0 || len > 4 {
+                    flush_pending(&mut simplified, &mut simplified_run);
+                }
+                simplified_gap = len;
+                if len > 4 {
+                    format_break(&mut simplified, len, BreakdownMode::Simplified);
+                    simplified_gap = 0;
+                }
+            }
+        }
+    }
+    flush_pending(&mut partial, &mut partial_run);
+    flush_pending(&mut simplified, &mut simplified_run);
+    (detailed, partial, simplified)
 }
 
 fn format_breakdown_tokens(tokens: &[Token], mode: BreakdownMode) -> String {

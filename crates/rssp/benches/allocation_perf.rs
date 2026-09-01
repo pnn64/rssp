@@ -2161,6 +2161,69 @@ fn run_stream_outputs_alloc_phase(
     );
 }
 
+fn stream_outputs_elapsed(
+    measures: &[usize],
+    tokens: &mut Vec<rssp::streams::Token>,
+    fused: bool,
+) -> u128 {
+    const BATCH: usize = 128;
+    let start = Instant::now();
+    for _ in 0..BATCH {
+        black_box(rssp::streams::compute_stream_outputs_profile(
+            black_box(measures),
+            black_box(tokens),
+            fused,
+        ));
+    }
+    start.elapsed().as_nanos()
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "paired wall-time ratios need floating-point division"
+)]
+fn print_stream_output_pairs(measures: &[usize]) {
+    const SAMPLES: usize = 31;
+    let mut legacy_tokens = Vec::new();
+    let mut fused_tokens = Vec::new();
+    assert_eq!(
+        rssp::streams::compute_stream_outputs_profile(measures, &mut legacy_tokens, false),
+        rssp::streams::compute_stream_outputs_profile(measures, &mut fused_tokens, true),
+    );
+    let mut legacy = [0u128; SAMPLES];
+    let mut fused = [0u128; SAMPLES];
+    let mut ratios = [0.0f64; SAMPLES];
+    for sample in 0..SAMPLES {
+        let (legacy_ns, fused_ns) = if sample.is_multiple_of(2) {
+            (
+                stream_outputs_elapsed(measures, &mut legacy_tokens, false),
+                stream_outputs_elapsed(measures, &mut fused_tokens, true),
+            )
+        } else {
+            let fused_ns = stream_outputs_elapsed(measures, &mut fused_tokens, true);
+            let legacy_ns = stream_outputs_elapsed(measures, &mut legacy_tokens, false);
+            (legacy_ns, fused_ns)
+        };
+        legacy[sample] = legacy_ns;
+        fused[sample] = fused_ns;
+        ratios[sample] = fused_ns as f64 / legacy_ns as f64;
+    }
+    legacy.sort_unstable();
+    fused.sort_unstable();
+    ratios.sort_by(f64::total_cmp);
+    let mid = SAMPLES / 2;
+    println!(
+        concat!(
+            "mode=stream-outputs paired_samples={} three_pass_median_ns={} ",
+            "fused_median_ns={} median_change={:+.3}%"
+        ),
+        SAMPLES,
+        legacy[mid],
+        fused[mid],
+        (ratios[mid] - 1.0) * 100.0,
+    );
+}
+
 fn run_stream_outputs_alloc(iterations: usize) {
     let measures: Vec<_> = (0..16_384)
         .map(|index| match index % 23 {
@@ -2171,6 +2234,7 @@ fn run_stream_outputs_alloc(iterations: usize) {
             _ => 0,
         })
         .collect();
+    print_stream_output_pairs(&measures);
     let base_live_bytes = LIVE_BYTES.load(Ordering::Relaxed);
     run_stream_outputs_alloc_phase(
         "allocating",
@@ -2179,13 +2243,23 @@ fn run_stream_outputs_alloc(iterations: usize) {
         base_live_bytes,
         |measures| rssp::stats::compute_stream_outputs(measures),
     );
+    {
+        let mut tokens = Vec::new();
+        run_stream_outputs_alloc_phase(
+            "three-pass",
+            iterations,
+            &measures,
+            base_live_bytes,
+            |measures| rssp::streams::compute_stream_outputs_profile(measures, &mut tokens, false),
+        );
+    }
     let mut tokens = Vec::new();
     run_stream_outputs_alloc_phase(
-        "reused",
+        "fused",
         iterations,
         &measures,
         base_live_bytes,
-        |measures| rssp::stats::compute_stream_outputs_with_scratch(measures, &mut tokens),
+        |measures| rssp::streams::compute_stream_outputs_profile(measures, &mut tokens, true),
     );
 }
 
