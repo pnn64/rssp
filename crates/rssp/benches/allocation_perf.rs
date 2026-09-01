@@ -6005,7 +6005,15 @@ fn run_background_changes_alloc(iterations: usize) {
         rssp::profile::background_changes_always_sort,
     );
     run_bgchanges_phase(
-        "cached-entry-type",
+        "growing-paths",
+        iterations,
+        assets_bench::CHANGE_COUNT,
+        &fixture,
+        ordered,
+        rssp::profile::background_changes_growing_paths,
+    );
+    run_bgchanges_phase(
+        "preallocated-paths",
         iterations,
         assets_bench::CHANGE_COUNT,
         &fixture,
@@ -6024,7 +6032,15 @@ fn run_background_changes_alloc(iterations: usize) {
         rssp::profile::background_changes_linear_upsert,
     );
     run_bgchanges_phase(
-        "unordered-filtered-upsert",
+        "unordered-growing-paths",
+        iterations,
+        assets_bench::UNORDERED_PAIR_COUNT,
+        &fixture,
+        &unordered,
+        rssp::profile::background_changes_growing_paths,
+    );
+    run_bgchanges_phase(
+        "unordered-preallocated-paths",
         iterations,
         assets_bench::UNORDERED_PAIR_COUNT,
         &fixture,

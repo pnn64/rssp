@@ -73,6 +73,11 @@ pub mod profile {
     }
 
     #[must_use]
+    pub fn relative_path_join(base: &Path, relative: &str, prealloc: bool) -> PathBuf {
+        crate::assets::profile_join_rel(base, relative, prealloc)
+    }
+
+    #[must_use]
     pub fn song_assets_legacy(
         song_dir: &Path,
         banner: &str,
@@ -231,6 +236,14 @@ pub mod profile {
         simfile_data: &[u8],
     ) -> Vec<crate::assets::ResolvedBackgroundChange> {
         crate::assets::profile_bgchanges_always_sort(song_dir, simfile_data)
+    }
+
+    #[must_use]
+    pub fn background_changes_growing_paths(
+        song_dir: &Path,
+        simfile_data: &[u8],
+    ) -> Vec<crate::assets::ResolvedBackgroundChange> {
+        crate::assets::profile_bgchanges_growing_paths(song_dir, simfile_data)
     }
 
     pub fn sort_background_changes(

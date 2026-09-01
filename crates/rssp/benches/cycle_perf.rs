@@ -619,6 +619,55 @@ fn print_note_data_pairs(data: &[u8], analyze: bool) {
 }
 
 #[cfg(windows)]
+fn path_join_cycles(base: &std::path::Path, prealloc: bool) -> u64 {
+    const ITERATIONS: usize = 4_096;
+    let start = platform::read_cycles();
+    for _ in 0..ITERATIONS {
+        black_box(rssp::profile::relative_path_join(
+            black_box(base),
+            black_box("Visuals/Background,Layer.png"),
+            prealloc,
+        ));
+    }
+    platform::read_cycles() - start
+}
+
+#[cfg(windows)]
+#[allow(clippy::cast_precision_loss)]
+fn print_path_join_pairs(base: &std::path::Path) {
+    const SAMPLES: usize = 31;
+    let mut growing = [0u64; SAMPLES];
+    let mut preallocated = [0u64; SAMPLES];
+    let mut ratios = [0.0f64; SAMPLES];
+    for sample in 0..SAMPLES {
+        let (growing_cycles, preallocated_cycles) = if sample.is_multiple_of(2) {
+            (path_join_cycles(base, false), path_join_cycles(base, true))
+        } else {
+            let preallocated_cycles = path_join_cycles(base, true);
+            let growing_cycles = path_join_cycles(base, false);
+            (growing_cycles, preallocated_cycles)
+        };
+        growing[sample] = growing_cycles;
+        preallocated[sample] = preallocated_cycles;
+        ratios[sample] = preallocated_cycles as f64 / growing_cycles as f64;
+    }
+    growing.sort_unstable();
+    preallocated.sort_unstable();
+    ratios.sort_by(f64::total_cmp);
+    let mid = SAMPLES / 2;
+    eprintln!(
+        concat!(
+            "background_path_join paired_samples={} growing_median_cycles={} ",
+            "preallocated_median_cycles={} median_change={:+.3}%"
+        ),
+        SAMPLES,
+        growing[mid],
+        preallocated[mid],
+        (ratios[mid] - 1.0) * 100.0,
+    );
+}
+
+#[cfg(windows)]
 fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     const ENTRIES: usize = 4_096;
     let cpu = platform::stabilize_thread();
@@ -2851,6 +2900,31 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     });
     simfile_tree.finish();
 
+    let mut background_path = c.benchmark_group("cycles/background_path_join");
+    background_path.sample_size(100);
+    background_path.measurement_time(Duration::from_secs(3));
+    background_path.throughput(Throughput::Elements(1));
+    background_path.bench_function("growing", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::relative_path_join(
+                black_box(asset_fixture.song_dir()),
+                black_box("Visuals/Background,Layer.png"),
+                false,
+            ))
+        });
+    });
+    background_path.bench_function("preallocated", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::relative_path_join(
+                black_box(asset_fixture.song_dir()),
+                black_box("Visuals/Background,Layer.png"),
+                true,
+            ))
+        });
+    });
+    background_path.finish();
+    print_path_join_pairs(asset_fixture.song_dir());
+
     let mut background = c.benchmark_group("cycles/background_changes");
     background.sample_size(20);
     background.measurement_time(Duration::from_secs(3));
@@ -2882,6 +2956,14 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     background.bench_function("always_sort", |b| {
         b.iter(|| {
             black_box(rssp::profile::background_changes_always_sort(
+                black_box(asset_fixture.song_dir()),
+                black_box(asset_fixture.simfile()),
+            ))
+        });
+    });
+    background.bench_function("growing_paths", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::background_changes_growing_paths(
                 black_box(asset_fixture.song_dir()),
                 black_box(asset_fixture.simfile()),
             ))
@@ -2954,6 +3036,14 @@ fn bench_cycles(c: &mut Criterion<ThreadCycles>) {
     background_order.bench_function("linear_upsert", |b| {
         b.iter(|| {
             black_box(rssp::profile::background_changes_linear_upsert(
+                black_box(asset_fixture.song_dir()),
+                black_box(&unordered_bgchanges),
+            ))
+        });
+    });
+    background_order.bench_function("growing_paths", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::background_changes_growing_paths(
                 black_box(asset_fixture.song_dir()),
                 black_box(&unordered_bgchanges),
             ))

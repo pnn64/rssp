@@ -1022,7 +1022,31 @@ fn for_each_bgchange_pair_legacy(
     for_each_bgchange_pair_with(changes, files, &find_bg_delimiter_legacy, handle);
 }
 
-fn resolve_bgchange_target(
+fn join_rel<const PREALLOC: bool>(base: &Path, relative: &str) -> PathBuf {
+    if !PREALLOC {
+        return base.join(relative);
+    }
+    let mut joined = PathBuf::with_capacity(
+        base.as_os_str()
+            .len()
+            .saturating_add(relative.len())
+            .saturating_add(1),
+    );
+    joined.push(base);
+    joined.push(relative);
+    joined
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_join_rel(base: &Path, relative: &str, prealloc: bool) -> PathBuf {
+    if prealloc {
+        join_rel::<true>(base, relative)
+    } else {
+        join_rel::<false>(base, relative)
+    }
+}
+
+fn resolve_bgchange_target<const PREALLOC_PATHS: bool>(
     song_dir: &Path,
     target_name: &str,
     file_index: Option<usize>,
@@ -1042,10 +1066,12 @@ fn resolve_bgchange_target(
     if let Some(file_index) = file_index {
         let relative = &files.files[file_index];
         return match resolution_status.get(file_index) {
-            1 => Some(BackgroundChangeTarget::File(song_dir.join(relative))),
+            1 => Some(BackgroundChangeTarget::File(join_rel::<PREALLOC_PATHS>(
+                song_dir, relative,
+            ))),
             2 => None,
             _ => {
-                let path = song_dir.join(relative);
+                let path = join_rel::<PREALLOC_PATHS>(song_dir, relative);
                 if !is_mac_resource_fork(&path) && path.is_file() {
                     resolution_status.set(file_index, 1);
                     Some(BackgroundChangeTarget::File(path))
@@ -1059,7 +1085,7 @@ fn resolve_bgchange_target(
     resolve_asset(song_dir, target_name).map(BackgroundChangeTarget::File)
 }
 
-fn parse_bgchange_pair(
+fn parse_bgchange_pair<const PREALLOC_PATHS: bool>(
     song_dir: &Path,
     start_beat: &str,
     target: &str,
@@ -1068,7 +1094,13 @@ fn parse_bgchange_pair(
     resolution_status: &mut BgResolutionStatus,
 ) -> Option<ResolvedBackgroundChange> {
     let start_beat = start_beat.trim().parse::<f32>().unwrap_or(0.0);
-    let target = resolve_bgchange_target(song_dir, target, file_index, files, resolution_status)?;
+    let target = resolve_bgchange_target::<PREALLOC_PATHS>(
+        song_dir,
+        target,
+        file_index,
+        files,
+        resolution_status,
+    )?;
     Some(ResolvedBackgroundChange { start_beat, target })
 }
 
@@ -1171,7 +1203,12 @@ fn sort_bgchanges<const SKIP_ORDERED: bool>(
     }
 }
 
-fn resolve_bgchanges_with<'a, const FILTER_UNORDERED: bool, const SKIP_ORDERED: bool>(
+fn resolve_bgchanges_with<
+    'a,
+    const FILTER_UNORDERED: bool,
+    const SKIP_ORDERED: bool,
+    const PREALLOC_PATHS: bool,
+>(
     song_dir: &Path,
     values: impl IntoIterator<Item = &'a [u8]>,
     files: &BgFileCatalog,
@@ -1191,7 +1228,7 @@ fn resolve_bgchanges_with<'a, const FILTER_UNORDERED: bool, const SKIP_ORDERED: 
             files,
             &find_delimiter,
             |start_beat, target, file_index| {
-                let Some(change) = parse_bgchange_pair(
+                let Some(change) = parse_bgchange_pair::<PREALLOC_PATHS>(
                     song_dir,
                     start_beat,
                     target,
@@ -1267,7 +1304,7 @@ pub fn resolve_background_changes_like_itg(
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
     let (files, movie) = list_song_dir_rel_files::<true, true>(song_dir);
-    resolve_bgchanges_with::<true, true>(
+    resolve_bgchanges_with::<true, true, true>(
         song_dir,
         bgchanges_values(simfile_data),
         &files,
@@ -1279,7 +1316,7 @@ pub fn resolve_background_changes_like_itg(
 #[cfg(any(test, feature = "profile"))]
 fn resolve_bgchanges_legacy(song_dir: &Path, simfile_data: &[u8]) -> Vec<ResolvedBackgroundChange> {
     let (files, _) = list_song_dir_rel_files::<false, true>(song_dir);
-    resolve_bgchanges_with::<true, false>(
+    resolve_bgchanges_with::<true, false, true>(
         song_dir,
         extract_bgchanges_values(simfile_data),
         &files,
@@ -1294,7 +1331,7 @@ fn resolve_bgchanges_double_find(
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
     let (files, movie) = list_song_dir_rel_files::<true, true>(song_dir);
-    resolve_bgchanges_with::<true, false>(
+    resolve_bgchanges_with::<true, false, true>(
         song_dir,
         extract_bgchanges_values(simfile_data),
         &files,
@@ -1309,7 +1346,7 @@ pub(crate) fn profile_bgchanges_materialized(
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
     let (files, movie) = list_song_dir_rel_files::<true, true>(song_dir);
-    resolve_bgchanges_with::<true, false>(
+    resolve_bgchanges_with::<true, false, true>(
         song_dir,
         extract_bgchanges_values(simfile_data),
         &files,
@@ -1324,7 +1361,7 @@ pub(crate) fn profile_bgchanges_linear_upsert(
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
     let (files, movie) = list_song_dir_rel_files::<true, true>(song_dir);
-    resolve_bgchanges_with::<false, false>(
+    resolve_bgchanges_with::<false, false, true>(
         song_dir,
         bgchanges_values(simfile_data),
         &files,
@@ -1339,7 +1376,7 @@ pub(crate) fn profile_bgchanges_path_metadata(
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
     let (files, movie) = list_song_dir_rel_files::<true, false>(song_dir);
-    resolve_bgchanges_with::<true, false>(
+    resolve_bgchanges_with::<true, false, true>(
         song_dir,
         bgchanges_values(simfile_data),
         &files,
@@ -1354,7 +1391,22 @@ pub(crate) fn profile_bgchanges_always_sort(
     simfile_data: &[u8],
 ) -> Vec<ResolvedBackgroundChange> {
     let (files, movie) = list_song_dir_rel_files::<true, true>(song_dir);
-    resolve_bgchanges_with::<true, false>(
+    resolve_bgchanges_with::<true, false, true>(
+        song_dir,
+        bgchanges_values(simfile_data),
+        &files,
+        || movie,
+        find_bg_delimiter,
+    )
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn profile_bgchanges_growing_paths(
+    song_dir: &Path,
+    simfile_data: &[u8],
+) -> Vec<ResolvedBackgroundChange> {
+    let (files, movie) = list_song_dir_rel_files::<true, true>(song_dir);
+    resolve_bgchanges_with::<true, true, false>(
         song_dir,
         bgchanges_values(simfile_data),
         &files,
@@ -1394,15 +1446,36 @@ pub(crate) fn profile_bgchanges_double_find(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use super::{
         BackgroundChangeTarget, BgFileCatalog, BgResolutionStatus, ResolvedBackgroundChange,
         cmp_name_ci, for_each_bgchange_pair, for_each_bgchange_pair_legacy, is_dir_ci, is_file_ci,
-        lc_name, list_image_candidates, match_bg_file, resolve_background_changes_like_itg,
-        resolve_bgchanges_legacy, resolve_music_path_like_itg, resolve_song_assets, strip_newlines,
-        upsert_bgchange,
+        join_rel, lc_name, list_image_candidates, match_bg_file,
+        resolve_background_changes_like_itg, resolve_bgchanges_legacy, resolve_music_path_like_itg,
+        resolve_song_assets, strip_newlines, upsert_bgchange,
     };
+
+    #[test]
+    fn preallocated_relative_join_matches_path_join() {
+        for base in [
+            Path::new(""),
+            Path::new("Songs/Pack/Song"),
+            Path::new("C:\\Songs\\曲"),
+        ] {
+            for relative in [
+                "",
+                "banner.png",
+                "Visuals/Background,Layer.png",
+                "../movie.mp4",
+            ] {
+                assert_eq!(
+                    join_rel::<true>(base, relative),
+                    join_rel::<false>(base, relative)
+                );
+            }
+        }
+    }
 
     struct TempDir(PathBuf);
 

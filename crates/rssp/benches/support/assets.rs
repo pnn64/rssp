@@ -252,9 +252,12 @@ impl AssetFixture {
         ] {
             let previous = rssp::profile::background_changes_materialized(&self.root, simfile);
             let always_sorted = rssp::profile::background_changes_always_sort(&self.root, simfile);
+            let growing_paths =
+                rssp::profile::background_changes_growing_paths(&self.root, simfile);
             let current = rssp::assets::resolve_background_changes_like_itg(&self.root, simfile);
             assert_eq!(current, previous);
             assert_eq!(current, always_sorted);
+            assert_eq!(current, growing_paths);
         }
     }
 

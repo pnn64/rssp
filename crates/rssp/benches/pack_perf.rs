@@ -2,7 +2,7 @@ use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_mai
 use std::ffi::{OsStr, OsString};
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[path = "support/assets.rs"]
 mod assets_bench;
@@ -10,6 +10,57 @@ mod assets_bench;
 mod pack_bench;
 #[path = "support/path_sort.rs"]
 mod path_sort_bench;
+
+fn background_changes_ns(dir: &Path, simfile: &[u8], growing: bool) -> u128 {
+    const ITERATIONS: usize = 4;
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        let changes = if growing {
+            rssp::profile::background_changes_growing_paths(dir, simfile)
+        } else {
+            rssp::assets::resolve_background_changes_like_itg(dir, simfile)
+        };
+        black_box(changes);
+    }
+    start.elapsed().as_nanos()
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn print_background_change_pairs(dir: &Path, simfile: &[u8]) {
+    const SAMPLES: usize = 31;
+    let mut growing = [0u128; SAMPLES];
+    let mut preallocated = [0u128; SAMPLES];
+    let mut ratios = [0.0f64; SAMPLES];
+    for sample in 0..SAMPLES {
+        let (growing_ns, preallocated_ns) = if sample.is_multiple_of(2) {
+            (
+                background_changes_ns(dir, simfile, true),
+                background_changes_ns(dir, simfile, false),
+            )
+        } else {
+            let preallocated_ns = background_changes_ns(dir, simfile, false);
+            let growing_ns = background_changes_ns(dir, simfile, true);
+            (growing_ns, preallocated_ns)
+        };
+        growing[sample] = growing_ns;
+        preallocated[sample] = preallocated_ns;
+        ratios[sample] = preallocated_ns as f64 / growing_ns as f64;
+    }
+    growing.sort_unstable();
+    preallocated.sort_unstable();
+    ratios.sort_by(f64::total_cmp);
+    let mid = SAMPLES / 2;
+    eprintln!(
+        concat!(
+            "background_change_order paired_samples={} growing_median_ns={} ",
+            "preallocated_median_ns={} median_change={:+.3}%"
+        ),
+        SAMPLES,
+        growing[mid],
+        preallocated[mid],
+        (ratios[mid] - 1.0) * 100.0,
+    );
+}
 
 fn bench_pack_scan(c: &mut Criterion) {
     let fixture = pack_bench::PackFixture::new();
@@ -281,6 +332,31 @@ fn bench_background_changes(c: &mut Criterion) {
     fixture.assert_catalog_behavior();
     let unordered = fixture.unordered_simfile();
     fixture.assert_unordered_behavior(&unordered);
+    print_background_change_pairs(fixture.song_dir(), &unordered);
+
+    let mut path_join = c.benchmark_group("background_path_join");
+    path_join.sample_size(100);
+    path_join.measurement_time(Duration::from_secs(3));
+    path_join.throughput(Throughput::Elements(1));
+    path_join.bench_function("growing", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::relative_path_join(
+                black_box(fixture.song_dir()),
+                black_box("Visuals/Background,Layer.png"),
+                false,
+            ))
+        });
+    });
+    path_join.bench_function("preallocated", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::relative_path_join(
+                black_box(fixture.song_dir()),
+                black_box("Visuals/Background,Layer.png"),
+                true,
+            ))
+        });
+    });
+    path_join.finish();
 
     let mut group = c.benchmark_group("background_changes");
     group.sample_size(30);
@@ -297,6 +373,14 @@ fn bench_background_changes(c: &mut Criterion) {
     group.bench_function("materialized_values", |b| {
         b.iter(|| {
             black_box(rssp::profile::background_changes_materialized(
+                black_box(fixture.song_dir()),
+                black_box(fixture.simfile()),
+            ))
+        });
+    });
+    group.bench_function("growing_paths", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::background_changes_growing_paths(
                 black_box(fixture.song_dir()),
                 black_box(fixture.simfile()),
             ))
@@ -343,6 +427,14 @@ fn bench_background_changes(c: &mut Criterion) {
     order.bench_function("linear_upsert", |b| {
         b.iter(|| {
             black_box(rssp::profile::background_changes_linear_upsert(
+                black_box(fixture.song_dir()),
+                black_box(&unordered),
+            ))
+        });
+    });
+    order.bench_function("growing_paths", |b| {
+        b.iter(|| {
+            black_box(rssp::profile::background_changes_growing_paths(
                 black_box(fixture.song_dir()),
                 black_box(&unordered),
             ))
