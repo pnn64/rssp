@@ -5,6 +5,9 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[path = "support/nps_cases.rs"]
+mod nps_cases;
+
 struct CountingAllocator;
 
 static ALLOC_CALLS: AtomicU64 = AtomicU64::new(0);
@@ -91,6 +94,20 @@ fn main() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(100);
+
+    for (name, values) in nps_cases::cases() {
+        measure(&format!("nps/cold/{name}"), iterations, || {
+            black_box(rssp::nps::get_nps_stats(black_box(&values)));
+        });
+        let mut scratch = Vec::new();
+        black_box(rssp::nps::get_nps_stats_with_scratch(&values, &mut scratch));
+        measure(&format!("nps/reused/{name}"), iterations, || {
+            black_box(rssp::nps::get_nps_stats_with_scratch(
+                black_box(&values),
+                black_box(&mut scratch),
+            ));
+        });
+    }
     let data = include_bytes!("fixtures/camellia_mix.ssc");
     let options = rssp::AnalysisOptions {
         mono_threshold: 6,

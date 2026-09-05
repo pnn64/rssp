@@ -397,13 +397,19 @@ pub fn get_nps_stats(nps: &[f64]) -> (f64, f64) {
 }
 
 /// Computes NPS statistics using caller-owned median-selection storage.
+///
+/// One or two measures need no heap storage; larger inputs reuse `scratch`.
 #[must_use]
 pub fn get_nps_stats_with_scratch(nps: &[f64], scratch: &mut Vec<f64>) -> (f64, f64) {
     scratch.clear();
     let (max, median) = scan_nps(nps);
-    let median = median.unwrap_or_else(|| {
-        scratch.extend_from_slice(nps);
-        median_in_place(scratch)
+    let median = median.unwrap_or_else(|| match nps {
+        [value] => *value,
+        &[first, second] => median_in_place(&mut [first, second]),
+        _ => {
+            scratch.extend_from_slice(nps);
+            median_in_place(scratch)
+        }
     });
     (max, median)
 }
@@ -485,6 +491,78 @@ mod tests {
     #[test]
     fn nps_stats_even_median() {
         assert_eq!(get_nps_stats(&[8.0, 2.0, 4.0, 16.0]), (16.0, 6.0));
+    }
+
+    #[test]
+    fn nps_medians_across_sizes() {
+        let mut scratch = Vec::new();
+        for (len, median) in [
+            (256, 127.5),
+            (1, 0.0),
+            (2, 0.5),
+            (3, 1.0),
+            (32, 15.5),
+            (63, 31.0),
+            (64, 31.5),
+            (65, 32.0),
+        ] {
+            let mut values: Vec<_> = (0..len).rev().map(f64::from).collect();
+            values.rotate_left(len as usize / 3);
+            let original = values.clone();
+            let expected = (f64::from(len - 1), median);
+            assert_eq!(get_nps_stats(&values), expected);
+            assert_eq!(get_nps_stats_with_scratch(&values, &mut scratch), expected);
+            assert_eq!(values, original);
+        }
+    }
+
+    #[test]
+    fn nps_preserves_special_values() {
+        let mut scratch = vec![99.0; 128];
+        for (values, expected) in [
+            (&[-0.0][..], (0.0_f64, -0.0_f64)),
+            (&[f64::INFINITY][..], (f64::INFINITY, f64::INFINITY)),
+            (&[f64::NEG_INFINITY][..], (0.0, f64::NEG_INFINITY)),
+            (&[-9.0, -1.0, -5.0][..], (0.0, -5.0)),
+            (&[8.0, 2.0, 8.0, 2.0, 8.0][..], (8.0, 8.0)),
+            (&[][..], (0.0, 0.0)),
+        ] {
+            let actual = get_nps_stats_with_scratch(values, &mut scratch);
+            assert_eq!(actual.0.to_bits(), expected.0.to_bits());
+            assert_eq!(actual.1.to_bits(), expected.1.to_bits());
+        }
+        let (max, median) = get_nps_stats_with_scratch(&[f64::NAN], &mut scratch);
+        assert_eq!(max, 0.0);
+        assert!(median.is_nan());
+    }
+
+    #[test]
+    fn nps_pairs_match_in_place() {
+        let values = [
+            f64::NEG_INFINITY,
+            f64::MIN,
+            -1.0,
+            -0.0,
+            0.0,
+            1.0,
+            f64::MAX,
+            f64::INFINITY,
+            f64::NAN,
+        ];
+        let mut scratch = Vec::new();
+        for first in values {
+            for second in values {
+                let mut pair = [first, second];
+                let expected = super::get_nps_stats_in_place(&mut pair);
+                let actual = get_nps_stats_with_scratch(&[first, second], &mut scratch);
+                assert_eq!(actual.0.to_bits(), expected.0.to_bits());
+                if expected.1.is_nan() {
+                    assert!(actual.1.is_nan());
+                } else {
+                    assert_eq!(actual.1.to_bits(), expected.1.to_bits());
+                }
+            }
+        }
     }
 
     #[test]

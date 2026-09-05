@@ -107,6 +107,10 @@ harness = false
 name = "allocation_perf"
 harness = false
 
+[[bench]]
+name = "nps_perf"
+harness = false
+
 [lints.clippy]
 pedantic = "warn"
 
