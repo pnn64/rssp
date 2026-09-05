@@ -691,6 +691,7 @@ fn chart_or_global<'a>(
     }
 }
 
+// Keep the insertion and neighbor-merge state machine together.
 fn add_segment_by<T>(
     segments: &mut Vec<T>,
     mut segment: T,
@@ -706,9 +707,20 @@ fn add_segment_by<T>(
         return;
     }
 
-    let pos = segments.partition_point(|item| beat_to_note_row(get_beat(item)) <= row);
+    // Stored beats are already i32 rows divided by 48. Their ordering and
+    // equality match the rows, so searches need no repeated quantization.
+    // Most timing text is ordered; append/coalesce without binary searches.
+    let last = &segments[segments.len() - 1];
+    if beat > get_beat(last) {
+        if !same_value(last, &segment) {
+            segments.push(segment);
+        }
+        return;
+    }
+
+    let pos = segments.partition_point(|item| get_beat(item) <= beat);
     let idx = if pos == 0 { 0 } else { pos - 1 };
-    let b_on_same_row = beat_to_note_row(get_beat(&segments[idx])) == row;
+    let b_on_same_row = get_beat(&segments[idx]) == beat;
     let prev_idx = if b_on_same_row && idx > 0 {
         idx - 1
     } else {
@@ -751,8 +763,7 @@ fn add_segment_by<T>(
     if b_on_same_row {
         segments[idx] = segment;
     } else {
-        let insert_pos = segments.partition_point(|item| beat_to_note_row(get_beat(item)) <= row);
-        segments.insert(insert_pos, segment);
+        segments.insert(pos, segment);
     }
 }
 
@@ -766,52 +777,13 @@ fn add_indefinite_segment<T: PartialEq>(segments: &mut Vec<(f64, T)>, beat: f64,
     );
 }
 
-fn tidy_in_place<T>(mut segments: Vec<T>, mut add: impl FnMut(&mut Vec<T>, T)) -> Vec<T> {
-    let input_len = segments.len();
-    let input = segments.as_mut_ptr();
-    // SAFETY: Each consumed entry adds at most one output, so before reading
-    // index `i`, output occupies only slots below `i`. Reading `i` first lets
-    // the normalizer reuse that slot without touching unread entries, and the
-    // original capacity prevents reallocation from invalidating `input`.
-    unsafe { segments.set_len(0) };
-    for index in 0..input_len {
-        debug_assert!(segments.len() <= index);
-        // SAFETY: `index` addresses an initialized, unread element from the
-        // original length. It is read before output may overwrite this slot.
-        let segment = unsafe { input.add(index).read() };
-        add(&mut segments, segment);
-    }
-    segments
-}
-
-fn tidy_indefinite_segments<T: PartialEq>(segments: Vec<(f64, T)>) -> Vec<(f64, T)> {
-    tidy_in_place(segments, |out, (beat, value)| {
-        add_indefinite_segment(out, beat, value);
-    })
-}
-
-fn tidy_timing_triples(segments: Vec<(f64, i32, i32)>) -> Vec<(f64, i32, i32)> {
-    tidy_in_place(segments, |out, segment| {
-        add_segment_by(
-            out,
-            segment,
-            |segment| segment.0,
-            |left, right| left.1 == right.1 && left.2 == right.2,
-            |segment, beat| segment.0 = beat,
-        );
-    })
-}
-
-fn parse_tickcounts_with(
-    opt: Option<&str>,
-    capacity: usize,
-    tidy: impl FnOnce(Vec<(f64, i32)>) -> Vec<(f64, i32)>,
-) -> Vec<(f64, i32)> {
+fn parse_tickcounts(opt: Option<&str>) -> Vec<(f64, i32)> {
+    let capacity = opt.map_or(0, |text| estimate_text_segments(text, 6));
     let Some(s) = opt else {
         return vec![(0.0, 4)];
     };
 
-    let mut raw = Vec::new();
+    let mut segments = Vec::new();
     for segment in s.split(',') {
         let segment = segment.trim();
         if segment.is_empty() {
@@ -830,17 +802,17 @@ fn parse_tickcounts_with(
         let Ok(count) = count_str.trim().parse::<i32>() else {
             continue;
         };
-        if raw.is_empty() {
-            raw.reserve(capacity);
+        if segments.is_empty() {
+            segments.reserve(capacity);
         }
-        raw.push((beat, count));
+        add_indefinite_segment(&mut segments, beat, count);
     }
 
-    if raw.is_empty() {
+    if segments.is_empty() {
         return vec![(0.0, 4)];
     }
 
-    tidy(raw)
+    segments
 }
 
 fn estimate_text_segments(text: &str, bytes_per_segment: usize) -> usize {
@@ -858,7 +830,7 @@ fn parse_timing_triples(
         return vec![default];
     };
 
-    let mut raw = Vec::new();
+    let mut segments = Vec::new();
     for segment in text
         .split(',')
         .map(str::trim)
@@ -876,28 +848,30 @@ fn parse_timing_triples(
         ) else {
             continue;
         };
-        if raw.is_empty() {
-            raw.reserve(capacity);
+        if segments.is_empty() {
+            segments.reserve(capacity);
         }
-        raw.push((beat, first, second));
+        // Prefix the first parsed segment, before normalization can reorder it.
+        if segments.is_empty() && prefix_default && beat_to_note_row(beat) > 0 {
+            segments.push(default);
+        }
+        add_segment_by(
+            &mut segments,
+            (beat, first, second),
+            |segment| segment.0,
+            |left, right| left.1 == right.1 && left.2 == right.2,
+            |segment, beat| segment.0 = beat,
+        );
     }
-    if raw.is_empty() {
+    if segments.is_empty() {
         return vec![default];
     }
-    if prefix_default && beat_to_note_row(raw[0].0) > 0 {
-        raw.insert(0, default);
-    }
-    tidy_timing_triples(raw)
+    segments
 }
 
 fn parse_time_signatures(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
     let capacity = opt.map_or(0, |text| estimate_text_segments(text, 7) + 1);
     parse_timing_triples(opt, capacity, (0.0, 4, 4), true)
-}
-
-fn parse_tickcounts(opt: Option<&str>) -> Vec<(f64, i32)> {
-    let capacity = opt.map_or(0, |text| estimate_text_segments(text, 6));
-    parse_tickcounts_with(opt, capacity, tidy_indefinite_segments)
 }
 
 fn parse_combos(opt: Option<&str>) -> Vec<(f64, i32, i32)> {
@@ -1082,16 +1056,13 @@ pub fn build_timing_snapshot(chart: &ChartSummary, simfile: &SimfileSummary) -> 
     }
 }
 
-fn parse_labels_with(
-    opt: Option<&str>,
-    capacity: usize,
-    tidy: impl FnOnce(Vec<(f64, String)>) -> Vec<(f64, String)>,
-) -> Vec<(f64, String)> {
+fn parse_labels(opt: Option<&str>) -> Vec<(f64, String)> {
+    let capacity = opt.map_or(0, |text| estimate_text_segments(text, 16));
     let Some(s) = opt else {
         return vec![(0.0, "Song Start".to_string())];
     };
 
-    let mut raw = Vec::new();
+    let mut segments = Vec::new();
     for segment in s.split(',') {
         let segment = segment.trim();
         if segment.is_empty() {
@@ -1103,26 +1074,21 @@ fn parse_labels_with(
         let Ok(beat) = beat_str.trim().parse::<f64>() else {
             continue;
         };
-        let label = label_raw.trim().to_string();
+        let label = label_raw.trim();
         if label.is_empty() {
             continue;
         }
-        if raw.is_empty() {
-            raw.reserve(capacity);
+        if segments.is_empty() {
+            segments.reserve(capacity);
         }
-        raw.push((beat, label));
+        add_indefinite_segment(&mut segments, beat, label.to_string());
     }
 
-    if raw.is_empty() {
+    if segments.is_empty() {
         return vec![(0.0, "Song Start".to_string())];
     }
 
-    tidy(raw)
-}
-
-fn parse_labels(opt: Option<&str>) -> Vec<(f64, String)> {
-    let capacity = opt.map_or(0, |text| estimate_text_segments(text, 16));
-    parse_labels_with(opt, capacity, tidy_indefinite_segments)
+    segments
 }
 
 fn count_timing_segments_from_str(s: &str) -> u32 {
@@ -3580,6 +3546,66 @@ fn write_csv_row<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::{timing_fixed_6, write_json_native_bpms};
+
+    #[test]
+    fn timing_order_and_merges() {
+        assert_eq!(
+            super::parse_tickcounts(Some("0=4,4=4,8=8,8=12,12=12,16=4")),
+            [(0.0, 4), (8.0, 12), (16.0, 4)]
+        );
+        assert_eq!(
+            super::parse_tickcounts(Some("8=4,0=8,4=4,4=12,12=12")),
+            [(0.0, 8), (4.0, 12)]
+        );
+        assert_eq!(
+            super::parse_labels(Some("8=A,0=B,4=A,4=C,12=C")),
+            [(0.0, "B".to_string()), (4.0, "C".to_string())]
+        );
+        assert_eq!(
+            super::parse_time_signatures(Some("8=3=4,0=5=4,4=3=4")),
+            [(0.0, 5, 4), (4.0, 3, 4)]
+        );
+        assert_eq!(
+            super::parse_time_signatures(Some("8=3=4")),
+            [(0.0, 4, 4), (8.0, 3, 4)]
+        );
+        assert_eq!(super::parse_combos(Some("8=3=4")), [(8.0, 3, 4)]);
+        assert_eq!(
+            super::parse_time_signatures(Some("8=4=4,12=4=4")),
+            [(0.0, 4, 4)]
+        );
+    }
+
+    #[test]
+    fn timing_invalid_defaults() {
+        for input in [None, Some(""), Some("bad, 1=no, =, 0=, ,")] {
+            assert_eq!(super::parse_tickcounts(input), [(0.0, 4)]);
+            assert_eq!(super::parse_time_signatures(input), [(0.0, 4, 4)]);
+            assert_eq!(super::parse_combos(input), [(0.0, 1, 1)]);
+        }
+        for input in [None, Some(""), Some("bad, no=label, 0= , ,")] {
+            assert_eq!(
+                super::parse_labels(input),
+                [(0.0, "Song Start".to_string())]
+            );
+        }
+        assert_eq!(
+            super::parse_tickcounts(Some("bad, -4=8, 0.001=4, 0.002=12")),
+            [(-4.0, 8), (0.0, 12)]
+        );
+        assert_eq!(
+            super::parse_labels(Some("0= 日本語 = A , 4=日本語 = A, 8=End")),
+            [(0.0, "日本語 = A".to_string()), (8.0, "End".to_string())]
+        );
+    }
+
+    #[test]
+    fn timing_large_beats() {
+        assert_eq!(
+            super::parse_tickcounts(Some("40000000=4,-40000000=8,39999999.979166664=8,0=12")),
+            [(-40_000_000.0, 8), (0.0, 12), (40_000_000.0, 4)]
+        );
+    }
     #[test]
     fn timing_fixed_6_matches_harness_style_values() {
         assert_eq!(timing_fixed_6(0.009), 0.009);

@@ -161,16 +161,23 @@ const TAG_CHAR_CLASS: [u8; 256] = {
     t
 };
 
-#[inline(always)]
-fn cp1252_char(byte: u8) -> char {
-    match byte {
-        0x00..=0x7F => byte as char,
-        0x80..=0x9F => {
-            char::from_u32(u32::from(CP1252_MAP[(byte - 0x80) as usize])).unwrap_or('\u{FFFD}')
-        }
-        _ => char::from_u32(u32::from(byte)).unwrap_or('\u{FFFD}'),
+const CP1252_CHARS: [char; 256] = {
+    let mut chars = ['\0'; 256];
+    let mut index = 0;
+    while index < chars.len() {
+        let value = if index >= 0x80 && index < 0xa0 {
+            CP1252_MAP[index - 0x80] as u32
+        } else {
+            index as u32
+        };
+        chars[index] = match char::from_u32(value) {
+            Some(ch) => ch,
+            None => panic!("CP1252 table contains an invalid character"),
+        };
+        index += 1;
     }
-}
+    chars
+};
 
 #[inline]
 fn cp1252_utf8_len(bytes: &[u8]) -> usize {
@@ -196,26 +203,27 @@ fn cp1252_utf8_len(bytes: &[u8]) -> usize {
     utf8_len
 }
 
+fn push_cp1252(decoded: &mut String, bytes: &[u8]) {
+    for &byte in bytes {
+        if byte < 0x80 {
+            decoded.push(byte as char);
+        } else {
+            decoded.push(CP1252_CHARS[byte as usize]);
+        }
+    }
+}
+
 fn decode_cp1252(bytes: &[u8]) -> String {
     let mut decoded = String::with_capacity(cp1252_utf8_len(bytes));
-    let mut ascii_start = 0usize;
-    for (idx, &byte) in bytes.iter().enumerate() {
-        if byte < 0x80 {
-            continue;
+    let (chunks, tail) = bytes.as_chunks::<32>();
+    for chunk in chunks {
+        if chunk.is_ascii() {
+            decoded.push_str(std::str::from_utf8(chunk).expect("ASCII is valid UTF-8"));
+        } else {
+            push_cp1252(&mut decoded, chunk);
         }
-        if ascii_start < idx {
-            // Every byte in this run was checked by the branch above.
-            let ascii = unsafe { std::str::from_utf8_unchecked(&bytes[ascii_start..idx]) };
-            decoded.push_str(ascii);
-        }
-        decoded.push(cp1252_char(byte));
-        ascii_start = idx + 1;
     }
-    if ascii_start < bytes.len() {
-        // The loop found no high byte in the remaining run.
-        let ascii = unsafe { std::str::from_utf8_unchecked(&bytes[ascii_start..]) };
-        decoded.push_str(ascii);
-    }
+    push_cp1252(&mut decoded, tail);
     decoded
 }
 
@@ -1313,11 +1321,34 @@ mod tests {
         let all_bytes: Vec<_> = (u8::MIN..=u8::MAX).collect();
         let expected: String = all_bytes
             .iter()
-            .map(|&byte| super::cp1252_char(byte))
+            .map(|&byte| super::CP1252_CHARS[byte as usize])
             .collect();
         let decoded = decode_cp1252(&all_bytes);
         assert_eq!(decoded, expected);
         assert_eq!(decoded.capacity(), decoded.len());
+    }
+
+    #[test]
+    fn cp1252_run_edges() {
+        for length in [0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 4096] {
+            let ascii = "A".repeat(length);
+            for input in [
+                [ascii.as_bytes(), &[0x80]].concat(),
+                [&[0x80], ascii.as_bytes()].concat(),
+            ] {
+                let decoded = super::decode_bytes(&input);
+                let expected = if input[0] == 0x80 {
+                    format!("€{ascii}")
+                } else {
+                    format!("{ascii}€")
+                };
+                assert_eq!(decoded, expected);
+            }
+        }
+        // One invalid byte makes the entire input CP1252, including valid UTF-8 prefixes.
+        assert_eq!(super::decode_bytes(b"\xc3\xa9\x80"), "Ã©€");
+        assert_eq!(super::decode_bytes("é日本語".as_bytes()), "é日本語");
+        assert!(matches!(super::decode_bytes(b""), Cow::Borrowed("")));
     }
 
     #[test]

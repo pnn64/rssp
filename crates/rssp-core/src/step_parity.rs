@@ -3304,31 +3304,24 @@ fn is_footswitch(prev: Foot, curr: Foot) -> bool {
 // afterwards, so concurrent readers need no locks. Callers may warm it by
 // creating parity scratch at load time; a first-use miss only enumerates the
 // fixed layout in memory and performs one exact allocation (no I/O). Capacity
-// is fixed at 85 single or 517 double placements, with no eviction; storage is
-// released at process teardown. The parity-cache allocation/cycle benchmarks
-// instrument construction. Worst-case work is bounded to 256 masks/517 writes.
+// is fixed at 85 single or 517 double placements plus 256 slice descriptors per
+// layout. Checked slices are created once during warmup; reads never allocate,
+// miss, evict, or destroy entries. The OS reclaims storage at process teardown.
+// Startup work is bounded to 256 masks/517 placements; each lookup loads one
+// precomputed slice.
 struct LayoutCache {
     layout: StageLayout,
     perm_table: PermTable,
 }
 
 struct PermTable {
-    values: Box<[FootPlacement]>,
-    // Low 16 bits are the start, high 16 bits are the length. The largest
-    // supported table has fewer than 3,400 entries and at most 24 per mask.
-    ranges: [u32; 256],
+    values: [&'static [FootPlacement]; 256],
 }
 
 impl PermTable {
     #[inline(always)]
-    fn get(&self, mask: u8) -> &[FootPlacement] {
-        let range = self.ranges[mask as usize];
-        let start = (range & 0xffff) as usize;
-        let len = (range >> 16) as usize;
-        debug_assert!(start + len <= self.values.len());
-        // SAFETY: build_perm_table creates every range from the buffer's length
-        // before and after appending that mask, and the boxed buffer never moves.
-        unsafe { std::slice::from_raw_parts(self.values.as_ptr().add(start), len) }
+    const fn get(&self, mask: u8) -> &[FootPlacement] {
+        self.values[mask as usize]
     }
 }
 
@@ -3418,9 +3411,15 @@ fn build_perm_table(layout: &StageLayout) -> PermTable {
     }
 
     assert_eq!(values.len(), PERM_TOTALS[col_count]);
+    // The two layout OnceLocks initialize this storage once per process. Their
+    // contents are never dropped; retain the same bounded allocation lifetime.
+    let values = Box::leak(values.into_boxed_slice());
     PermTable {
-        values: values.into_boxed_slice(),
-        ranges,
+        values: ranges.map(|range| {
+            let start = (range & 0xffff) as usize;
+            let len = (range >> 16) as usize;
+            &values[start..start + len]
+        }),
     }
 }
 
@@ -3958,6 +3957,33 @@ mod tests {
     use super::*;
     use crate::stats::minimize_rows_typed;
     use crate::timing::{TimingFormat, timing_data_from_chart_data};
+
+    #[test]
+    fn perm_slices_match_rows() {
+        for cache in [dance_single_cache(), dance_double_cache()] {
+            let col_count = layout_cols(&cache.layout);
+            let mut expected = Vec::with_capacity(24);
+            let mut total = 0;
+            for mask in 0u8..=255 {
+                expected.clear();
+                if usize::from(mask) < 1 << col_count {
+                    permute_row(
+                        &cache.layout,
+                        mask,
+                        &mut [Foot::None; MAX_COLUMNS],
+                        0,
+                        col_count,
+                        0,
+                        &mut |placement| expected.push(placement),
+                    );
+                }
+                let actual = cache.perm_table.get(mask);
+                assert_eq!(actual, expected, "columns={col_count}, mask={mask}");
+                total += actual.len();
+            }
+            assert_eq!(total, PERM_TOTALS[col_count]);
+        }
+    }
 
     fn basic_timing() -> TimingData {
         timing_data_from_chart_data(
