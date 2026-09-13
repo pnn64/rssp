@@ -166,10 +166,6 @@ fn keep_first_owned(first: &mut Option<OsString>, candidate: OsString) {
     }
 }
 
-fn pack_ini_path(pack_dir: &Path) -> PathBuf {
-    pack_dir.join("Pack.ini")
-}
-
 fn parse_sync_pref(s: &str) -> SyncPref {
     match s.trim() {
         "NULL" => SyncPref::Null,
@@ -670,7 +666,10 @@ fn scan_pack_dir_valid(dir: &Path, opt: ScanOpt) -> Result<Option<PackScan>, Sca
         return Err(ScanError::InvalidUtf8Path);
     };
 
-    let ini_text = fs::read_to_string(pack_ini_path(dir)).unwrap_or_default();
+    // ITGmania's virtual filesystem resolves Pack.ini without regard to case.
+    let ini_text = assets::is_file_ci(dir, "Pack.ini")
+        .and_then(|path| fs::read_to_string(path).ok())
+        .unwrap_or_default();
     let ini = parse_pack_ini(&ini_text);
     let has_pack_ini = !ini.version.trim().is_empty();
     let PackIniRaw {
@@ -935,6 +934,46 @@ mod tests {
                 year: "2026",
             }
         );
+    }
+
+    #[test]
+    fn pack_ini_filename_case() {
+        let root = test_dir("pack-ini-case");
+        for (index, name) in ["Pack.ini", "pack.ini", "PACK.INI", "pAcK.InI"]
+            .iter()
+            .enumerate()
+        {
+            let pack = root.join(format!("Pack {index}"));
+            let song = pack.join("Song");
+            fs::create_dir_all(&song).expect("create song directory");
+            write_file(&song.join("chart.ssc"));
+            write_file(&pack.join("alpha.png"));
+            write_file(&pack.join("chosen.png"));
+            write_file(&pack.join("back.jpg"));
+            fs::write(
+                pack.join(name),
+                b"[Group]\nVersion=1\nDisplayTitle=Display\nSortTitle=Sort\nTranslitTitle=Translit\nSeries=Series\nYear=2026\nSyncOffset=ITG\nBanner=chosen.png\nBackground=back.jpg\n",
+            )
+            .expect("write pack metadata");
+
+            let scan = scan_pack_dir(&pack, ScanOpt::default())
+                .expect("scan pack")
+                .expect("pack with a song");
+            assert!(scan.has_pack_ini, "{name}");
+            assert_eq!(scan.version, 1, "{name}");
+            assert_eq!(scan.display_title, "Display", "{name}");
+            assert_eq!(scan.sort_title, "Sort", "{name}");
+            assert_eq!(scan.translit_title, "Translit", "{name}");
+            assert_eq!(scan.series, "Series", "{name}");
+            assert_eq!(scan.year, 2026, "{name}");
+            assert_eq!(scan.sync_pref, super::SyncPref::Itg, "{name}");
+            assert_eq!(scan.banner_path, Some(pack.join("chosen.png")), "{name}");
+            assert_eq!(scan.background_path, Some(pack.join("back.jpg")), "{name}");
+        }
+        let scans = scan_songs_dir(&root, ScanOpt::default()).expect("scan songs root");
+        assert_eq!(scans.len(), 4);
+        assert!(scans.iter().all(|pack| pack.has_pack_ini));
+        fs::remove_dir_all(root).expect("remove test root");
     }
 
     #[test]
