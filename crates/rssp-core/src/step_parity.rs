@@ -1843,11 +1843,19 @@ fn fixed_row_time(parts: FixedTimingParts, row: i32) -> f32 {
 
 fn rows_have_holds<const LANES: usize>(rows: &[[u8; LANES]], cols: usize) -> bool {
     let copy_len = cols.min(LANES);
-    rows.iter().any(|row| {
+    let has_hold = |row: &[u8; LANES]| {
         row.iter()
             .take(copy_len)
             .any(|&ch| matches!(ch, b'2' | b'4'))
-    })
+    };
+    if copy_len == LANES {
+        // Eight supported rows span at most 64 bytes. Preserve the cheap early
+        // exit for holds near the chart's start before entering the bulk scan.
+        let (head, tail) = rows.split_at(rows.len().min(8));
+        return head.iter().any(has_hold)
+            || memchr::memchr2(b'2', b'4', tail.as_flattened()).is_some();
+    }
+    rows.iter().any(has_hold)
 }
 fn parity_analyze_sparse<const LANES: usize>(
     g: &mut StepParityGenerator,
@@ -3957,6 +3965,28 @@ mod tests {
     use super::*;
     use crate::stats::minimize_rows_typed;
     use crate::timing::{TimingFormat, timing_data_from_chart_data};
+
+    #[test]
+    fn hold_scan_edges() {
+        assert!(!rows_have_holds::<4>(&[], 4));
+        assert!(!rows_have_holds(&[[b'0'; 0]], 0));
+        for count in [1, 2, 3, 4, 7, 8, 9, 16, 17, 1024] {
+            let mut rows = vec![*b"01MLF30X"; count];
+            assert!(!rows_have_holds(&rows, 8));
+            for head in *b"24" {
+                rows[count - 1][7] = head;
+                assert!(rows_have_holds(&rows, 8));
+                assert!(rows_have_holds(&rows, 9));
+                assert!(!rows_have_holds(&rows, 7));
+                assert!(!rows_have_holds(&rows, 0));
+                rows[count - 1][7] = b'X';
+                rows[0][0] = head;
+                assert!(rows_have_holds(&rows, 8));
+                assert!(rows_have_holds(&rows, 1));
+                rows[0][0] = b'0';
+            }
+        }
+    }
 
     #[test]
     fn perm_slices_match_rows() {

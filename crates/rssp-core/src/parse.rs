@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 use std::io;
 
+use memchr::{memchr, memchr2, memchr3};
+
 use crate::timing::{STEPFILE_VERSION_NUMBER, TimingFormat};
 
 #[must_use]
@@ -430,30 +432,35 @@ fn starts_with_ci(slice: &[u8], tag: &[u8]) -> bool {
         .is_some_and(|head| head.eq_ignore_ascii_case(tag))
 }
 
+// Metadata delimiters are usually nearby. Keep a bounded inline word scan for
+// those, then let memchr scan long tag values and note blocks with SIMD.
+const SCAN_PREFIX: usize = 64;
+
 #[inline(always)]
 fn find_byte(slice: &[u8], needle: u8) -> Option<usize> {
-    let mut i = 0usize;
-    let (chunks, rem) = slice.as_chunks::<8>();
+    let prefix_len = slice.len().min(SCAN_PREFIX);
+    let (chunks, rem) = slice[..prefix_len].as_chunks::<8>();
+    let mut i = 0;
     for chunk in chunks {
-        let word = u64::from_le_bytes(*chunk);
-        let hits = byte_hits(word, needle);
+        let hits = byte_hits(u64::from_le_bytes(*chunk), needle);
         if hits != 0 {
             return Some(i + hits.trailing_zeros() as usize / 8);
         }
         i += 8;
     }
-    for (j, &b) in rem.iter().enumerate() {
-        if b == needle {
+    for (j, &byte) in rem.iter().enumerate() {
+        if byte == needle {
             return Some(i + j);
         }
     }
-    None
+    memchr(needle, &slice[prefix_len..]).map(|index| index + prefix_len)
 }
 
 #[inline(always)]
 fn find_either_byte(slice: &[u8], a: u8, b: u8) -> Option<usize> {
-    let mut i = 0usize;
-    let (chunks, rem) = slice.as_chunks::<8>();
+    let prefix_len = slice.len().min(SCAN_PREFIX);
+    let (chunks, rem) = slice[..prefix_len].as_chunks::<8>();
+    let mut i = 0;
     for chunk in chunks {
         let word = u64::from_le_bytes(*chunk);
         let hits = byte_hits(word, a) | byte_hits(word, b);
@@ -462,37 +469,16 @@ fn find_either_byte(slice: &[u8], a: u8, b: u8) -> Option<usize> {
         }
         i += 8;
     }
-    for (j, &x) in rem.iter().enumerate() {
-        if x == a || x == b {
+    for (j, &byte) in rem.iter().enumerate() {
+        if byte == a || byte == b {
             return Some(i + j);
         }
     }
-    None
-}
-
-#[inline(always)]
-fn find_three_byte(slice: &[u8], a: u8, b: u8, c: u8) -> Option<usize> {
-    let mut i = 0usize;
-    let (chunks, rem) = slice.as_chunks::<8>();
-    for chunk in chunks {
-        let word = u64::from_le_bytes(*chunk);
-        let hits = byte_hits(word, a) | byte_hits(word, b) | byte_hits(word, c);
-        if hits != 0 {
-            return Some(i + hits.trailing_zeros() as usize / 8);
-        }
-        i += 8;
-    }
-    for (j, &x) in rem.iter().enumerate() {
-        if x == a || x == b || x == c {
-            return Some(i + j);
-        }
-    }
-    None
+    memchr2(a, b, &slice[prefix_len..]).map(|index| index + prefix_len)
 }
 
 #[inline(always)]
 fn byte_hits(word: u64, byte: u8) -> u64 {
-    // Marks the high bit of each byte lane equal to `byte`.
     const LO: u64 = 0x0101_0101_0101_0101;
     const HI: u64 = 0x8080_8080_8080_8080;
     let x = word ^ (u64::from(byte) * LO);
@@ -1122,7 +1108,7 @@ fn next_after_semi(data: &[u8], start: usize) -> usize {
 fn scan_sm_note_data(data: &[u8], start: usize) -> (usize, usize) {
     let mut off = start;
     while off < data.len() {
-        let Some(rel) = find_three_byte(&data[off..], b';', b'\\', b':') else {
+        let Some(rel) = memchr3(b';', b'\\', b':', &data[off..]) else {
             return (data.len(), data.len() + 1);
         };
         let idx = off + rel;
@@ -1231,6 +1217,41 @@ mod tests {
         decode_cp1252, decode_unescape_trim, extract_sections, parse_version, unescape_trim_cow,
     };
     use crate::timing::{STEPFILE_VERSION_NUMBER, TimingFormat};
+
+    #[test]
+    fn delimiter_scan_edges() {
+        for padding in [0, 1, 7, 8, 15, 16, 31, 32, 63, 64, 65, 255, 4096] {
+            for (suffix, end) in [
+                (&b";"[..], 0),
+                (&b"\\;x;"[..], 3),
+                (&b"\\\\;"[..], 2),
+                (&b"#x;"[..], 2),
+                (&b"\r\n #NEXT:x;"[..], 0),
+            ] {
+                let mut data = vec![b'x'; padding];
+                data.extend_from_slice(suffix);
+                assert_eq!(
+                    super::scan_tag_end(&data, true).map(|pair| pair.0),
+                    Some(padding + end)
+                );
+            }
+            for (suffix, end, next) in [
+                (&b";"[..], 0, 1),
+                (&b"\\;"[..], 1, 2),
+                (&b"\\:x;"[..], 3, 4),
+                (&b"\\\\:x;"[..], 2, 5),
+                (&b":x;"[..], 0, 3),
+                (&b"x"[..], 1, 2),
+            ] {
+                let mut data = vec![b'0'; padding];
+                data.extend_from_slice(suffix);
+                assert_eq!(
+                    super::scan_sm_note_data(&data, 0),
+                    (padding + end, padding + next)
+                );
+            }
+        }
+    }
 
     #[test]
     fn indexed_tag_dispatch_preserves_mixed_case_tags() {

@@ -10,7 +10,7 @@ keywords = ["stepmania", "simfile", "parser", "rust", "rssp"]
 
 [dependencies]
 foldhash = "0.2.0"
-memchr = "2.8.3"
+memchr = { workspace = true }
 rssp-core = { workspace = true }
 serde_json = { version = "1.0.145", features = ["preserve_order"] }
 
@@ -109,6 +109,10 @@ harness = false
 
 [[bench]]
 name = "nps_perf"
+harness = false
+
+[[bench]]
+name = "scan_perf"
 harness = false
 
 [lints.clippy]

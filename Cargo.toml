@@ -10,6 +10,7 @@ resolver = "3"
 version = "0.4.265"
 
 [workspace.dependencies]
+memchr = "2.8.3"
 rssp = { path = "crates/rssp" }
 rssp-core = { path = "crates/rssp-core"}
 

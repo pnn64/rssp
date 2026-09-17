@@ -9,6 +9,7 @@ license = "MIT"
 keywords = ["stepmania", "simfile", "parser", "rust", "rssp"]
 
 [dependencies]
+memchr = { workspace = true }
 
 [lints.clippy]
 pedantic = "warn"
