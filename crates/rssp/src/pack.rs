@@ -224,7 +224,8 @@ fn parse_pack_ini_with<'a, T: Default>(
     let mut in_group = false;
 
     for raw_line in text.lines() {
-        let line = raw_line.trim();
+        // ITGmania removes one UTF-8 BOM at the start of each physical INI line.
+        let line = raw_line.strip_prefix('\u{feff}').unwrap_or(raw_line).trim();
         if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
             continue;
         }
@@ -934,6 +935,61 @@ mod tests {
                 year: "2026",
             }
         );
+    }
+
+    #[test]
+    fn pack_ini_line_bom() {
+        let parsed = parse_pack_ini(concat!(
+            "# Pack metadata\n",
+            "\u{feff}[Group]\n",
+            "\u{feff}Version=2\n",
+            "\u{feff}DisplayTitle=Cirque\u{feff} Lykan\n",
+            "\u{feff}Series=Cirque\n",
+            "\u{feff}[Other]\n",
+            "Series=ignored\n",
+        ));
+        assert_eq!(parsed.version, "2");
+        assert_eq!(parsed.display_title, "Cirque\u{feff} Lykan");
+        assert_eq!(parsed.series, "Cirque");
+    }
+
+    #[test]
+    fn pack_ini_bom_metadata() {
+        let root = test_dir("pack-ini-bom");
+        let pack = root.join("Cirque du Lykan");
+        let song = pack.join("Song");
+        fs::create_dir_all(&song).expect("create song directory");
+        write_file(&song.join("chart.ssc"));
+        write_file(&pack.join("alpha.png"));
+        write_file(&pack.join("banner.png"));
+        let metadata = concat!(
+            "[Group]\n",
+            "Version=2\n",
+            "DisplayTitle=Cirque Lykan\n",
+            "TranslitTitle=Cirque Lykan\n",
+            "SortTitle=Cirque Lykan\n",
+            "Series=Cirque\n",
+            "Banner=banner.png\n",
+            "SyncOffset=ITG\n",
+        );
+        for newline in ["\n", "\r\n"] {
+            for prefix in ["", "\u{feff}"] {
+                let text = format!("{prefix}{}", metadata.replace('\n', newline));
+                fs::write(pack.join("pack.ini"), text).expect("write pack metadata");
+                let scan = scan_pack_dir(&pack, ScanOpt::default())
+                    .expect("scan pack")
+                    .expect("pack with a song");
+                assert!(scan.has_pack_ini, "prefix={prefix:?}, newline={newline:?}");
+                assert_eq!(scan.version, 2);
+                assert_eq!(scan.display_title, "Cirque Lykan");
+                assert_eq!(scan.sort_title, "Cirque Lykan");
+                assert_eq!(scan.translit_title, "Cirque Lykan");
+                assert_eq!(scan.series, "Cirque");
+                assert_eq!(scan.sync_pref, super::SyncPref::Itg);
+                assert_eq!(scan.banner_path, Some(pack.join("banner.png")));
+            }
+        }
+        fs::remove_dir_all(root).expect("remove test root");
     }
 
     #[test]
