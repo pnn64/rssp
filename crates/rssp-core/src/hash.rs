@@ -19,10 +19,21 @@ const SHA1_K: [[u32; 4]; 4] = [
 
 const STREAM_BUFFER_LEN: usize = 8 * 1024;
 
-/// Reusable measure-row storage for hashing multiple charts in sequence.
-#[derive(Default)]
+/// Reusable measure-row and byte storage for hashing multiple charts in sequence.
+///
+/// Includes 8 KiB of inline staging storage, initialized once when scratch is created.
 pub struct NoteHashScratch {
     rows: NoteHashRows,
+    staging: [u8; STREAM_BUFFER_LEN],
+}
+
+impl Default for NoteHashScratch {
+    fn default() -> Self {
+        Self {
+            rows: NoteHashRows::Empty,
+            staging: [0; STREAM_BUFFER_LEN],
+        }
+    }
 }
 
 #[derive(Default)]
@@ -35,23 +46,24 @@ enum NoteHashRows {
     Rows10(Vec<[u8; 10]>),
 }
 
-struct Sha1Stream {
+struct Sha1Stream<'a> {
     state: [u32; 5],
     block: [u8; 64],
     block_len: usize,
     total_len: usize,
-    staging: [u8; STREAM_BUFFER_LEN],
+    staging: &'a mut [u8; STREAM_BUFFER_LEN],
     staging_len: usize,
 }
 
-impl Sha1Stream {
-    fn new() -> Self {
+impl<'a> Sha1Stream<'a> {
+    fn new(staging: &'a mut [u8; STREAM_BUFFER_LEN]) -> Self {
+        // Only staging[..staging_len] is read, so previous chart bytes need no clearing.
         Self {
             state: SHA1_INIT,
             block: [0; 64],
             block_len: 0,
             total_len: 0,
-            staging: [0; STREAM_BUFFER_LEN],
+            staging,
             staging_len: 0,
         }
     }
@@ -513,8 +525,9 @@ pub fn compute_note_data_hash_with_scratch(
         note_data: &[u8],
         normalized_bpms: &str,
         rows: &mut Vec<[u8; LANES]>,
+        staging: &mut [u8; STREAM_BUFFER_LEN],
     ) -> String {
-        let mut stream = Sha1Stream::new();
+        let mut stream = Sha1Stream::new(staging);
         let mut pending_newline = false;
 
         crate::stats::for_each_minimized_measure_in::<LANES, _>(
@@ -549,7 +562,7 @@ pub fn compute_note_data_hash_with_scratch(
             let NoteHashRows::$variant(rows) = &mut scratch.rows else {
                 unreachable!()
             };
-            hash_lanes::<$lanes>(note_data, normalized_bpms, rows)
+            hash_lanes::<$lanes>(note_data, normalized_bpms, rows, &mut scratch.staging)
         }};
     }
     match lanes {
@@ -563,6 +576,218 @@ pub fn compute_note_data_hash_with_scratch(
 #[cfg(test)]
 mod tests {
     use super::{compute_chart_hash, compute_chart_hash_pair};
+
+    // Independent SHA-1 vectors generated with Python hashlib over bytes
+    // (i * 37 + 11) % 256. Cover padding, block, and staging boundaries.
+    const SHA1_CASES: &[(usize, [u8; 20])] = &[
+        (
+            0,
+            [
+                0xda, 0x39, 0xa3, 0xee, 0x5e, 0x6b, 0x4b, 0x0d, 0x32, 0x55, 0xbf, 0xef, 0x95, 0x60,
+                0x18, 0x90, 0xaf, 0xd8, 0x07, 0x09,
+            ],
+        ),
+        (
+            1,
+            [
+                0x06, 0x7d, 0x50, 0x96, 0xf2, 0x19, 0xc6, 0x4b, 0x53, 0xbb, 0x1c, 0x7d, 0x5e, 0x37,
+                0x54, 0x28, 0x5b, 0x56, 0x5a, 0x47,
+            ],
+        ),
+        (
+            55,
+            [
+                0xc4, 0x62, 0x20, 0x48, 0xcf, 0xef, 0x59, 0xb7, 0x28, 0x75, 0x83, 0x9e, 0xe7, 0xae,
+                0x1c, 0xbc, 0xf5, 0x5e, 0x76, 0x58,
+            ],
+        ),
+        (
+            56,
+            [
+                0xdd, 0xc1, 0x29, 0x42, 0x65, 0x64, 0x68, 0x47, 0x59, 0x70, 0xfa, 0x4f, 0xa4, 0x91,
+                0x61, 0xf5, 0x2e, 0xd1, 0x38, 0xe4,
+            ],
+        ),
+        (
+            63,
+            [
+                0x7f, 0x8c, 0x3f, 0xa4, 0x9f, 0x12, 0x97, 0xbd, 0x8b, 0x9f, 0xeb, 0x96, 0x4b, 0x6b,
+                0x41, 0x99, 0x87, 0xf9, 0xf0, 0xd1,
+            ],
+        ),
+        (
+            64,
+            [
+                0xa3, 0x34, 0xb4, 0x71, 0x80, 0xc6, 0x1f, 0xd5, 0x22, 0xf9, 0x99, 0x05, 0xec, 0x02,
+                0xc3, 0x6f, 0x9e, 0x84, 0x82, 0x11,
+            ],
+        ),
+        (
+            65,
+            [
+                0xdd, 0x27, 0xd9, 0xeb, 0x92, 0x3d, 0x39, 0x68, 0x7e, 0x10, 0x87, 0x2c, 0x3e, 0x81,
+                0x33, 0xba, 0x2f, 0x0a, 0x68, 0xa1,
+            ],
+        ),
+        (
+            119,
+            [
+                0xbe, 0xa9, 0x49, 0x47, 0x3b, 0x1e, 0xc3, 0x47, 0x47, 0xce, 0x12, 0x1c, 0x32, 0x93,
+                0x62, 0x4b, 0x5d, 0x9d, 0x8f, 0x84,
+            ],
+        ),
+        (
+            120,
+            [
+                0xbf, 0x05, 0x26, 0x6a, 0xcd, 0x3e, 0xc2, 0x15, 0x92, 0xb4, 0xd4, 0x2a, 0xae, 0xa9,
+                0x7f, 0xa6, 0xf3, 0xe5, 0x19, 0x26,
+            ],
+        ),
+        (
+            127,
+            [
+                0xb2, 0xb4, 0xbf, 0xd7, 0xb2, 0x11, 0x2a, 0x16, 0x7b, 0x77, 0xa6, 0x00, 0xcc, 0xa2,
+                0x27, 0x59, 0x35, 0x23, 0xc4, 0x06,
+            ],
+        ),
+        (
+            128,
+            [
+                0x3b, 0x19, 0x53, 0x09, 0x18, 0x99, 0x49, 0x23, 0x77, 0xf6, 0x86, 0xc2, 0x66, 0xb8,
+                0x1d, 0x84, 0xb5, 0xd4, 0x0f, 0x70,
+            ],
+        ),
+        (
+            129,
+            [
+                0x4f, 0xd6, 0x55, 0x8b, 0x2a, 0x93, 0x92, 0x5f, 0xb7, 0x12, 0x94, 0x47, 0xe1, 0xd1,
+                0xfa, 0xc8, 0xcf, 0xf5, 0x62, 0x87,
+            ],
+        ),
+        (
+            1023,
+            [
+                0xe1, 0xdf, 0x23, 0xf6, 0x81, 0xf0, 0x2f, 0x79, 0xf4, 0x7a, 0x9a, 0x18, 0x3a, 0xc4,
+                0x89, 0xeb, 0x17, 0x68, 0xe3, 0x23,
+            ],
+        ),
+        (
+            1024,
+            [
+                0x3d, 0x43, 0x69, 0x5d, 0x5e, 0x94, 0x5c, 0xea, 0x89, 0x7d, 0x48, 0x9c, 0xff, 0x9f,
+                0xf4, 0x5b, 0xb0, 0x19, 0x49, 0x8b,
+            ],
+        ),
+        (
+            1025,
+            [
+                0x4c, 0xd9, 0x29, 0x55, 0x2c, 0xd9, 0x81, 0xca, 0x4a, 0xdb, 0x46, 0xa2, 0xed, 0x98,
+                0x4f, 0xd5, 0x2d, 0xb4, 0x5f, 0x63,
+            ],
+        ),
+        (
+            8191,
+            [
+                0x9d, 0xc1, 0xee, 0x7f, 0x06, 0x6f, 0x90, 0xaf, 0xe5, 0xb2, 0xc7, 0x4e, 0x97, 0xe4,
+                0xa4, 0x5c, 0x3a, 0x4b, 0x0e, 0x3d,
+            ],
+        ),
+        (
+            8192,
+            [
+                0x70, 0x6e, 0x3f, 0xc6, 0xa9, 0x3a, 0x81, 0x6c, 0x4b, 0xb4, 0x35, 0xf1, 0x66, 0xfa,
+                0x60, 0xe9, 0x69, 0xa1, 0x8d, 0x35,
+            ],
+        ),
+        (
+            8193,
+            [
+                0x97, 0xa5, 0x88, 0x1d, 0x35, 0x34, 0x31, 0x54, 0x19, 0x1c, 0x8f, 0x5e, 0x69, 0x2c,
+                0x0e, 0xeb, 0x56, 0x5e, 0xc8, 0x78,
+            ],
+        ),
+    ];
+
+    #[test]
+    fn sha1_known_answers() {
+        for &(len, expected) in SHA1_CASES {
+            let data: Vec<u8> = (0..len)
+                .map(|i| (i as u8).wrapping_mul(37).wrapping_add(11))
+                .collect();
+            for split in [
+                0,
+                1.min(len),
+                55.min(len),
+                56.min(len),
+                63.min(len),
+                64.min(len),
+                len / 2,
+                len,
+            ] {
+                assert_eq!(
+                    super::sha1_digest(&data[..split], &data[split..]),
+                    expected,
+                    "len={len}, split={split}"
+                );
+            }
+            for size in [
+                5,
+                64,
+                super::STREAM_BUFFER_LEN,
+                super::STREAM_BUFFER_LEN + 1,
+            ] {
+                let mut staging = [0; super::STREAM_BUFFER_LEN];
+                let mut stream = super::Sha1Stream::new(&mut staging);
+                for chunk in data.chunks(size) {
+                    stream.write(chunk);
+                }
+                assert_eq!(
+                    stream.finish(b""),
+                    expected,
+                    "stream len={len}, chunk={size}"
+                );
+            }
+            let (hash, neutral) = compute_chart_hash_pair(&data, "0.000=150.000");
+            assert_eq!(hash, compute_chart_hash(&data, "0.000=150.000"));
+            assert_eq!(neutral, compute_chart_hash(&data, "0.000=0.000"));
+        }
+    }
+
+    #[test]
+    fn streamed_hash_matches() {
+        let mut scratch = super::NoteHashScratch::default();
+        for lanes in [4, 5, 8, 10, 4] {
+            for data in [
+                &b""[..],
+                &b",\n,\n"[..],
+                &b"// comment\r\n1000000000\r\n0000000000\r\n,\n0000000000\n"[..],
+                &b"2000000000\n0000000000\n3000000000\nMFLK000000\n,\n"[..],
+            ] {
+                // Repetition crosses the staging boundary for every lane count.
+                for repeats in [1, 1024] {
+                    let notes = data.repeat(repeats);
+                    let mut minimized = crate::stats::minimize_chart_for_hash(&notes, lanes);
+                    if minimized.last() == Some(&b'\n') {
+                        minimized.pop();
+                    }
+                    let expected = compute_chart_hash(&minimized, "0.000=150.000");
+                    assert_eq!(
+                        super::compute_note_data_hash(&notes, lanes, "0.000=150.000"),
+                        expected
+                    );
+                    assert_eq!(
+                        super::compute_note_data_hash_with_scratch(
+                            &notes,
+                            lanes,
+                            "0.000=150.000",
+                            &mut scratch
+                        ),
+                        expected
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn chart_hash_pair_matches_individual_hashes() {
