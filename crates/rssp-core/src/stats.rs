@@ -332,15 +332,13 @@ const HOLD_STACK_CAP: usize = 8;
 
 fn track_holds_core<const L: usize>(
     rows: impl Iterator<Item = impl AsRef<[u8]>>,
-    row_count: usize,
-) -> Vec<[usize; L]> {
+    mut on_end: impl FnMut(usize, usize, usize),
+) {
     let mut stacks: [[usize; HOLD_STACK_CAP]; L] = [[0; HOLD_STACK_CAP]; L];
     let mut depths: [usize; L] = [0; L];
-    let mut ends = Vec::with_capacity(row_count);
 
     for (i, row) in rows.enumerate() {
         let r = row.as_ref();
-        ends.push([HOLD_END_NONE; L]);
         for c in 0..L.min(r.len()) {
             match r[c] {
                 ch if is_hold_blocker(ch) => depths[c] = 0,
@@ -354,17 +352,18 @@ fn track_holds_core<const L: usize>(
                 b'3' if depths[c] > 0 => {
                     depths[c] -= 1;
                     let start = stacks[c][depths[c]];
-                    ends[start][c] = i;
+                    on_end(start, c, i);
                 }
                 _ => {}
             }
         }
     }
-    ends
 }
 
 fn scan_hold_ends<const L: usize>(rows: &[[u8; L]]) -> Vec<[usize; L]> {
-    track_holds_core::<L>(rows.iter().map(<[u8; L]>::as_slice), rows.len())
+    let mut ends = vec![[HOLD_END_NONE; L]; rows.len()];
+    track_holds_core::<L>(rows.iter(), |start, column, end| ends[start][column] = end);
+    ends
 }
 
 // ============================================================================
@@ -680,23 +679,18 @@ fn count_tap_mask<const L: usize>(
     }
 }
 
-fn recalc_without_phantoms<const L: usize>(rows: &[[u8; L]], ends: &[[usize; L]]) -> ArrowStats {
+fn recalc_phantom_stats<const L: usize>(rows: &[[u8; L]]) -> ArrowStats {
+    // All supported layouts fit in u16. Correction needs head validity only,
+    // not a machine-word tail index for every lane of every row.
+    let mut phantoms = vec![u16::MAX; rows.len()];
+    track_holds_core::<L>(rows.iter(), |start, column, _| {
+        phantoms[start] &= !(1 << column);
+    });
     let mut stats = ArrowStats::default();
-    for (i, line) in rows.iter().enumerate() {
-        let phantom_mask = ends[i].iter().enumerate().fold(0u16, |m, (c, &e)| {
-            if e == HOLD_END_NONE {
-                m | (1u16 << c)
-            } else {
-                m
-            }
-        });
+    for (line, phantom_mask) in rows.iter().zip(phantoms) {
         count_line_masked(line, &mut stats, phantom_mask);
     }
     stats
-}
-
-fn recalc_phantom_stats<const L: usize>(rows: &[[u8; L]]) -> ArrowStats {
-    recalc_without_phantoms(rows, &scan_hold_ends(rows))
 }
 
 #[inline(always)]
@@ -756,9 +750,14 @@ fn count_line_masked<const L: usize>(line: &[u8; L], stats: &mut ArrowStats, pha
 
 #[inline(always)]
 pub fn minimize_measure<const L: usize>(m: &mut Vec<[u8; L]>) {
+    let len = reduce_rows(m);
+    m.truncate(len);
+}
+
+fn reduce_rows<const L: usize>(m: &mut [[u8; L]]) -> usize {
     let shift = measure_reduce_shift(m);
     if shift == 0 {
-        return;
+        return m.len();
     }
 
     let step = 1usize << shift;
@@ -766,7 +765,7 @@ pub fn minimize_measure<const L: usize>(m: &mut Vec<[u8; L]>) {
     for i in 1..len {
         m[i] = m[i * step];
     }
-    m.truncate(len);
+    len
 }
 
 #[inline(always)]
@@ -813,8 +812,9 @@ pub(crate) fn calc_last_beat(midx: Option<usize>, row: usize, rows: usize) -> f6
 // Chart Processing - Unified Implementation
 // ============================================================================
 
-fn finalize_measure<const L: usize, R, N, C>(
+fn finalize_measure<const L: usize, const KEEP: bool, R, N, C>(
     m: &mut Vec<[u8; L]>,
+    start: usize,
     idx: usize,
     output: &mut Vec<u8>,
     densities: &mut Vec<usize>,
@@ -826,15 +826,15 @@ fn finalize_measure<const L: usize, R, N, C>(
     N: FnMut(&[u8; L], usize, usize, usize, bool),
     C: FnMut(&[u8; L]) -> RowCount,
 {
-    if m.is_empty() {
+    if start == m.len() {
         densities.push(0);
         return;
     }
-    minimize_measure(m);
-    on_rows(idx, m.len());
-    let rows = m.len();
+    let rows = reduce_rows(&mut m[start..]);
+    m.truncate(start + rows);
+    on_rows(idx, rows);
     let mut density = 0;
-    for (i, line) in m.iter().enumerate() {
+    for (i, line) in m[start..].iter().enumerate() {
         let row_count = on_count(line);
         on_line(line, idx, i, rows, row_count.object);
         if row_count.density {
@@ -843,11 +843,15 @@ fn finalize_measure<const L: usize, R, N, C>(
         output.extend_from_slice(line);
         output.push(b'\n');
     }
-    m.clear();
+    if !KEEP {
+        m.clear();
+    }
     densities.push(density);
 }
 
-fn minimize_chart_core<const L: usize, R, N, C>(
+// Parser state machine: KEEP retains minimized measures in the typed-row output
+// itself, so typed analysis needs no separate measure allocation or row copy.
+fn minimize_chart_core<const L: usize, const KEEP: bool, R, N, C>(
     data: &[u8],
     measure: &mut Vec<[u8; L]>,
     on_rows: &mut R,
@@ -861,9 +865,12 @@ where
 {
     let mut output = Vec::with_capacity(data.len());
     measure.clear();
-    measure.reserve(64);
+    if !KEEP {
+        measure.reserve(64);
+    }
     let mut densities = Vec::with_capacity(data.len() / ((L + 1) * 4) + 1);
     let (mut midx, mut done) = (0usize, false);
+    let mut start = 0;
 
     let mut line_off = 0usize;
     while let Some(raw) = next_line(data, &mut line_off) {
@@ -874,8 +881,9 @@ where
 
         match line[0] {
             b',' => {
-                finalize_measure(
+                finalize_measure::<L, KEEP, _, _, _>(
                     measure,
+                    start,
                     midx,
                     &mut output,
                     &mut densities,
@@ -884,11 +892,13 @@ where
                     on_count,
                 );
                 output.extend_from_slice(b",\n");
+                start = measure.len();
                 midx += 1;
             }
             b';' => {
-                finalize_measure(
+                finalize_measure::<L, KEEP, _, _, _>(
                     measure,
+                    start,
                     midx,
                     &mut output,
                     &mut densities,
@@ -909,8 +919,9 @@ where
     }
 
     if !done {
-        finalize_measure(
+        finalize_measure::<L, KEEP, _, _, _>(
             measure,
+            start,
             midx,
             &mut output,
             &mut densities,
@@ -947,24 +958,16 @@ where
     N: FnMut(&[u8; L], usize, usize, usize, bool),
 {
     let mut chart_notes = ChartNotesScratch::default();
-    process_chart_in_impl::<L, false, _, _>(data, measure, on_rows, on_line, &mut chart_notes)
+    process_chart_in_impl::<L, false, false, _, _>(
+        data,
+        measure,
+        on_rows,
+        on_line,
+        &mut chart_notes,
+    )
 }
 
-fn process_chart_notes_in<const L: usize, R, N>(
-    data: &[u8],
-    measure: &mut Vec<[u8; L]>,
-    on_rows: &mut R,
-    on_line: &mut N,
-    chart_notes: &mut ChartNotesScratch,
-) -> (Vec<u8>, ArrowStats, Vec<usize>)
-where
-    R: FnMut(usize, usize),
-    N: FnMut(&[u8; L], usize, usize, usize, bool),
-{
-    process_chart_in_impl::<L, true, _, _>(data, measure, on_rows, on_line, chart_notes)
-}
-
-fn process_chart_in_impl<const L: usize, const NOTES: bool, R, N>(
+fn process_chart_in_impl<const L: usize, const NOTES: bool, const KEEP: bool, R, N>(
     data: &[u8],
     measure: &mut Vec<[u8; L]>,
     on_rows: &mut R,
@@ -1004,14 +1007,18 @@ where
             )
         }
     };
-    let (output, densities) = minimize_chart_core(data, measure, on_rows, on_line, &mut count);
+    let (output, densities) =
+        minimize_chart_core::<L, KEEP, _, _, _>(data, measure, on_rows, on_line, &mut count);
     has_phantom |= phantom_depths.iter().any(|&d| d != 0);
 
     // Fix phantom holds
     if holds > 0 && (holds != ends || has_phantom) {
-        let rows = parse_minimized_rows::<L>(&output);
         let step_count = stats.total_steps;
-        stats = recalc_phantom_stats(&rows);
+        stats = if KEEP {
+            recalc_phantom_stats(measure)
+        } else {
+            recalc_phantom_stats(&parse_minimized_rows::<L>(&output))
+        };
         stats.total_steps = step_count;
     }
 
@@ -1447,7 +1454,6 @@ pub fn minimize_rows_typed<const L: usize>(data: &[u8]) -> MinimizedTypedRows<L>
 #[derive(Default)]
 pub struct TypedRowsScratch<const L: usize> {
     rows: Vec<[u8; L]>,
-    measure: Vec<[u8; L]>,
 }
 
 impl<const L: usize> TypedRowsScratch<L> {
@@ -1457,10 +1463,9 @@ impl<const L: usize> TypedRowsScratch<L> {
         &self.rows
     }
 
-    /// Clears prior rows while retaining both internal allocations.
+    /// Clears prior rows while retaining their allocation.
     pub fn clear(&mut self) {
         self.rows.clear();
-        self.measure.clear();
     }
 
     /// Capacity of the retained typed-row output buffer.
@@ -1474,12 +1479,11 @@ impl<const L: usize> core::fmt::Debug for TypedRowsScratch<L> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("TypedRowsScratch")
             .field("row_capacity", &self.rows.capacity())
-            .field("measure_capacity", &self.measure.capacity())
             .finish()
     }
 }
 
-/// Minimizes chart data while reusing its typed-row and measure allocations.
+/// Minimizes chart data while reusing its typed-row allocation.
 ///
 /// The output, densities, and beat positions remain owned because callers
 /// retain them; the temporary typed rows can be cleared and reused between
@@ -1509,24 +1513,25 @@ fn minimize_rows_typed_in_impl<const L: usize, const NOTES: bool>(
 ) -> (Vec<u8>, ArrowStats, Vec<usize>, Vec<f32>, f64) {
     let capacity = data.len() / (L + 1);
     scratch.clear();
-    let TypedRowsScratch { rows, measure } = scratch;
+    let TypedRowsScratch { rows } = scratch;
     rows.reserve(capacity);
     let mut beats = Vec::with_capacity(capacity);
     let (mut last_m, mut last_r, mut last_rows) = (None, 0, 0);
 
     let mut on_rows = |m, r| append_row_beats(&mut beats, m, r);
-    let mut on_line = |line: &[u8; L], m, r, row_count, has_object| {
-        rows.push(*line);
+    let mut on_line = |_: &[u8; L], m, r, row_count, has_object| {
         if has_object {
             (last_m, last_r, last_rows) = (Some(m), r, row_count);
         }
     };
 
-    let (out, stats, dens) = if NOTES {
-        process_chart_notes_in::<L, _, _>(data, measure, &mut on_rows, &mut on_line, chart_notes)
-    } else {
-        process_chart_in::<L, _, _>(data, measure, &mut on_rows, &mut on_line)
-    };
+    let (out, stats, dens) = process_chart_in_impl::<L, NOTES, true, _, _>(
+        data,
+        rows,
+        &mut on_rows,
+        &mut on_line,
+        chart_notes,
+    );
     let last = calc_last_beat(last_m, last_r, last_rows);
     (out, stats, dens, beats, last)
 }
@@ -2412,6 +2417,61 @@ mod tests {
     }
 
     #[test]
+    fn typed_rows_keep_measure_boundaries() {
+        let data = b" 2000\r\n0000\r\n0000\r\n0000\r\n,\n0000\n3000\n1000\n0000\n,\n,\n0010\n0000\n0000\n0000\n;";
+        let mut scratch = TypedRowsScratch::<4>::default();
+        let (out, stats, dens, beats, last) = minimize_rows_typed_in(data, &mut scratch);
+        assert_eq!(out, b"2000\n,\n0000\n3000\n1000\n0000\n,\n,\n0010\n");
+        assert_eq!(
+            scratch.rows(),
+            &[*b"2000", *b"0000", *b"3000", *b"1000", *b"0000", *b"0010"]
+        );
+        assert_eq!(dens, [1, 1, 0, 1]);
+        assert_eq!(beats, [0.0, 4.0, 5.0, 6.0, 7.0, 12.0]);
+        assert_eq!(last, 12.0);
+        assert_eq!(
+            stats,
+            ArrowStats {
+                total_arrows: 3,
+                total_steps: 3,
+                left: 2,
+                up: 1,
+                holds: 1,
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn typed_notes_keep_cross_measure_tails() {
+        let data = b"20000000\n00000000\n,\n00000000\n30000000\n00001000\n00000000\n;";
+        let mut scratch = TypedRowsScratch::<8>::default();
+        let mut notes = ChartNotesScratch::default();
+        let (_, _, dens, beats, last) =
+            minimize_rows_typed_in_notes(data, &mut scratch, &mut notes);
+        assert_eq!(dens, [1, 1]);
+        assert_eq!(beats, [0.0, 4.0, 5.0, 6.0, 7.0]);
+        assert_eq!(last, 6.0);
+        assert_eq!(
+            notes.drain().collect::<Vec<_>>(),
+            [
+                ParsedChartNote {
+                    row_index: 0,
+                    column: 0,
+                    note_type: ChartNoteType::Hold,
+                    tail_row_index: Some(2)
+                },
+                ParsedChartNote {
+                    row_index: 3,
+                    column: 4,
+                    note_type: ChartNoteType::Tap,
+                    tail_row_index: None
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn output_backed_minimize_matches_typed_pipeline() {
         assert_direct_matches_typed::<4>(&generated_chart::<4>());
         assert_direct_matches_typed::<5>(&generated_chart::<5>());
@@ -2543,10 +2603,50 @@ mod tests {
     fn phantom_recalc_supports_pump_double_lanes() {
         let mut row = [b'0'; 10];
         row[9] = b'1';
-        let stats = recalc_without_phantoms(&[row], &[[HOLD_END_NONE; 10]]);
+        let stats = recalc_phantom_stats(&[row]);
 
         assert_eq!(stats.total_arrows, 1);
         assert_eq!(stats.total_steps, 1);
+    }
+
+    #[test]
+    fn phantom_recalc_keeps_nested_and_blocked_heads() {
+        let rows = [
+            *b"2400", *b"2400", *b"3300", *b"1300", *b"3000", *b"0400", *b"0M00", *b"0300",
+        ];
+        // Both rolls pair with tails; the first hold is blocked by the tap,
+        // and the final roll is blocked by the mine before its tail.
+        assert_eq!(
+            recalc_phantom_stats(&rows),
+            ArrowStats {
+                total_arrows: 4,
+                left: 2,
+                down: 2,
+                total_steps: 3,
+                jumps: 1,
+                hands: 1,
+                rolls: 2,
+                holds: 1,
+                mines: 1,
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn phantom_recalc_keeps_hold_stack_limit() {
+        let rows: Vec<_> = [*b"2000"; 9].into_iter().chain([*b"3000"; 8]).collect();
+        assert_eq!(
+            recalc_phantom_stats(&rows),
+            ArrowStats {
+                total_arrows: 8,
+                left: 8,
+                total_steps: 8,
+                holds: 8,
+                hands: 6,
+                ..Default::default()
+            }
+        );
     }
 
     #[test]

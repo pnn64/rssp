@@ -115,6 +115,10 @@ harness = false
 name = "scan_perf"
 harness = false
 
+[[bench]]
+name = "hotpath_perf"
+harness = false
+
 [lints.clippy]
 pedantic = "warn"
 

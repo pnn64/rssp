@@ -1230,6 +1230,8 @@ fn hashed_matrix_inputs(
         BpmCountsMap::with_capacity_and_hasher(bpm_map.len(), BuildHasherDefault::default());
 
     let (mut bpm_idx, mut next_beat) = (0usize, bpm_map.get(1).map_or(f64::INFINITY, |m| m.0));
+    let mut counted_bpm = bpm_map[0].1.to_bits();
+    let mut counts = [0usize; 4];
     for (idx, &density) in measure_densities.iter().enumerate() {
         let beat = idx as f64 * 4.0;
         while beat >= next_beat {
@@ -1239,13 +1241,32 @@ fn hashed_matrix_inputs(
 
         let code = density_code(categorize_measure_density(density));
         let bpm = bpm_map[bpm_idx].1;
+        let bits = bpm.to_bits();
+        if bits != counted_bpm {
+            merge_matrix_counts(&mut bpm_counts, counted_bpm, counts);
+            counts = [0; 4];
+            counted_bpm = bits;
+        }
         if code != u8::MAX && bpm > 0.0 {
-            bpm_counts.entry(bpm.to_bits()).or_default()[code as usize] += 1;
+            counts[code as usize] += 1;
         }
     }
+    merge_matrix_counts(&mut bpm_counts, counted_bpm, counts);
 
     for (bpm_bits, counts) in bpm_counts {
         emit_matrix_counts(bpm_bits, counts, emit);
+    }
+}
+
+// Hash once per active BPM run instead of once per stream measure. Empty or
+// skipped timing segments never insert a map entry.
+fn merge_matrix_counts(map: &mut BpmCountsMap, bits: u64, counts: [usize; 4]) {
+    if counts == [0; 4] {
+        return;
+    }
+    let totals = map.entry(bits).or_default();
+    for (total, count) in totals.iter_mut().zip(counts) {
+        *total += count;
     }
 }
 
@@ -1475,6 +1496,47 @@ mod tests {
         assert_eq!(
             compute_matrix_rating(&densities, &bpm_map),
             matrix_rating_generic(&densities, &bpm_map)
+        );
+    }
+
+    #[test]
+    fn matrix_batches_keep_segment_boundaries() {
+        let densities = [16, 20, 24, 32, 0, 16, 20, 32];
+        let mut bpms = vec![(0.0, 120.0); HASH_AGGREGATION_MIN_SEGMENTS];
+        bpms[1] = (4.0, 180.0);
+        bpms[2] = (4.0, 240.0); // Last change at the same beat wins.
+        bpms[3] = (7.0, 120.0);
+        bpms[4] = (12.0, -10.0);
+        bpms[5] = (16.0, f64::NAN);
+        bpms[6] = (20.0, 240.0);
+        for (index, bpm) in bpms.iter_mut().enumerate().skip(7) {
+            *bpm = (100.0 + index as f64, 300.0); // Unvisited segments.
+        }
+        let profile = compute_matrix_profile(&densities, &bpms);
+        assert_eq!(
+            profile.as_slice(),
+            &[
+                MatrixRatingInput {
+                    effective_bpm: 120.0,
+                    measures: 1
+                },
+                MatrixRatingInput {
+                    effective_bpm: 180.0,
+                    measures: 1
+                },
+                MatrixRatingInput {
+                    effective_bpm: 240.0,
+                    measures: 1
+                },
+                MatrixRatingInput {
+                    effective_bpm: 300.0,
+                    measures: 2
+                },
+                MatrixRatingInput {
+                    effective_bpm: 480.0,
+                    measures: 1
+                },
+            ]
         );
     }
 
