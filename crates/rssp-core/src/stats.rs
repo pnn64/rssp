@@ -178,8 +178,6 @@ enum ChartNoteCell {
 
 pub const RADAR_CATEGORY_COUNT: usize = 14;
 
-const HOLD_END_NONE: usize = usize::MAX;
-
 #[derive(Clone, Copy)]
 struct RowCount {
     density: bool,
@@ -360,27 +358,25 @@ fn track_holds_core<const L: usize>(
     }
 }
 
-fn scan_hold_ends<const L: usize>(rows: &[[u8; L]]) -> Vec<[usize; L]> {
-    let mut ends = vec![[HOLD_END_NONE; L]; rows.len()];
-    track_holds_core::<L>(rows.iter(), |start, column, end| ends[start][column] = end);
-    ends
-}
-
 // ============================================================================
 // Row Parsing
 // ============================================================================
 
 pub(crate) fn parse_minimized_rows<const L: usize>(data: &[u8]) -> Vec<[u8; L]> {
     let mut rows = Vec::with_capacity(data.len() / (L + 1));
+    visit_min_rows::<L>(data, |row| rows.push(*row));
+    rows
+}
+
+fn visit_min_rows<const L: usize>(data: &[u8], mut visit: impl FnMut(&[u8; L])) {
     for raw in data.split(|&b| b == b'\n') {
         let line = trim_cr(raw);
-        if line.len() >= L && !matches!(line.first(), Some(b',' | b';') | None) {
-            let mut arr = [0u8; L];
-            arr.copy_from_slice(&line[..L]);
-            rows.push(arr);
+        if let Some(row) = line.first_chunk::<L>()
+            && !matches!(line.first(), Some(b',' | b';') | None)
+        {
+            visit(row);
         }
     }
-    rows
 }
 
 #[inline(always)]
@@ -1379,32 +1375,28 @@ fn row_has_object<const L: usize>(line: &[u8; L], object_depths: &mut [u32; L]) 
     object
 }
 
-fn push_timing_measure<const L: usize>(
-    measure: &mut Vec<[u8; L]>,
-    midx: usize,
+fn finish_timing_rows<const L: usize>(
     rows: &mut Vec<[u8; L]>,
+    start: usize,
+    midx: usize,
     beats: &mut Vec<f32>,
-    has_holds: &mut bool,
-) {
-    if measure.is_empty() {
-        return;
+) -> bool {
+    if start == rows.len() {
+        return false;
     }
-
-    minimize_measure(measure);
-    append_row_beats(beats, midx, measure.len());
-    for line in measure.drain(..) {
-        *has_holds |= row_has_hold_head(&line);
-        rows.push(line);
-    }
+    let len = reduce_rows(&mut rows[start..]);
+    rows.truncate(start + len);
+    append_row_beats(beats, midx, len);
+    rows[start..].iter().any(row_has_hold_head)
 }
 
 fn minimize_timing_rows<const L: usize>(data: &[u8]) -> (Vec<[u8; L]>, Vec<f32>, bool) {
     let cap = data.len() / (L + 1);
     let mut rows = Vec::with_capacity(cap);
     let mut beats = Vec::with_capacity(cap);
-    let mut measure = Vec::with_capacity(64);
     let mut has_holds = false;
     let (mut midx, mut done) = (0usize, false);
+    let mut start = 0;
 
     let mut line_off = 0usize;
     while let Some(raw) = next_line(data, &mut line_off) {
@@ -1415,25 +1407,26 @@ fn minimize_timing_rows<const L: usize>(data: &[u8]) -> (Vec<[u8; L]>, Vec<f32>,
 
         match line[0] {
             b',' => {
-                push_timing_measure(&mut measure, midx, &mut rows, &mut beats, &mut has_holds);
+                has_holds |= finish_timing_rows(&mut rows, start, midx, &mut beats);
+                start = rows.len();
                 midx += 1;
             }
             b';' => {
-                push_timing_measure(&mut measure, midx, &mut rows, &mut beats, &mut has_holds);
+                has_holds |= finish_timing_rows(&mut rows, start, midx, &mut beats);
                 done = true;
                 break;
             }
             _ if line.len() >= L => {
                 let mut arr = [0u8; L];
                 arr.copy_from_slice(&line[..L]);
-                measure.push(arr);
+                rows.push(arr);
             }
             _ => {}
         }
     }
 
     if !done {
-        push_timing_measure(&mut measure, midx, &mut rows, &mut beats, &mut has_holds);
+        has_holds |= finish_timing_rows(&mut rows, start, midx, &mut beats);
     }
 
     (rows, beats, has_holds)
@@ -1744,7 +1737,48 @@ pub fn compute_timing_aware_stats_with_row_to_beat(
     macro_rules! compute {
         ($lanes:literal) => {{
             let rows = parse_minimized_rows::<$lanes>(data);
-            compute_timing_aware_stats_from_rows_with_row_to_beat::<$lanes>(&rows, timing, beats)
+            compute_timing_aware_stats_from_rows_with_row_to_beat(&rows, timing, beats)
+        }};
+    }
+    match lanes {
+        5 => compute!(5),
+        8 => compute!(8),
+        10 => compute!(10),
+        _ => compute!(4),
+    }
+}
+
+/// Counts minimized chart text without allocating row storage.
+///
+/// Use when minimization has confirmed there are no valid hold or roll heads.
+/// Phantom heads and tails are ignored, as in the typed no-hold API.
+#[must_use]
+pub fn compute_no_hold_stats(
+    data: &[u8],
+    lanes: usize,
+    timing: &TimingData,
+    beats: &[f32],
+) -> ArrowStats {
+    macro_rules! compute {
+        ($lanes:literal) => {{
+            let mut stats = ArrowStats::default();
+            if has_nonjudgable_rows(timing) {
+                let mut judgable = JudgableRowCursor::new(timing);
+                let mut idx = 0;
+                visit_min_rows::<$lanes>(data, |row| {
+                    process_timing_row_no_holds(
+                        row,
+                        judgable.is_judgable(beat_to_note_row_f32(beats[idx])),
+                        &mut stats,
+                    );
+                    idx += 1;
+                });
+            } else {
+                visit_min_rows::<$lanes>(data, |row| {
+                    process_timing_row_no_holds_judgable(row, &mut stats)
+                });
+            }
+            stats
         }};
     }
     match lanes {
@@ -1767,8 +1801,10 @@ pub fn compute_timing_aware_stats_from_rows_with_row_to_beat<const L: usize>(
     if !has_nonjudgable_rows(timing) {
         return process_rows_judgable(rows);
     }
-    let ends = scan_hold_ends(rows);
-    process_timing_rows::<L>(rows.iter(), &ends, timing, beats)
+    let mut judgable = JudgableRowCursor::new(timing);
+    process_timing_rows::<L>(rows, |idx| {
+        judgable.is_judgable(beat_to_note_row_f32(beats[idx]))
+    })
 }
 
 #[must_use]
@@ -1829,7 +1865,7 @@ fn process_rows_judgable<const L: usize>(rows: &[[u8; L]]) -> ArrowStats {
             match ch {
                 b'1' => {
                     if depths[c] != 0 {
-                        return process_rows_judgable_fallback(rows);
+                        return recalc_judgable_stats(rows);
                     }
                     has_note = true;
                     notes += 1;
@@ -1838,7 +1874,7 @@ fn process_rows_judgable<const L: usize>(rows: &[[u8; L]]) -> ArrowStats {
                 }
                 b'2' | b'4' => {
                     if depths[c] as usize == HOLD_STACK_CAP {
-                        return process_rows_judgable_fallback(rows);
+                        return recalc_judgable_stats(rows);
                     }
                     depths[c] += 1;
                     has_note = true;
@@ -1860,7 +1896,7 @@ fn process_rows_judgable<const L: usize>(rows: &[[u8; L]]) -> ArrowStats {
                 }
                 b'L' => {
                     if depths[c] != 0 {
-                        return process_rows_judgable_fallback(rows);
+                        return recalc_judgable_stats(rows);
                     }
                     has_note = true;
                     notes += 1;
@@ -1877,7 +1913,7 @@ fn process_rows_judgable<const L: usize>(rows: &[[u8; L]]) -> ArrowStats {
                 }
                 b'M' | b'F' => {
                     if depths[c] != 0 {
-                        return process_rows_judgable_fallback(rows);
+                        return recalc_judgable_stats(rows);
                     }
                     has_note = true;
                     if ch == b'M' {
@@ -1913,15 +1949,16 @@ fn process_rows_judgable<const L: usize>(rows: &[[u8; L]]) -> ArrowStats {
     }
 
     if depths.iter().any(|&d| d != 0) {
-        return process_rows_judgable_fallback(rows);
+        return recalc_judgable_stats(rows);
     }
 
     stats
 }
 
-fn process_rows_judgable_fallback<const L: usize>(rows: &[[u8; L]]) -> ArrowStats {
-    let ends = scan_hold_ends(rows);
-    process_timing_rows_all_judgable::<L>(rows.iter(), &ends)
+// Keep allocation and repair code out of the ordinary chart's hot state machine.
+#[cold]
+fn recalc_judgable_stats<const L: usize>(rows: &[[u8; L]]) -> ArrowStats {
+    process_timing_rows::<L>(rows, |_| true)
 }
 
 #[inline(always)]
@@ -1983,71 +2020,100 @@ fn process_timing_row_no_holds_judgable<const L: usize>(line: &[u8; L], stats: &
     }
 }
 
-fn process_timing_rows_all_judgable<'a, const L: usize>(
-    rows: impl Iterator<Item = &'a [u8; L]>,
-    ends: &[[usize; L]],
-) -> ArrowStats {
-    let mut stats = ArrowStats::default();
-    let mut ends_per = vec![0u32; ends.len()];
-    let mut active = 0i32;
+struct TimingRow {
+    heads: u16,
+    // A row has at most L <= 16 matched tails on the compact path.
+    ends: u8,
+    judgable: bool,
+}
 
-    for (ridx, line) in rows.enumerate() {
-        if ridx > 0 {
-            active -= ends_per[ridx - 1] as i32;
+fn process_timing_rows<const L: usize>(
+    rows: &[[u8; L]],
+    mut is_judgable: impl FnMut(usize) -> bool,
+) -> ArrowStats {
+    // Preserve the generic API for layouts wider than this compact mask.
+    if L > 16 {
+        return process_wide_rows(rows, is_judgable);
+    }
+    // Keep head validity, judgability, and tail counts together instead of
+    // machine-word indices per lane and a second allocation for tail counts.
+    let mut info: Vec<_> = (0..rows.len())
+        .map(|idx| TimingRow {
+            heads: 0,
+            ends: 0,
+            judgable: is_judgable(idx),
+        })
+        .collect();
+    track_holds_core::<L>(rows.iter(), |start, column, end| {
+        info[start].heads |= 1 << column;
+        if info[start].judgable {
+            info[end].ends += 1;
+        }
+    });
+    let mut stats = ArrowStats::default();
+    let mut active = 0i32;
+    let mut prev_ends = 0;
+    for (line, row) in rows.iter().zip(info) {
+        active -= prev_ends;
+        process_timing_row::<L>(
+            line,
+            |c| row.heads & (1 << c) != 0,
+            row.judgable,
+            &mut stats,
+            &mut active,
+        );
+        // Tails stay active through their own row, even when that row is fake.
+        prev_ends = i32::from(row.ends);
+    }
+    stats
+}
+
+fn process_wide_rows<const L: usize>(
+    rows: &[[u8; L]],
+    mut is_judgable: impl FnMut(usize) -> bool,
+) -> ArrowStats {
+    let mut ends = vec![[usize::MAX; L]; rows.len()];
+    track_holds_core::<L>(rows.iter(), |start, column, end| ends[start][column] = end);
+    let mut ends_per = vec![0u32; rows.len()];
+    let mut stats = ArrowStats::default();
+    let mut active = 0i32;
+    for (idx, line) in rows.iter().enumerate() {
+        if idx > 0 {
+            active -= ends_per[idx - 1] as i32;
+        }
+        let judgable = is_judgable(idx);
+        if judgable {
+            for &end in &ends[idx] {
+                if end != usize::MAX {
+                    ends_per[end] += 1;
+                }
+            }
         }
         process_timing_row::<L>(
             line,
-            &ends[ridx],
-            true,
+            |c| ends[idx][c] != usize::MAX,
+            judgable,
             &mut stats,
-            &mut ends_per,
             &mut active,
         );
     }
     stats
 }
 
-fn process_timing_rows<'a, const L: usize>(
-    rows: impl Iterator<Item = &'a [u8; L]>,
-    ends: &[[usize; L]],
-    timing: &TimingData,
-    beats: &[f32],
-) -> ArrowStats {
-    let mut stats = ArrowStats::default();
-    let mut ends_per = vec![0u32; ends.len()];
-    let mut active = 0i32;
-    let mut judgable = JudgableRowCursor::new(timing);
-
-    for (ridx, line) in rows.enumerate() {
-        if ridx > 0 {
-            active -= ends_per[ridx - 1] as i32;
-        }
-        process_timing_row::<L>(
-            line,
-            &ends[ridx],
-            judgable.is_judgable(beat_to_note_row_f32(beats[ridx])),
-            &mut stats,
-            &mut ends_per,
-            &mut active,
-        );
-    }
-    stats
-}
-
+// This row state machine keeps cell classification and hand accounting together.
 #[inline(always)]
 fn process_timing_row<const L: usize>(
-    line: &[u8],
-    hold_ends: &[usize; L],
+    line: &[u8; L],
+    hold_head: impl Fn(usize) -> bool,
     judgable: bool,
     stats: &mut ArrowStats,
-    ends_per: &mut [u32],
     active: &mut i32,
 ) {
     if !judgable {
-        for c in 0..L {
-            match line[c] {
+        for (c, &ch) in line.iter().enumerate() {
+            match ch {
                 b'1' | b'L' | b'l' | b'M' | b'm' | b'F' | b'f' => stats.fakes += 1,
-                b'2' | b'4' if hold_ends[c] != HOLD_END_NONE => stats.fakes += 1,
+                b'2' | b'4' if hold_head(c) => stats.fakes += 1,
                 _ => {}
             }
         }
@@ -2057,21 +2123,20 @@ fn process_timing_row<const L: usize>(
     let (mut notes, mut new_h) = (0u32, 0u32);
     let mut has_note = false;
 
-    for c in 0..L {
-        match line[c] {
+    for (c, &ch) in line.iter().enumerate() {
+        match ch {
             b'1' => {
                 has_note = true;
                 notes += 1;
                 stats.total_arrows += 1;
                 bump_dir(stats, c);
             }
-            b'2' | b'4' if hold_ends[c] != HOLD_END_NONE => {
+            b'2' | b'4' if hold_head(c) => {
                 has_note = true;
                 notes += 1;
                 new_h += 1;
                 stats.total_arrows += 1;
-                ends_per[hold_ends[c]] += 1;
-                if line[c] == b'2' {
+                if ch == b'2' {
                     stats.holds += 1;
                 } else {
                     stats.rolls += 1;
@@ -2722,5 +2787,341 @@ M000
         assert_eq!(stats.total_steps, 0);
         assert_eq!(stats.mines, 1);
         assert_eq!(stats.hands, 0);
+    }
+
+    #[test]
+    fn timing_holds_keep_fake_heads_and_tail_rows() {
+        let rows = [*b"2200", *b"4000", *b"3011", *b"300M", *b"0311", *b"0011"];
+        let beats = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+        for (fakes, expected) in [
+            (
+                "1=1",
+                ArrowStats {
+                    total_arrows: 8,
+                    left: 1,
+                    down: 1,
+                    up: 3,
+                    right: 3,
+                    total_steps: 4,
+                    jumps: 4,
+                    hands: 2,
+                    holds: 2,
+                    mines: 1,
+                    fakes: 1,
+                    ..Default::default()
+                },
+            ),
+            (
+                "1=1,4=1",
+                ArrowStats {
+                    total_arrows: 6,
+                    left: 1,
+                    down: 1,
+                    up: 2,
+                    right: 2,
+                    total_steps: 3,
+                    jumps: 3,
+                    hands: 1,
+                    holds: 2,
+                    mines: 1,
+                    fakes: 3,
+                    ..Default::default()
+                },
+            ),
+        ] {
+            assert_eq!(
+                compute_timing_aware_stats_from_rows_with_row_to_beat(
+                    &rows,
+                    &timing(Some(fakes)),
+                    &beats,
+                ),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn timing_holds_keep_blockers_and_stack_limit() {
+        let rows = [
+            *b"2400", *b"2400", *b"3300", *b"1300", *b"3000", *b"0400", *b"0M00", *b"0300",
+        ];
+        assert_eq!(
+            compute_timing_aware_stats_from_rows_with_row_to_beat(&rows, &timing(None), &[],),
+            ArrowStats {
+                total_arrows: 4,
+                left: 2,
+                down: 2,
+                total_steps: 3,
+                jumps: 1,
+                hands: 1,
+                rolls: 2,
+                holds: 1,
+                mines: 1,
+                ..Default::default()
+            }
+        );
+        let rows: Vec<_> = [*b"2000"; 9].into_iter().chain([*b"3000"; 8]).collect();
+        assert_eq!(
+            compute_timing_aware_stats_from_rows_with_row_to_beat(&rows, &timing(None), &[],),
+            ArrowStats {
+                total_arrows: 8,
+                left: 8,
+                total_steps: 8,
+                holds: 8,
+                hands: 6,
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn timing_holds_reset_for_decreasing_beats() {
+        let rows = [*b"2000", *b"4000", *b"3000", *b"3110", *b"0110"];
+        assert_eq!(
+            compute_timing_aware_stats_from_rows_with_row_to_beat(
+                &rows,
+                &timing(Some("1=1")),
+                &[5.0, 1.0, 4.0, 2.0, 3.0],
+            ),
+            ArrowStats {
+                total_arrows: 5,
+                left: 1,
+                down: 2,
+                up: 2,
+                total_steps: 3,
+                jumps: 2,
+                hands: 1,
+                holds: 1,
+                fakes: 1,
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn timing_raw_keeps_measure_beats_and_terminator() {
+        let data =
+            b",\n0000\n0000\n0000\n0000\n,\n//comment\n 1000\r\n0000\r\n0100\r\n0000\r\n;\n0010";
+        assert_eq!(
+            compute_timing_aware_stats(data, 4, &timing(Some("8=1"))),
+            ArrowStats {
+                total_arrows: 1,
+                down: 1,
+                total_steps: 1,
+                fakes: 1,
+                ..Default::default()
+            }
+        );
+        for (lanes, data, expected) in [
+            (
+                5,
+                &b"20000\n30001\n"[..],
+                ArrowStats {
+                    total_arrows: 2,
+                    left: 2,
+                    total_steps: 2,
+                    holds: 1,
+                    ..Default::default()
+                },
+            ),
+            (
+                10,
+                &b"2000000000\n3000000001\n"[..],
+                ArrowStats {
+                    total_arrows: 2,
+                    left: 1,
+                    down: 1,
+                    total_steps: 2,
+                    holds: 1,
+                    ..Default::default()
+                },
+            ),
+        ] {
+            assert_eq!(
+                compute_timing_aware_stats(data, lanes, &timing(None)),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn timing_text_keeps_row_filtering() {
+        let data = b"\r\n,\r\n2000000000extra\r\nx\r\n3000000001\r\n;\r\n0000100000";
+        assert_eq!(
+            compute_timing_aware_stats_with_row_to_beat(data, 10, &timing(None), &[],),
+            ArrowStats {
+                total_arrows: 3,
+                left: 2,
+                down: 1,
+                total_steps: 3,
+                holds: 1,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            compute_timing_aware_stats_with_row_to_beat(
+                b"\r\n,\n;\nx",
+                8,
+                &timing(Some("0=4")),
+                &[],
+            ),
+            ArrowStats::default()
+        );
+    }
+
+    #[test]
+    fn timing_taps_keep_all_masks() {
+        for (lanes, expected) in [
+            (
+                4,
+                ArrowStats {
+                    total_arrows: 32,
+                    left: 8,
+                    down: 8,
+                    up: 8,
+                    right: 8,
+                    total_steps: 15,
+                    jumps: 11,
+                    hands: 5,
+                    ..Default::default()
+                },
+            ),
+            (
+                8,
+                ArrowStats {
+                    total_arrows: 1024,
+                    left: 256,
+                    down: 256,
+                    up: 256,
+                    right: 256,
+                    total_steps: 255,
+                    jumps: 247,
+                    hands: 219,
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let mut data = Vec::new();
+            for mask in 0..(1u16 << lanes) {
+                for column in 0..lanes {
+                    data.push(if mask & (1 << column) == 0 {
+                        b'0'
+                    } else {
+                        b'1'
+                    });
+                }
+                data.push(b'\n');
+            }
+            let timing = timing(None);
+            assert_eq!(
+                compute_timing_aware_stats_with_row_to_beat(&data, lanes, &timing, &[]),
+                expected
+            );
+            assert_eq!(compute_no_hold_stats(&data, lanes, &timing, &[]), expected);
+            if lanes == 8 {
+                let rows = parse_minimized_rows::<8>(&data);
+                assert_eq!(
+                    compute_timing_aware_stats_no_holds_from_rows(&rows, &timing, &[]),
+                    expected
+                );
+            } else {
+                let rows = parse_minimized_rows::<4>(&data);
+                assert_eq!(
+                    compute_timing_aware_stats_no_holds_from_rows(&rows, &timing, &[]),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_hold_text_keeps_special_cells_and_fakes() {
+        let data = b"\r\n,\r\nL000000000extra\r\nx\r\nm000000001\r\n;\r\n0000f00000";
+        for (fakes, expected) in [
+            (
+                None,
+                ArrowStats {
+                    total_arrows: 2,
+                    left: 1,
+                    down: 1,
+                    total_steps: 2,
+                    mines: 1,
+                    fakes: 1,
+                    lifts: 1,
+                    ..Default::default()
+                },
+            ),
+            (
+                Some("1=1"),
+                ArrowStats {
+                    total_arrows: 1,
+                    left: 1,
+                    total_steps: 1,
+                    fakes: 3,
+                    lifts: 1,
+                    ..Default::default()
+                },
+            ),
+        ] {
+            assert_eq!(
+                compute_no_hold_stats(data, 10, &timing(fakes), &[0.0, 1.0, 2.0]),
+                expected
+            );
+        }
+        assert_eq!(
+            compute_no_hold_stats(
+                b"2000\nM000\n3000",
+                4,
+                &timing(Some("0=4")),
+                &[0.0, 1.0, 2.0]
+            ),
+            ArrowStats {
+                fakes: 1,
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn timing_holds_support_mask_limit_and_wide_rows() {
+        let timing = timing(Some("10=1"));
+        assert_eq!(
+            compute_timing_aware_stats_from_rows_with_row_to_beat(
+                &[[b'2'; 16], [b'3'; 16], [b'1'; 16]],
+                &timing,
+                &[0.0, 1.0, 2.0],
+            ),
+            ArrowStats {
+                total_arrows: 32,
+                left: 8,
+                down: 8,
+                up: 8,
+                right: 8,
+                total_steps: 2,
+                jumps: 2,
+                hands: 2,
+                holds: 16,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            compute_timing_aware_stats_from_rows_with_row_to_beat(
+                &[[b'2'; 17], [b'3'; 17], [b'1'; 17]],
+                &timing,
+                &[0.0, 1.0, 2.0],
+            ),
+            ArrowStats {
+                total_arrows: 34,
+                left: 10,
+                down: 8,
+                up: 8,
+                right: 8,
+                total_steps: 2,
+                jumps: 2,
+                hands: 2,
+                holds: 17,
+                ..Default::default()
+            }
+        );
     }
 }

@@ -151,6 +151,168 @@ fn row_cases<const L: usize>(iters: usize) {
     }
 }
 
+fn encode_rows<const L: usize>(rows: &[[u8; L]], measure_rows: usize) -> Vec<u8> {
+    let mut text = Vec::with_capacity(rows.len() * (L + 1) + 2 * rows.len().div_ceil(measure_rows));
+    for chunk in rows.chunks(measure_rows) {
+        for row in chunk {
+            text.extend_from_slice(row);
+            text.push(b'\n');
+        }
+        text.extend_from_slice(b",\n");
+    }
+    text
+}
+
+fn timing_cases<const L: usize>(iters: usize) {
+    let plain = timing_data("");
+    let fake = timing_data("8=4,32=8,128=16,512=32");
+    for (name, holds) in [("taps", false), ("holds", true), ("phantom", true)] {
+        let rows: Vec<_> = (0..4096)
+            .map(|index| {
+                let mut row = [b'0'; L];
+                row[1 + index % (L - 1)] = if index % 31 == 0 { b'L' } else { b'1' };
+                if holds {
+                    row[0] = match index % 16 {
+                        0 => b'2',
+                        2 => b'4',
+                        6 if name == "phantom" => b'M',
+                        7 | 15 => b'3',
+                        _ => b'0',
+                    };
+                }
+                row
+            })
+            .collect();
+        let beats: Vec<_> = (0..4096).map(|index| index as f32 / 4.0).collect();
+        let text = encode_rows(&rows, 16);
+        for (tag, timing) in [("plain", &plain), ("fake", &fake)] {
+            measure(
+                &format!("timing{L}/{name}_{tag}_rows"),
+                rows.len(),
+                iters,
+                || {
+                    black_box(
+                        rssp::stats::compute_timing_aware_stats_from_rows_with_row_to_beat(
+                            black_box(&rows),
+                            black_box(timing),
+                            black_box(&beats),
+                        ),
+                    );
+                },
+            );
+            measure(
+                &format!("timing{L}/{name}_{tag}_text"),
+                rows.len(),
+                iters,
+                || {
+                    black_box(rssp::stats::compute_timing_aware_stats_with_row_to_beat(
+                        black_box(&text),
+                        L,
+                        black_box(timing),
+                        black_box(&beats),
+                    ));
+                },
+            );
+            if !holds {
+                measure(
+                    &format!("timing{L}/{name}_{tag}_no_hold_text"),
+                    rows.len(),
+                    iters,
+                    || {
+                        black_box(rssp::stats::compute_no_hold_stats(
+                            black_box(&text),
+                            L,
+                            black_box(timing),
+                            black_box(&beats),
+                        ));
+                    },
+                );
+                measure(
+                    &format!("timing{L}/{name}_{tag}_no_holds"),
+                    rows.len(),
+                    iters,
+                    || {
+                        black_box(rssp::stats::compute_timing_aware_stats_no_holds_from_rows(
+                            black_box(&rows),
+                            black_box(timing),
+                            black_box(&beats),
+                        ));
+                    },
+                );
+            }
+        }
+        measure(&format!("timing{L}/{name}_raw"), rows.len(), iters, || {
+            black_box(rssp::stats::compute_timing_aware_stats(
+                black_box(&text),
+                L,
+                black_box(&fake),
+            ));
+        });
+        let dense = encode_rows(&rows, 256);
+        measure(
+            &format!("timing{L}/{name}_dense_raw"),
+            rows.len(),
+            iters,
+            || {
+                black_box(rssp::stats::compute_timing_aware_stats(
+                    black_box(&dense),
+                    L,
+                    black_box(&fake),
+                ));
+            },
+        );
+    }
+}
+
+fn timing_data(fakes: &str) -> rssp::timing::TimingData {
+    rssp::timing::timing_data_from_chart_data(
+        0.0,
+        0.0,
+        None,
+        "0=120",
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        Some(fakes),
+        "",
+        rssp::timing::TimingFormat::Ssc,
+        true,
+    )
+}
+
+fn fast_timing_case(iters: usize) {
+    let mut data = b"#VERSION:0.83;\n#TITLE:Fake intervals;\n#BPMS:0=120;\n#FAKES:8=4,32=8,128=16,512=32;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Challenge;\n#METER:10;\n#NOTES:\n".to_vec();
+    for idx in 0..4096 {
+        let mut row = [b'0'; 4];
+        row[idx % 4] = if idx % 31 == 0 { b'L' } else { b'1' };
+        data.extend_from_slice(&row);
+        data.push(b'\n');
+        if idx % 16 == 15 {
+            data.extend_from_slice(b",\n");
+        }
+    }
+    data.push(b';');
+    let opts = rssp::AnalysisOptions {
+        compute_tech_counts: false,
+        compute_pattern_counts: false,
+        ..Default::default()
+    };
+    let mut scratch = rssp::AnalysisScratch::default();
+    measure("analyze/fast_fake_lifts", 4096, iters, || {
+        black_box(
+            rssp::analyze_with_scratch(black_box(&data), "ssc", black_box(&opts), &mut scratch)
+                .expect("valid fixture"),
+        );
+    });
+}
+
 fn main() {
     cpu::pin();
     let iters = std::env::var("RSSP_HOT_ITERS")
@@ -159,6 +321,9 @@ fn main() {
         .unwrap_or(200);
     row_cases::<4>(iters);
     row_cases::<8>(iters);
+    timing_cases::<4>(iters);
+    timing_cases::<8>(iters);
+    fast_timing_case(iters);
     let densities: Vec<_> = (0..16384).map(|i| [0, 16, 20, 24, 32][i % 5]).collect();
     for (name, step) in [("long_segments", 2048.0), ("short_segments", 4.0)] {
         let bpms: Vec<_> = (0..32)

@@ -86,3 +86,103 @@ two lines were verified exactly:
 test result: FAILED. 30479 passed; 10 failed
 error: test failed, to rerun pass `-p rssp --test all_parity`
 ```
+
+# Performance measurements: 0.4.270
+
+Baseline: `2e02886`, version 0.4.269. This pass applies `M-HOTPATH`,
+`M-INITIAL-CAPACITY`, `M-MEM-REUSE`, and `M-THROUGHPUT` from
+`rust-performance.md` to timing statistics:
+
+1. Timing hold tracking stores a `u16` head mask, `u8` tail count, and judgability
+   flag in one four-byte record per row. This replaces per-lane `usize` tail
+   indices and a separate tail-count allocation. Tracking storage falls from
+   36 to 4 bytes per row for four lanes, and from 68 to 4 for eight lanes.
+   Layouts wider than 16 lanes retain the previous representation. Fake heads
+   never become active; tails remain active through their own row. Rare repair
+   of invalid holds is marked cold to keep it outside the ordinary state machine.
+2. `compute_no_hold_stats` visits borrowed rows from minimized text and counts
+   them directly. Analysis uses it when minimization has confirmed there are no
+   valid hold or roll heads. This avoids row materialization and hold tracking,
+   including on charts with fake intervals. Owned parsing and direct counting
+   share row validation through the same visitor.
+3. Raw timing minimization reduces each measure in the retained row buffer.
+   It removes the separate measure buffer, copying rows into the output, and
+   growth of that measure buffer on dense charts. The result still owns its
+   rows and beats at this parsing boundary.
+
+## Measurements
+
+Hardware, allocator, compiler, and affinity match the 0.4.269 report above.
+Both executables were built before measurement. Each result below is the median
+of three process pairs with alternating order, seven batches of 1,000 calls per
+process, and four warmup calls. Allocator counting runs separately. Inputs are
+identical, deterministic, and constructed outside measurement; fixture bytes
+were also checked against the baseline checkout. CPU cycles use Windows
+`QueryThreadCycleTime`; throughput uses elapsed time.
+
+| Case | CPU cycles, old -> new | Allocations / reallocations, old -> new | Requested bytes, old -> new | Throughput change |
+| --- | ---: | ---: | ---: | ---: |
+| Four lanes, holds with fake intervals, typed rows | 232,221 -> 233,549 | 2 / 0 -> 1 / 0 | 147,456 -> 16,384 | -0.8% |
+| Eight lanes, holds with fake intervals, typed rows | 299,795 -> 269,774 | 2 / 0 -> 1 / 0 | 278,528 -> 16,384 | +11.3% |
+| Four lanes, no holds, text with fake intervals | 281,121 -> 209,385 | 3 / 0 -> 0 / 0 | 164,248 -> 0 | +34.4% |
+| Eight lanes, no holds, text with fake intervals | 351,456 -> 228,440 | 3 / 0 -> 0 / 0 | 311,744 -> 0 | +55.0% |
+| Four lanes, dense raw holds | 396,710 -> 308,864 | 5 / 2 -> 3 / 0 | 182,064 -> 49,200 | +28.4% |
+| Eight lanes, dense raw holds | 478,786 -> 373,457 | 5 / 2 -> 3 / 0 | 331,300 -> 65,572 | +28.4% |
+| Four lanes, sparse raw taps | 299,127 -> 319,173 | 3 / 0 -> 2 / 0 | 33,840 -> 33,584 | -6.3% |
+| Complete fast analysis, fake intervals and lifts | 645,560 -> 603,234 | 34 / 0 -> 31 / 0 | 223,276 -> 59,028 | +6.9% |
+
+Timing cases contain 4,096 rows, with two nested heads and tails every 16 rows
+for hold cases. Phantom cases insert a blocker before the tails. Measures have
+16 rows normally and 256 in dense raw cases. Tap cases include periodic lifts.
+The composed case analyzes a complete SSC containing those taps and lifts,
+four fake intervals, and the regular analysis outputs, with technique and
+pattern counting disabled. Its requested bytes fall by 73.6%.
+
+For the `no_hold_text` comparison, the baseline calls the existing general
+text timing API used by its analysis caller; the optimized executable calls
+the new API used by its updated caller. Other benchmark calls are unchanged.
+Requested bytes measure allocation churn, including full requested resize
+sizes, rather than peak live memory or process RSS.
+
+CPU gains depend on the case. Four-lane hold tracking primarily benefits
+allocation count and memory. Small raw tap and general text cases have mixed
+timing medians; sample ranges overlap. For example, sparse raw four-lane taps
+range from 134.71 to 140.37 us before and 132.97 to 154.73 us after. General
+four-lane hold text has 9.3% lower median throughput with overlapping ranges, while
+the composed fast analysis improves by 6.9%. These results support the storage
+reductions and the targeted throughput gains without implying every small
+call is faster. The six existing direct minimization cases also retain their
+allocation counts and requested bytes; their throughput medians improve by
+0.7-5.7% in this comparison.
+
+## Reproduction and behavior
+
+```powershell
+$env:RSSP_HOT_ITERS = '1000'
+$env:RSSP_HOT_FILTER = 'timing' # Or 'fast_fake_lifts' or 'direct'.
+cargo bench -p rssp --bench hotpath_perf
+```
+
+For the baseline, use `2e02886`, copy the current benchmark and its fixtures
+byte-for-byte, and replace its single `rssp::stats::compute_no_hold_stats`
+benchmark call with `rssp::stats::compute_timing_aware_stats_with_row_to_beat`.
+Build both executables, then run three pairs in alternating order without
+concurrent compilation. The baseline already registers `hotpath_perf`.
+
+New tests assert explicit statistics for nested and fake heads, tail inclusion,
+blockers, the eight-head stack limit, decreasing beats, empty measures,
+comments, terminators, CRLF and short rows, every four/eight-lane tap mask,
+special cells, 16/17-lane layouts, and fast/full analysis across all four
+supported lane counts. Validation uses production functions directly.
+
+All 198 workspace library/binary unit tests pass in release mode. Strict Clippy
+passes for both libraries and `hotpath_perf`, and formatting/diff checks pass.
+After confirming the optimizations, the required command
+`cargo test --release --test all_parity -- --test-threads=22` exited with status
+101. The ten failure names match the 0.4.269 baseline exactly, and its final two
+lines were verified exactly before committing:
+
+```text
+test result: FAILED. 30479 passed; 10 failed
+error: test failed, to rerun pass `-p rssp --test all_parity`
+```

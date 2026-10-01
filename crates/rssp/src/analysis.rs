@@ -944,17 +944,24 @@ fn build_chart_summary<'a>(
     let reuse_base_stats =
         stats.holds == 0 && stats.rolls == 0 && stats.lifts == 0 && !has_nonjudgable_rows(timing);
     let has_hold_notes = stats.holds != 0 || stats.rolls != 0;
+    let text_stats = || {
+        if has_hold_notes {
+            compute_timing_aware_stats_with_row_to_beat(
+                &minimized_chart,
+                lanes,
+                timing,
+                &row_to_beat,
+            )
+        } else {
+            stats::compute_no_hold_stats(&minimized_chart, lanes, timing, &row_to_beat)
+        }
+    };
     let (tech_counts, mut timing_stats, note_annotations) = match lanes {
         4 => {
             let timing_stats = if reuse_base_stats {
                 std::mem::take(&mut stats)
             } else if !rows_collected {
-                compute_timing_aware_stats_with_row_to_beat(
-                    &minimized_chart,
-                    lanes,
-                    timing,
-                    &row_to_beat,
-                )
+                text_stats()
             } else if stats.holds == 0 && stats.rolls == 0 {
                 compute_timing_aware_stats_no_holds_from_rows::<4>(rows4, timing, &row_to_beat)
             } else {
@@ -978,12 +985,7 @@ fn build_chart_summary<'a>(
             let timing_stats = if reuse_base_stats {
                 std::mem::take(&mut stats)
             } else if !rows_collected {
-                compute_timing_aware_stats_with_row_to_beat(
-                    &minimized_chart,
-                    lanes,
-                    timing,
-                    &row_to_beat,
-                )
+                text_stats()
             } else if stats.holds == 0 && stats.rolls == 0 {
                 compute_timing_aware_stats_no_holds_from_rows::<8>(rows8, timing, &row_to_beat)
             } else {
@@ -1008,12 +1010,7 @@ fn build_chart_summary<'a>(
             let timing_stats = if reuse_base_stats {
                 std::mem::take(&mut stats)
             } else {
-                compute_timing_aware_stats_with_row_to_beat(
-                    &minimized_chart,
-                    lanes,
-                    timing,
-                    &row_to_beat,
-                )
+                text_stats()
             };
             let note_annotations = options.compute_note_annotations.then(Vec::new);
             (tech_counts, timing_stats, note_annotations)
@@ -1900,6 +1897,39 @@ mod tests {
             .expect("chart BPM fixture should contain a chart")
             .chart_bpms_norm = None;
         assert_eq!(json(&summary), json(&without_cache));
+    }
+
+    #[test]
+    fn fast_timing_stats_keep_fakes_and_phantom_heads() {
+        const CHARTS: &[u8] = concat!(
+            "#VERSION:0.83;\n#BPMS:0=120;\n#FAKES:1=1;\n",
+            "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Challenge;\n#METER:1;\n#NOTES:\n1L00\nM001\n2000\n1000\n;\n",
+            "#NOTEDATA:;\n#STEPSTYPE:dance-double;\n#DIFFICULTY:Challenge;\n#METER:1;\n#NOTES:\n1L000000\nM0010000\n20000000\n10000000\n;\n",
+            "#NOTEDATA:;\n#STEPSTYPE:pump-single;\n#DIFFICULTY:Challenge;\n#METER:1;\n#NOTES:\n1L000\nM0010\n20000\n10000\n;\n",
+            "#NOTEDATA:;\n#STEPSTYPE:pump-double;\n#DIFFICULTY:Challenge;\n#METER:1;\n#NOTES:\n1L00000000\nM001000000\n2000000000\n1000000000\n;\n",
+        ).as_bytes();
+        let fast = AnalysisOptions {
+            compute_tech_counts: false,
+            compute_pattern_counts: false,
+            ..Default::default()
+        };
+        let expected = crate::stats::ArrowStats {
+            total_arrows: 3,
+            left: 2,
+            down: 1,
+            total_steps: 2,
+            jumps: 1,
+            fakes: 2,
+            lifts: 1,
+            ..Default::default()
+        };
+        for options in [&fast, &AnalysisOptions::default()] {
+            let summary = analyze(CHARTS, "ssc", options).expect("valid timing fixture");
+            assert_eq!(summary.charts.len(), 4);
+            for chart in summary.charts {
+                assert_eq!(chart.stats, expected);
+            }
+        }
     }
 
     #[test]
