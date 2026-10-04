@@ -1828,9 +1828,12 @@ fn write_other_patterns<W: Write>(writer: &mut W, chart: &ChartSummary) -> io::R
 
     Ok(())
 }
-fn write_indent<W: Write>(writer: &mut W, indent: usize) -> io::Result<()> {
-    for _ in 0..indent {
-        writer.write_all(b" ")?;
+fn write_indent<W: Write>(writer: &mut W, mut indent: usize) -> io::Result<()> {
+    const SPACES: [u8; 64] = [b' '; 64];
+    while indent != 0 {
+        let len = indent.min(SPACES.len());
+        writer.write_all(&SPACES[..len])?;
+        indent -= len;
     }
     Ok(())
 }
@@ -1984,26 +1987,37 @@ impl<'a, W: Write> JsonObjectWriter<'a, W> {
         })
     }
 
-    fn field_with(
-        &mut self,
-        key: &str,
-        write_value: impl FnOnce(&mut W, usize) -> io::Result<()>,
-    ) -> io::Result<()> {
+    fn begin_field(&mut self) -> io::Result<usize> {
         if !self.first {
             self.writer.write_all(b",\n")?;
         }
         self.first = false;
         let value_indent = self.indent + 2;
         write_indent(self.writer, value_indent)?;
-        write_json_string(self.writer, key)?;
-        self.writer.write_all(b": ")?;
+        Ok(value_indent)
+    }
+
+    fn field_with(
+        &mut self,
+        key: &'static str,
+        write_value: impl FnOnce(&mut W, usize) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let value_indent = self.begin_field()?;
+        // Schema keys are fixed ASCII identifiers; custom names use escaping below.
+        self.writer.write_all(b"\"")?;
+        self.writer.write_all(key.as_bytes())?;
+        self.writer.write_all(b"\": ")?;
         write_value(self.writer, value_indent)
     }
-    fn field_string(&mut self, key: &str, value: &str) -> io::Result<()> {
+    fn field_string(&mut self, key: &'static str, value: &str) -> io::Result<()> {
         self.field_with(key, |writer, _| write_json_string(writer, value))
     }
 
-    fn field_display_string(&mut self, key: &str, value: impl std::fmt::Display) -> io::Result<()> {
+    fn field_display_string(
+        &mut self,
+        key: &'static str,
+        value: impl std::fmt::Display,
+    ) -> io::Result<()> {
         self.field_with(key, |writer, _| {
             writer.write_all(b"\"")?;
             write!(writer, "{value}")?;
@@ -2011,7 +2025,7 @@ impl<'a, W: Write> JsonObjectWriter<'a, W> {
         })
     }
 
-    fn field_f64(&mut self, key: &str, value: f64) -> io::Result<()> {
+    fn field_f64(&mut self, key: &'static str, value: f64) -> io::Result<()> {
         self.field_with(key, |writer, _| {
             let Some(number) = JsonNumber::from_f64(value) else {
                 return writer.write_all(b"null");
@@ -2020,11 +2034,11 @@ impl<'a, W: Write> JsonObjectWriter<'a, W> {
         })
     }
 
-    fn field_u32(&mut self, key: &str, value: u32) -> io::Result<()> {
+    fn field_u32(&mut self, key: &'static str, value: u32) -> io::Result<()> {
         self.field_with(key, |writer, _| write_json_raw_u32(writer, value))
     }
 
-    fn field_bool(&mut self, key: &str, value: bool) -> io::Result<()> {
+    fn field_bool(&mut self, key: &'static str, value: bool) -> io::Result<()> {
         self.field_with(key, |writer, _| {
             writer.write_all(if value { b"true" } else { b"false" })
         })
@@ -2042,7 +2056,7 @@ impl<'a, W: Write> JsonObjectWriter<'a, W> {
 fn write_json_u32_object<W: Write>(
     writer: &mut W,
     indent: usize,
-    fields: &[(&str, u32)],
+    fields: &[(&'static str, u32)],
 ) -> io::Result<()> {
     let mut object = JsonObjectWriter::new(writer, indent)?;
     for &(key, value) in fields {
@@ -2843,12 +2857,12 @@ fn write_json_pattern_counts<W: Write>(
     })?;
 
     {
-        let mut write_quad = |key: &str,
-                              total_key: &str,
-                              left_key: &str,
-                              right_key: &str,
-                              left_inv_key: &str,
-                              right_inv_key: &str,
+        let mut write_quad = |key: &'static str,
+                              total_key: &'static str,
+                              left_key: &'static str,
+                              right_key: &'static str,
+                              left_inv_key: &'static str,
+                              right_inv_key: &'static str,
                               values: SimpleQuadParts|
          -> io::Result<()> {
             object.field_with(key, |writer, indent| {
@@ -2964,7 +2978,10 @@ fn write_json_pattern_counts<W: Write>(
             // Analysis deduplicates names and retains their stable input order,
             // matching serde_json's preserve_order map without rebuilding it.
             for pattern in &chart.custom_patterns {
-                custom.field_u32(&pattern.pattern, pattern.count)?;
+                custom.begin_field()?;
+                write_json_string(custom.writer, &pattern.pattern)?;
+                custom.writer.write_all(b": ")?;
+                write_json_raw_u32(custom.writer, pattern.count)?;
             }
             custom.finish()
         })?;
@@ -3140,18 +3157,19 @@ impl<'a, W: Write> CsvRow<'a, W> {
 
 fn push_str<W: Write>(out: &mut CsvRow<'_, W>, value: &str) {
     out.write_field(|writer| {
-        if !value.contains(['"', ',']) {
-            return writer.write_all(value.as_bytes());
-        }
-
+        let bytes = value.as_bytes();
+        let Some(first) = memchr::memchr2(b'"', b',', bytes) else {
+            return writer.write_all(bytes);
+        };
         writer.write_all(b"\"")?;
-        let mut rest = value;
-        while let Some(quote) = rest.find('"') {
-            writer.write_all(&rest.as_bytes()[..quote])?;
+        writer.write_all(&bytes[..first])?;
+        let mut rest = &bytes[first..];
+        while let Some(quote) = memchr::memchr(b'"', rest) {
+            writer.write_all(&rest[..quote])?;
             writer.write_all(b"\"\"")?;
             rest = &rest[quote + 1..];
         }
-        writer.write_all(rest.as_bytes())?;
+        writer.write_all(rest)?;
         writer.write_all(b"\"")
     });
 }
@@ -3544,8 +3562,187 @@ fn write_csv_row<W: Write>(
 }
 
 #[cfg(test)]
+#[path = "../benches/support/report_perf.rs"]
+mod perf;
+
+#[cfg(test)]
 mod tests {
+    use std::io::{self, Write};
+
     use super::{timing_fixed_6, write_json_native_bpms};
+
+    #[test]
+    fn json_string_bytes() {
+        let controls: String = (0..32).map(char::from).collect();
+        for value in [
+            "",
+            "plain",
+            "日本語 é \u{7f}",
+            "\"\\\n\r\t\u{8}\u{c}",
+            "long clean prefix ends with \"",
+            controls.as_str(),
+        ] {
+            let mut actual = Vec::new();
+            super::write_json_string(&mut actual, value).expect("Vec write");
+            assert_eq!(actual, serde_json::to_vec(value).expect("string JSON"));
+        }
+    }
+
+    #[test]
+    fn csv_string_bytes() {
+        for (value, expected) in [
+            ("", "\n"),
+            ("plain", "plain\n"),
+            ("日本語 é", "日本語 é\n"),
+            ("line\nbreak\r", "line\nbreak\r\n"),
+            ("a,b", "\"a,b\"\n"),
+            ("a\"b", "\"a\"\"b\"\n"),
+            ("a,b\"c", "\"a,b\"\"c\"\n"),
+            ("\"a,b\"", "\"\"\"a,b\"\"\"\n"),
+        ] {
+            let mut actual = Vec::new();
+            let mut row = super::CsvRow::new(&mut actual);
+            super::push_str(&mut row, value);
+            row.finish().expect("Vec write");
+            assert_eq!(actual, expected.as_bytes());
+        }
+    }
+
+    #[test]
+    fn indent_bytes() {
+        for indent in [0, 1, 2, 8, 16, 63, 64, 65, 129] {
+            let mut actual = b"prefix".to_vec();
+            super::write_indent(&mut actual, indent).expect("Vec write");
+            assert_eq!(&actual[..6], b"prefix");
+            assert_eq!(&actual[6..], vec![b' '; indent]);
+        }
+    }
+
+    struct PartialWriter {
+        bytes: Vec<u8>,
+        limit: usize,
+        failures: usize,
+    }
+
+    impl Write for PartialWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.bytes.len() == self.limit {
+                self.failures += 1;
+                return Err(io::ErrorKind::BrokenPipe.into());
+            }
+            let len = bytes.len().min(3).min(self.limit - self.bytes.len());
+            self.bytes.extend_from_slice(&bytes[..len]);
+            Ok(len)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn json_partial_errors() {
+        let value = "é prefix \" slash \\ \n \u{1} end";
+        let expected = serde_json::to_vec(value).expect("string JSON");
+        for limit in 0..=expected.len() {
+            let mut writer = PartialWriter {
+                bytes: Vec::new(),
+                limit,
+                failures: 0,
+            };
+            let result = super::write_json_string(&mut writer, value);
+            assert_eq!(writer.bytes, expected[..limit]);
+            assert_eq!(result.is_ok(), limit == expected.len());
+            if let Err(error) = result {
+                assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+                assert_eq!(writer.failures, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn csv_partial_errors() {
+        let expected = b"\"a,b\"\"c\",tail\n";
+        for limit in 0..=expected.len() {
+            let mut writer = PartialWriter {
+                bytes: Vec::new(),
+                limit,
+                failures: 0,
+            };
+            let mut row = super::CsvRow::new(&mut writer);
+            super::push_str(&mut row, "a,b\"c");
+            super::push_str(&mut row, "tail");
+            let result = row.finish();
+            assert_eq!(writer.bytes, expected[..limit]);
+            assert_eq!(result.is_ok(), limit == expected.len());
+            if let Err(error) = result {
+                assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+                assert_eq!(writer.failures, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn indent_partial_errors() {
+        for indent in [0, 8, 64, 65, 129] {
+            for limit in 0..=indent {
+                let mut writer = PartialWriter {
+                    bytes: Vec::new(),
+                    limit,
+                    failures: 0,
+                };
+                let result = super::write_indent(&mut writer, indent);
+                assert_eq!(writer.bytes, vec![b' '; limit]);
+                assert_eq!(result.is_ok(), limit == indent);
+                if let Err(error) = result {
+                    assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+                    assert_eq!(writer.failures, 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn schema_partial_errors() {
+        let expected = b"{\n  \"title\": \"a\\\"b\",\n  \"count\": 7\n}";
+        for limit in 0..=expected.len() {
+            let mut writer = PartialWriter {
+                bytes: Vec::new(),
+                limit,
+                failures: 0,
+            };
+            let result = super::JsonObjectWriter::new(&mut writer, 0).and_then(|mut object| {
+                object.field_string("title", "a\"b")?;
+                object.field_u32("count", 7)?;
+                object.finish()
+            });
+            assert_eq!(writer.bytes, expected[..limit]);
+            assert_eq!(result.is_ok(), limit == expected.len());
+            if let Err(error) = result {
+                assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+                assert_eq!(writer.failures, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn custom_key_bytes() {
+        let mut summary = crate::analyze(
+            b"#BPMS:0=120;#NOTES:dance-single::Hard:1::1000;",
+            "sm",
+            &crate::AnalysisOptions::default(),
+        )
+        .expect("valid minimal chart");
+        let name = "é \" \\ \n \u{1}";
+        summary.charts[0].custom_patterns = vec![crate::patterns::CustomPatternSummary {
+            pattern: name.to_owned(),
+            count: 7,
+        }];
+        let mut output = Vec::new();
+        super::write_json_pattern_counts(&mut output, &summary.charts[0], 0).expect("Vec write");
+        let parsed: serde_json::Value = serde_json::from_slice(&output).expect("valid JSON");
+        assert_eq!(parsed["custom_patterns"][name], 7);
+    }
 
     #[test]
     fn timing_order_and_merges() {

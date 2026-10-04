@@ -1448,3 +1448,201 @@ $bench = Get-ChildItem target/release/deps/hotpath_perf-*.exe | Sort-Object Last
 ```
 
 `RSSP_HOT_VERIFY=1` emits the deterministic component and corpus transcript.
+
+# Performance pass 0.4.279
+
+Baseline: `983d6a3` (0.4.278), compiled at version 0.4.279 with the same
+benchmark harness as the optimized code. The patch version advances exactly
+once. No public API or allocation is added. `rust-performance.md` was
+reviewed and remains outside the commit,
+along with `optimize.sh` and `optimize.ps1`.
+
+## Changes
+
+1. **Batch JSON indentation.** Replace one `write_all` per space with slices
+   of a constant 64-byte block. Normal report indentation takes one write;
+   larger widths use bounded chunks, retaining arbitrary-width behavior.
+   Empty indentation does no work.
+2. **Write fixed JSON keys directly.** Schema keys are static ASCII
+   identifiers, so omit their escape scan and combine the closing quote
+   with `: ` in one write. Private field APIs require static keys. The
+   existing separator/indent state transition is shared with custom names,
+   which still use the original JSON escaping function. Value escaping and
+   all numeric formatting remain unchanged.
+3. **Scan CSV bytes directly.** Replace generic character searches with the
+   existing dependency's `memchr2`/`memchr`. Retain the first quote/comma
+   position, write the known clean prefix once, and search only the suffix
+   for quotes to double. Commas, doubled quotes, Unicode and the existing
+   newline handling are preserved. No temporary strings are created.
+
+JSON value-scanner trials were discarded after clean-string and small-report
+slowdowns. The original `write_json_string` implementation is unchanged.
+
+## Measurements
+
+Rust 1.98.1 / LLVM 22.1.8, Windows, Xeon E5-2696 v4, 44 logical CPUs.
+Both builds use release fat LTO and one codegen unit. Each result is the
+median of three alternating old/new process pairs, with seven timed batches
+per process. Each benchmark process is pinned to CPU 2.
+
+Private production functions and JSON field operations are called directly by the explicitly ignored
+`report_hotpath` unit benchmark: a reused 8 KB `BufWriter<Vec<u8>>`, a
+pre-sized backing vector, and a flush per invocation. Use 200,000 iterations
+for object fields/indentation/16-byte fields and 4,000 for 4 KB fields. These leaf results
+measure wall-clock throughput, including flush/clear overhead; they do not
+claim CPU-cycle or peak-memory measurements.
+
+The public `write_reports` benchmarks reuse a pre-sized output vector and
+exclude fixture parsing from measurement. Use 200 iterations per batch;
+unchanged analysis controls use 30 (Camellia internally uses three).
+`QueryThreadCycleTime` supplies CPU cycles. Allocations are counted in a
+separate invocation. Requested bytes include reallocations and mean churn,
+not resident memory.
+
+- Eight-space indentation: 1.44x throughput;
+  64 spaces: 6.67x.
+- Fixed-key string field `sn_detailed_breakdown`:
+  1.39x throughput;
+  the corresponding numeric field:
+  1.79x.
+- A 4 KB CSV field with a late quote: 14.33x;
+  the complete CSV report: 4.11x.
+- Dense 4 KB escaping: unchanged JSON string control +3.3%,
+  complete JSON -2.5%; CSV leaf
+  +77.6%, complete CSV
+  -2.6%.
+- Camellia reports: JSON +12.6%, CSV
+  +42.3%. Allocation counts and bytes are unchanged
+  in every report and analysis case. This pass improves CPU/throughput,
+  not allocation churn.
+
+All cases, including short fields, clean strings and unchanged controls,
+are shown below. Small timing differences do not establish a universal
+speedup or their cause.
+
+| Direct production function / input | ns old -> new | Throughput |
+|---|---:|---:|
+| `report_leaf/object/title_false` | 44 -> 35 | +25.7% |
+| `report_leaf/object/title_true` | 39 -> 35 | +11.4% |
+| `report_leaf/object/sn_detailed_breakdown_false` | 61 -> 44 | +38.6% |
+| `report_leaf/object/sn_detailed_breakdown_true` | 52 -> 29 | +79.3% |
+| `report_leaf/object/equally_spaced_per_measure_false` | 68 -> 36 | +88.9% |
+| `report_leaf/object/equally_spaced_per_measure_true` | 57 -> 31 | +83.9% |
+| `report_leaf/indent/0` | 1 -> 1 | +0.0% |
+| `report_leaf/indent/2` | 14 -> 16 | -12.5% |
+| `report_leaf/indent/8` | 23 -> 16 | +43.8% |
+| `report_leaf/indent/16` | 42 -> 14 | +200.0% |
+| `report_leaf/indent/64` | 160 -> 24 | +566.7% |
+| `report_leaf/indent/129` | 318 -> 34 | +835.3% |
+| `report_leaf/json/16_clean` | 31 -> 31 | +0.0% |
+| `report_leaf/json/16_early` | 40 -> 39 | +2.6% |
+| `report_leaf/json/16_late` | 61 -> 54 | +13.0% |
+| `report_leaf/json/16_dense` | 86 -> 81 | +6.2% |
+| `report_leaf/json/16_comma` | 33 -> 32 | +3.1% |
+| `report_leaf/json/16_comma_quote` | 60 -> 54 | +11.1% |
+| `report_leaf/json/4096_clean` | 3,711 -> 3,634 | +2.1% |
+| `report_leaf/json/4096_early` | 4,620 -> 4,698 | -1.7% |
+| `report_leaf/json/4096_late` | 8,132 -> 8,021 | +1.4% |
+| `report_leaf/json/4096_dense` | 18,078 -> 17,495 | +3.3% |
+| `report_leaf/json/4096_comma` | 3,640 -> 3,629 | +0.3% |
+| `report_leaf/json/4096_comma_quote` | 8,098 -> 8,184 | -1.1% |
+| `report_leaf/csv/16_clean` | 39 -> 26 | +50.0% |
+| `report_leaf/csv/16_early` | 57 -> 49 | +16.3% |
+| `report_leaf/csv/16_late` | 69 -> 43 | +60.5% |
+| `report_leaf/csv/16_dense` | 117 -> 87 | +34.5% |
+| `report_leaf/csv/16_comma` | 47 -> 34 | +38.2% |
+| `report_leaf/csv/16_comma_quote` | 63 -> 46 | +37.0% |
+| `report_leaf/csv/4096_clean` | 3,180 -> 241 | +1219.5% |
+| `report_leaf/csv/4096_early` | 581 -> 229 | +153.7% |
+| `report_leaf/csv/4096_late` | 3,611 -> 252 | +1332.9% |
+| `report_leaf/csv/4096_dense` | 21,087 -> 11,873 | +77.6% |
+| `report_leaf/csv/4096_comma` | 3,590 -> 243 | +1377.4% |
+| `report_leaf/csv/4096_comma_quote` | 2,080 -> 232 | +796.6% |
+
+| Complete path / input | Cycles old -> new | Throughput | Allocs old -> new | Requested bytes old -> new |
+|---|---:|---:|---:|---:|
+| `report/json/16_clean` | 104,313 -> 85,783 | +21.7% | 18 -> 18 | 318 -> 318 |
+| `report/csv/16_clean` | 35,010 -> 33,010 | +6.0% | 0 -> 0 | 0 -> 0 |
+| `report/json/16_early` | 113,733 -> 87,804 | +29.6% | 18 -> 18 | 318 -> 318 |
+| `report/csv/16_early` | 37,194 -> 33,964 | +9.5% | 0 -> 0 | 0 -> 0 |
+| `report/json/16_late` | 119,850 -> 85,045 | +41.4% | 18 -> 18 | 318 -> 318 |
+| `report/csv/16_late` | 36,424 -> 34,196 | +6.5% | 0 -> 0 | 0 -> 0 |
+| `report/json/16_dense` | 106,776 -> 85,605 | +24.9% | 18 -> 18 | 318 -> 318 |
+| `report/csv/16_dense` | 36,356 -> 35,239 | +3.0% | 0 -> 0 | 0 -> 0 |
+| `report/json/16_comma` | 106,105 -> 84,718 | +25.2% | 18 -> 18 | 318 -> 318 |
+| `report/csv/16_comma` | 39,480 -> 34,044 | +16.4% | 0 -> 0 | 0 -> 0 |
+| `report/json/16_comma_quote` | 112,546 -> 86,381 | +30.7% | 18 -> 18 | 318 -> 318 |
+| `report/csv/16_comma_quote` | 34,027 -> 34,020 | +0.2% | 0 -> 0 | 0 -> 0 |
+| `report/json/16_custom` | 105,663 -> 86,298 | +22.5% | 18 -> 18 | 318 -> 318 |
+| `report/csv/16_custom` | 37,315 -> 33,539 | +11.2% | 0 -> 0 | 0 -> 0 |
+| `report/json/4096_clean` | 158,146 -> 127,562 | +23.8% | 18 -> 18 | 318 -> 318 |
+| `report/csv/4096_clean` | 159,461 -> 42,980 | +271.3% | 0 -> 0 | 0 -> 0 |
+| `report/json/4096_early` | 169,308 -> 148,978 | +13.7% | 18 -> 18 | 318 -> 318 |
+| `report/csv/4096_early` | 55,977 -> 41,745 | +33.8% | 0 -> 0 | 0 -> 0 |
+| `report/json/4096_late` | 213,271 -> 185,575 | +15.1% | 18 -> 18 | 318 -> 318 |
+| `report/csv/4096_late` | 178,225 -> 43,315 | +311.0% | 0 -> 0 | 0 -> 0 |
+| `report/json/4096_dense` | 324,994 -> 333,031 | -2.5% | 18 -> 18 | 318 -> 318 |
+| `report/csv/4096_dense` | 490,770 -> 503,020 | -2.6% | 0 -> 0 | 0 -> 0 |
+| `report/json/4096_comma` | 147,497 -> 129,223 | +14.1% | 18 -> 18 | 318 -> 318 |
+| `report/csv/4096_comma` | 174,064 -> 43,170 | +303.4% | 0 -> 0 | 0 -> 0 |
+| `report/json/4096_comma_quote` | 226,269 -> 188,114 | +20.3% | 18 -> 18 | 318 -> 318 |
+| `report/csv/4096_comma_quote` | 125,209 -> 42,713 | +193.5% | 0 -> 0 | 0 -> 0 |
+| `report/json/4096_custom` | 152,411 -> 128,829 | +18.4% | 18 -> 18 | 318 -> 318 |
+| `report/csv/4096_custom` | 157,836 -> 43,965 | +259.3% | 0 -> 0 | 0 -> 0 |
+| `report/json/camellia` | 22,878,245 -> 20,515,615 | +12.6% | 30 -> 30 | 850 -> 850 |
+| `report/csv/camellia` | 91,310 -> 64,151 | +42.3% | 0 -> 0 | 0 -> 0 |
+| `analyze/fast_fake_lifts` | 633,799 -> 651,286 | -2.7% | 31 -> 31 | 59,028 -> 59,028 |
+| `analyze/camellia` | 441,425,257 -> 437,701,070 | +0.9% | 110 -> 110 | 5,263,624 -> 5,263,624 |
+| `analyze/fast_camellia` | 60,577,463 -> 56,765,334 | +6.7% | 115 -> 115 | 7,051,152 -> 7,051,152 |
+| `analyze/mixed_small` | 51,041 -> 48,700 | +5.2% | 59 -> 59 | 7,460 -> 7,460 |
+
+
+## Validation
+
+- Release unit tests: 206 passed, with the performance test intentionally
+  ignored by default. Focused optimization regression suite: 24 passed.
+  Eight new tests call the production writers and cover all JSON ASCII
+  controls, Unicode, early/late quotes, commas, quote doubling, existing
+  CSV newline behavior, indentation across chunk boundaries, short writes
+  and errors at every output byte. The first error and written prefix are
+  checked explicitly; CSV stops attempting writes after an error.
+  Fixed schema keys and dynamic custom names containing Unicode, quotes,
+  backslashes, newlines and other controls are checked separately.
+- Strict release Clippy across all workspace targets, formatting and diff
+  checks passed.
+- After confirming the final optimizations, the exact command
+  `cargo test --release --test all_parity -- --test-threads=22` passed
+  all 30,489 tests with zero failures before commit.
+- Original/final deterministic output is byte-identical across 30,843
+  corpus files, 56,125 supported charts and representative component
+  fixtures, including 354 matching malformed-file errors. New components
+  compare complete JSON and CSV bytes for clean, early/late/dense escaped
+  metadata, commas, comma-before-quote cases and dynamic custom keys at
+  16 and 4,096 bytes.
+  The corpus fields check densities, spacing, stream strings, normalized
+  maps, exact duration/peak bits and BPM snapshots; they do not serialize
+  reports for every corpus file. Full parity checks JSON analysis fields
+  against golden data. SHA-256 of 167,714,804
+  transcript bytes: `1c9330ce908bd078713e45d7fe8a36ea13cacdf703e0a311c38713ddfc9be488`.
+
+## Reproduction
+
+Build `983d6a3` with only version 0.4.279 and the final benchmark/test harness,
+save both executables, then build the final production code with that same
+version/harness. Alternate the saved executables three times.
+
+```powershell
+cargo test --release -p rssp --lib --no-run
+$env:RSSP_REPORT_FILTER = 'object/' # also indent/, json/16_, json/4096_, csv/16_, csv/4096_
+$env:RSSP_REPORT_ITERS = '200000' # 4000 for 4 KB fields
+cargo test --release -p rssp --lib report::perf::report_hotpath -- --ignored --nocapture --test-threads=1
+
+cargo bench -p rssp --bench hotpath_perf --no-run
+$env:RSSP_HOT_FILTER = 'report/' # or analyze/
+$env:RSSP_HOT_ITERS = '200' # 30 for analyze/
+$bench = Get-ChildItem target/release/deps/hotpath_perf-*.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+& $bench.FullName
+```
+
+Pin the leaf benchmark process to CPU 2 for the recorded configuration.
+`RSSP_HOT_VERIFY=1` emits the deterministic component/corpus transcript.

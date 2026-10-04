@@ -956,6 +956,7 @@ fn peak_work_cases(iters: usize) {
     reason = "emit an ordered component transcript for original/final byte comparison"
 )]
 fn verify_components() {
+    verify_reports();
     for input in [
         "",
         "0=120",
@@ -1108,6 +1109,7 @@ fn main() {
     tidy_bpm_cases(iters);
     hash_batch_cases(iters);
     credit_cases(iters);
+    report_cases(iters);
     let densities: Vec<_> = (0..16384).map(|i| [0, 16, 20, 24, 32][i % 5]).collect();
     for (name, step) in [("long_segments", 2048.0), ("short_segments", 4.0)] {
         let bpms: Vec<_> = (0..32)
@@ -1155,6 +1157,113 @@ fn main() {
                 .expect("valid fixture"),
         );
     });
+}
+
+fn report_fixture(kind: &str, length: usize) -> rssp::SimfileSummary {
+    let mut summary = rssp::analyze(
+        include_bytes!("fixtures/hash_fixture.ssc"),
+        "ssc",
+        &rssp::AnalysisOptions::default(),
+    )
+    .expect("valid report fixture");
+    let mut value = "a".repeat(length);
+    match kind {
+        "early" => value.replace_range(0..1, "\""),
+        "late" => value.replace_range(length - 1..length, "\""),
+        "comma" => value.replace_range(length - 1..length, ","),
+        "comma_quote" => {
+            value.replace_range(length / 2..=length / 2, ",");
+            value.replace_range(length - 1..length, "\"");
+        }
+        "dense" => value = "\\\"\n,".repeat(length / 4),
+        _ => {}
+    }
+    summary.title_str.clone_from(&value);
+    summary.subtitle_str.clone_from(&value);
+    summary.artist_str.clone_from(&value);
+    summary.titletranslit_str.clone_from(&value);
+    summary.subtitletranslit_str.clone_from(&value);
+    summary.artisttranslit_str = value;
+    if kind == "custom" {
+        summary.charts[0].custom_patterns = ["é \" \\ \n \u{1}", "title", "ldur"]
+            .into_iter()
+            .map(|name| rssp::patterns::CustomPatternSummary {
+                pattern: name.to_owned(),
+                count: 7,
+            })
+            .collect();
+    }
+    summary
+}
+
+fn report_cases(iters: usize) {
+    for length in [16, 4096] {
+        for kind in [
+            "clean",
+            "early",
+            "late",
+            "dense",
+            "comma",
+            "comma_quote",
+            "custom",
+        ] {
+            let summary = report_fixture(kind, length);
+            for (mode, label) in [
+                (rssp::report::OutputMode::JSON, "json"),
+                (rssp::report::OutputMode::CSV, "csv"),
+            ] {
+                let mut output = Vec::with_capacity(65536);
+                measure(&format!("report/{label}/{length}_{kind}"), 1, iters, || {
+                    output.clear();
+                    rssp::report::write_reports(black_box(&summary), mode, black_box(&mut output))
+                        .expect("Vec write");
+                    black_box(&output);
+                });
+            }
+        }
+    }
+    let summary = rssp::analyze(
+        include_bytes!("fixtures/camellia_mix.ssc"),
+        "ssc",
+        &rssp::AnalysisOptions::default(),
+    )
+    .expect("valid report fixture");
+    for (mode, label) in [
+        (rssp::report::OutputMode::JSON, "json"),
+        (rssp::report::OutputMode::CSV, "csv"),
+    ] {
+        let mut output = Vec::with_capacity(262_144);
+        measure(&format!("report/{label}/camellia"), 1, iters, || {
+            output.clear();
+            rssp::report::write_reports(black_box(&summary), mode, black_box(&mut output))
+                .expect("Vec write");
+            black_box(&output);
+        });
+    }
+}
+
+fn verify_reports() {
+    for length in [16, 4096] {
+        for kind in [
+            "clean",
+            "early",
+            "late",
+            "dense",
+            "comma",
+            "comma_quote",
+            "custom",
+        ] {
+            let summary = report_fixture(kind, length);
+            for mode in [
+                rssp::report::OutputMode::JSON,
+                rssp::report::OutputMode::CSV,
+            ] {
+                let mut output = Vec::new();
+                rssp::report::write_reports(&summary, mode, &mut output).expect("Vec write");
+                println!("report {length} {kind} {mode:?} {output:?}");
+            }
+        }
+    }
 }
 
 fn tidy_bpm_cases(iters: usize) {

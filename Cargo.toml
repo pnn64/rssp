@@ -7,7 +7,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.4.278"
+version = "0.4.279"
 
 [workspace.dependencies]
 memchr = "2.8.3"
