@@ -68,7 +68,7 @@ pub fn compute_chart_peak_nps(
         .unwrap_or(0);
     let mut results = Vec::with_capacity(entries.len());
     let mut global_timing = None;
-    let mut density_scratch = crate::stats::DensityScratch::with_capacity(density_capacity);
+    let mut density_scratch = Vec::with_capacity(density_capacity);
 
     for entry in entries {
         if entry.field_count < 5 {

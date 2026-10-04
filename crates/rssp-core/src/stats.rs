@@ -384,20 +384,6 @@ fn row_has_hold_head<const L: usize>(line: &[u8; L]) -> bool {
     line.iter().any(|&b| b == b'2' || b == b'4')
 }
 
-const DENSITY_ROW_ZERO: u8 = 1;
-const DENSITY_ROW_STEP: u8 = 1 << 1;
-
-#[inline(always)]
-fn density_row_flags<const L: usize>(line: &[u8]) -> u8 {
-    let mut all_zero = true;
-    let mut has_step = false;
-    for &b in &line[..L] {
-        all_zero &= b == b'0';
-        has_step |= is_note(b);
-    }
-    u8::from(all_zero) | (u8::from(has_step) << 1)
-}
-
 // ============================================================================
 // Stats Counting
 // ============================================================================
@@ -2184,24 +2170,9 @@ fn process_timing_row<const L: usize>(
 
 #[must_use]
 pub fn measure_densities(data: &[u8], lanes: usize) -> Vec<usize> {
-    let mut scratch = DensityScratch::with_capacity(density_capacity(data.len(), lanes));
-    fill_densities(data, lanes, &mut scratch);
-    scratch.densities
-}
-
-#[derive(Default)]
-pub(crate) struct DensityScratch {
-    measure: Vec<u8>,
-    densities: Vec<usize>,
-}
-
-impl DensityScratch {
-    pub(crate) fn with_capacity(capacity: usize) -> Self {
-        Self {
-            measure: Vec::with_capacity(64),
-            densities: Vec::with_capacity(capacity),
-        }
-    }
+    let mut densities = Vec::with_capacity(density_capacity(data.len(), lanes));
+    measure_densities_with_scratch(data, lanes, &mut densities);
+    densities
 }
 
 pub(crate) const fn density_capacity(data_len: usize, lanes: usize) -> usize {
@@ -2211,36 +2182,23 @@ pub(crate) const fn density_capacity(data_len: usize, lanes: usize) -> usize {
 pub(crate) fn measure_densities_with_scratch<'a>(
     data: &[u8],
     lanes: usize,
-    scratch: &'a mut DensityScratch,
+    densities: &'a mut Vec<usize>,
 ) -> &'a [usize] {
-    fill_densities(data, lanes, scratch);
-    &scratch.densities
-}
-
-fn fill_densities(data: &[u8], lanes: usize, scratch: &mut DensityScratch) {
-    scratch.measure.clear();
-    scratch.densities.clear();
-    scratch.measure.reserve(64);
-    scratch
-        .densities
-        .reserve(density_capacity(data.len(), lanes));
-
-    let DensityScratch { measure, densities } = scratch;
+    densities.clear();
+    densities.reserve(density_capacity(data.len(), lanes));
     match lanes {
-        5 => fill_densities_impl::<5>(data, measure, densities),
-        8 => fill_densities_impl::<8>(data, measure, densities),
-        10 => fill_densities_impl::<10>(data, measure, densities),
-        _ => fill_densities_impl::<4>(data, measure, densities),
+        5 => fill_densities_impl::<5>(data, densities),
+        8 => fill_densities_impl::<8>(data, densities),
+        10 => fill_densities_impl::<10>(data, densities),
+        _ => fill_densities_impl::<4>(data, densities),
     }
+    densities
 }
 
-fn fill_densities_impl<const L: usize>(
-    data: &[u8],
-    measure: &mut Vec<u8>,
-    densities: &mut Vec<usize>,
-) {
+fn fill_densities_impl<const L: usize>(data: &[u8], densities: &mut Vec<usize>) {
+    // Minimization removes only all-zero rows, so it cannot change the number
+    // of rows containing a tap, hold or roll head. Count those rows directly.
     let mut measure_steps = 0usize;
-    let mut done = false;
 
     let mut line_off = 0usize;
     while let Some(raw) = next_line(data, &mut line_off) {
@@ -2250,66 +2208,23 @@ fn fill_densities_impl<const L: usize>(
         }
 
         match line[0] {
-            b',' => densities.push(take_density_measure(measure, &mut measure_steps)),
+            b',' => {
+                densities.push(measure_steps);
+                measure_steps = 0;
+            }
             b';' => {
-                densities.push(take_density_measure(measure, &mut measure_steps));
-                done = true;
-                break;
+                densities.push(measure_steps);
+                return;
             }
             _ if line.len() >= L => {
-                let flags = density_row_flags::<L>(line);
-                measure_steps += usize::from((flags & DENSITY_ROW_STEP) != 0);
-                measure.push(flags);
+                let has_step = line[..L].iter().fold(false, |has, &b| has | is_note(b));
+                measure_steps += usize::from(has_step);
             }
             _ => {}
         }
     }
 
-    if !done {
-        densities.push(take_density_measure(measure, &mut measure_steps));
-    }
-}
-
-fn take_density_measure(measure: &mut Vec<u8>, measure_steps: &mut usize) -> usize {
-    let density = if measure.is_empty() {
-        0
-    } else {
-        let shift = density_reduce_shift(measure);
-        if shift == 0 {
-            *measure_steps
-        } else {
-            let step = 1usize << shift;
-            let len = measure.len() >> shift;
-            (0..len)
-                .map(|i| usize::from((measure[i * step] & DENSITY_ROW_STEP) != 0))
-                .sum()
-        }
-    };
-    measure.clear();
-    *measure_steps = 0;
-    density
-}
-
-#[inline(always)]
-fn density_reduce_shift(measure: &[u8]) -> usize {
-    if measure.len() < 2 {
-        return 0;
-    }
-
-    let mut shift = 0usize;
-    let mut step = 2usize;
-    for _ in 0..measure.len().trailing_zeros() {
-        let mut i = step / 2;
-        while i < measure.len() {
-            if (measure[i] & DENSITY_ROW_ZERO) == 0 {
-                return shift;
-            }
-            i += step;
-        }
-        shift += 1;
-        step <<= 1;
-    }
-    shift
+    densities.push(measure_steps);
 }
 
 #[cfg(test)]

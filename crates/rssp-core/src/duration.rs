@@ -92,17 +92,9 @@ fn compute_duration_timing_segments(
 ///
 /// Returns an error when `extension` is not `sm` or `ssc`, or when the
 /// simfile structure cannot be parsed.
-pub fn compute_chart_durations(
-    simfile_data: &[u8],
-    extension: &str,
-    offsets: TimingOffsets,
-) -> Result<Vec<ChartDuration>, String> {
-    compute_chart_durations_impl(simfile_data, extension, offsets)
-}
-
 // Duration extraction is a linear parser over chart sections and timing keys.
 #[allow(clippy::too_many_lines)]
-fn compute_chart_durations_impl(
+pub fn compute_chart_durations(
     simfile_data: &[u8],
     extension: &str,
     offsets: TimingOffsets,
@@ -139,8 +131,7 @@ fn compute_chart_durations_impl(
     // retains one chart's timing data, warms on first use, replaces in O(1),
     // performs the normal build on misses, and is destroyed on return. A hit
     // compares at most the five timing tags once; no I/O or pruning is added.
-    let mut last_chart_key = None;
-    let mut last_chart_timing = None;
+    let mut last_chart_timing: Option<(DurationTimingKey<'_>, TimingData)> = None;
 
     for entry in &entries {
         if entry.field_count < 5 {
@@ -191,33 +182,21 @@ fn compute_chart_durations_impl(
             "",
         );
         let chart_offset = timing_src.chart_offset_seconds;
-        let chart_bpms = if allow_steps_timing {
-            chart_map_mode::<true>(entry.chart_bpms.as_deref())
-        } else {
-            None
-        };
-        let chart_stops = if allow_steps_timing {
-            chart_map_mode::<true>(entry.chart_stops.as_deref())
-        } else {
-            None
-        };
-        let chart_delays = if allow_steps_timing {
-            chart_map_mode::<true>(entry.chart_delays.as_deref())
-        } else {
-            None
-        };
-        let chart_warps = if allow_steps_timing {
-            chart_map_mode::<true>(entry.chart_warps.as_deref())
-        } else {
-            None
-        };
         let timing = if timing_src.chart_has_own_timing {
             let key = duration_timing_key(entry);
-            if last_chart_key == Some(key) {
-                last_chart_timing
-                    .as_ref()
-                    .expect("a cached timing key has timing data")
-            } else {
+            if last_chart_timing
+                .as_ref()
+                .is_some_and(|(cached, _)| *cached != key)
+            {
+                last_chart_timing = None;
+            }
+            let (_, timing) = last_chart_timing.get_or_insert_with(|| {
+                // Owning chart timing implies steps timing is enabled. Clean
+                // only on misses; a cached raw key already identifies the data.
+                let chart_bpms = chart_map_mode::<true>(entry.chart_bpms.as_deref());
+                let chart_stops = chart_map_mode::<true>(entry.chart_stops.as_deref());
+                let chart_delays = chart_map_mode::<true>(entry.chart_delays.as_deref());
+                let chart_warps = chart_map_mode::<true>(entry.chart_warps.as_deref());
                 let timing_segments = compute_duration_timing_segments(
                     chart_bpms.as_deref(),
                     timing_src.global_bpms,
@@ -230,12 +209,9 @@ fn compute_chart_durations_impl(
                     timing_format,
                 );
                 let built = timing_data_from_segments(chart_offset, 0.0, &timing_segments);
-                last_chart_key = Some(key);
-                last_chart_timing = Some(built);
-                last_chart_timing
-                    .as_ref()
-                    .expect("timing data was inserted with its key")
-            }
+                (key, built)
+            });
+            timing
         } else {
             global_timing.get_or_insert_with(|| {
                 let timing_segments = compute_duration_timing_segments(

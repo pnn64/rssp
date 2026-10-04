@@ -7,7 +7,7 @@ use crate::parse::{
     parse_version,
 };
 use crate::timing::{
-    ROWS_PER_BEAT, TimingFormat, compute_timing_segments, format_bpm_segments_f32_like_itg,
+    ROWS_PER_BEAT, TimingFormat, format_bpm_segments_f32_like_itg, parse_bpm_stops,
     steps_timing_allowed, timing_format_from_ext,
 };
 
@@ -507,7 +507,7 @@ fn chart_metadata(fields: &[&[u8]], fmt: TimingFormat) -> Option<(String, String
 
 fn chart_bpm_snapshot(
     entry: &ParsedChartEntry<'_>,
-    global: &[Cow<'_, str>; 7],
+    global: &[Cow<'_, str>; 2],
     bpms_norm: &str,
     fmt: TimingFormat,
     use_chart: bool,
@@ -517,17 +517,10 @@ fn chart_bpm_snapshot(
         return None;
     }
     let (step_type, difficulty) = chart_metadata(&entry.fields, fmt)?;
-    // Keep the same BPM/stops/delays/warps/speeds/scrolls/fakes order as global.
-    let chart = [
-        entry.chart_bpms.as_deref(),
-        entry.chart_stops.as_deref(),
-        entry.chart_delays.as_deref(),
-        entry.chart_warps.as_deref(),
-        entry.chart_speeds.as_deref(),
-        entry.chart_scrolls.as_deref(),
-        entry.chart_fakes.as_deref(),
-    ]
-    .map(chart_timing_tag_cow);
+    // Only BPMs and stops can alter the effective BPM map. Auxiliary tags
+    // neither affect its values nor change fallback to the global sources.
+    let chart =
+        [entry.chart_bpms.as_deref(), entry.chart_stops.as_deref()].map(chart_timing_tag_cow);
     let hash_bpms = chart[0]
         .as_deref()
         .map(normalize_float_digits)
@@ -568,23 +561,25 @@ fn chart_bpm_snapshot(
 }
 
 fn bpm_snapshot_timing(
-    chart: &[Option<Cow<'_, str>>; 7],
-    global: &[Cow<'_, str>; 7],
+    chart: &[Option<Cow<'_, str>>; 2],
+    global: &[Cow<'_, str>; 2],
     fmt: TimingFormat,
     use_chart: bool,
 ) -> BpmSnapshotTiming {
-    let r: [(&str, Option<&str>); 7] = std::array::from_fn(|i| {
+    let r: [(&str, Option<&str>); 2] = std::array::from_fn(|i| {
         (
             global[i].as_ref(),
             if use_chart { chart[i].as_deref() } else { None },
         )
     });
-    let segments = compute_timing_segments(
-        r[0].1, r[0].0, r[1].1, r[1].0, r[2].1, r[2].0, r[3].1, r[3].0, r[4].1, r[4].0, r[5].1,
-        r[5].0, r[6].1, r[6].0, fmt, true,
-    );
-    let bpms_formatted = format_bpm_segments_f32_like_itg(&segments.bpms);
-    let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw_f32(&segments.bpms);
+    let (bpms, _, _, _) = parse_bpm_stops(r[0].1, r[0].0, r[1].1, r[1].0, fmt, true);
+    // Match native segment precision without constructing the unused tables.
+    let bpms: Vec<_> = bpms
+        .into_iter()
+        .map(|(b, v)| (b as f32, v as f32))
+        .collect();
+    let bpms_formatted = format_bpm_segments_f32_like_itg(&bpms);
+    let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw_f32(&bpms);
     BpmSnapshotTiming {
         bpms_formatted,
         bpm_min_raw,
@@ -630,16 +625,7 @@ pub fn chart_bpm_snapshots(data: &[u8], ext: &str) -> Result<Vec<ChartBpmSnapsho
     let parsed = extract_sections(data, ext).map_err(|e| e.to_string())?;
     let fmt = timing_format_from_ext(ext);
     let use_chart = steps_timing_allowed(parse_version(parsed.version, fmt), fmt);
-    let global = [
-        parsed.bpms,
-        parsed.stops,
-        parsed.delays,
-        parsed.warps,
-        parsed.speeds,
-        parsed.scrolls,
-        parsed.fakes,
-    ]
-    .map(|tag| {
+    let global = [parsed.bpms, parsed.stops].map(|tag| {
         clean_timing_map_cow(
             tag.and_then(|bytes| std::str::from_utf8(bytes).ok())
                 .unwrap_or(""),

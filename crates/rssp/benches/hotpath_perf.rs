@@ -401,6 +401,78 @@ fn tier_cases(iters: usize) {
     }
 }
 
+fn density_cases(iters: usize) {
+    for lanes in [4, 5, 8, 10] {
+        for (name, spacing, rows) in [("sparse", 16, 256), ("dense", 1, 16)] {
+            let mut data = Vec::with_capacity(4096 * (lanes + 1));
+            for i in 0..4096 {
+                let start = data.len();
+                data.resize(start + lanes, b'0');
+                if i % spacing == 0 {
+                    data[start + i % lanes] = b'1';
+                }
+                data.push(b'\n');
+                if i % rows == rows - 1 {
+                    data.extend_from_slice(b",\n");
+                }
+            }
+            measure(&format!("density{lanes}/{name}"), 4096, iters, || {
+                black_box(rssp::stats::measure_densities(black_box(&data), lanes));
+            });
+        }
+    }
+}
+
+fn duration_cases(iters: usize) {
+    for (name, dirty, miss) in [
+        ("clean_hit", false, false),
+        ("dirty_hit", true, false),
+        ("dirty_miss", true, true),
+    ] {
+        let mut tags = String::new();
+        for (tag, value) in [
+            ("BPMS", "180"),
+            ("STOPS", "0.01"),
+            ("DELAYS", "0.01"),
+            ("WARPS", "0.25"),
+        ] {
+            write!(tags, "#{tag}:").expect("String write cannot fail");
+            for i in 0..128 {
+                if i != 0 {
+                    tags.push(',');
+                }
+                let pad = if dirty { " \u{1}" } else { "" };
+                write!(tags, "{pad}{}={value}{pad}", i * 4).expect("String write cannot fail");
+            }
+            tags.push_str(";\n");
+        }
+        let mut data = String::from("#VERSION:0.83;\n#BPMS:0=120;\n");
+        for (i, difficulty) in ["Easy", "Medium", "Hard", "Challenge"].iter().enumerate() {
+            write!(data, "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:{difficulty};\n#METER:8;\n#OFFSET:{};\n", if miss { i } else { 0 })
+                .expect("String write cannot fail");
+            data.push_str(&tags);
+            data.push_str("#NOTES:\n1000\n0100\n0010\n0001\n;\n");
+        }
+        measure(&format!("duration/{name}"), 4, iters, || {
+            black_box(
+                rssp::compute_chart_durations(
+                    black_box(data.as_bytes()),
+                    "ssc",
+                    rssp::TimingOffsets::default(),
+                )
+                .expect("valid fixture"),
+            );
+        });
+    }
+    let data = include_bytes!("fixtures/camellia_mix.ssc");
+    measure("duration/camellia", 5, (iters / 10).max(1), || {
+        black_box(
+            rssp::compute_chart_durations(black_box(data), "ssc", rssp::TimingOffsets::default())
+                .expect("valid fixture"),
+        );
+    });
+}
+
 fn verify_corpus() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/packs");
     let mut files: Vec<_> = walkdir::WalkDir::new(&root)
@@ -424,6 +496,29 @@ fn verify_corpus() {
             "file {}",
             path.strip_prefix(&root).expect("corpus prefix").display()
         );
+        if let Ok(parsed) = rssp::parse::extract_sections(&data, ext) {
+            for chart in parsed.notes_list {
+                if let Some(lanes) = rssp::supported_stepstype_lanes_bytes(chart.fields[0]) {
+                    println!(
+                        "density {:?}",
+                        rssp::stats::measure_densities(chart.note_data, lanes)
+                    );
+                }
+            }
+        }
+        match rssp::compute_chart_durations(&data, ext, rssp::TimingOffsets::default()) {
+            Ok(charts) => {
+                for chart in charts {
+                    println!(
+                        "duration {:?} {:?} {}",
+                        chart.step_type,
+                        chart.difficulty,
+                        chart.duration_seconds.to_bits()
+                    );
+                }
+            }
+            Err(err) => println!("duration error {err:?}"),
+        }
         match rssp::nps::compute_chart_peak_nps(&data, ext) {
             Ok(charts) => {
                 for chart in charts {
@@ -476,6 +571,8 @@ fn main() {
     fast_timing_case(iters);
     batch_timing_cases(iters);
     tier_cases(iters);
+    density_cases(iters);
+    duration_cases(iters);
     let densities: Vec<_> = (0..16384).map(|i| [0, 16, 20, 24, 32][i % 5]).collect();
     for (name, step) in [("long_segments", 2048.0), ("short_segments", 4.0)] {
         let bpms: Vec<_> = (0..32)

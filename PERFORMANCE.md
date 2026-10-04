@@ -294,3 +294,126 @@ cargo test --release --test all_parity -- --test-threads=22
 ```text
 test result: ok. 30489 passed; 0 failed
 ```
+
+# Performance measurements: 0.4.272
+
+Baseline: `9561f82`, version 0.4.271. This pass applies `M-HOTPATH`,
+`M-MEM-REUSE`, `M-AVOID-INDIRECTION`, and `M-THROUGHPUT` from
+`rust-performance.md` by deleting work that does not contribute to outputs:
+
+1. Measure density counts tap/hold/roll rows with a branchless lane scan.
+   Removing all-zero rows cannot change that count, so the flag buffer,
+   reduction scan, recount, scratch struct, and forwarding fill function are removed. Peak NPS
+   reuses a plain density vector across charts.
+2. Duration extraction checks its existing raw timing key before cleaning chart
+   maps. Cache hits avoid all four clean operations. Its key and data now share
+   one optional entry, removing separate validity checks and two `expect` calls.
+   The redundant forwarding wrapper is also removed. The cache retains its
+   call-local, single-entry lifetime and performs the same builds on misses.
+3. BPM snapshots use the shared BPM/stop parsing step directly, preserving
+   legacy SM conversion and native f32 output precision. They stop cleaning and
+   constructing delays, warps, speeds, scrolls, and fakes, including default
+   tables and inherited timing rebuilt for auxiliary-only local tags. General
+   timing construction reuses that same parsing step.
+
+Production code shrinks by 113 lines. Public APIs and returned fields are unchanged.
+
+## Measurements
+
+Windows MSVC, Rust 1.98.1, Intel Xeon E5-2696 v4, system allocator, repository
+bench profile (fat LTO, one codegen unit, debug symbols). Both versions use
+identical benchmark code, fixture bytes, and dependency versions. The baseline
+executable was saved before production edits; its source matches `9561f82`.
+The updated executable was rebuilt after the final changes. Both were built
+before measurement, with no concurrent compilation or corpus scans.
+
+The measuring thread is pinned to logical CPU 2. Results below are medians of
+three process pairs with alternating old/new order. Each process takes the
+median of seven batches after four warmup calls, with 1,000 calls per batch
+(100 for Camellia duration and peak NPS). Setup and I/O are outside measurement;
+returned result destruction is included. CPU cycles use `QueryThreadCycleTime`.
+Allocation counting runs separately from timing.
+
+| Case | CPU cycles, old -> new | Allocations / reallocations, old -> new | Requested bytes, old -> new | Throughput change |
+| --- | ---: | ---: | ---: | ---: |
+| Density, 4 lanes, sparse | 94,043 -> 69,841 | 2 / 2 -> 1 / 0 | 8,656 -> 8,208 | +35.2% |
+| Density, 4 lanes, dense | 98,044 -> 76,506 | 2 / 0 -> 1 / 0 | 8,464 -> 8,400 | +27.8% |
+| Density, 5 lanes, sparse | 105,388 -> 61,839 | 2 / 2 -> 1 / 0 | 8,656 -> 8,208 | +69.8% |
+| Density, 5 lanes, dense | 107,222 -> 69,272 | 2 / 0 -> 1 / 0 | 8,432 -> 8,368 | +55.9% |
+| Density, 8 lanes, sparse | 148,375 -> 74,205 | 2 / 2 -> 1 / 0 | 8,648 -> 8,200 | +101.6% |
+| Density, 8 lanes, dense | 145,762 -> 79,077 | 2 / 0 -> 1 / 0 | 8,376 -> 8,312 | +84.9% |
+| Density, 10 lanes, sparse | 179,686 -> 77,786 | 2 / 2 -> 1 / 0 | 8,648 -> 8,200 | +129.5% |
+| Density, 10 lanes, dense | 176,622 -> 80,979 | 2 / 0 -> 1 / 0 | 8,352 -> 8,288 | +118.8% |
+| Duration, clean repeated timing | 340,868 -> 203,606 | 21 / 1 -> 21 / 1 | 25,815 -> 25,815 | +67.8% |
+| Duration, dirty repeated timing | 494,790 -> 244,077 | 37 / 1 -> 25 / 1 | 51,463 -> 32,227 | +111.7% |
+| Duration, dirty distinct timing | 944,930 -> 845,917 | 70 / 4 -> 70 / 4 | 120,223 -> 120,223 | +19.3% |
+| Duration, Camellia fixture | 17,278,928 -> 16,802,339 | 23 / 5 -> 23 / 5 | 9,395 -> 9,395 | +3.9% |
+| BPM snapshots, plain | 18,111 -> 16,882 | 26 / 2 -> 26 / 2 | 3,554 -> 3,554 | +7.7% |
+| BPM snapshots, global auxiliary timing | 170,466 -> 17,128 | 32 / 3 -> 26 / 2 | 20,794 -> 3,554 | +886.7% |
+| BPM snapshots, local auxiliary timing | 646,995 -> 38,074 | 79 / 14 -> 35 / 10 | 73,346 -> 4,162 | +1605.3% |
+| BPM snapshots, Camellia fixture | 242,878 -> 238,601 | 37 / 0 -> 37 / 0 | 4,511 -> 4,511 | +1.3% |
+| Peak NPS, plain | 25,434 -> 23,592 | 15 / 0 -> 14 / 0 | 3,287 -> 3,223 | +5.5% |
+| Peak NPS, global auxiliary timing | 25,301 -> 23,455 | 15 / 0 -> 14 / 0 | 3,287 -> 3,223 | +8.4% |
+| Peak NPS, local auxiliary timing | 53,208 -> 51,776 | 56 / 0 -> 55 / 0 | 4,095 -> 4,031 | +1.1% |
+| Peak NPS, Camellia fixture | 11,492,967 -> 8,813,575 | 26 / 2 -> 25 / 0 | 213,459 -> 213,011 | +30.7% |
+
+Density inputs contain 4,096 rows in four, five, eight, or ten lanes. Sparse
+inputs have a tap every 16 rows and 256-row measures; dense inputs have one tap
+per row and 16-row measures. Duration inputs have four charts with 128 entries
+each for BPMs, stops, delays, and warps. Dirty maps contain whitespace and control
+characters; distinct timing changes chart offsets to force cache misses.
+Snapshot/peak timing inputs have four charts with 32 four-row measures. Auxiliary
+cases contain 128 entries each for speeds, scrolls, and fakes; local cases also
+have a BPM change, stop, delay, and warp. Requested bytes sum allocation and full
+reallocation requests, measuring churn rather than peak live memory.
+
+All measured medians improve, but small gains should be treated as indicative.
+Peak-NPS local samples overlap (old 23.18-25.34 us, new 23.07-26.06 us), so
+its 1.1% median gain does not establish a universal speedup. The 1.3% Camellia
+snapshot gain is also small. Targeted allocation reductions are deterministic:
+density cases halve allocation count and eliminate sparse-measure reallocations;
+repeated dirty duration timing uses 12 fewer allocations and 37.4% less churn;
+local snapshots use 44 fewer allocations and 94.3% less churn. Mixed-chart peak
+NPS improves with nonoverlapping process medians (old 5.27-5.41 ms, new
+4.07-4.52 ms). No behavioral regressions were found.
+
+## Reproduction and behavior
+
+```powershell
+$env:RSSP_HOT_ITERS = '1000'
+$env:RSSP_HOT_FILTER = 'density' # Or 'duration/', 'snapshot/', or 'peak/'.
+cargo bench -p rssp --bench hotpath_perf
+
+$env:RSSP_HOT_VERIFY = '1'
+cargo bench -p rssp --bench hotpath_perf
+Remove-Item Env:RSSP_HOT_VERIFY
+```
+
+For the baseline, check out `9561f82` separately, copy the current benchmark,
+use the same fixtures and dependency lockfile (adjust only the three workspace
+package versions to 0.4.271), and build first. Run both executables alternately
+without other test or compilation workloads. The baseline already registers
+this benchmark. Verify mode emits sorted file paths, explicit density vectors,
+all duration/peak/snapshot fields, and errors; numeric fields use exact bits.
+
+Original and final verification outputs are byte-identical across 30,489 valid
+simfiles and 56,125 charts, with the same 354 invalid-input errors for each API.
+The native UTF-8 verification output SHA-256 is
+`bc0d8b3f57bff93ed791de3631dc6fb31130bdebbb09ea47cbb21adf71b57ce7`.
+Three new integration tests cover reducible/odd/dense measures, all supported
+lane counts, jumps, hold/roll heads, ignored note types, comments, CRLF,
+termination, trailing/empty measures, dirty duration cache hits, offset/BPM
+changes, auxiliary-only snapshot tags, and old/new SSC timing behavior.
+
+All 198 existing workspace library/binary unit tests and all eight integration
+tests pass in release mode. Strict Clippy, formatting, and diff checks pass.
+After confirming the final benchmarks, the required command passed all 30,489
+cases with zero failures before committing:
+
+```powershell
+cargo test --release --test all_parity -- --test-threads=22
+```
+
+```text
+test result: ok. 30489 passed; 0 failed
+```

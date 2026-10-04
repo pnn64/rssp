@@ -681,6 +681,31 @@ where
 }
 
 // --- TimingSegments output ---
+pub(crate) fn parse_bpm_stops(
+    chart_bpms: Option<&str>,
+    global_bpms: &str,
+    chart_stops: Option<&str>,
+    global_stops: &str,
+    format: TimingFormat,
+    cleaned: bool,
+) -> BpmStopResult {
+    let bpms_str = chart_bpms.filter(|s| !s.is_empty()).unwrap_or(global_bpms);
+    let mut bpms = if cleaned {
+        parse_bpm_map(bpms_str)
+    } else {
+        parse_bpm_map(clean_timing_map_cow(bpms_str).as_ref())
+    };
+    if bpms.is_empty() {
+        bpms.push((0.0, DEFAULT_BPM));
+    }
+    let stops = parse_optional_timing(chart_stops, global_stops, parse_segments, cleaned);
+    let (mut bpms, stops, extra_warps, offset) = process_bpms_and_stops(format, bpms, stops);
+    if bpms.is_empty() {
+        bpms.push((0.0, DEFAULT_BPM));
+    }
+    (bpms, stops, extra_warps, offset)
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TimingSegments {
     pub beat0_offset_adjust: f32,
@@ -712,23 +737,15 @@ pub fn compute_timing_segments(
     format: TimingFormat,
     cleaned: bool,
 ) -> TimingSegments {
-    let bpms_str = chart_bpms.filter(|s| !s.is_empty()).unwrap_or(global_bpms);
-    let mut parsed_bpms: Vec<(f64, f64)> = if cleaned {
-        parse_bpm_map(bpms_str)
-    } else {
-        parse_bpm_map(clean_timing_map_cow(bpms_str).as_ref())
-    };
-    if parsed_bpms.is_empty() {
-        parsed_bpms.push((0.0, DEFAULT_BPM));
-    }
-
-    let raw_stops = parse_optional_timing(chart_stops, global_stops, parse_segments, cleaned);
-    let (mut parsed_bpms, stops, extra_warps, beat0_offset_adjust) =
-        process_bpms_and_stops(format, parsed_bpms, raw_stops);
+    let (parsed_bpms, stops, extra_warps, beat0_offset_adjust) = parse_bpm_stops(
+        chart_bpms,
+        global_bpms,
+        chart_stops,
+        global_stops,
+        format,
+        cleaned,
+    );
     let stops = tidy_row_segments(stops);
-    if parsed_bpms.is_empty() {
-        parsed_bpms.push((0.0, DEFAULT_BPM));
-    }
 
     let quantize_seg = |seg: Segment| Segment {
         beat: quantize_beat(seg.beat),
@@ -1513,22 +1530,15 @@ pub fn timing_data_from_chart_data(
     format: TimingFormat,
     cleaned: bool,
 ) -> TimingData {
-    let bpms_str = chart_bpms.filter(|s| !s.is_empty()).unwrap_or(global_bpms);
-    let mut bpms: Vec<(f64, f64)> = if cleaned {
-        parse_bpm_map(bpms_str)
-    } else {
-        parse_bpm_map(clean_timing_map_cow(bpms_str).as_ref())
-    };
-    if bpms.is_empty() {
-        bpms.push((0.0, DEFAULT_BPM));
-    }
-
-    let raw_stops = parse_optional_timing(chart_stops, global_stops, parse_segments, cleaned);
-    let (mut bpms, stops, extra_warps, beat0_adj) = process_bpms_and_stops(format, bpms, raw_stops);
+    let (bpms, stops, extra_warps, beat0_adj) = parse_bpm_stops(
+        chart_bpms,
+        global_bpms,
+        chart_stops,
+        global_stops,
+        format,
+        cleaned,
+    );
     let stops = tidy_row_segments(stops);
-    if bpms.is_empty() {
-        bpms.push((0.0, DEFAULT_BPM));
-    }
 
     let q = |s: Segment| Segment {
         beat: quantize_beat(s.beat),

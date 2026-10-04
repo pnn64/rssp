@@ -140,3 +140,97 @@ fn fixed_tier_matches() {
         );
     }
 }
+
+#[test]
+fn density_preserves_counts() {
+    for lanes in [4, 5, 8, 10] {
+        let mut data = Vec::new();
+        for (rows, spacing) in [(64, 16), (9, 2), (32, 1)] {
+            for i in 0..rows {
+                let start = data.len();
+                data.resize(start + lanes, b'0');
+                if i % spacing == 0 {
+                    data[start] = b"124"[i % 3];
+                    data[start + lanes - 1] = b'1'; // Jumps still count once.
+                }
+                data.extend_from_slice(b"\r\n");
+            }
+            data.extend_from_slice(b",\n");
+        }
+        data.extend_from_slice(b"// comment\n\t0000\n;\n1111111111\n");
+        assert_eq!(rssp::stats::measure_densities(&data, lanes), [4, 5, 32, 0]);
+    }
+    for (data, expected) in [
+        (&b""[..], &[0][..]),
+        (&b",\n,\n;"[..], &[0, 0, 0][..]),
+        (&b"  1111\n0000\n"[..], &[1][..]),
+        (
+            &b"M000\nF000\nL000\n3000\n2000\n4000\n1000\n;"[..],
+            &[3][..],
+        ),
+    ] {
+        assert_eq!(rssp::stats::measure_densities(data, 4), expected);
+    }
+    assert_eq!(rssp::stats::measure_densities(b"00001\n1000\n;", 99), [1]);
+}
+
+#[test]
+fn duration_cache_keys() {
+    let data = concat!(
+        "#VERSION:0.83;\n#OFFSET:0.5;\n#BPMS:0=120;\n",
+        "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Easy;\n#METER:4;\n",
+        "#BPMS: \u{1}0=120, ;\n#STOPS: 2=0.5, ;\n#DELAYS: 1=0.25, ;\n#WARPS: 1=0.5, ;\n",
+        "#NOTES:\n1000\n0100\n0010\n0001\n;\n",
+        "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Medium;\n#METER:4;\n",
+        "#BPMS: \u{1}0=120, ;\n#STOPS: 2=0.5, ;\n#DELAYS: 1=0.25, ;\n#WARPS: 1=0.5, ;\n",
+        "#NOTES:\n1000\n0100\n0010\n0001\n;\n",
+        "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Hard;\n#METER:4;\n",
+        "#OFFSET:1;\n#BPMS: \u{1}0=120, ;\n#STOPS: 2=0.5, ;\n#DELAYS: 1=0.25, ;\n#WARPS: 1=0.5, ;\n",
+        "#NOTES:\n1000\n0100\n0010\n0001\n;\n",
+        "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Challenge;\n#METER:4;\n",
+        "#BPMS:0=240;\n#NOTES:\n1000\n0100\n0010\n0001\n;\n",
+    );
+    let charts =
+        rssp::compute_chart_durations(data.as_bytes(), "ssc", rssp::TimingOffsets::default())
+            .expect("valid SSC");
+    assert_eq!(charts.len(), 4);
+    for (chart, (difficulty, duration)) in charts.iter().zip([
+        ("Easy", 1.5),
+        ("Medium", 1.5),
+        ("Hard", 1.0),
+        ("Challenge", 0.25),
+    ]) {
+        assert_eq!(chart.step_type, "dance-single");
+        assert_eq!(chart.difficulty, difficulty);
+        assert_eq!(chart.duration_seconds, duration);
+    }
+}
+
+#[test]
+fn snapshot_aux_maps() {
+    for version in ["0.6", "0.83"] {
+        for tag in [
+            "SPEEDS: \u{1}0=2=1=0, ",
+            "SCROLLS:0=-1",
+            "FAKES:0=4",
+            "DELAYS:0=4",
+            "WARPS:0=4",
+            "SPEEDS:",
+        ] {
+            let data = format!(
+                "#VERSION:{version};\n#BPMS:0=120,4=180;\n#SPEEDS:0=2=1=0;\n\
+                 #SCROLLS:0=-1;\n#FAKES:0=4;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n\
+                 #DIFFICULTY:Hard;\n#METER:8;\n#{tag};\n#NOTES:\n1000\n;\n"
+            );
+            let charts = chart_bpm_snapshots(data.as_bytes(), "ssc").expect("valid SSC");
+            assert_eq!(charts.len(), 1);
+            assert_eq!(charts[0].hash_bpms, "0.000=120.000,4.000=180.000");
+            assert_eq!(
+                charts[0].bpms_formatted,
+                "0.000000=120.000000,4.000000=180.000000"
+            );
+            assert_eq!((charts[0].bpm_min, charts[0].bpm_max), (120.0, 180.0));
+            assert_eq!(charts[0].display_bpm, "120 - 180");
+        }
+    }
+}
