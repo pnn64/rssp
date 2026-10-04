@@ -238,14 +238,6 @@ fn chart_timing_tag_pair(tag: Option<&[u8]>) -> (Option<String>, Option<String>)
     (raw, norm)
 }
 
-fn clean_norm_map(param: &str) -> (Cow<'_, str>, String) {
-    clean_norm_map_cow(param)
-}
-
-fn clean_norm_speeds(param: &str) -> (Cow<'_, str>, String) {
-    clean_norm_speeds_cow(param)
-}
-
 fn chart_display_bpm_tag(tag: Option<&[u8]>) -> Option<String> {
     let bytes = tag?;
     let value = decode_trim_owned(bytes);
@@ -1321,37 +1313,39 @@ fn analyze_with_scratch_impl<T, MapNote: FnMut(ParsedChartNote) -> T>(
         .unwrap_or(0.0);
     let global_bpms_raw = std::str::from_utf8(parsed_data.bpms.unwrap_or(b"<invalid-bpms>"))
         .unwrap_or("<invalid-bpms>");
-    let (cleaned_global_bpms, normalized_global_bpms) = clean_norm_map(global_bpms_raw);
+    let (cleaned_global_bpms, normalized_global_bpms) = clean_norm_map_cow(global_bpms_raw);
     let global_stops_raw = parsed_data
         .stops
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let (cleaned_global_stops, normalized_global_stops) = clean_norm_map(global_stops_raw);
+    let (cleaned_global_stops, normalized_global_stops) = clean_norm_map_cow(global_stops_raw);
     let global_delays_raw = parsed_data
         .delays
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let (cleaned_global_delays, normalized_global_delays) = clean_norm_map(global_delays_raw);
+    let (cleaned_global_delays, normalized_global_delays) = clean_norm_map_cow(global_delays_raw);
     let global_warps_raw = parsed_data
         .warps
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let (cleaned_global_warps, normalized_global_warps) = clean_norm_map(global_warps_raw);
+    let (cleaned_global_warps, normalized_global_warps) = clean_norm_map_cow(global_warps_raw);
     let global_speeds_raw = parsed_data
         .speeds
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let (cleaned_global_speeds, normalized_global_speeds) = clean_norm_speeds(global_speeds_raw);
+    let (cleaned_global_speeds, normalized_global_speeds) =
+        clean_norm_speeds_cow(global_speeds_raw);
     let global_scrolls_raw = parsed_data
         .scrolls
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let (cleaned_global_scrolls, normalized_global_scrolls) = clean_norm_map(global_scrolls_raw);
+    let (cleaned_global_scrolls, normalized_global_scrolls) =
+        clean_norm_map_cow(global_scrolls_raw);
     let global_fakes_raw = parsed_data
         .fakes
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
-    let (cleaned_global_fakes, normalized_global_fakes) = clean_norm_map(global_fakes_raw);
+    let (cleaned_global_fakes, normalized_global_fakes) = clean_norm_map_cow(global_fakes_raw);
     let normalized_global_time_signatures = parsed_data
         .time_signatures
         .and_then(|b| std::str::from_utf8(b).ok())

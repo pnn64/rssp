@@ -3,7 +3,6 @@ use crate::timing::{
     note_row_to_beat,
 };
 
-pub use crate::nps::measure_equally_spaced;
 pub use crate::streams::{
     BreakdownMode, RunDensity, StreamBreakdownLevel, StreamCounts, StreamSegment, Token,
     categorize_measure_density, compute_stream_counts, compute_stream_outputs,
@@ -1555,6 +1554,64 @@ pub(crate) fn for_each_minimized_measure_in<const L: usize, F>(
         minimize_measure(measure);
         on_measure(measure_idx, measure.as_slice(), false);
     }
+}
+
+#[must_use]
+pub fn measure_equally_spaced(data: &[u8], lanes: usize) -> Vec<bool> {
+    dispatch_lanes!(lanes, equally_spaced_impl(data))
+}
+
+// Reduction retains every nonzero row. Its power-of-two stride is limited by
+// the row count and the least-aligned nonzero row, so spacing needs no row buffer.
+fn equally_spaced_impl<const L: usize>(data: &[u8]) -> Vec<bool> {
+    let mut results = Vec::with_capacity(count_byte(data, b',') + 1);
+    let (mut rows, mut notes, mut shift) = (0usize, 0usize, usize::BITS);
+    let mut spaced = true;
+    let mut line_off = 0usize;
+    while let Some(raw) = next_line(data, &mut line_off) {
+        let line = skip_ws(raw);
+        if line.is_empty() || line[0] == b'/' {
+            continue;
+        }
+        match line[0] {
+            b',' | b';' => {
+                results.push(
+                    spaced && (rows == 0 || notes == rows >> shift.min(rows.trailing_zeros())),
+                );
+                if line[0] == b';' {
+                    return results;
+                }
+                (rows, notes, shift) = (0, 0, usize::BITS);
+                spaced = true;
+            }
+            _ => {
+                if !spaced {
+                    continue;
+                }
+                let Some(row) = line.first_chunk::<L>() else {
+                    continue;
+                };
+                // A unit stride cannot grow again; the remaining rows only
+                // need note checks, with no zero scan or alignment bookkeeping.
+                if shift == 0 {
+                    spaced = row.iter().copied().any(is_note);
+                    continue;
+                }
+                if is_all_zero(row) {
+                    // Row zero always survives reduction.
+                    spaced = rows != 0;
+                } else {
+                    shift = shift.min(rows.trailing_zeros());
+                    spaced = row.iter().copied().any(is_note);
+                    notes += usize::from(spaced);
+                }
+                rows += 1;
+                spaced &= shift != 0 || notes == rows;
+            }
+        }
+    }
+    results.push(spaced && (rows == 0 || notes == rows >> shift.min(rows.trailing_zeros())));
+    results
 }
 
 /// Visits spacing flags for note data that has already been minimized.

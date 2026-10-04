@@ -7,6 +7,109 @@ use rssp::bpm::{chart_bpm_snapshots, compute_tier_bpm};
 use rssp::nps::compute_chart_peak_nps;
 
 #[test]
+fn cleanup_preserves_prefixes() {
+    use rssp::bpm::{clean_norm_map_cow, clean_norm_speeds_cow};
+    for prefix in ["", "0=120,", "0=\u{b}120,", "bad,0=120,", "0=NaN,4=inf,"] {
+        for tail in ["", " 8=180 ", ",8=180,", "8=1\u{1}80", "\u{a0}8=180\u{a0}"] {
+            let raw = format!("{prefix}{tail}");
+            let expected = rssp::bpm::clean_and_normalize_float_digits(&raw);
+            let actual = clean_norm_map_cow(&raw);
+            assert_eq!(actual.0.as_ref(), expected.0);
+            assert_eq!(actual.1, expected.1);
+        }
+    }
+    for prefix in ["", "0=1=0=0,", "0=1=0=0=ignored,", "bad,0=1=0=0,"] {
+        for tail in [
+            "",
+            " 8=2=1=1 ",
+            ",8=2=1=1,",
+            "8=1\u{1}5=0=0",
+            "8=1=0=\u{b}0",
+        ] {
+            let raw = format!("{prefix}{tail}");
+            let expected = rssp::bpm::clean_and_normalize_speeds_float_digits(&raw);
+            let actual = clean_norm_speeds_cow(&raw);
+            assert_eq!(actual.0.as_ref(), expected.0);
+            assert_eq!(actual.1, expected.1);
+        }
+    }
+    assert!(matches!(
+        clean_norm_map_cow("0=\u{b}120"),
+        (std::borrow::Cow::Borrowed(_), _)
+    ));
+    assert!(matches!(
+        clean_norm_speeds_cow("0=1=0=0"),
+        (std::borrow::Cow::Borrowed(_), _)
+    ));
+}
+
+#[test]
+fn spacing_matches_minimization() {
+    for lanes in [0, 4, 5, 8, 10] {
+        let width = if lanes == 0 { 4 } else { lanes };
+        for rows in [0usize, 1, 2, 3, 4, 7, 16, 63, 64, 65, 129, 256] {
+            for step in [1, 2, 4, 7, 16] {
+                for object in *b"1243MX0" {
+                    let mut data = b"// ignored\n  ,\r\n".to_vec();
+                    for i in 0..rows {
+                        data.extend_from_slice(b" \t");
+                        let start = data.len();
+                        data.resize(start + width, b'0');
+                        if i % step == 0 {
+                            data[start + i % width] = object;
+                        }
+                        data.extend_from_slice(b" trailing\r\n");
+                    }
+                    data.extend_from_slice(b",\n,\n;\n1000\n");
+                    let minimized = rssp::stats::minimize_chart_for_hash(&data, lanes);
+                    let mut expected = Vec::new();
+                    rssp::stats::visit_measure_spacing(&minimized, lanes, |value| {
+                        expected.push(value);
+                        Ok::<_, std::convert::Infallible>(())
+                    })
+                    .expect("infallible visitor");
+                    assert_eq!(rssp::nps::measure_equally_spaced(&data, lanes), expected);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn nps_small_medians() {
+    for len in [0, 1, 2, 3, 8, 32, 63, 64, 65, 128] {
+        let values: Vec<_> = (0..len).map(|i| f64::from((i * 37) % 23) / 3.0).collect();
+        let mut sorted = values.clone();
+        let expected = rssp::nps::get_nps_stats_in_place(&mut sorted);
+        let mut scratch = Vec::new();
+        assert_eq!(rssp::nps::get_nps_stats(&values), expected);
+        assert_eq!(
+            rssp::nps::get_nps_stats_with_scratch(&values, &mut scratch),
+            expected
+        );
+    }
+    for values in [
+        vec![-0.0],
+        vec![f64::NAN],
+        vec![-0.0, 0.0],
+        vec![0.0, -0.0],
+        vec![f64::NAN, 1.0],
+        vec![1.0, f64::NAN],
+        vec![f64::NAN, f64::NAN],
+        vec![f64::NEG_INFINITY, f64::INFINITY],
+        vec![-0.0, 0.0, -0.0],
+        vec![f64::NAN, 1.0, 2.0],
+        vec![f64::NEG_INFINITY, 0.0, f64::INFINITY],
+    ] {
+        let mut sorted = values.clone();
+        let expected = rssp::nps::get_nps_stats_in_place(&mut sorted);
+        let actual = rssp::nps::get_nps_stats(&values);
+        assert_eq!(actual.0.to_bits(), expected.0.to_bits());
+        assert_eq!(actual.1.to_bits(), expected.1.to_bits());
+    }
+}
+
+#[test]
 fn breakdown_gap_boundaries() {
     use rssp::streams::{BreakdownMode, StreamBreakdownLevel};
     for gap in [0, 1, 2, 4, 5, 31, 32, 33, 128] {

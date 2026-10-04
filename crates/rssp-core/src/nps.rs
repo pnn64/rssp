@@ -13,6 +13,8 @@ use crate::timing::{
 
 const NPS_MEDIAN_SCAN_MIN: usize = 64;
 
+pub use crate::stats::measure_equally_spaced;
+
 #[derive(Debug, Clone)]
 pub struct ChartNpsInfo {
     pub step_type: String,
@@ -366,7 +368,22 @@ fn scan_nps(nps: &[f64]) -> (f64, Option<f64>) {
 
 #[must_use]
 pub fn get_nps_stats(nps: &[f64]) -> (f64, f64) {
-    get_nps_stats_with_scratch(nps, &mut Vec::new())
+    match nps {
+        [] => (0.0, 0.0),
+        [value] => (scan_nps(nps).0, *value),
+        &[first, second] => (scan_nps(nps).0, median_in_place(&mut [first, second])),
+        small if small.len() <= NPS_MEDIAN_SCAN_MIN => {
+            let (max, median) = scan_nps(small);
+            let median = median.unwrap_or_else(|| {
+                let mut values = [0.0; NPS_MEDIAN_SCAN_MIN];
+                let values = &mut values[..small.len()];
+                values.copy_from_slice(small);
+                median_in_place(values)
+            });
+            (max, median)
+        }
+        _ => get_nps_stats_with_scratch(nps, &mut Vec::new()),
+    }
 }
 
 /// Computes NPS statistics using caller-owned median-selection storage.
@@ -395,30 +412,6 @@ pub fn get_nps_stats_with_scratch(nps: &[f64], scratch: &mut Vec<f64>) -> (f64, 
 pub fn get_nps_stats_in_place(nps: &mut [f64]) -> (f64, f64) {
     let (max, median) = scan_nps(nps);
     (max, median.unwrap_or_else(|| median_in_place(nps)))
-}
-
-#[must_use]
-pub fn measure_equally_spaced(data: &[u8], lanes: usize) -> Vec<bool> {
-    match lanes {
-        5 => equally_spaced_impl::<5>(data),
-        8 => equally_spaced_impl::<8>(data),
-        10 => equally_spaced_impl::<10>(data),
-        _ => equally_spaced_impl::<4>(data),
-    }
-}
-
-#[inline(always)]
-const fn is_note(ch: u8) -> bool {
-    matches!(ch, b'1' | b'2' | b'4')
-}
-
-fn equally_spaced_impl<const L: usize>(data: &[u8]) -> Vec<bool> {
-    let measure_count = crate::stats::count_byte(data, b',') + 1;
-    let mut results = Vec::with_capacity(measure_count);
-    crate::stats::for_each_minimized_measure::<L, _>(data, |_, rows, _| {
-        results.push(rows.iter().all(|row| row.iter().copied().any(is_note)));
-    });
-    results
 }
 
 #[cfg(test)]

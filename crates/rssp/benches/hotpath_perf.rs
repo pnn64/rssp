@@ -567,6 +567,75 @@ fn breakdown_cases(iters: usize) {
     }
 }
 
+fn cleanup_cases(iters: usize) {
+    for len in [1, 128, 4096] {
+        for (name, dirty) in [("clean", None), ("early", Some(0)), ("late", Some(len - 1))] {
+            for speeds in [false, true] {
+                let mut raw = String::new();
+                for i in 0..len {
+                    if i != 0 {
+                        raw.push(',');
+                    }
+                    let pad = if dirty == Some(i) { " \u{b}" } else { "" };
+                    if speeds {
+                        write!(raw, "{pad}{}=1.25=0.5=0{pad}", i * 4).expect("String write");
+                    } else {
+                        write!(raw, "{pad}{}=120.125{pad}", i * 4).expect("String write");
+                    }
+                }
+                let tag = if speeds { "speed" } else { "pair" };
+                measure(&format!("cleanup/{tag}_{len}_{name}"), len, iters, || {
+                    if speeds {
+                        black_box(rssp::bpm::clean_norm_speeds_cow(black_box(&raw)));
+                    } else {
+                        black_box(rssp::bpm::clean_norm_map_cow(black_box(&raw)));
+                    }
+                });
+            }
+        }
+    }
+}
+
+fn spacing_cases(iters: usize) {
+    for lanes in [4, 5, 8, 10] {
+        for (name, spacing, rows) in [("sparse", 16, 256), ("dense", 1, 16), ("odd", 7, 129)] {
+            let mut data = Vec::new();
+            for i in 0..4096 {
+                let start = data.len();
+                data.resize(start + lanes, b'0');
+                if i % spacing == 0 {
+                    data[start + i % lanes] = b'1';
+                }
+                data.push(b'\n');
+                if i % rows == rows - 1 {
+                    data.extend_from_slice(b",\n");
+                }
+            }
+            measure(&format!("spacing/{lanes}_{name}"), 4096, iters, || {
+                black_box(rssp::nps::measure_equally_spaced(black_box(&data), lanes));
+            });
+        }
+    }
+}
+
+fn nps_stats_cases(iters: usize) {
+    for len in [1, 2, 3, 8, 16, 32, 63, 64, 65, 256, 4096] {
+        let values: Vec<_> = (0..len).map(|i| ((i * 37) % 23) as f64 / 3.0).collect();
+        measure(&format!("nps_stats/{len}_cold"), len, iters * 10, || {
+            black_box(rssp::nps::get_nps_stats(black_box(&values)));
+        });
+        let mut scratch = Vec::new();
+        measure(&format!("nps_stats/{len}_warm"), len, iters * 10, || {
+            black_box(rssp::nps::get_nps_stats_with_scratch(
+                black_box(&values),
+                &mut scratch,
+            ));
+        });
+    }
+}
+
+// Keep explicit corpus fields together so the original/final comparison is auditable.
+#[allow(clippy::too_many_lines)]
 fn verify_corpus() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/packs");
     let mut files: Vec<_> = walkdir::WalkDir::new(&root)
@@ -595,6 +664,10 @@ fn verify_corpus() {
                 if let Some(lanes) = rssp::supported_stepstype_lanes_bytes(chart.fields[0]) {
                     let densities = rssp::stats::measure_densities(chart.note_data, lanes);
                     println!("density {densities:?}");
+                    println!(
+                        "spacing {:?}",
+                        rssp::nps::measure_equally_spaced(chart.note_data, lanes)
+                    );
                     println!("sn {:?}", rssp::streams::generate_breakdowns(&densities));
                     println!(
                         "standard {:?} {:?}",
@@ -605,6 +678,23 @@ fn verify_corpus() {
                         )
                     );
                 }
+            }
+        }
+        if let Ok(parsed) = rssp::parse::extract_sections(&data, ext) {
+            for raw in [
+                parsed.bpms,
+                parsed.stops,
+                parsed.delays,
+                parsed.warps,
+                parsed.scrolls,
+                parsed.fakes,
+            ] {
+                if let Some(raw) = raw.and_then(|raw| std::str::from_utf8(raw).ok()) {
+                    println!("norm {:?}", rssp::bpm::clean_norm_map_cow(raw));
+                }
+            }
+            if let Some(raw) = parsed.speeds.and_then(|raw| std::str::from_utf8(raw).ok()) {
+                println!("speed {:?}", rssp::bpm::clean_norm_speeds_cow(raw));
             }
         }
         match rssp::compute_chart_durations(&data, ext, rssp::TimingOffsets::default()) {
@@ -676,6 +766,9 @@ fn main() {
     duration_cases(iters);
     duration_row_cases(iters);
     breakdown_cases(iters);
+    cleanup_cases(iters);
+    spacing_cases(iters);
+    nps_stats_cases(iters);
     let densities: Vec<_> = (0..16384).map(|i| [0, 16, 20, 24, 32][i % 5]).collect();
     for (name, step) in [("long_segments", 2048.0), ("short_segments", 4.0)] {
         let bpms: Vec<_> = (0..32)

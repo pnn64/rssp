@@ -616,3 +616,197 @@ cargo test --release --test all_parity -- --test-threads=22
 ```text
 test result: ok. 30489 passed; 0 failed
 ```
+
+
+# 0.4.274: retain normalization work, scan spacing, and stack small NPS medians
+
+## Changes
+
+1. Dirty timing pair maps retain their already-normalized prefix. On the first
+   dirty entry, the prefix is cleaned once and the remaining entries are
+   cleaned and normalized in one pass. This removes the discarded string,
+   repeated number parsing and formatting, the speculative pair-map helper, and
+   analysis forwarding helpers. Clean maps retain their borrowed raw text.
+   Pair-map control-character rules remain unchanged. Speed-map cleanup keeps
+   its original implementation: sharing the cleanup loop caused a measurable
+   regression on large clean speed maps, so that candidate was discarded.
+2. Measure spacing scans raw rows directly, eliminating the measure vector,
+   its growth, row copies, reduction, compaction, and second scan. Reduction
+   retains every nonzero row. The surviving row count follows from the
+   power-of-two alignment of the measure length and nonzero row positions;
+   comparing it with the number of note rows gives the original spacing flag.
+   Once a retained row proves spacing false, remaining row inspection stops
+   until the next measure boundary. At stride one, alignment bookkeeping
+   stops and only note checks remain. Empty measures, odd row counts, comments,
+   terminators, unsupported lane counts, mines, tails, and unknown bytes retain
+   their original behavior.
+3. The allocating NPS statistics API selects small medians in a fixed array
+   of 64 doubles instead of creating a vector. One/two-value special cases
+   and existing scan shortcuts remain. The caller-owned scratch API retains
+   its original reuse path. Larger medians use the existing heap storage.
+
+Workspace versions increase exactly once from 0.4.273 to 0.4.274. Public
+signatures, output text, and float operations remain unchanged.
+
+## Benchmark method
+
+Baseline production code is `bd55b4c`. Both executables use workspace version
+0.4.274, identical measured benchmark code, fixtures, dependencies and compiler,
+and the same checkout and target directory. The baseline executable was saved
+before production edits. Holding the version constant avoids crate-metadata
+changes in this comparison.
+
+Measurements use rustc 1.98.1 / LLVM 22.1.8, x86_64-pc-windows-msvc, an Intel
+Xeon E5-2696 v4 (22 cores / 44 logical processors), fat LTO and one codegen unit.
+The measuring thread is pinned to logical CPU 2. Each process takes the median
+of seven batches after warmup; tables report medians from three alternating
+baseline/optimized process pairs. Component cases use 500 calls per batch;
+NPS statistics use 5,000. Analysis uses 30, with three calls per batch for
+Camellia. Setup, fixture generation and I/O occur outside timed loops. Timing
+and allocation counting run separately. Cycles come from Windows
+QueryThreadCycleTime; requested bytes sum allocation and full reallocation
+requests, measuring churn rather than peak memory. No rssp builds or tests
+run during final measurements. Other shared-machine activity can affect CPU
+and elapsed-time results; allocation reductions are deterministic.
+
+## Timing-map normalization
+
+Clean, early-dirty and late-dirty inputs exercise pair maps and unchanged speed
+maps at three sizes. Prefix reuse targets late-dirty pairs, while all dirty
+pair maps avoid the discarded initial allocation. Clean input and speed-map
+allocation counts remain unchanged.
+
+| Case | CPU cycles/call, old -> new | Allocations / reallocations, old -> new | Requested bytes/call, old -> new | Throughput change |
+| --- | ---: | ---: | ---: | ---: |
+| cleanup/pair_1_clean | 825 -> 696 | 1 / 1 -> 1 / 1 | 27 -> 27 | +18.5% |
+| cleanup/speed_1_clean | 1,073 -> 912 | 1 / 1 -> 1 / 1 | 36 -> 36 | +19.7% |
+| cleanup/pair_1_early | 1,010 -> 792 | 3 / 0 -> 2 / 0 | 39 -> 26 | +27.3% |
+| cleanup/speed_1_early | 1,391 -> 1,483 | 3 / 1 -> 3 / 1 | 80 -> 80 | -6.2% |
+| cleanup/pair_1_late | 986 -> 790 | 3 / 0 -> 2 / 0 | 39 -> 26 | +24.9% |
+| cleanup/speed_1_late | 1,316 -> 1,341 | 3 / 1 -> 3 / 1 | 80 -> 80 | -2.0% |
+| cleanup/pair_128_clean | 48,435 -> 45,897 | 1 / 1 -> 1 / 1 | 4,521 -> 4,521 | +5.5% |
+| cleanup/speed_128_clean | 75,466 -> 72,314 | 1 / 1 -> 1 / 1 | 5,673 -> 5,673 | +4.2% |
+| cleanup/pair_128_early | 55,948 -> 52,783 | 3 / 1 -> 2 / 1 | 7,555 -> 6,044 | +5.9% |
+| cleanup/speed_128_early | 83,551 -> 83,682 | 3 / 1 -> 3 / 1 | 9,475 -> 9,475 | -0.1% |
+| cleanup/pair_128_late | 107,701 -> 61,363 | 3 / 2 -> 2 / 1 | 10,577 -> 6,044 | +75.5% |
+| cleanup/speed_128_late | 154,160 -> 152,209 | 3 / 2 -> 3 / 2 | 13,265 -> 13,265 | +1.3% |
+| cleanup/pair_4096_clean | 1,657,404 -> 1,577,723 | 1 / 1 -> 1 / 1 | 163,695 -> 163,695 | +5.1% |
+| cleanup/speed_4096_clean | 2,337,740 -> 2,400,354 | 1 / 1 -> 1 / 1 | 200,559 -> 200,559 | -2.7% |
+| cleanup/pair_4096_early | 1,778,771 -> 1,869,876 | 3 / 1 -> 2 / 1 | 272,845 -> 218,276 | -4.9% |
+| cleanup/speed_4096_early | 2,607,276 -> 2,652,944 | 3 / 1 -> 3 / 1 | 334,285 -> 334,285 | -1.8% |
+| cleanup/pair_4096_late | 3,440,356 -> 2,078,007 | 3 / 2 -> 2 / 1 | 381,983 -> 218,276 | +65.5% |
+| cleanup/speed_4096_late | 5,042,807 -> 5,294,836 | 3 / 2 -> 3 / 2 | 467,999 -> 467,999 | -5.2% |
+
+## Measure spacing
+
+Each input has 4,096 rows. Sparse measures have 256 rows with one note every
+16 rows; dense measures have 16 rows with a note on every row; odd measures
+have 129 rows and a note every seven rows. Only the output flag vector remains.
+
+| Case | CPU cycles/call, old -> new | Allocations / reallocations, old -> new | Requested bytes/call, old -> new | Throughput change |
+| --- | ---: | ---: | ---: | ---: |
+| spacing/4_sparse | 80,428 -> 73,697 | 2 / 2 -> 1 / 0 | 1,809 -> 17 | +9.1% |
+| spacing/4_dense | 111,836 -> 90,983 | 2 / 0 -> 1 / 0 | 513 -> 257 | +22.8% |
+| spacing/4_odd | 70,226 -> 71,180 | 2 / 2 -> 1 / 0 | 1,824 -> 32 | -1.3% |
+| spacing/5_sparse | 85,897 -> 84,529 | 2 / 2 -> 1 / 0 | 2,257 -> 17 | +1.6% |
+| spacing/5_dense | 113,530 -> 99,354 | 2 / 0 -> 1 / 0 | 577 -> 257 | +14.3% |
+| spacing/5_odd | 74,285 -> 70,896 | 2 / 2 -> 1 / 0 | 2,272 -> 32 | +4.9% |
+| spacing/8_sparse | 87,826 -> 93,702 | 2 / 2 -> 1 / 0 | 3,601 -> 17 | -6.3% |
+| spacing/8_dense | 136,681 -> 126,429 | 2 / 0 -> 1 / 0 | 769 -> 257 | +8.1% |
+| spacing/8_odd | 82,197 -> 82,969 | 2 / 2 -> 1 / 0 | 3,616 -> 32 | -0.9% |
+| spacing/10_sparse | 96,634 -> 101,122 | 2 / 2 -> 1 / 0 | 4,497 -> 17 | -4.4% |
+| spacing/10_dense | 143,444 -> 141,819 | 2 / 0 -> 1 / 0 | 897 -> 257 | +1.2% |
+| spacing/10_odd | 86,587 -> 87,221 | 2 / 2 -> 1 / 0 | 4,512 -> 32 | -0.8% |
+
+Spacing CPU results depend on the input. The ten-lane sparse case uses 4.6%
+more cycles while requested allocation bytes fall from 4,497 to 17 (99.6%).
+The table includes this tradeoff; the change does not claim a universal CPU
+speedup. The measure buffer and its reallocations are eliminated in every case.
+
+
+## NPS statistics
+
+Cold cases call get_nps_stats; warm cases call get_nps_stats_with_scratch after
+warmup. The latter is an allocation-free control and preserves its original
+storage strategy. Mixed deterministic values avoid the constant-value median
+shortcut. Sizes around 64 verify the boundary and larger controls.
+
+| Case | CPU cycles/call, old -> new | Allocations / reallocations, old -> new | Requested bytes/call, old -> new | Throughput change |
+| --- | ---: | ---: | ---: | ---: |
+| nps_stats/1_cold | 30 -> 16 | 0 / 0 -> 0 / 0 | 0 -> 0 | +75.0% |
+| nps_stats/1_warm | 22 -> 19 | 0 / 0 -> 0 / 0 | 0 -> 0 | +11.1% |
+| nps_stats/2_cold | 41 -> 21 | 0 / 0 -> 0 / 0 | 0 -> 0 | +90.0% |
+| nps_stats/2_warm | 31 -> 30 | 0 / 0 -> 0 / 0 | 0 -> 0 | +0.0% |
+| nps_stats/3_cold | 243 -> 63 | 1 / 0 -> 0 / 0 | 32 -> 0 | +282.8% |
+| nps_stats/3_warm | 42 -> 50 | 0 / 0 -> 0 / 0 | 0 -> 0 | -17.4% |
+| nps_stats/8_cold | 273 -> 123 | 1 / 0 -> 0 / 0 | 64 -> 0 | +119.3% |
+| nps_stats/8_warm | 108 -> 110 | 0 / 0 -> 0 / 0 | 0 -> 0 | -2.0% |
+| nps_stats/16_cold | 435 -> 233 | 1 / 0 -> 0 / 0 | 128 -> 0 | +86.0% |
+| nps_stats/16_warm | 211 -> 203 | 0 / 0 -> 0 / 0 | 0 -> 0 | +3.2% |
+| nps_stats/32_cold | 1,162 -> 444 | 1 / 0 -> 0 / 0 | 256 -> 0 | +165.5% |
+| nps_stats/32_warm | 452 -> 431 | 0 / 0 -> 0 / 0 | 0 -> 0 | +3.5% |
+| nps_stats/63_cold | 992 -> 770 | 1 / 0 -> 0 / 0 | 504 -> 0 | +29.1% |
+| nps_stats/63_warm | 734 -> 730 | 0 / 0 -> 0 / 0 | 0 -> 0 | +0.6% |
+| nps_stats/64_cold | 1,652 -> 819 | 1 / 0 -> 0 / 0 | 512 -> 0 | +101.9% |
+| nps_stats/64_warm | 860 -> 824 | 0 / 0 -> 0 / 0 | 0 -> 0 | +4.5% |
+| nps_stats/65_cold | 1,019 -> 1,028 | 1 / 0 -> 1 / 0 | 520 -> 520 | -0.9% |
+| nps_stats/65_warm | 797 -> 768 | 0 / 0 -> 0 / 0 | 0 -> 0 | +4.0% |
+| nps_stats/256_cold | 2,983 -> 2,954 | 1 / 0 -> 1 / 0 | 2,048 -> 2,048 | +0.9% |
+| nps_stats/256_warm | 2,665 -> 2,542 | 0 / 0 -> 0 / 0 | 0 -> 0 | +4.5% |
+| nps_stats/4096_cold | 48,848 -> 44,455 | 1 / 0 -> 1 / 0 | 32,768 -> 32,768 | +10.2% |
+| nps_stats/4096_warm | 44,156 -> 44,266 | 0 / 0 -> 0 / 0 | 0 -> 0 | -0.3% |
+
+The unchanged three-value warm control measures 4 ns slower in this build;
+other warm controls vary in both directions. These expose layout and machine
+variation alongside the changed cold path. Heap allocation counts are zero
+for every cold case through 64 values, including the original 0/1/2 shortcuts.
+
+
+## Composed analysis controls
+
+Complete analysis exercises timing normalization and NPS statistics alongside
+the chart's other work. Raw spacing is a separate public API; the existing
+reporting visitor already consumes minimized data and remains unchanged.
+
+| Case | CPU cycles/call, old -> new | Allocations / reallocations, old -> new | Requested bytes/call, old -> new | Throughput change |
+| --- | ---: | ---: | ---: | ---: |
+| analyze/fast_fake_lifts | 712,519 -> 700,117 | 31 / 4 -> 31 / 4 | 59,028 -> 59,028 | +2.2% |
+| analyze/camellia | 468,367,636 -> 462,549,130 | 110 / 0 -> 110 / 0 | 5,263,624 -> 5,263,624 | +1.4% |
+| analyze/fast_camellia | 59,901,913 -> 59,170,687 | 115 / 0 -> 115 / 0 | 7,051,152 -> 7,051,152 | +1.3% |
+| analyze/mixed_small | 56,631 -> 54,187 | 59 / 3 -> 59 / 3 | 7,460 -> 7,460 | +4.5% |
+
+## Behavioral validation
+
+- 210 release tests passed: 60 rssp library, 138 core library and 12 integration
+  tests. New tests compare cleanup with the existing owned APIs, spacing with
+  minimization plus the production spacing visitor, and small NPS medians with
+  in-place selection. They cover control characters, nonfinite values, signed
+  zero, lane widths, row-count boundaries and empty measures.
+- Original and final executables produced byte-identical component output on
+  all 30,843 corpus files (30,489 supported inputs and 354 matching errors),
+  covering 56,125 charts. Added comparisons include raw measure spacing and
+  global timing-map normalization, alongside densities, breakdowns, duration,
+  peak NPS and BPM snapshots. UTF-8 SHA-256:
+  `9248db7d2bd754546c0755ebfee578231e0350c77b677bdbcbb8fcc2db3fe2ae`.
+- After final benchmarks confirmed the changes, the exact required command
+  passed: `cargo test --release --test all_parity -- --test-threads=22`.
+  Result: 30,489 passed, zero failures, before commit.
+- Release Clippy with `-D warnings`, formatting and git diff checks passed.
+
+## Reproduction
+
+Build the identical harness against baseline production and final production
+with both manifests at 0.4.274:
+
+```powershell
+cargo bench -p rssp --bench hotpath_perf --no-run
+$env:RSSP_HOT_FILTER = 'cleanup/' # also spacing/, nps_stats/, analyze/
+$env:RSSP_HOT_ITERS = '500'       # 30 for analysis
+& target/release/deps/hotpath_perf-<hash>.exe
+$env:RSSP_HOT_VERIFY = '1'
+& target/release/deps/hotpath_perf-<hash>.exe
+```
+
+Local executables, three-pair raw logs, measurement JSON and corpus output are
+under the ignored target/perf-274 directory. rust-performance.md, optimize.sh
+and optimize.ps1 are excluded from this commit.

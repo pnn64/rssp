@@ -155,11 +155,35 @@ pub fn clean_and_normalize_float_digits(param: &str) -> (String, String) {
 
 #[must_use]
 pub fn clean_norm_map_cow(param: &str) -> (Cow<'_, str>, String) {
-    if let Some(normalized) = normalize_clean_pairs(param) {
+    let mut normalized = String::with_capacity(param.len());
+    if param.is_empty() {
         return (Cow::Borrowed(param), normalized);
     }
-    let (cleaned, normalized) = clean_and_normalize_float_digits(param);
-    (Cow::Owned(cleaned), normalized)
+    let mut entries = param.split(',');
+    while let Some(entry) = entries.next() {
+        if !entry.is_empty() && entry_is_trimmed(entry) {
+            let start = normalized.len();
+            push_norm_pair(&mut normalized, entry);
+            if normalized.len() != start || !has_control(entry) {
+                continue;
+            }
+        }
+        // A dirty entry only requires cleaning the prefix, not parsing and
+        // formatting its already-normalized numbers again.
+        let mut cleaned = String::with_capacity(param.len());
+        // split yields a subslice of param, so this byte offset is a UTF-8 boundary.
+        let offset = entry.as_ptr() as usize - param.as_ptr() as usize;
+        for prefix in param[..offset].split(',') {
+            let _ = push_clean_entry(&mut cleaned, prefix);
+        }
+        for entry in std::iter::once(entry).chain(entries) {
+            if let Some(start) = push_clean_entry(&mut cleaned, entry) {
+                push_norm_pair(&mut normalized, &cleaned[start..]);
+            }
+        }
+        return (Cow::Owned(cleaned), normalized);
+    }
+    (Cow::Borrowed(param), normalized)
 }
 
 #[must_use]
@@ -184,27 +208,6 @@ pub fn clean_norm_speeds_cow(param: &str) -> (Cow<'_, str>, String) {
     }
     let (cleaned, normalized) = clean_and_normalize_speeds_float_digits(param);
     (Cow::Owned(cleaned), normalized)
-}
-
-fn normalize_clean_pairs(param: &str) -> Option<String> {
-    let mut normalized = String::with_capacity(param.len());
-    for entry in param.split(',') {
-        if entry.is_empty() {
-            if param.is_empty() {
-                continue;
-            }
-            return None;
-        }
-        if !entry_is_trimmed(entry) {
-            return None;
-        }
-        let start = normalized.len();
-        push_norm_pair(&mut normalized, entry);
-        if normalized.len() == start && has_control(entry) {
-            return None;
-        }
-    }
-    Some(normalized)
 }
 
 fn normalize_clean_speeds(param: &str) -> Option<String> {
