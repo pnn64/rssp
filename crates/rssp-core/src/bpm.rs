@@ -198,28 +198,31 @@ pub fn clean_and_normalize_speeds_float_digits(param: &str) -> (String, String) 
 
 #[must_use]
 pub fn clean_norm_speeds_cow(param: &str) -> (Cow<'_, str>, String) {
-    if let Some(normalized) = normalize_clean_speeds(param) {
+    let mut normalized = String::with_capacity(param.len());
+    if param.is_empty() {
         return (Cow::Borrowed(param), normalized);
     }
-    let (cleaned, normalized) = clean_and_normalize_speeds_float_digits(param);
-    (Cow::Owned(cleaned), normalized)
-}
-
-fn normalize_clean_speeds(param: &str) -> Option<String> {
-    let mut normalized = String::with_capacity(param.len());
-    for entry in param.split(',') {
-        if entry.is_empty() {
-            if param.is_empty() {
-                continue;
+    let mut entries = param.split(',');
+    while let Some(entry) = entries.next() {
+        if !entry.is_empty() && entry_is_trimmed(entry) && !has_control(entry) {
+            push_norm_speed(&mut normalized, entry);
+            continue;
+        }
+        // Retain formatted numbers when a later entry needs cleanup.
+        let mut cleaned = String::with_capacity(param.len());
+        // split yields a subslice of param at a UTF-8 boundary.
+        let offset = entry.as_ptr() as usize - param.as_ptr() as usize;
+        for prefix in param[..offset].split(',') {
+            let _ = push_clean_entry(&mut cleaned, prefix);
+        }
+        for entry in std::iter::once(entry).chain(entries) {
+            if let Some(start) = push_clean_entry(&mut cleaned, entry) {
+                push_norm_speed(&mut normalized, &cleaned[start..]);
             }
-            return None;
         }
-        if !entry_is_trimmed(entry) || has_control(entry) {
-            return None;
-        }
-        push_norm_speed(&mut normalized, entry);
+        return (Cow::Owned(cleaned), normalized);
     }
-    Some(normalized)
+    (Cow::Borrowed(param), normalized)
 }
 
 fn entry_is_trimmed(entry: &str) -> bool {
@@ -1358,6 +1361,39 @@ mod tests {
         }
         assert!(matches!(clean_norm_map_cow("0=120"), (Cow::Borrowed(_), _)));
         assert!(matches!(clean_norm_map_cow(",0=120,"), (Cow::Owned(_), _)));
+    }
+
+    #[test]
+    fn speed_cleanup_edges() {
+        for raw in [
+            "",
+            "0=1=0=0",
+            ",",
+            ",,,",
+            "bad,",
+            "0=1=0=0,bad",
+            "0=1=0=0, 4=2=1=1 ",
+            "0=1=0=0,,8=3=0=1,",
+            "0=1=0=0,4=\u{1}2=1=1",
+            "0=1=0=0,\t4=2=1=1\n",
+            "0=1=0=0,\u{2003}4=2=1=1\u{2003}",
+            "0=1=0=0,4=2=1=\u{85}1",
+            "NaN=inf=-inf=0,4=-0=0=1=ignored",
+        ] {
+            let expected = clean_and_normalize_speeds_float_digits(raw);
+            let actual = clean_norm_speeds_cow(raw);
+            assert_eq!(actual.0.as_ref(), expected.0, "raw {raw:?}");
+            assert_eq!(actual.1, expected.1, "norm {raw:?}");
+        }
+        assert!(matches!(clean_norm_speeds_cow(""), (Cow::Borrowed(_), _)));
+        assert!(matches!(
+            clean_norm_speeds_cow("0=1=0=0"),
+            (Cow::Borrowed(_), _)
+        ));
+        let actual = clean_norm_speeds_cow("0=1=0=0, 4=2=1=1 ");
+        assert!(matches!(actual.0, Cow::Owned(_)));
+        assert_eq!(actual.0, "0=1=0=0,4=2=1=1");
+        assert_eq!(actual.1, "0.000=1.000=0.000=0,4.000=2.000=1.000=1");
     }
     #[test]
     fn normalize_float_digits_formats_pairs() {

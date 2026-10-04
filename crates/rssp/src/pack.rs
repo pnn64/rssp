@@ -5,6 +5,10 @@ use std::path::{Path, PathBuf};
 
 use crate::assets;
 
+#[cfg(test)]
+#[path = "../benches/support/pack_edges.rs"]
+mod pass_edges;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DupPolicy {
     #[default]
@@ -115,15 +119,16 @@ fn sort_compact_ci<T>(
             .then_with(|| left.original.cmp(&right.original))
     });
 
-    let mut destinations = vec![0u32; values.len()];
-    for (target, key) in keys.iter().enumerate() {
-        destinations[key.original as usize] = target as u32;
+    // Sorted keys no longer need text offsets; reuse them for destinations.
+    for target in 0..keys.len() {
+        let original = keys[target].original as usize;
+        keys[original].start = target as u32;
     }
     for index in 0..values.len() {
-        while destinations[index] as usize != index {
-            let target = destinations[index] as usize;
+        while keys[index].start as usize != index {
+            let target = keys[index].start as usize;
             values.swap(index, target);
-            destinations.swap(index, target);
+            keys.swap(index, target);
         }
     }
 }

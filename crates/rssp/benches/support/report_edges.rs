@@ -6,6 +6,9 @@ use crate::perf::fixtures;
 #[path = "course_reports.rs"]
 mod course_reports;
 
+#[path = "csv_edges.rs"]
+mod csv_edges;
+
 #[test]
 fn course_report_edges() {
     use std::io::{self, Write};

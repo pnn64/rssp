@@ -2395,3 +2395,297 @@ Validation:
 - Separate course report comparison: all 12 complete outputs (three title lengths × four output modes) are byte-identical. JSON fields, flags, native timing, partial-write prefixes, first I/O errors, and post-call reference counts are tested directly.
 - `cargo clippy --release --workspace --all-targets -- -D warnings`, formatting, and diff checks pass.
 - No cache, dependency, timing arithmetic, production unsafe code, or new production API is added. `rust-performance.md`, `optimize.sh`, and `optimize.ps1` are excluded from the commit.
+
+# 0.4.283: stream course hashes and reuse sorting and normalization work
+
+## Changes
+
+1. Course CSV writes hash strings and separators directly to the output writer.
+   This deletes the length prepasses, temporary String, buffer reset, and extra
+   copies. Empty lists, empty hashes, embedded separators, Unicode, and partial
+   writer errors retain their output bytes and error propagation. The CLI uses
+   its existing stdout lock; callers writing files should continue buffering
+   report output because reports issue many writes. No disk I/O is timed here.
+2. Pack sorting stores permutation destinations in key offsets after sorting,
+   when those offsets are no longer needed. This deletes the separate zeroed
+   destination Vec. ASCII-insensitive ordering, stable ties, record ownership,
+   the small-list path, and oversized-input fallbacks are preserved. The sort
+   still performs a bounded number of swaps; no cache or new lifetime is added.
+3. Speed-map cleanup retains its already-formatted prefix on the first dirty
+   entry. It cleans the raw prefix and then cleans/formats the remainder once,
+   deleting the speculative normalizer helper, discarded allocation, and
+   repeated prefix parsing/formatting. Clean raw maps remain borrowed. The
+   original control-character, whitespace, numeric, and unit rules remain.
+
+The three production edits together remove nine lines. There are no new
+dependencies, public APIs, production unsafe blocks, or caches. The workspace
+patch version changes exactly once, from 0.4.282 to 0.4.283.
+
+## Method
+
+Original production code is commit 1ad0434. Both baseline and optimized builds
+use version 0.4.283 and identical fixtures/harnesses. Original executables were
+saved before applying the production edits. Rust 1.98.1 / LLVM 22.1.8 targets
+x86_64-pc-windows-msvc on the Xeon E5-2696 v4 host with 44 logical CPUs. Release
+and bench retain fat LTO and one codegen unit; bench retains debug information.
+
+Benchmarks call production functions directly. Four warmups precede seven
+batches, with the thread pinned to logical CPU 2. Each table reports medians of
+three alternating process pairs: old/new, new/old, old/new. Windows
+QueryThreadCycleTime supplies thread cycles; elapsed time supplies throughput.
+Allocator calls/requested bytes are counted separately for one invocation.
+Requested bytes measure allocation churn, including realloc requests, rather
+than process RSS. Fixtures, parsing/setup for output benchmarks, buffer reserve,
+and fresh sorting-input clones are outside measurement. Sorting scratch and
+target normalization allocations are inside measurement. Sort input/output
+destruction occurs after the timer; target scratch destruction is included.
+
+Pack sorting uses 500 iterations/batch for the generic sorter and 200 for the
+PackScan caller, across ordered, reversed, rotated, mixed, and equal names.
+Every iteration receives fresh unsorted input. Sizes 1/4 exercise the unchanged
+small path; 5/32/256/4096 exercise compact keys. The PackScan caller stops at 256
+to avoid excessive setup memory. CSV uses 2,000 iterations with preallocated Vec
+and 8 KiB BufWriter outputs, ordinary 16-byte hashes, arbitrary hash bytes, and
+1 KiB hashes. Cleanup uses 300 iterations on 1/128/4096-entry pair/speed maps;
+unchanged pair maps are controls. Four-chart speed loads use 80 iterations;
+ordinary analysis uses 40 (Camellia uses four); course report controls use 2,000.
+The focused repeat uses 3,000 iterations on the six 128-entry cleanup cases.
+
+Scripts, saved executables, raw runs, and output traces remain in ignored
+target/perf-283. run.py accepts exact case prefixes; measurements.json contains
+all 114 main medians and raw process values; focused.json contains six repeats.
+
+## Results
+
+
+Course CSV removes its temporary allocation for every nonempty hash field.
+For 32 ordinary hashes, thread cycles fall from 2,643 to 2,182 with Vec output
+and from 2,691 to 2,385 with buffered output; throughput rises 21.7% and 13.1%.
+The 4,096-hash case removes 69,631 requested bytes and gains 47.0%/31.7% in
+throughput. The 32 long-hash case removes 32,799 bytes and gains 87.3%/61.3%.
+
+Compact pack sorting changes three scratch allocations to two and requested
+bytes from 40N to 36N for these fixtures: a 10% reduction, saving 16,384 bytes
+at 4,096 entries. Five-entry sort throughput gains 19.4-33.1%; 32-entry sort
+gains 5.1-9.4%. The 32-entry PackScan caller gains 0.7-16.1%. Large generic
+sorts are mostly near flat, so the durable large-list gain is memory churn.
+
+Late-dirty speed normalization at 4,096 entries falls from 4,946,542 to
+2,879,363 cycles (-41.8%), with allocations/reallocations 3/2 -> 2/1 and
+requested bytes 467,999 -> 267,428 (-42.9%). Throughput improves 71.6% in the
+leaf and 45.8% in four-chart analysis. The focused 128-entry repeat retains a
+70.7% throughput improvement for late dirtiness and 42.9% fewer requested
+bytes. Early-dirty maps save one allocation and 20% of requested bytes.
+
+### Pack sorter
+
+| Case | Thread cycles, old -> new | ns, old -> new | Alloc/realloc, old -> new | Requested bytes, old -> new | Throughput |
+|---|---:|---:|---:|---:|---:|
+| pack_sort/1_sorted | 17 -> 17 | 10 -> 10 | 0/0 -> 0/0 | 0 -> 0 | +0.0% |
+| pack_sort/1_reverse | 17 -> 17 | 10 -> 9 | 0/0 -> 0/0 | 0 -> 0 | +11.1% |
+| pack_sort/1_cycle | 17 -> 17 | 9 -> 9 | 0/0 -> 0/0 | 0 -> 0 | +0.0% |
+| pack_sort/1_mixed | 17 -> 17 | 10 -> 9 | 0/0 -> 0/0 | 0 -> 0 | +11.1% |
+| pack_sort/1_equal | 16 -> 17 | 9 -> 10 | 0/0 -> 0/0 | 0 -> 0 | -10.0% |
+| pack_sort/4_sorted | 138 -> 139 | 65 -> 66 | 0/0 -> 0/0 | 0 -> 0 | -1.5% |
+| pack_sort/4_reverse | 259 -> 262 | 120 -> 122 | 0/0 -> 0/0 | 0 -> 0 | -1.6% |
+| pack_sort/4_cycle | 216 -> 216 | 101 -> 101 | 0/0 -> 0/0 | 0 -> 0 | +0.0% |
+| pack_sort/4_mixed | 139 -> 140 | 66 -> 66 | 0/0 -> 0/0 | 0 -> 0 | +0.0% |
+| pack_sort/4_equal | 142 -> 141 | 67 -> 67 | 0/0 -> 0/0 | 0 -> 0 | +0.0% |
+| pack_sort/5_sorted | 740 -> 567 | 346 -> 260 | 3/0 -> 2/0 | 200 -> 180 | +33.1% |
+| pack_sort/5_reverse | 903 -> 753 | 413 -> 345 | 3/0 -> 2/0 | 200 -> 180 | +19.7% |
+| pack_sort/5_cycle | 842 -> 697 | 388 -> 320 | 3/0 -> 2/0 | 200 -> 180 | +21.2% |
+| pack_sort/5_mixed | 821 -> 687 | 376 -> 315 | 3/0 -> 2/0 | 200 -> 180 | +19.4% |
+| pack_sort/5_equal | 730 -> 570 | 335 -> 261 | 3/0 -> 2/0 | 200 -> 180 | +28.4% |
+| pack_sort/32_sorted | 2,597 -> 2,407 | 1,186 -> 1,099 | 3/0 -> 2/0 | 1,280 -> 1,152 | +7.9% |
+| pack_sort/32_reverse | 2,504 -> 2,333 | 1,157 -> 1,066 | 3/0 -> 2/0 | 1,280 -> 1,152 | +8.5% |
+| pack_sort/32_cycle | 5,778 -> 5,447 | 2,636 -> 2,508 | 3/0 -> 2/0 | 1,280 -> 1,152 | +5.1% |
+| pack_sort/32_mixed | 5,183 -> 4,692 | 2,369 -> 2,171 | 3/0 -> 2/0 | 1,280 -> 1,152 | +9.1% |
+| pack_sort/32_equal | 2,274 -> 2,049 | 1,039 -> 950 | 3/0 -> 2/0 | 1,280 -> 1,152 | +9.4% |
+| pack_sort/256_sorted | 16,730 -> 15,378 | 7,669 -> 7,022 | 3/0 -> 2/0 | 10,240 -> 9,216 | +9.2% |
+| pack_sort/256_reverse | 16,559 -> 16,569 | 7,610 -> 7,595 | 3/0 -> 2/0 | 10,240 -> 9,216 | +0.2% |
+| pack_sort/256_cycle | 68,408 -> 62,823 | 31,292 -> 28,709 | 3/0 -> 2/0 | 10,240 -> 9,216 | +9.0% |
+| pack_sort/256_mixed | 75,697 -> 74,689 | 34,645 -> 34,226 | 3/0 -> 2/0 | 10,240 -> 9,216 | +1.2% |
+| pack_sort/256_equal | 14,140 -> 14,122 | 6,488 -> 6,464 | 3/0 -> 2/0 | 10,240 -> 9,216 | +0.4% |
+| pack_sort/4096_sorted | 262,616 -> 262,229 | 120,103 -> 119,914 | 3/0 -> 2/0 | 163,840 -> 147,456 | +0.2% |
+| pack_sort/4096_reverse | 292,030 -> 290,377 | 133,608 -> 132,780 | 3/0 -> 2/0 | 163,840 -> 147,456 | +0.6% |
+| pack_sort/4096_cycle | 1,762,947 -> 1,778,906 | 806,180 -> 813,434 | 3/0 -> 2/0 | 163,840 -> 147,456 | -0.9% |
+| pack_sort/4096_mixed | 2,221,709 -> 2,240,505 | 1,016,038 -> 1,024,734 | 3/0 -> 2/0 | 163,840 -> 147,456 | -0.8% |
+| pack_sort/4096_equal | 242,346 -> 251,404 | 110,816 -> 115,025 | 3/0 -> 2/0 | 163,840 -> 147,456 | -3.7% |
+
+### PackScan caller
+
+| Case | Thread cycles, old -> new | ns, old -> new | Alloc/realloc, old -> new | Requested bytes, old -> new | Throughput |
+|---|---:|---:|---:|---:|---:|
+| pack_list/1_sorted | 21 -> 21 | 15 -> 14 | 0/0 -> 0/0 | 0 -> 0 | +7.1% |
+| pack_list/1_reverse | 21 -> 22 | 15 -> 15 | 0/0 -> 0/0 | 0 -> 0 | +0.0% |
+| pack_list/1_cycle | 21 -> 22 | 15 -> 15 | 0/0 -> 0/0 | 0 -> 0 | +0.0% |
+| pack_list/1_mixed | 21 -> 21 | 14 -> 14 | 0/0 -> 0/0 | 0 -> 0 | +0.0% |
+| pack_list/1_equal | 21 -> 22 | 14 -> 15 | 0/0 -> 0/0 | 0 -> 0 | -6.7% |
+| pack_list/4_sorted | 200 -> 205 | 98 -> 100 | 0/0 -> 0/0 | 0 -> 0 | -2.0% |
+| pack_list/4_reverse | 522 -> 530 | 245 -> 249 | 0/0 -> 0/0 | 0 -> 0 | -1.6% |
+| pack_list/4_cycle | 390 -> 387 | 185 -> 184 | 0/0 -> 0/0 | 0 -> 0 | +0.5% |
+| pack_list/4_mixed | 202 -> 203 | 98 -> 100 | 0/0 -> 0/0 | 0 -> 0 | -2.0% |
+| pack_list/4_equal | 196 -> 196 | 96 -> 96 | 0/0 -> 0/0 | 0 -> 0 | +0.0% |
+| pack_list/5_sorted | 1,070 -> 1,034 | 494 -> 478 | 3/0 -> 2/0 | 200 -> 180 | +3.3% |
+| pack_list/5_reverse | 1,119 -> 988 | 518 -> 457 | 3/0 -> 2/0 | 200 -> 180 | +13.3% |
+| pack_list/5_cycle | 1,122 -> 994 | 519 -> 461 | 3/0 -> 2/0 | 200 -> 180 | +12.6% |
+| pack_list/5_mixed | 1,091 -> 950 | 504 -> 441 | 3/0 -> 2/0 | 200 -> 180 | +14.3% |
+| pack_list/5_equal | 846 -> 676 | 399 -> 314 | 3/0 -> 2/0 | 200 -> 180 | +27.1% |
+| pack_list/32_sorted | 3,841 -> 3,310 | 1,763 -> 1,518 | 3/0 -> 2/0 | 1,280 -> 1,152 | +16.1% |
+| pack_list/32_reverse | 4,244 -> 3,682 | 1,943 -> 1,685 | 3/0 -> 2/0 | 1,280 -> 1,152 | +15.3% |
+| pack_list/32_cycle | 7,428 -> 7,306 | 3,394 -> 3,372 | 3/0 -> 2/0 | 1,280 -> 1,152 | +0.7% |
+| pack_list/32_mixed | 5,924 -> 5,558 | 2,725 -> 2,540 | 3/0 -> 2/0 | 1,280 -> 1,152 | +7.3% |
+| pack_list/32_equal | 2,760 -> 2,470 | 1,269 -> 1,136 | 3/0 -> 2/0 | 1,280 -> 1,152 | +11.7% |
+| pack_list/256_sorted | 31,643 -> 23,563 | 14,449 -> 10,840 | 3/0 -> 2/0 | 10,240 -> 9,216 | +33.3% |
+| pack_list/256_reverse | 39,143 -> 30,619 | 17,864 -> 14,020 | 3/0 -> 2/0 | 10,240 -> 9,216 | +27.4% |
+| pack_list/256_cycle | 112,777 -> 81,054 | 51,601 -> 37,158 | 3/0 -> 2/0 | 10,240 -> 9,216 | +38.9% |
+| pack_list/256_mixed | 117,409 -> 95,928 | 53,714 -> 43,832 | 3/0 -> 2/0 | 10,240 -> 9,216 | +22.5% |
+| pack_list/256_equal | 23,321 -> 23,668 | 10,652 -> 10,948 | 3/0 -> 2/0 | 10,240 -> 9,216 | -2.7% |
+
+### Course CSV output
+
+| Case | Thread cycles, old -> new | ns, old -> new | Alloc/realloc, old -> new | Requested bytes, old -> new | Throughput |
+|---|---:|---:|---:|---:|---:|
+| csv_hash/0_plain_false | 1,826 -> 1,730 | 842 -> 789 | 0/0 -> 0/0 | 0 -> 0 | +6.7% |
+| csv_hash/0_plain_true | 1,709 -> 1,823 | 787 -> 833 | 0/0 -> 0/0 | 0 -> 0 | -5.5% |
+| csv_hash/1_plain_false | 1,975 -> 1,680 | 902 -> 774 | 1/0 -> 0/0 | 16 -> 0 | +16.5% |
+| csv_hash/1_plain_true | 2,089 -> 1,742 | 952 -> 797 | 1/0 -> 0/0 | 16 -> 0 | +19.4% |
+| csv_hash/32_plain_false | 2,643 -> 2,182 | 1,212 -> 996 | 1/0 -> 0/0 | 543 -> 0 | +21.7% |
+| csv_hash/32_plain_true | 2,691 -> 2,385 | 1,233 -> 1,090 | 1/0 -> 0/0 | 543 -> 0 | +13.1% |
+| csv_hash/256_plain_false | 7,092 -> 5,094 | 3,244 -> 2,332 | 1/0 -> 0/0 | 4,351 -> 0 | +39.1% |
+| csv_hash/256_plain_true | 8,044 -> 5,798 | 3,679 -> 2,647 | 1/0 -> 0/0 | 4,351 -> 0 | +39.0% |
+| csv_hash/4096_plain_false | 113,122 -> 77,007 | 51,761 -> 35,207 | 1/0 -> 0/0 | 69,631 -> 0 | +47.0% |
+| csv_hash/4096_plain_true | 114,329 -> 86,851 | 52,313 -> 39,719 | 1/0 -> 0/0 | 69,631 -> 0 | +31.7% |
+| csv_hash/1_special_false | 1,820 -> 1,788 | 831 -> 819 | 0/0 -> 0/0 | 0 -> 0 | +1.5% |
+| csv_hash/1_special_true | 1,924 -> 1,831 | 879 -> 836 | 0/0 -> 0/0 | 0 -> 0 | +5.1% |
+| csv_hash/32_special_false | 2,633 -> 2,180 | 1,209 -> 995 | 1/0 -> 0/0 | 207 -> 0 | +21.5% |
+| csv_hash/32_special_true | 2,728 -> 2,359 | 1,250 -> 1,081 | 1/0 -> 0/0 | 207 -> 0 | +15.6% |
+| csv_hash/32_long_false | 13,970 -> 7,448 | 6,383 -> 3,408 | 1/0 -> 0/0 | 32,799 -> 0 | +87.3% |
+| csv_hash/32_long_true | 14,380 -> 8,914 | 6,577 -> 4,077 | 1/0 -> 0/0 | 32,799 -> 0 | +61.3% |
+
+### Timing cleanup and unchanged pair controls
+
+| Case | Thread cycles, old -> new | ns, old -> new | Alloc/realloc, old -> new | Requested bytes, old -> new | Throughput |
+|---|---:|---:|---:|---:|---:|
+| cleanup/pair_1_clean | 697 -> 699 | 320 -> 321 | 1/1 -> 1/1 | 27 -> 27 | -0.3% |
+| cleanup/speed_1_clean | 898 -> 852 | 412 -> 391 | 1/1 -> 1/1 | 36 -> 36 | +5.4% |
+| cleanup/pair_1_early | 800 -> 798 | 368 -> 366 | 2/0 -> 2/0 | 26 -> 26 | +0.5% |
+| cleanup/speed_1_early | 1,357 -> 1,267 | 621 -> 580 | 3/1 -> 2/1 | 80 -> 64 | +7.1% |
+| cleanup/pair_1_late | 801 -> 797 | 368 -> 366 | 2/0 -> 2/0 | 26 -> 26 | +0.5% |
+| cleanup/speed_1_late | 1,378 -> 1,253 | 638 -> 575 | 3/1 -> 2/1 | 80 -> 64 | +11.0% |
+| cleanup/pair_128_clean | 41,126 -> 43,495 | 18,808 -> 19,915 | 1/1 -> 1/1 | 4,521 -> 4,521 | -5.6% |
+| cleanup/speed_128_clean | 69,766 -> 74,003 | 31,885 -> 33,829 | 1/1 -> 1/1 | 5,673 -> 5,673 | -5.7% |
+| cleanup/pair_128_early | 46,015 -> 49,232 | 20,988 -> 22,506 | 2/1 -> 2/1 | 6,044 -> 6,044 | -6.7% |
+| cleanup/speed_128_early | 72,210 -> 78,389 | 33,021 -> 35,828 | 3/1 -> 2/1 | 9,475 -> 7,580 | -7.8% |
+| cleanup/pair_128_late | 54,622 -> 54,016 | 24,977 -> 24,648 | 2/1 -> 2/1 | 6,044 -> 6,044 | +1.3% |
+| cleanup/speed_128_late | 148,411 -> 83,136 | 67,855 -> 37,990 | 3/2 -> 2/1 | 13,265 -> 7,580 | +78.6% |
+| cleanup/pair_4096_clean | 1,501,571 -> 1,492,602 | 686,998 -> 682,498 | 1/1 -> 1/1 | 163,695 -> 163,695 | +0.7% |
+| cleanup/speed_4096_clean | 2,326,453 -> 2,405,689 | 1,064,483 -> 1,100,143 | 1/1 -> 1/1 | 200,559 -> 200,559 | -3.2% |
+| cleanup/pair_4096_early | 1,667,397 -> 1,798,899 | 762,581 -> 822,871 | 2/1 -> 2/1 | 218,276 -> 218,276 | -7.3% |
+| cleanup/speed_4096_early | 2,424,180 -> 2,526,210 | 1,108,445 -> 1,155,477 | 3/1 -> 2/1 | 334,285 -> 267,428 | -4.1% |
+| cleanup/pair_4096_late | 1,955,313 -> 1,962,358 | 894,658 -> 897,732 | 2/1 -> 2/1 | 218,276 -> 218,276 | -0.3% |
+| cleanup/speed_4096_late | 4,946,542 -> 2,879,363 | 2,262,363 -> 1,318,346 | 3/2 -> 2/1 | 467,999 -> 267,428 | +71.6% |
+
+### Four-chart speed-map analysis
+
+| Case | Thread cycles, old -> new | ns, old -> new | Alloc/realloc, old -> new | Requested bytes, old -> new | Throughput |
+|---|---:|---:|---:|---:|---:|
+| speed_load/1_clean | 34,730 -> 36,453 | 15,838 -> 16,709 | 63/11 -> 63/11 | 9,214 -> 9,214 | -5.2% |
+| speed_load/1_early | 60,796 -> 39,112 | 27,906 -> 17,981 | 65/11 -> 64/11 | 9,258 -> 9,242 | +55.2% |
+| speed_load/1_late | 43,049 -> 36,484 | 19,668 -> 16,671 | 65/11 -> 64/11 | 9,258 -> 9,242 | +18.0% |
+| speed_load/128_clean | 169,344 -> 173,978 | 77,489 -> 79,734 | 63/11 -> 63/11 | 20,867 -> 20,867 | -2.8% |
+| speed_load/128_early | 164,932 -> 161,986 | 75,282 -> 74,176 | 65/11 -> 64/11 | 24,669 -> 22,774 | +1.5% |
+| speed_load/128_late | 237,178 -> 180,681 | 108,346 -> 82,576 | 65/12 -> 64/11 | 28,459 -> 22,774 | +31.2% |
+| speed_load/4096_clean | 3,962,622 -> 4,122,740 | 1,811,944 -> 1,885,900 | 63/11 -> 63/11 | 423,625 -> 423,625 | -3.9% |
+| speed_load/4096_early | 4,014,715 -> 4,157,058 | 1,836,269 -> 1,901,745 | 65/11 -> 64/11 | 557,351 -> 490,494 | -3.4% |
+| speed_load/4096_late | 6,320,722 -> 4,336,626 | 2,890,445 -> 1,982,692 | 65/12 -> 64/11 | 691,065 -> 490,494 | +45.8% |
+
+### Unchanged analysis controls
+
+| Case | Thread cycles, old -> new | ns, old -> new | Alloc/realloc, old -> new | Requested bytes, old -> new | Throughput |
+|---|---:|---:|---:|---:|---:|
+| analyze/fast_fake_lifts | 676,730 -> 666,303 | 309,628 -> 304,612 | 31/4 -> 31/4 | 59,028 -> 59,028 | +1.6% |
+| analyze/camellia | 455,704,331 -> 460,807,384 | 208,393,350 -> 210,791,925 | 110/0 -> 110/0 | 5,263,624 -> 5,263,624 | -1.1% |
+| analyze/fast_camellia | 58,132,928 -> 58,032,781 | 26,595,650 -> 26,542,800 | 115/0 -> 115/0 | 7,051,152 -> 7,051,152 | +0.2% |
+| analyze/mixed_small | 48,444 -> 48,114 | 22,160 -> 22,240 | 59/3 -> 59/3 | 7,460 -> 7,460 | -0.4% |
+
+### Course report composition and controls
+
+| Case | Thread cycles, old -> new | ns, old -> new | Alloc/realloc, old -> new | Requested bytes, old -> new | Throughput |
+|---|---:|---:|---:|---:|---:|
+| course_report/0_Full | 12,567 -> 13,264 | 5,746 -> 6,058 | 0/0 -> 0/0 | 0 -> 0 | -5.2% |
+| course_report/0_Pretty | 5,675 -> 5,886 | 2,590 -> 2,689 | 0/0 -> 0/0 | 0 -> 0 | -3.7% |
+| course_report/0_JSON | 27,340 -> 27,604 | 12,495 -> 12,627 | 6/0 -> 6/0 | 106 -> 106 | -1.0% |
+| course_report/0_CSV | 2,006 -> 1,721 | 917 -> 787 | 1/0 -> 0/0 | 16 -> 0 | +16.5% |
+| course_report/16_Full | 12,500 -> 12,883 | 5,711 -> 5,888 | 0/0 -> 0/0 | 0 -> 0 | -3.0% |
+| course_report/16_Pretty | 5,767 -> 5,645 | 2,630 -> 2,579 | 0/0 -> 0/0 | 0 -> 0 | +2.0% |
+| course_report/16_JSON | 28,065 -> 27,429 | 12,833 -> 12,534 | 6/0 -> 6/0 | 106 -> 106 | +2.4% |
+| course_report/16_CSV | 2,008 -> 1,755 | 921 -> 801 | 1/0 -> 0/0 | 16 -> 0 | +15.0% |
+| course_report/4096_Full | 12,919 -> 13,138 | 5,901 -> 6,004 | 0/0 -> 0/0 | 0 -> 0 | -1.7% |
+| course_report/4096_Pretty | 5,838 -> 5,946 | 2,667 -> 2,723 | 0/0 -> 0/0 | 0 -> 0 | -2.1% |
+| course_report/4096_JSON | 36,015 -> 34,501 | 16,473 -> 15,778 | 6/0 -> 6/0 | 106 -> 106 | +4.4% |
+| course_report/4096_CSV | 2,013 -> 1,800 | 919 -> 822 | 1/0 -> 0/0 | 16 -> 0 | +11.8% |
+
+### Focused 128-entry cleanup repeat
+
+| Case | Thread cycles, old -> new | ns, old -> new | Alloc/realloc, old -> new | Requested bytes, old -> new | Throughput |
+|---|---:|---:|---:|---:|---:|
+| cleanup/pair_128_clean | 43,489 -> 43,301 | 19,877 -> 19,798 | 1/1 -> 1/1 | 4,521 -> 4,521 | +0.4% |
+| cleanup/pair_128_early | 50,023 -> 48,499 | 22,876 -> 22,162 | 2/1 -> 2/1 | 6,044 -> 6,044 | +3.2% |
+| cleanup/pair_128_late | 57,309 -> 53,178 | 26,202 -> 24,302 | 2/1 -> 2/1 | 6,044 -> 6,044 | +7.8% |
+| cleanup/speed_128_clean | 72,787 -> 73,734 | 33,293 -> 33,746 | 1/1 -> 1/1 | 5,673 -> 5,673 | -1.3% |
+| cleanup/speed_128_early | 77,287 -> 76,147 | 35,351 -> 34,808 | 3/1 -> 2/1 | 9,475 -> 7,580 | +1.6% |
+| cleanup/speed_128_late | 147,839 -> 86,656 | 67,668 -> 39,635 | 3/2 -> 2/1 | 13,265 -> 7,580 | +70.7% |
+
+
+## Interpretation and limits
+
+No semantic/output regression was observed, and no measured allocation,
+reallocation, or requested-byte count increases. CPU throughput is not a
+universal win. The main run's 128-entry early-dirty speed case was 7.8% slower;
+the focused repeat was 1.6% faster. Clean 128-entry speeds moved from -5.7% to
+-1.3%. Unchanged 128-entry pair controls also changed substantially: early
+dirtiness moved from -6.7% to +3.2% and late dirtiness from +1.3% to +7.8%.
+These repeats support the allocation and large late-dirty CPU gains while
+limiting conclusions about small timing differences on this shared host.
+
+Main-run large clean/early speed cases remain 3.2-4.1% slower in the leaf and
+3.4-3.9% slower in composition. The unchanged large early-dirty pair control is
+7.3% slower. Large generic pack sorting ranges from +0.6% to -3.7%; the
+unchanged 1/4-entry controls include percentages amplified by one nanosecond.
+Empty buffered CSV is 5.5% slower with unchanged allocation counts; course
+Full/Pretty/JSON controls range from -5.2% to +4.4%. All slower cases are
+reported above. No disk/console throughput or process-RSS improvement is
+claimed, and filesystem scanning is outside the pack sort benchmark.
+
+
+## Regression checks
+
+- 77 rssp release library tests, 140 rssp-core release library tests, and 29
+  optimization edge integration tests pass: 246 total, zero failures.
+- New tests check stable pack permutations at sizes 0/1/4/5/32/257, equal and
+  mixed-case names, Unicode, and exact record identity. Speed cleanup is compared
+  with the owned production implementation for empty/malformed fields, early and
+  late dirty entries, whitespace, controls, nonfinite values, signed zero, and
+  extra fields. CSV tests check explicit hash bytes and failure prefixes at every
+  byte boundary inside both hash fields, including Unicode; no writes follow an
+  error. Existing all-mode course error tests also pass.
+- Component and full-corpus comparisons produce 169,095,313 byte-identical
+  UTF-8 bytes, including explicit timing snapshots, hashes, statistics, and
+  reports. The corpus contains 30,843 files and 56,125 supported charts, with
+  30,489 successful analyses and 354 matching errors. SHA-256:
+  2f783d1a4404df0de9d27fa0d3b2b9b728b4c9e9cdf6849ab59a2b54e56a714b.
+- 57 additional course-report, course-CSV, and pack-order cases produce
+  29,124,186 byte-identical UTF-8 bytes. SHA-256:
+  aac4e521dea9affd1f0e1baa95991e7dd0fa7f4bb10d109b82bed5ff84d290d7.
+- cargo fmt --all -- --check, git diff --check, and strict release workspace
+  Clippy for all targets pass.
+- After benchmark confirmation and before committing, the required command ran:
+
+```powershell
+cargo test --release --test all_parity -- --test-threads=22
+```
+
+```text
+test result: ok. 30489 passed; 0 failed
+```

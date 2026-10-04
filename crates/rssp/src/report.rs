@@ -608,21 +608,14 @@ const COURSE_CSV_HEADER: &[u8] = concat!(
 )
 .as_bytes();
 
-fn csv_hashes_len(hashes: &[String]) -> usize {
-    hashes
-        .iter()
-        .map(String::len)
-        .sum::<usize>()
-        .saturating_add(hashes.len().saturating_sub(1))
-}
-
-fn buffer_csv_hashes(buffer: &mut String, hashes: &[String]) {
+fn write_csv_hashes<W: Write>(writer: &mut W, hashes: &[String]) -> io::Result<()> {
     for (index, hash) in hashes.iter().enumerate() {
         if index != 0 {
-            buffer.push('|');
+            writer.write_all(b"|")?;
         }
-        buffer.push_str(hash);
+        writer.write_all(hash.as_bytes())?;
     }
+    Ok(())
 }
 
 fn write_csv_course<W: Write>(writer: &mut W, course: &CourseSummary) -> io::Result<()> {
@@ -635,15 +628,9 @@ fn write_csv_course<W: Write>(writer: &mut W, course: &CourseSummary) -> io::Res
     )?;
     write_duration(writer, course.total_length)?;
     write!(writer, ",{},", course.entries.len())?;
-    let hash_capacity =
-        csv_hashes_len(&course.sha1_hashes).max(csv_hashes_len(&course.bpm_neutral_sha1_hashes));
-    let mut hash_buffer = String::with_capacity(hash_capacity);
-    buffer_csv_hashes(&mut hash_buffer, &course.sha1_hashes);
-    writer.write_all(hash_buffer.as_bytes())?;
+    write_csv_hashes(writer, &course.sha1_hashes)?;
     writer.write_all(b",")?;
-    hash_buffer.clear();
-    buffer_csv_hashes(&mut hash_buffer, &course.bpm_neutral_sha1_hashes);
-    writer.write_all(hash_buffer.as_bytes())?;
+    write_csv_hashes(writer, &course.bpm_neutral_sha1_hashes)?;
 
     let chart = &course.chart;
     writeln!(

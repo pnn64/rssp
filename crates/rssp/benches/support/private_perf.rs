@@ -79,6 +79,15 @@ mod cpu {
 }
 
 pub fn measure(name: &str, items: usize, mut run: impl FnMut()) {
+    measure_prepared(name, items, || (), |()| run());
+}
+
+pub fn measure_prepared<T>(
+    name: &str,
+    items: usize,
+    mut setup: impl FnMut() -> T,
+    mut run: impl FnMut(&mut T),
+) {
     if std::env::var("RSSP_PASS_FILTER").is_ok_and(|filter| !name.contains(&filter)) {
         return;
     }
@@ -88,15 +97,16 @@ pub fn measure(name: &str, items: usize, mut run: impl FnMut()) {
         .unwrap_or(4000);
     cpu::pin();
     for _ in 0..4 {
-        run();
+        run(&mut setup());
     }
     let mut times = [0.0; 7];
     let mut cycles = [0.0; 7];
     for (time, cycle) in times.iter_mut().zip(&mut cycles) {
+        let mut inputs: Vec<_> = (0..iters).map(|_| setup()).collect();
         let start = Instant::now();
         let before = cpu::cycles();
-        for _ in 0..iters {
-            run();
+        for input in &mut inputs {
+            run(input);
         }
         *cycle = (cpu::cycles() - before) as f64 / iters as f64;
         *time = start.elapsed().as_nanos() as f64 / iters as f64;
@@ -106,8 +116,9 @@ pub fn measure(name: &str, items: usize, mut run: impl FnMut()) {
     ALLOCS.store(0, Ordering::Relaxed);
     REALLOCS.store(0, Ordering::Relaxed);
     BYTES.store(0, Ordering::Relaxed);
+    let mut input = setup();
     COUNT.store(true, Ordering::Relaxed);
-    run();
+    run(&mut input);
     COUNT.store(false, Ordering::Relaxed);
     println!(
         "{name}: ns={:.0} cycles={:.0} items/s={:.0} allocs={} reallocs={} churn_bytes={}",
