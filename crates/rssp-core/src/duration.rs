@@ -158,77 +158,81 @@ pub fn compute_chart_durations(
 
         let last_beat = crate::stats::chart_last_beat(chart_data, lanes);
 
-        let timing_src = crate::timing::resolve_chart_timing(
-            allow_steps_timing,
-            song_offset,
-            entry.chart_offset.as_deref(),
-            entry.chart_bpms.as_deref(),
-            entry.chart_stops.as_deref(),
-            entry.chart_delays.as_deref(),
-            entry.chart_warps.as_deref(),
-            entry.chart_speeds.as_deref(),
-            entry.chart_scrolls.as_deref(),
-            entry.chart_fakes.as_deref(),
-            entry.chart_time_signatures.as_deref(),
-            entry.chart_labels.as_deref(),
-            entry.chart_tickcounts.as_deref(),
-            entry.chart_combos.as_deref(),
-            cleaned_global_bpms.as_ref(),
-            cleaned_global_stops.as_ref(),
-            cleaned_global_delays.as_ref(),
-            cleaned_global_warps.as_ref(),
-            "",
-            "",
-            "",
-        );
-        let chart_offset = timing_src.chart_offset_seconds;
-        let timing = if timing_src.chart_has_own_timing {
-            let key = duration_timing_key(entry);
-            if last_chart_timing
-                .as_ref()
-                .is_some_and(|(cached, _)| *cached != key)
-            {
-                last_chart_timing = None;
-            }
-            let (_, timing) = last_chart_timing.get_or_insert_with(|| {
-                // Owning chart timing implies steps timing is enabled. Clean
-                // only on misses; a cached raw key already identifies the data.
-                let chart_bpms = chart_map_mode::<true>(entry.chart_bpms.as_deref());
-                let chart_stops = chart_map_mode::<true>(entry.chart_stops.as_deref());
-                let chart_delays = chart_map_mode::<true>(entry.chart_delays.as_deref());
-                let chart_warps = chart_map_mode::<true>(entry.chart_warps.as_deref());
-                let timing_segments = compute_duration_timing_segments(
-                    chart_bpms.as_deref(),
-                    timing_src.global_bpms,
-                    chart_stops.as_deref(),
-                    timing_src.global_stops,
-                    chart_delays.as_deref(),
-                    timing_src.global_delays,
-                    chart_warps.as_deref(),
-                    timing_src.global_warps,
-                    timing_format,
-                );
-                let built = timing_data_from_segments(chart_offset, 0.0, &timing_segments);
-                (key, built)
-            });
-            timing
+        let duration_seconds = if last_beat <= 0.0 {
+            0.0
         } else {
-            global_timing.get_or_insert_with(|| {
-                let timing_segments = compute_duration_timing_segments(
-                    None,
-                    &cleaned_global_bpms,
-                    None,
-                    &cleaned_global_stops,
-                    None,
-                    &cleaned_global_delays,
-                    None,
-                    &cleaned_global_warps,
-                    timing_format,
-                );
-                timing_data_from_segments(song_offset, 0.0, &timing_segments)
-            })
+            let timing_src = crate::timing::resolve_chart_timing(
+                allow_steps_timing,
+                song_offset,
+                entry.chart_offset.as_deref(),
+                entry.chart_bpms.as_deref(),
+                entry.chart_stops.as_deref(),
+                entry.chart_delays.as_deref(),
+                entry.chart_warps.as_deref(),
+                entry.chart_speeds.as_deref(),
+                entry.chart_scrolls.as_deref(),
+                entry.chart_fakes.as_deref(),
+                entry.chart_time_signatures.as_deref(),
+                entry.chart_labels.as_deref(),
+                entry.chart_tickcounts.as_deref(),
+                entry.chart_combos.as_deref(),
+                cleaned_global_bpms.as_ref(),
+                cleaned_global_stops.as_ref(),
+                cleaned_global_delays.as_ref(),
+                cleaned_global_warps.as_ref(),
+                "",
+                "",
+                "",
+            );
+            let chart_offset = timing_src.chart_offset_seconds;
+            let timing = if timing_src.chart_has_own_timing {
+                let key = duration_timing_key(entry);
+                if last_chart_timing
+                    .as_ref()
+                    .is_some_and(|(cached, _)| *cached != key)
+                {
+                    last_chart_timing = None;
+                }
+                let (_, timing) = last_chart_timing.get_or_insert_with(|| {
+                    // Owning chart timing implies steps timing is enabled. Clean
+                    // only on misses; a cached raw key already identifies the data.
+                    let chart_bpms = chart_map_mode::<true>(entry.chart_bpms.as_deref());
+                    let chart_stops = chart_map_mode::<true>(entry.chart_stops.as_deref());
+                    let chart_delays = chart_map_mode::<true>(entry.chart_delays.as_deref());
+                    let chart_warps = chart_map_mode::<true>(entry.chart_warps.as_deref());
+                    let timing_segments = compute_duration_timing_segments(
+                        chart_bpms.as_deref(),
+                        timing_src.global_bpms,
+                        chart_stops.as_deref(),
+                        timing_src.global_stops,
+                        chart_delays.as_deref(),
+                        timing_src.global_delays,
+                        chart_warps.as_deref(),
+                        timing_src.global_warps,
+                        timing_format,
+                    );
+                    let built = timing_data_from_segments(chart_offset, 0.0, &timing_segments);
+                    (key, built)
+                });
+                timing
+            } else {
+                global_timing.get_or_insert_with(|| {
+                    let timing_segments = compute_duration_timing_segments(
+                        None,
+                        &cleaned_global_bpms,
+                        None,
+                        &cleaned_global_stops,
+                        None,
+                        &cleaned_global_delays,
+                        None,
+                        &cleaned_global_warps,
+                        timing_format,
+                    );
+                    timing_data_from_segments(song_offset, 0.0, &timing_segments)
+                })
+            };
+            chart_duration_seconds(last_beat, timing, offsets)
         };
-        let duration_seconds = chart_duration_seconds(last_beat, timing, offsets);
 
         results.push(ChartDuration {
             step_type,

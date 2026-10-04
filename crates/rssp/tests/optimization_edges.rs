@@ -7,6 +7,173 @@ use rssp::bpm::{chart_bpm_snapshots, compute_tier_bpm};
 use rssp::nps::compute_chart_peak_nps;
 
 #[test]
+fn zero_duration_cache() {
+    use rssp::{TimingOffsets, compute_chart_durations};
+    let header = "#VERSION:0.83;\n#OFFSET:0.25;\n#BPMS:0=120;\n";
+    let local = concat!(
+        "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Hard;\n#METER:10;\n",
+        "#OFFSET:1;\n#BPMS:0=180;\n#STOPS:0=0.25;\n#NOTES:\n0000\n1000\n;\n",
+    );
+    let first = concat!(
+        "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Easy;\n#METER:3;\n",
+        "#OFFSET:-2;\n#BPMS:0=60;\n#STOPS:0=1;\n#DELAYS:0=0.5;\n#NOTES:\n1000\n;\n",
+    );
+    let empty = concat!(
+        "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Beginner;\n#METER:1;\n",
+        "#NOTES:\n0000\n0000\n;\n",
+    );
+    let global = concat!(
+        "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Medium;\n#METER:5;\n",
+        "#NOTES:\n0000\n1000\n;\n",
+    );
+    for offsets in [
+        TimingOffsets::default(),
+        TimingOffsets {
+            global_offset_seconds: 100.0,
+            group_offset_seconds: -250.0,
+        },
+    ] {
+        let data = format!("{header}{local}{first}{local}{empty}{global}{first}");
+        let actual =
+            compute_chart_durations(data.as_bytes(), "ssc", offsets).expect("valid fixture");
+        assert_eq!(actual.len(), 6);
+        for (chart, isolated) in actual
+            .iter()
+            .zip([local, first, local, empty, global, first])
+        {
+            let isolated = format!("{header}{isolated}");
+            let expected = compute_chart_durations(isolated.as_bytes(), "ssc", offsets)
+                .expect("valid fixture");
+            assert_eq!(chart.step_type, expected[0].step_type);
+            assert_eq!(chart.difficulty, expected[0].difficulty);
+            assert_eq!(
+                chart.duration_seconds.to_bits(),
+                expected[0].duration_seconds.to_bits()
+            );
+        }
+        for i in [1, 3, 5] {
+            assert_eq!(actual[i].duration_seconds.to_bits(), 0.0f64.to_bits());
+        }
+    }
+    let sm = b"#BPMS:0=120;#STOPS:0=1;#NOTES:dance-single::Easy:1::\n1000\n;";
+    let actual =
+        compute_chart_durations(sm, "sm", TimingOffsets::default()).expect("valid fixture");
+    assert_eq!(actual[0].duration_seconds.to_bits(), 0.0f64.to_bits());
+}
+
+#[test]
+fn small_bpm_keeps_bits() {
+    use rssp::bpm::{
+        compute_bpm_map_stats, compute_bpm_range_and_stats_with_scratch, compute_bpm_stats,
+    };
+    for len in [1, 2, 3, 8, 31, 32, 33, 64] {
+        for source in [
+            &[120.0, 180.0, 90.0, 10_000.0, 0.0, -0.0][..],
+            &[0.0, -0.0, -120.0, f64::MAX, f64::MIN][..],
+            &[
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NAN,
+                f64::from_bits(0x7ff0_0000_0000_1234),
+            ][..],
+            &[f64::from_bits(0x7ff8_0000_0000_1234), -0.0, 0.0][..],
+        ] {
+            let values: Vec<_> = (0..len).map(|i| source[i % source.len()]).collect();
+            let map: Vec<_> = values.iter().map(|&v| (0.0, v)).collect();
+            let expected = std::panic::catch_unwind(|| {
+                compute_bpm_range_and_stats_with_scratch(&map, &mut Vec::new())
+            });
+            for actual in [
+                std::panic::catch_unwind(|| compute_bpm_stats(&values)),
+                std::panic::catch_unwind(|| compute_bpm_map_stats(&map)),
+            ] {
+                match (expected.as_ref(), actual) {
+                    (Ok(expected), Ok(actual)) => {
+                        assert_eq!(actual.0.to_bits(), expected.2.to_bits(), "median len={len}");
+                        assert_eq!(
+                            actual.1.to_bits(),
+                            expected.3.to_bits(),
+                            "average len={len}"
+                        );
+                    }
+                    // The original NaN comparator can reject non-total ordering.
+                    (Err(_), Err(_)) => {}
+                    _ => panic!("BPM sort behavior changed for len={len}"),
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn stream_gaps_match() {
+    use rssp::streams::{StreamSegment, stream_sequences, visit_stream_sequences};
+    assert!(stream_sequences(&[]).is_empty());
+    assert!(stream_sequences(&[0, 15, 0, 8]).is_empty());
+    assert_eq!(
+        stream_sequences(&[0, 0, 16, 0, 32, 0, 0]),
+        vec![
+            StreamSegment {
+                start: 0,
+                end: 2,
+                is_break: true
+            },
+            StreamSegment {
+                start: 2,
+                end: 3,
+                is_break: false
+            },
+            StreamSegment {
+                start: 4,
+                end: 5,
+                is_break: false
+            },
+            StreamSegment {
+                start: 5,
+                end: 7,
+                is_break: true
+            },
+        ]
+    );
+    for len in [0, 1, 2, 8, 32, 4096] {
+        let measures: Vec<_> = (0..len).map(|i| [0, 16, 32, 0, 15][i % 5]).collect();
+        let mut visited = Vec::new();
+        visit_stream_sequences(&measures, |segment| {
+            visited.push(segment);
+            Ok::<(), std::convert::Infallible>(())
+        })
+        .expect("infallible visitor");
+        assert_eq!(stream_sequences(&measures), visited);
+    }
+}
+
+#[test]
+fn stream_visitor_stops() {
+    use rssp::streams::{stream_sequences, visit_stream_sequences};
+    let mut late = vec![0; 4096];
+    late.push(16);
+    let segments = stream_sequences(&late);
+    assert_eq!(segments.len(), 2);
+    assert_eq!(
+        (segments[0].start, segments[0].end, segments[0].is_break),
+        (0, 4096, true)
+    );
+    assert_eq!(
+        (segments[1].start, segments[1].end, segments[1].is_break),
+        (4096, 4097, false)
+    );
+    let mut calls = 0;
+    assert_eq!(
+        visit_stream_sequences(&late, |_| {
+            calls += 1;
+            Err("stop")
+        }),
+        Err("stop")
+    );
+    assert_eq!(calls, 1);
+}
+
+#[test]
 fn custom_owned_matches_reuse() {
     use rssp::patterns::{
         compile_custom_patterns, detect_custom_patterns, detect_custom_patterns_compiled,

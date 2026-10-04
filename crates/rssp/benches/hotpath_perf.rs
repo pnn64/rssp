@@ -784,7 +784,7 @@ fn custom_cases(iters: usize) {
 }
 
 fn bpm_stats_cases(iters: usize) {
-    for len in [0, 1, 2, 8, 64] {
+    for len in [0, 1, 2, 8, 32, 64] {
         let values: Vec<_> = (0..len).map(|i| 120.0 + (i % 5) as f64).collect();
         let map: Vec<_> = values
             .iter()
@@ -845,6 +845,53 @@ fn serialize_cases(iters: usize) {
                         .expect("valid output"),
                 );
                 black_box(&output);
+            });
+        }
+    }
+}
+
+fn zero_duration_cases(iters: usize) {
+    for len in [1, 128] {
+        let mut pairs = String::new();
+        for i in 0..len {
+            if i != 0 {
+                pairs.push(',');
+            }
+            write!(pairs, "{}=0.125", i * 4).expect("String write");
+        }
+        for (name, notes, local) in [
+            ("empty_global", "0000\n", false),
+            ("first_global", "1000\n", false),
+            ("empty_local", "0000\n", true),
+            ("first_local", "1000\n", true),
+            ("nonzero_local", "0000\n1000\n", true),
+        ] {
+            let mut data =
+                format!("#VERSION:0.83;\n#BPMS:0=120;\n#STOPS:{pairs};\n#DELAYS:{pairs};\n");
+            for i in 0..4 {
+                write!(
+                    data,
+                    "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Hard;\n#METER:10;\n"
+                )
+                .expect("String write");
+                if local {
+                    write!(
+                        data,
+                        "#OFFSET:{i};\n#BPMS:0=180;\n#STOPS:{pairs};\n#DELAYS:{pairs};\n"
+                    )
+                    .expect("String write");
+                }
+                write!(data, "#NOTES:\n{notes};\n").expect("String write");
+            }
+            measure(&format!("zero_duration/{len}_{name}"), 4, iters, || {
+                black_box(
+                    rssp::compute_chart_durations(
+                        black_box(data.as_bytes()),
+                        "ssc",
+                        rssp::TimingOffsets::default(),
+                    )
+                    .expect("valid fixture"),
+                );
             });
         }
     }
@@ -954,6 +1001,7 @@ fn main() {
     nps_stats_cases(iters);
     custom_cases(iters);
     bpm_stats_cases(iters);
+    zero_duration_cases(iters);
     serialize_cases(iters);
     let densities: Vec<_> = (0..16384).map(|i| [0, 16, 20, 24, 32][i % 5]).collect();
     for (name, step) in [("long_segments", 2048.0), ("short_segments", 4.0)] {

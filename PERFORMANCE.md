@@ -979,3 +979,156 @@ Alternate saved baseline/final executables three times and aggregate their seven
 batch medians. Set `RSSP_HOT_VERIFY=1` to emit the deterministic corpus comparison.
 Local binaries, raw runs, JSON results, and verification logs are in
 `target/perf-275/` and remain outside the commit.
+
+# 0.4.276: avoid temporary BPM storage and zero-output work
+
+Three changes remove work whose result is already known or whose temporary
+storage can stay on the stack:
+
+1. `compute_bpm_stats` and `compute_bpm_map_stats` use a bounded 32-value stack
+   buffer for small inputs. They share filtering and call the original sorting,
+   median, and average implementation. The one-finite-value shortcut, larger
+   inputs, and caller-owned scratch API keep their existing algorithms.
+2. `stream_sequences` finds the first stream before reserving its output vector.
+   Charts without streams return an empty vector directly. A shared walker
+   starts at that first index, avoiding both a repeated leading-gap scan and
+   per-segment reservation checks. The visitor preserves ordering, leading and
+   trailing breaks, one-measure gap handling, and error propagation.
+3. `compute_chart_durations` returns the existing zero duration when the last
+   beat is nonpositive before resolving or building chart timing. Metadata is
+   still returned. Skipping these charts also avoids replacing the local timing
+   cache with data that cannot affect their result.
+
+The workspace patch increases exactly once: **0.4.275 → 0.4.276**.
+
+## Method
+
+Baseline production code is `87476fc`. Both saved executables use version
+0.4.276, identical benchmark code and fixtures, Rust 1.98.1 / LLVM 22.1.8,
+Windows x86-64, and the normal fat-LTO bench profile. The benchmark pins its
+thread to logical CPU 2. Three process pairs alternate old/new, new/old,
+old/new; each result is the median of the process's seven warmed batches,
+followed by the median across those three runs. Composed analysis controls were
+repeated once and combine all six process pairs. Allocations are counted in a
+separate pass with the counter disabled during CPU/timing measurements.
+
+Inputs are prepared outside measurement. Parsing is intentionally measured by
+the duration and analysis cases; disk I/O is excluded. Heap churn bytes sum
+allocation and reallocation requests, rather than measuring peak resident
+memory. The small BPM buffer uses 256 bytes of stack storage. Raw output,
+62-case JSON results, and saved binaries remain in `target/perf-276/`.
+
+## Small BPM statistics
+
+All six measured 2/8/32-value convenience cases eliminate their one temporary
+heap allocation. Tests compare exact median/average bits against the original
+scratch API, including filtering, signed zero, infinities, NaN payloads, and
+signaling NaNs. Existing sort rejection for some non-total NaN inputs is also
+preserved.
+
+
+| Case | ns old → new | cycles old → new | allocations old → new | churn bytes old → new | throughput change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `bpm_stats/2_values` | 80 → 24 | 175 → 51 | 1 → 0 | 16 → 0 | +233.3% |
+| `bpm_stats/2_map` | 92 → 25 | 201 → 54 | 1 → 0 | 16 → 0 | +268.0% |
+| `bpm_stats/8_values` | 106 → 40 | 231 → 87 | 1 → 0 | 64 → 0 | +165.0% |
+| `bpm_stats/8_map` | 101 → 44 | 221 → 96 | 1 → 0 | 64 → 0 | +129.5% |
+| `bpm_stats/32_values` | 445 → 322 | 967 → 704 | 1 → 0 | 256 → 0 | +38.2% |
+| `bpm_stats/32_map` | 447 → 308 | 978 → 674 | 1 → 0 | 256 → 0 | +45.1% |
+
+## Stream output without temporary segment storage
+
+The 4,096-measure fixture alternates densities 0 and 15, producing no streams.
+The segment vector formerly reserved 1,024 entries (24,576 bytes), then was
+discarded empty. Output strings still have their required owned storage.
+
+
+| Case | ns old → new | cycles old → new | allocations old → new | churn bytes old → new | throughput change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `standard/empty_detailed` | 3,170 → 2,047 | 6,953 → 4,431 | 2 → 1 | 24,587 → 11 | +54.9% |
+| `standard/empty_partial` | 3,492 → 2,274 | 7,648 → 4,935 | 2 → 1 | 24,587 → 11 | +53.6% |
+| `standard/empty_simple` | 3,471 → 2,163 | 7,607 → 4,710 | 2 → 1 | 24,587 → 11 | +60.5% |
+| `standard/empty_three` | 3,468 → 2,357 | 7,599 → 5,111 | 4 → 3 | 24,609 → 33 | +47.1% |
+
+## Zero-duration timing work
+
+Each fixture contains four supported charts. `empty` charts contain only zeros;
+`first` charts contain one note at beat zero. Both have always returned zero
+duration, including when an offset is present. Local timing fixtures vary the
+chart offset, forcing four timing cache misses in the original implementation.
+The 128-entry fixtures have 128 stops and 128 delays per timing source.
+
+
+| Case | ns old → new | cycles old → new | allocations old → new | churn bytes old → new | throughput change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `zero_duration/1_empty_global` | 4,083 → 3,568 | 8,934 → 7,757 | 19 → 10 | 2,496 → 2,368 | +14.4% |
+| `zero_duration/1_first_global` | 4,619 → 3,544 | 10,089 → 7,771 | 19 → 10 | 2,496 → 2,368 | +30.3% |
+| `zero_duration/1_empty_local` | 9,024 → 4,158 | 19,771 → 9,119 | 46 → 10 | 2,880 → 2,368 | +117.0% |
+| `zero_duration/1_first_local` | 8,686 → 4,193 | 19,032 → 9,182 | 46 → 10 | 2,880 → 2,368 | +107.2% |
+| `zero_duration/128_empty_global` | 50,029 → 13,104 | 108,755 → 28,720 | 19 → 10 | 13,672 → 2,368 | +281.8% |
+| `zero_duration/128_first_global` | 51,596 → 13,340 | 112,937 → 29,104 | 19 → 10 | 13,672 → 2,368 | +286.8% |
+| `zero_duration/128_empty_local` | 194,175 → 14,686 | 424,859 → 32,057 | 46 → 10 | 47,584 → 2,368 | +1222.2% |
+| `zero_duration/128_first_local` | 194,762 → 14,520 | 426,008 → 31,450 | 46 → 10 | 47,584 → 2,368 | +1241.3% |
+
+## Other paths and controls
+
+These measurements retain nonempty streams, positive-duration charts, larger
+BPM maps, and composed analysis. Their allocation/reallocation counts and
+requested bytes are unchanged. CPU timings on this shared machine vary across
+unchanged controls too; the targeted results do not establish a general
+whole-analysis speedup. Full raw runs record every measured case.
+The default Camellia analysis control is about 3.5% slower across the combined
+six pairs, so this pass makes no claim of improved default-analysis throughput.
+
+
+| Case | ns old → new | cycles old → new | allocations old → new | churn bytes old → new | throughput change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `standard/uniform_three` | 3,274 → 2,876 | 7,168 → 6,298 | 4 → 4 | 24,594 → 24,594 | +13.8% |
+| `standard/fragmented_three` | 35,801 → 35,588 | 78,379 → 77,871 | 4 → 4 | 103,212 → 103,212 | +0.6% |
+| `standard/short_detailed` | 658 → 575 | 1,440 → 1,260 | 2 → 2 | 492 → 492 | +14.4% |
+| `standard/short_three` | 635 → 511 | 1,389 → 1,119 | 4 → 4 | 660 → 660 | +24.3% |
+| `bpm_stats/64_values` | 450 → 437 | 985 → 954 | 1 → 1 | 512 → 512 | +3.0% |
+| `bpm_stats/8_summary_warm` | 67 → 53 | 145 → 116 | 0 → 0 | 0 → 0 | +26.4% |
+| `zero_duration/128_nonzero_local` | 196,057 → 202,304 | 428,696 → 442,261 | 46 → 46 | 47,584 → 47,584 | -3.1% |
+| `duration/clean_hit` | 95,606 → 96,484 | 209,188 → 210,834 | 21 → 21 | 25,815 → 25,815 | -0.9% |
+| `duration/dirty_hit` | 110,818 → 108,207 | 242,122 → 236,419 | 25 → 25 | 32,227 → 32,227 | +2.4% |
+| `duration/dirty_miss` | 404,903 → 409,710 | 885,820 → 895,992 | 70 → 70 | 120,223 → 120,223 | -1.2% |
+| `duration/camellia` | 6,209,132 → 5,851,662 | 13,583,362 → 12,809,050 | 18 → 18 | 3,635 → 3,635 | +6.1% |
+| `analyze/camellia` | 195,965,500 → 202,958,016 | 428,402,831 → 443,739,297 | 110 → 110 | 5,263,624 → 5,263,624 | -3.4% |
+| `analyze/fast_camellia` | 25,167,700 → 25,316,883 | 55,030,333 → 55,335,364 | 115 → 115 | 7,051,152 → 7,051,152 | -0.6% |
+| `analyze/mixed_small` | 23,218 → 22,548 | 50,668 → 49,135 | 59 → 59 | 7,460 → 7,460 | +3.0% |
+
+## Behavioral validation
+
+- Release library suites: 60 rssp and 138 core tests passed.
+- Release optimization regressions: 18 passed. New cases cover small BPM exact
+  bits and original sort behavior; zero durations, offsets, metadata and cache
+  transitions; stream gaps, long leading breaks and visitor error propagation.
+- `cargo test --release --test all_parity -- --test-threads=22`: 30,489 passed,
+  zero failed, after the final optimizations were confirmed and before commit.
+- Strict release Clippy for all workspace targets, formatting and diff checks
+  passed.
+- Original/final output is byte-identical across 30,843 corpus files and 56,125
+  supported charts, including 354 matching parse errors. The comparison covers
+  durations, densities, spacing, stream breakdowns, normalization, peak NPS,
+  BPM snapshots, custom matching and serialized fixtures. UTF-8 SHA-256:
+  `9cd4f319db50e03f9861ddf483e447afcf78a32200292972d245f0692b581ab3`.
+
+## Reproduction
+
+Build `87476fc` with only the version bump to 0.4.276 and the final benchmark
+additions to save the baseline executable. Then build the final production code
+with the same version and harness:
+
+```powershell
+cargo bench -p rssp --bench hotpath_perf --no-run
+$env:RSSP_HOT_FILTER = 'bpm_stats/' # also standard/, zero_duration/, duration/, analyze/
+$env:RSSP_HOT_ITERS = '500' # 200 for zero_duration/, 30 for analyze/
+$bench = Get-ChildItem target/release/deps/hotpath_perf-*.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+& $bench.FullName
+```
+
+Alternate baseline/final executables three times. The filter matches substrings,
+so the driver records only cases starting with the selected namespace to avoid
+counting `zero_duration/` again under `duration/`. Set `RSSP_HOT_VERIFY=1` to emit
+the deterministic component and corpus comparison.

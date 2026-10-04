@@ -78,8 +78,11 @@ const fn is_stream_measure(d: usize) -> bool {
 
 #[must_use]
 pub fn stream_sequences(measures: &[usize]) -> Vec<StreamSegment> {
+    let Some(first) = measures.iter().position(|&d| is_stream_measure(d)) else {
+        return Vec::new();
+    };
     let mut segs = Vec::with_capacity(scratch_cap(measures.len() / 2 + 1));
-    match visit_stream_sequences(measures, |segment| {
+    match visit_streams_from(measures, first, |segment| {
         segs.push(segment);
         Ok::<(), std::convert::Infallible>(())
     }) {
@@ -96,9 +99,22 @@ pub fn stream_sequences(measures: &[usize]) -> Vec<StreamSegment> {
 /// Returns the first error produced by `visit`.
 pub fn visit_stream_sequences<E>(
     measures: &[usize],
+    visit: impl FnMut(StreamSegment) -> Result<(), E>,
+) -> Result<(), E> {
+    let first = measures
+        .iter()
+        .position(|&d| is_stream_measure(d))
+        .unwrap_or(measures.len());
+    visit_streams_from(measures, first, visit)
+}
+
+// Starting at the first stream lets the collecting caller allocate only when
+// needed, without rescanning leading breaks or checking storage on each visit.
+fn visit_streams_from<E>(
+    measures: &[usize],
+    mut i: usize,
     mut visit: impl FnMut(StreamSegment) -> Result<(), E>,
 ) -> Result<(), E> {
-    let mut i = 0usize;
     let mut prev_stream_end = None;
 
     while i < measures.len() {

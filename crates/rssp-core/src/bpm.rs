@@ -1037,6 +1037,9 @@ pub fn compute_bpm_stats(values: &[f64]) -> (f64, f64) {
             bpm_stats_from_values::<false>(&mut [bpm], false, 0.0)
         });
     }
+    if values.len() <= 32 {
+        return small_bpm_stats(values.iter().copied());
+    }
     let displayable_count = values.iter().filter(|&&bpm| is_display_bpm(bpm)).count();
     let all_values_are_displayable = displayable_count != 0;
     let capacity = if all_values_are_displayable {
@@ -1060,6 +1063,9 @@ pub fn compute_bpm_map_stats(map: &[(f64, f64)]) -> (f64, f64) {
             bpm_stats_from_values::<false>(&mut [bpm], false, 0.0)
         });
     }
+    if map.len() <= 32 {
+        return small_bpm_stats(map.iter().map(|&(_, bpm)| bpm));
+    }
     let mut filtered = Vec::with_capacity(map.len());
     filtered.extend(
         map.iter()
@@ -1071,6 +1077,23 @@ pub fn compute_bpm_map_stats(map: &[(f64, f64)]) -> (f64, f64) {
         filtered.extend(map.iter().map(|&(_, bpm)| bpm));
     }
     bpm_stats_from_values::<false>(&mut filtered, all_values_are_displayable, 0.0)
+}
+
+fn small_bpm_stats(bpms: impl Iterator<Item = f64> + Clone) -> (f64, f64) {
+    let mut values = [0.0; 32];
+    let mut len = 0;
+    for bpm in bpms.clone().filter(|&bpm| is_display_bpm(bpm)) {
+        values[len] = bpm;
+        len += 1;
+    }
+    let can_select = len != 0;
+    if !can_select {
+        for bpm in bpms {
+            values[len] = bpm;
+            len += 1;
+        }
+    }
+    bpm_stats_from_values::<false>(&mut values[..len], can_select, 0.0)
 }
 
 #[must_use]
