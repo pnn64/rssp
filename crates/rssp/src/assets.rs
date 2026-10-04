@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use memchr::memchr2;
 
-use crate::parse::{bgchanges_values, decode_bytes, unescape_tag};
+use crate::parse::{bgchanges_values, decode_unescape};
 
 const RANDOM_BACKGROUND_FILE: &str = "-random-";
 const NO_SONG_BG_FILE: &str = "-nosongbg-";
@@ -947,8 +947,7 @@ fn resolve_bgchanges_with<'a>(
     let mut beats_ordered = true;
     let mut beat_filter = None;
     for raw in values {
-        let decoded = decode_bytes(raw);
-        let text = unescape_tag(decoded.as_ref());
+        let text = decode_unescape(raw);
         for_each_bgchange_pair_with(text.as_ref(), files, |start_beat, target, file_index| {
             let Some(change) = parse_bgchange_pair(
                 song_dir,
@@ -1390,3 +1389,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "../benches/support/assets_edges.rs"]
+mod pass_edges;

@@ -11,6 +11,10 @@
     clippy::trivially_copy_pass_by_ref
 )]
 
+#[cfg(test)]
+#[path = "../benches/support/private_perf.rs"]
+mod perf;
+
 pub mod analysis;
 pub mod assets;
 pub mod course;

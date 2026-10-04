@@ -4,6 +4,8 @@ use std::ffi::{OsStr, OsString};
 use std::hash::BuildHasher;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+use memchr::{memchr, memchr2};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{Duration, Instant};
 #[cfg(target_arch = "wasm32")]
@@ -202,11 +204,17 @@ fn shift_diff(base: Difficulty, course: Difficulty) -> Difficulty {
 
 #[inline(always)]
 fn scan_term(slice: &[u8]) -> Option<(usize, usize)> {
+    // Short tags avoid the setup cost of a vector search.
+    let start = if slice.len() < 32 {
+        0
+    } else {
+        memchr2(b';', b'\\', slice)?
+    };
     let mut bs = 0usize;
-    for (i, &b) in slice.iter().enumerate() {
+    for (i, &b) in slice[start..].iter().enumerate() {
         let escaped = bs & 1 != 0;
         if b == b';' && !escaped {
-            return Some((i, i + 1));
+            return Some((start + i, start + i + 1));
         }
         bs = if b == b'\\' { bs + 1 } else { 0 };
     }
@@ -784,7 +792,13 @@ fn course_tag(name: &[u8]) -> CourseTag {
     }
 }
 
-fn parse_crs_impl(data: &[u8]) -> Result<CourseFile, String> {
+/// Parses an ITG course file.
+///
+/// # Errors
+///
+/// Returns an error when required course fields are invalid or missing.
+// Keep tag dispatch and input-cursor advancement together.
+pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
     let mut name = String::new();
     let mut name_translit = String::new();
     let mut scripter = String::new();
@@ -798,13 +812,13 @@ fn parse_crs_impl(data: &[u8]) -> Result<CourseFile, String> {
 
     let mut i = 0usize;
     while i < data.len() {
-        let Some(pos) = data[i..].iter().position(|&b| b == b'#') else {
+        let Some(pos) = memchr(b'#', &data[i..]) else {
             break;
         };
         i += pos;
         let tag_start = i;
         let s = &data[i..];
-        let Some(name_end) = s.iter().position(|&b| b == b':') else {
+        let Some(name_end) = memchr(b':', s) else {
             i += 1;
             continue;
         };
@@ -860,15 +874,6 @@ fn parse_crs_impl(data: &[u8]) -> Result<CourseFile, String> {
         meters,
         entries,
     })
-}
-
-/// Parses an ITG course file.
-///
-/// # Errors
-///
-/// Returns an error when required course fields are invalid or missing.
-pub fn parse_crs(data: &[u8]) -> Result<CourseFile, String> {
-    parse_crs_impl(data)
 }
 
 const fn empty_timing_segments() -> TimingSegments {
@@ -1881,3 +1886,7 @@ mod tests {
         assert!(!summary.tech_counts_enabled);
     }
 }
+
+#[cfg(test)]
+#[path = "../benches/support/course_edges.rs"]
+mod pass_edges;

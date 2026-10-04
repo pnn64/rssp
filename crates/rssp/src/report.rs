@@ -433,9 +433,10 @@ const fn format_duration(seconds: i32) -> DurationDisplay {
     DurationDisplay(seconds)
 }
 
+// Only chart writers consume this placeholder; song metadata is unused.
 fn dummy_simfile_for_course(course: &CourseSummary) -> SimfileSummary {
     SimfileSummary {
-        title_str: course.course.clone(),
+        title_str: String::new(),
         subtitle_str: String::new(),
         artist_str: String::new(),
         genre_str: String::new(),
@@ -481,7 +482,7 @@ fn dummy_simfile_for_course(course: &CourseSummary) -> SimfileSummary {
         median_bpm: 0.0,
         average_bpm: 0.0,
         total_length: course.total_length,
-        global_timing_segments: Arc::default(),
+        global_timing_segments: Arc::clone(&course.chart.timing_segments),
         pattern_counts_enabled: course.pattern_counts_enabled,
         tech_counts_enabled: course.tech_counts_enabled,
         charts: Vec::new(),
@@ -3907,3 +3908,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../benches/support/report_edges.rs"]
+mod pass_edges;
