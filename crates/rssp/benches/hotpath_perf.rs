@@ -473,6 +473,100 @@ fn duration_cases(iters: usize) {
     });
 }
 
+fn duration_row_cases(iters: usize) {
+    for (lanes, step_type) in [
+        (4, "dance-single"),
+        (5, "pump-single"),
+        (8, "dance-double"),
+        (10, "pump-double"),
+    ] {
+        for (name, spacing, rows) in [("sparse", 16, 256), ("dense", 1, 16), ("odd", 7, 129)] {
+            let mut data = format!("#BPMS:0=120;\n#NOTES:{step_type}::Hard:10::\n").into_bytes();
+            for i in 0..4096 {
+                let start = data.len();
+                data.resize(start + lanes, b'0');
+                if i % spacing == 0 {
+                    data[start + i % lanes] = match (i / spacing) % 8 {
+                        0 | 1 => b'2',
+                        2 | 3 => b'3',
+                        4 => b'M',
+                        _ => b'1',
+                    };
+                }
+                data.push(b'\n');
+                if i % rows == rows - 1 {
+                    data.extend_from_slice(b",\n");
+                }
+            }
+            data.extend_from_slice(b";\n");
+            measure(&format!("duration_rows{lanes}/{name}"), 4096, iters, || {
+                black_box(
+                    rssp::compute_chart_durations(
+                        black_box(&data),
+                        "sm",
+                        rssp::TimingOffsets::default(),
+                    )
+                    .expect("valid fixture"),
+                );
+            });
+        }
+    }
+}
+
+fn breakdown_cases(iters: usize) {
+    use rssp::streams::{BreakdownMode, StreamBreakdownLevel};
+    for (name, len, pattern) in [
+        ("uniform", 4096, &[16][..]),
+        (
+            "fragmented",
+            4096,
+            &[0, 16, 16, 0, 20, 20, 0, 0, 32, 32, 32, 0, 0, 0, 24][..],
+        ),
+        ("empty", 4096, &[0, 15][..]),
+        ("short", 32, &[16, 0, 20, 0, 0, 24, 32][..]),
+    ] {
+        let densities: Vec<_> = (0..len).map(|i| pattern[i % pattern.len()]).collect();
+        for (mode, tag) in [
+            (BreakdownMode::Detailed, "detailed"),
+            (BreakdownMode::Partial, "partial"),
+            (BreakdownMode::Simplified, "simple"),
+        ] {
+            measure(&format!("sn/{name}_{tag}"), len, iters, || {
+                black_box(rssp::streams::generate_breakdown(
+                    black_box(&densities),
+                    mode,
+                ));
+            });
+        }
+        measure(&format!("sn/{name}_three"), len, iters, || {
+            black_box(rssp::streams::generate_breakdowns(black_box(&densities)));
+        });
+        for (level, tag) in [
+            (StreamBreakdownLevel::Detailed, "detailed"),
+            (StreamBreakdownLevel::Partial, "partial"),
+            (StreamBreakdownLevel::Simple, "simple"),
+            (StreamBreakdownLevel::Total, "total"),
+        ] {
+            measure(&format!("standard/{name}_{tag}"), len, iters, || {
+                black_box(rssp::streams::stream_breakdown(
+                    black_box(&densities),
+                    level,
+                ));
+            });
+        }
+        measure(&format!("standard/{name}_three"), len, iters, || {
+            black_box(rssp::streams::stream_breakdowns(black_box(&densities)));
+        });
+        let mut tokens = Vec::new();
+        measure(&format!("streams/{name}_combined"), len, iters, || {
+            black_box(rssp::streams::compute_stream_outputs_with_scratch(
+                black_box(&densities),
+                &mut tokens,
+            ));
+        });
+    }
+}
+
 fn verify_corpus() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/packs");
     let mut files: Vec<_> = walkdir::WalkDir::new(&root)
@@ -499,9 +593,16 @@ fn verify_corpus() {
         if let Ok(parsed) = rssp::parse::extract_sections(&data, ext) {
             for chart in parsed.notes_list {
                 if let Some(lanes) = rssp::supported_stepstype_lanes_bytes(chart.fields[0]) {
+                    let densities = rssp::stats::measure_densities(chart.note_data, lanes);
+                    println!("density {densities:?}");
+                    println!("sn {:?}", rssp::streams::generate_breakdowns(&densities));
                     println!(
-                        "density {:?}",
-                        rssp::stats::measure_densities(chart.note_data, lanes)
+                        "standard {:?} {:?}",
+                        rssp::streams::stream_breakdowns(&densities),
+                        rssp::streams::stream_breakdown(
+                            &densities,
+                            rssp::streams::StreamBreakdownLevel::Total
+                        )
                     );
                 }
             }
@@ -573,6 +674,8 @@ fn main() {
     tier_cases(iters);
     density_cases(iters);
     duration_cases(iters);
+    duration_row_cases(iters);
+    breakdown_cases(iters);
     let densities: Vec<_> = (0..16384).map(|i| [0, 16, 20, 24, 32][i % 5]).collect();
     for (name, step) in [("long_segments", 2048.0), ("short_segments", 4.0)] {
         let bpms: Vec<_> = (0..32)

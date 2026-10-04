@@ -7,6 +7,58 @@ use rssp::bpm::{chart_bpm_snapshots, compute_tier_bpm};
 use rssp::nps::compute_chart_peak_nps;
 
 #[test]
+fn breakdown_gap_boundaries() {
+    use rssp::streams::{BreakdownMode, StreamBreakdownLevel};
+    for gap in [0, 1, 2, 4, 5, 31, 32, 33, 128] {
+        for same_category in [true, false] {
+            let mut measures = vec![0; 3];
+            measures.extend([16, 16]);
+            measures.resize(measures.len() + gap, 0);
+            measures.extend([if same_category { 16 } else { 32 }; 3]);
+            measures.extend([0; 3]);
+            let (counts, sn, standard) = rssp::streams::compute_stream_outputs(&measures);
+            assert_eq!(counts, rssp::streams::compute_stream_counts(&measures));
+            assert_eq!(sn, rssp::streams::generate_breakdowns(&measures));
+            assert_eq!(standard, rssp::streams::stream_breakdowns(&measures));
+            for (mode, expected) in [
+                (BreakdownMode::Detailed, &sn.0),
+                (BreakdownMode::Partial, &sn.1),
+                (BreakdownMode::Simplified, &sn.2),
+            ] {
+                assert_eq!(
+                    &rssp::streams::generate_breakdown(&measures, mode),
+                    expected
+                );
+            }
+            for (level, expected) in [
+                (StreamBreakdownLevel::Detailed, &standard.0),
+                (StreamBreakdownLevel::Partial, &standard.1),
+                (StreamBreakdownLevel::Simple, &standard.2),
+            ] {
+                assert_eq!(&rssp::streams::stream_breakdown(&measures, level), expected);
+            }
+            assert_eq!(
+                rssp::streams::stream_breakdown(&measures, StreamBreakdownLevel::Total),
+                "5 Total"
+            );
+        }
+    }
+    let measures = [0, 0, 16, 16, 0, 32, 0, 0, 24, 24, 0, 0];
+    assert_eq!(
+        rssp::streams::generate_breakdowns(&measures),
+        (
+            "2 =1= (2) \\2\\".into(),
+            "2 =1= - \\2\\".into(),
+            "2 =3=* \\2\\".into()
+        )
+    );
+    assert_eq!(
+        rssp::streams::stream_breakdowns(&measures),
+        ("2-1 (2) 2".into(), "2-1-2".into(), "4*-2".into())
+    );
+}
+
+#[test]
 fn peak_aux_overrides() {
     for version in ["0.6", "0.83"] {
         for tag in ["SPEEDS:0=2=1=0", "SCROLLS:0=0.5", "FAKES:0=4", "SPEEDS:"] {

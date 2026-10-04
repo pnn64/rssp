@@ -1232,128 +1232,61 @@ pub(crate) fn chart_last_beat(data: &[u8], lanes: usize) -> f64 {
     dispatch_lanes!(lanes, chart_last_beat_impl(data))
 }
 
-// Parser state machine: common measures stay bounded on the stack and only
-// charts with more than 96 rows in one measure spill to retained heap storage.
+// Scan raw rows directly: reduction only removes all-zero rows, which do
+// not change hold state. Scaling both the row and row count by a power of two
+// preserves the exact beat calculation, so no measure storage is needed.
 fn chart_last_beat_impl<const L: usize>(data: &[u8]) -> f64 {
-    chart_last_beat_with::<L, 96>(data)
-}
-
-fn chart_last_beat_with<const L: usize, const STACK_ROWS: usize>(data: &[u8]) -> f64 {
-    let mut stack = [[0u8; L]; STACK_ROWS];
-    let mut stack_len = 0usize;
-    let mut overflow = Vec::new();
-    let mut overflowing = false;
     let mut object_depths = [0u32; L];
     let (mut last_m, mut last_r, mut last_rows) = (None, 0usize, 0usize);
-    let (mut midx, mut done) = (0usize, false);
-
+    let (mut midx, mut rows, mut last) = (0usize, 0usize, None);
     let mut line_off = 0usize;
     while let Some(raw) = next_line(data, &mut line_off) {
         let line = skip_ws(raw);
         if line.is_empty() || line[0] == b'/' {
             continue;
         }
-
         match line[0] {
             b',' | b';' => {
-                let measure = if overflowing {
-                    overflow.as_mut_slice()
-                } else {
-                    &mut stack[..stack_len]
-                };
-                scan_last_rows(
-                    measure,
-                    midx,
-                    &mut object_depths,
-                    &mut last_m,
-                    &mut last_r,
-                    &mut last_rows,
-                );
-                overflow.clear();
-                overflowing = false;
-                stack_len = 0;
+                if let Some(row) = last {
+                    (last_m, last_r, last_rows) = (Some(midx), row, rows);
+                }
                 if line[0] == b';' {
-                    done = true;
-                    break;
+                    return calc_last_beat(last_m, last_r, last_rows);
                 }
                 midx += 1;
+                rows = 0;
+                last = None;
             }
-            _ if line.len() >= L => {
-                let mut row = [0u8; L];
-                row.copy_from_slice(&line[..L]);
-                if overflowing {
-                    overflow.push(row);
-                } else if stack_len < STACK_ROWS {
-                    stack[stack_len] = row;
-                    stack_len += 1;
-                } else {
-                    overflow.extend_from_slice(&stack);
-                    overflow.push(row);
-                    overflowing = true;
+            _ => {
+                let Some(row) = line.first_chunk::<L>() else {
+                    continue;
+                };
+                if !is_all_zero(row) && row_has_object(row, &mut object_depths) {
+                    last = Some(rows);
                 }
+                rows += 1;
             }
-            _ => {}
         }
     }
-
-    if !done {
-        let measure = if overflowing {
-            overflow.as_mut_slice()
-        } else {
-            &mut stack[..stack_len]
-        };
-        scan_last_rows(
-            measure,
-            midx,
-            &mut object_depths,
-            &mut last_m,
-            &mut last_r,
-            &mut last_rows,
-        );
+    if let Some(row) = last {
+        (last_m, last_r, last_rows) = (Some(midx), row, rows);
     }
-
     calc_last_beat(last_m, last_r, last_rows)
-}
-
-fn scan_last_rows<const L: usize>(
-    measure: &mut [[u8; L]],
-    midx: usize,
-    object_depths: &mut [u32; L],
-    last_m: &mut Option<usize>,
-    last_r: &mut usize,
-    last_rows: &mut usize,
-) {
-    if measure.is_empty() {
-        return;
-    }
-    let shift = measure_reduce_shift(measure);
-    let rows = measure.len() >> shift;
-    if shift != 0 {
-        let step = 1usize << shift;
-        for index in 1..rows {
-            measure[index] = measure[index * step];
-        }
-    }
-    for (ridx, line) in measure[..rows].iter().enumerate() {
-        if row_has_object(line, object_depths) {
-            (*last_m, *last_r, *last_rows) = (Some(midx), ridx, rows);
-        }
-    }
 }
 
 #[inline(always)]
 fn row_has_object<const L: usize>(line: &[u8; L], object_depths: &mut [u32; L]) -> bool {
     let mut object = false;
-    for (i, &ch) in line.iter().enumerate() {
+    for (&ch, depth) in line.iter().zip(object_depths) {
         match ch {
             b'1' | b'M' | b'L' | b'F' | b'K' => {
-                object_depths[i] = 0;
+                *depth = 0;
                 object = true;
             }
-            b'2' | b'4' => object_depths[i] = object_depths[i].saturating_add(1),
-            b'3' if object_depths[i] > 0 => {
-                object_depths[i] -= 1;
-                object = true;
+            b'2' | b'4' => *depth = depth.saturating_add(1),
+            b'3' => {
+                object |= *depth > 0;
+                *depth = depth.saturating_sub(1);
             }
             _ => {}
         }
@@ -2539,6 +2472,30 @@ mod tests {
         }
         dense.extend_from_slice(b";\n");
         check(&dense, 4);
+
+        // Reduction must not affect raw row positions, and nested hold state
+        // persists across empty measures. Dense measures formerly spilled.
+        for lanes in [4, 5, 8, 10] {
+            for rows in [1, 3, 7, 64, 96, 97, 128, 192, 257, 512] {
+                let mut data = Vec::new();
+                for (measure, spacing) in [16, 1, 7].into_iter().enumerate() {
+                    data.extend_from_slice(b"// comment\r\n\n,\n");
+                    for index in 0..rows {
+                        let start = data.len();
+                        data.extend_from_slice(b" \t");
+                        data.resize(start + 2 + lanes, b'0');
+                        if index % spacing == 0 {
+                            data[start + 2 + (index + measure) % lanes] =
+                                b"2243301MLFKx"[(index / spacing) % 12];
+                        }
+                        data.extend_from_slice(b"\r\n");
+                    }
+                }
+                check(&data, lanes);
+                data.extend_from_slice(b";\n1000\n");
+                check(&data, lanes);
+            }
+        }
     }
 
     #[test]

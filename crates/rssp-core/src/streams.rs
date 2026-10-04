@@ -318,17 +318,6 @@ pub fn compute_stream_outputs_with_scratch(
     (String, String, String),
     (String, String, String),
 ) {
-    compute_stream_outputs_impl(measures, tokens)
-}
-
-fn compute_stream_outputs_impl(
-    measures: &[usize],
-    tokens: &mut Vec<Token>,
-) -> (
-    StreamCounts,
-    (String, String, String),
-    (String, String, String),
-) {
     let counts = compute_stream_counts_and_tokens(measures, tokens);
     if tokens.is_empty() {
         return (
@@ -338,7 +327,10 @@ fn compute_stream_outputs_impl(
         );
     }
 
-    let sn = format_breakdown_tokens3(tokens);
+    let sn = format_breakdown_tokens3(
+        tokens.iter().copied(),
+        tokens.len().saturating_mul(TOKEN_TEXT_CAP),
+    );
     let standard = format_stream_tokens3(tokens);
     (counts, sn, standard)
 }
@@ -349,8 +341,12 @@ pub fn generate_breakdown(measures: &[usize], mode: BreakdownMode) -> String {
         return String::new();
     };
 
-    let tokens = tokenize(&measures[start..=end]);
-    format_breakdown_tokens(&tokens, mode)
+    let active = &measures[start..=end];
+    format_breakdown_tokens(
+        stream_tokens(active),
+        mode,
+        active.len().min(32) * TOKEN_TEXT_CAP,
+    )
 }
 
 #[must_use]
@@ -359,8 +355,8 @@ pub fn generate_breakdowns(measures: &[usize]) -> (String, String, String) {
         return (String::new(), String::new(), String::new());
     };
 
-    let tokens = tokenize(&measures[start..=end]);
-    format_breakdown_tokens3(&tokens)
+    let active = &measures[start..=end];
+    format_breakdown_tokens3(stream_tokens(active), active.len().min(32) * TOKEN_TEXT_CAP)
 }
 
 #[derive(Clone, Copy)]
@@ -422,8 +418,10 @@ fn push_pending<const SIMPLIFIED: bool>(
 // Render all SN variants while each compact token is hot in cache. Partial
 // and simplified runs stay pending until the following gap determines whether
 // they merge; detailed output can be emitted immediately.
-fn format_breakdown_tokens3(tokens: &[Token]) -> (String, String, String) {
-    let cap = tokens.len().saturating_mul(TOKEN_TEXT_CAP);
+fn format_breakdown_tokens3(
+    tokens: impl Iterator<Item = Token>,
+    cap: usize,
+) -> (String, String, String) {
     let mut detailed = String::with_capacity(cap);
     let mut partial = String::with_capacity(cap);
     let mut simplified = String::with_capacity(cap);
@@ -432,7 +430,7 @@ fn format_breakdown_tokens3(tokens: &[Token]) -> (String, String, String) {
     let mut partial_gap = 0usize;
     let mut simplified_gap = 0usize;
 
-    for &token in tokens {
+    for token in tokens {
         match token {
             Token::Run(category, len) => {
                 write_breakdown_run(
@@ -486,32 +484,49 @@ fn format_breakdown_tokens3(tokens: &[Token]) -> (String, String, String) {
     (detailed, partial, simplified)
 }
 
-fn format_breakdown_tokens(tokens: &[Token], mode: BreakdownMode) -> String {
+fn format_breakdown_tokens(
+    tokens: impl Iterator<Item = Token>,
+    mode: BreakdownMode,
+    cap: usize,
+) -> String {
     let threshold = match mode {
         BreakdownMode::Detailed => 0,
         BreakdownMode::Partial => 1,
         BreakdownMode::Simplified => 4,
     };
-
-    let mut out = String::with_capacity(tokens.len().saturating_mul(TOKEN_TEXT_CAP));
-    let mut i = 0;
-
-    while i < tokens.len() {
-        match tokens[i] {
-            Token::Run(cat, _) => {
-                let (total, star, next) = merge_runs(tokens, i, cat, threshold, mode);
-                if !out.is_empty() {
-                    out.push(' ');
+    let mut out = String::with_capacity(cap);
+    let (mut pending, mut gap) = (None, 0usize);
+    for token in tokens {
+        match token {
+            Token::Run(category, len) => match mode {
+                BreakdownMode::Detailed => write_breakdown_run(
+                    &mut out,
+                    PendingRun {
+                        category,
+                        len,
+                        star: false,
+                    },
+                ),
+                BreakdownMode::Partial => {
+                    push_pending::<false>(&mut out, &mut pending, &mut gap, category, len);
                 }
-                write_run(&mut out, cat, total, star);
-                i = next;
-            }
-            Token::Break(n) => {
-                format_break(&mut out, n, mode);
-                i += 1;
+                BreakdownMode::Simplified => {
+                    push_pending::<true>(&mut out, &mut pending, &mut gap, category, len);
+                }
+            },
+            Token::Break(len) => {
+                if gap != 0 || len > threshold {
+                    flush_pending(&mut out, &mut pending);
+                }
+                gap = len;
+                if len > threshold {
+                    format_break(&mut out, len, mode);
+                    gap = 0;
+                }
             }
         }
     }
+    flush_pending(&mut out, &mut pending);
     out
 }
 
@@ -521,71 +536,20 @@ fn active_range(m: &[usize]) -> Option<(usize, usize)> {
     Some((s, e))
 }
 
-fn tokenize(dens: &[usize]) -> Vec<Token> {
-    if dens.is_empty() {
-        return Vec::new();
-    }
-
-    let mut tokens = Vec::with_capacity(scratch_cap(dens.len()));
-    let mut cur = categorize_measure_density(dens[0]);
-    let mut count = 1;
-
-    for &d in &dens[1..] {
-        let next = categorize_measure_density(d);
-        if next == cur {
-            count += 1;
-        } else {
-            tokens.push(match cur {
-                RunDensity::Break => Token::Break(count),
-                c => Token::Run(c, count),
-            });
-            cur = next;
-            count = 1;
-        }
-    }
-    tokens.push(match cur {
-        RunDensity::Break => Token::Break(count),
-        c => Token::Run(c, count),
-    });
-    tokens
-}
-
-fn merge_runs(
-    tokens: &[Token],
-    start: usize,
-    cat: RunDensity,
-    thresh: usize,
-    mode: BreakdownMode,
-) -> (usize, bool, usize) {
-    let Token::Run(_, init) = tokens[start] else {
-        unreachable!()
-    };
-    let (mut total, mut star, mut next) = (init, false, start + 1);
-
-    while next + 1 < tokens.len() {
-        let Token::Break(bk) = tokens[next] else {
-            break;
-        };
-        if bk > thresh {
-            break;
-        }
-        let Token::Run(nc, nl) = tokens[next + 1] else {
-            break;
-        };
-        if nc == cat {
-            total += bk + nl;
-            star = true;
-            next += 2;
-        } else {
-            if mode == BreakdownMode::Simplified && bk > 1 && bk <= 4 {
-                total += bk;
-                star = true;
-            }
-            next += 1;
-            break;
-        }
-    }
-    (total, star, next)
+fn stream_tokens(mut dens: &[usize]) -> impl Iterator<Item = Token> + '_ {
+    std::iter::from_fn(move || {
+        let (&first, tail) = dens.split_first()?;
+        let category = categorize_measure_density(first);
+        let len = 1 + tail
+            .iter()
+            .take_while(|&&d| categorize_measure_density(d) == category)
+            .count();
+        dens = &dens[len..];
+        Some(match category {
+            RunDensity::Break => Token::Break(len),
+            run => Token::Run(run, len),
+        })
+    })
 }
 
 fn write_run(out: &mut String, cat: RunDensity, len: usize, star: bool) {
@@ -664,6 +628,17 @@ pub fn format_run_symbol(cat: RunDensity, len: usize, star: bool) -> String {
 
 #[must_use]
 pub fn stream_breakdown(measures: &[usize], level: StreamBreakdownLevel) -> String {
+    if level == StreamBreakdownLevel::Total {
+        let total = measures.iter().filter(|&&d| is_stream_measure(d)).count();
+        if total == 0 {
+            return "No Streams!".into();
+        }
+        // A usize needs at most 20 decimal digits, followed by " Total".
+        let mut out = String::with_capacity(26);
+        push_usize(&mut out, total);
+        out.push_str(" Total");
+        return out;
+    }
     if measures.is_empty() {
         return "No Streams!".into();
     }

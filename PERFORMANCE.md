@@ -417,3 +417,202 @@ cargo test --release --test all_parity -- --test-threads=22
 ```text
 test result: ok. 30489 passed; 0 failed
 ```
+
+# 0.4.273: duration scans, streamed SN formatting, and direct stream totals
+
+## Changes
+
+1. Duration scanning reads note rows directly. It removes the 96-row stack
+   buffer, spill vector, reduction, compaction, and the forwarding helper.
+   All-zero rows leave hold state unchanged, and reduction scales row indices
+   and row counts by powers of two, preserving the exact beat calculation.
+   Nested holds, blocking notes, and matched tails retain their original rules.
+2. SN breakdowns consume an iterator of category runs instead of constructing
+   a token vector. Single-output formatting reuses the existing pending-run
+   logic, removing indexed merging and its duplicate implementation. A small
+   reservation, capped at 160 bytes per output before actual text growth,
+   avoids repeated allocations for short charts. The combined analysis path
+   keeps its existing caller-owned token storage and exact capacity estimate.
+3. Standard total-stream formatting counts eligible measures directly. It
+   avoids segment construction, the intermediate formatting buffer, and the
+   second output string. Nonempty totals require one 26-byte allocation;
+   no-stream totals allocate only the existing `No Streams!` label. Detailed,
+   partial, simple, and three-output standard formatting retain their original
+   implementation.
+
+These changes remove 92 net production lines. Workspace versions increase once
+from 0.4.272 to 0.4.273. Public signatures and output text remain unchanged.
+
+## Benchmark method
+
+Original production code comes from `0aa0bcd` (0.4.272). Final comparisons compile
+both original and optimized production code with the same workspace version,
+0.4.273, in the same checkout and target directory. This holds crate metadata
+constant: preliminary comparisons across versions also showed timing changes
+in unchanged control functions. The benchmark, fixtures, dependency lockfile,
+compiler, and build settings are identical. Baseline production changes are
+absent when its executable is built; final production code is restored before
+the optimized build and all final validation.
+
+Measurements use rustc 1.98.1 / LLVM 22.1.8, x86_64-pc-windows-msvc, on an Intel
+Xeon E5-2696 v4 (22 cores / 44 logical processors). The workspace bench profile
+uses fat LTO and one codegen unit. Both executables pin their measuring thread
+to logical CPU 2. Each process warms up, takes the median of seven batches, and
+measures allocator requests separately. Tables report medians from three
+alternating baseline/optimized process pairs. Component cases use 500 calls per
+batch; Camellia duration uses 50. Analysis cases use 30 calls, with three calls
+per batch for Camellia. Setup and fixture generation occur outside timed loops.
+Cycles are Windows `QueryThreadCycleTime` values. Requested bytes sum allocation
+and full reallocation requests, measuring churn rather than peak live memory.
+Other activity on this shared machine can affect elapsed time and CPU counters;
+allocation counts and requested byte reductions are deterministic.
+
+## Duration results
+
+Synthetic inputs contain 4,096 rows in four, five, eight, or ten lanes, including
+hold heads, tails, mines, and taps. Sparse inputs place an event every 16 rows in
+256-row measures; dense inputs place one per row in 16-row measures; odd inputs
+place one every seven rows in 129-row measures. Existing timing-cache cases and
+the five-chart Camellia fixture measure the composed public duration API.
+
+| Case | CPU cycles/call, old -> new | Allocations / reallocations, old -> new | Requested bytes/call, old -> new | Throughput change |
+| --- | ---: | ---: | ---: | ---: |
+| duration_rows4/sparse | 79,354 -> 70,139 | 10 / 2 -> 9 / 0 | 3,864 -> 1,176 | +13.2% |
+| duration_rows4/dense | 109,001 -> 92,498 | 9 / 0 -> 9 / 0 | 1,176 -> 1,176 | +16.9% |
+| duration_rows4/odd | 102,666 -> 67,029 | 10 / 1 -> 9 / 0 | 2,328 -> 1,176 | +53.7% |
+| duration_rows5/sparse | 85,193 -> 73,902 | 10 / 2 -> 9 / 0 | 4,535 -> 1,175 | +15.7% |
+| duration_rows5/dense | 128,006 -> 103,874 | 9 / 0 -> 9 / 0 | 1,175 -> 1,175 | +23.0% |
+| duration_rows5/odd | 114,502 -> 71,961 | 10 / 1 -> 9 / 0 | 2,615 -> 1,175 | +61.0% |
+| duration_rows8/sparse | 89,170 -> 81,327 | 10 / 2 -> 9 / 0 | 6,552 -> 1,176 | +9.6% |
+| duration_rows8/dense | 145,323 -> 130,620 | 9 / 0 -> 9 / 0 | 1,176 -> 1,176 | +11.0% |
+| duration_rows8/odd | 141,448 -> 76,299 | 10 / 1 -> 9 / 0 | 3,480 -> 1,176 | +86.0% |
+| duration_rows10/sparse | 96,420 -> 88,466 | 10 / 2 -> 9 / 0 | 7,895 -> 1,175 | +9.0% |
+| duration_rows10/dense | 165,619 -> 139,716 | 9 / 0 -> 9 / 0 | 1,175 -> 1,175 | +18.2% |
+| duration_rows10/odd | 161,262 -> 85,296 | 10 / 1 -> 9 / 0 | 4,055 -> 1,175 | +87.9% |
+| duration/clean_hit | 202,429 -> 207,042 | 21 / 1 -> 21 / 1 | 25,815 -> 25,815 | -3.3% |
+| duration/dirty_hit | 290,611 -> 231,305 | 25 / 1 -> 25 / 1 | 32,227 -> 32,227 | +30.3% |
+| duration/dirty_miss | 966,877 -> 912,818 | 70 / 4 -> 70 / 4 | 120,223 -> 120,223 | +17.3% |
+| duration/camellia | 18,386,540 -> 13,983,853 | 23 / 5 -> 18 / 0 | 9,395 -> 3,635 | +46.2% |
+
+All twelve row-scan medians improve. Spill allocations disappear regardless of
+measure length; sparse ten-lane requested bytes fall from 7,895 to 1,175.
+Camellia uses five fewer allocations and 61.3% less requested allocation memory.
+The tiny clean-timing cache case is dominated by unchanged timing/metadata
+work; its small timing difference is discussed with the controls below.
+
+## SN breakdown results
+
+Uniform and no-stream inputs contain 4,096 measures. Fragmented inputs repeat
+`[0,16,16,0,20,20,0,0,32,32,32,0,0,0,24]` over 4,096 measures. Short inputs repeat
+`[16,0,20,0,0,24,32]` over 32 measures. Each single mode and the three-output
+API is measured directly.
+
+| Case | CPU cycles/call, old -> new | Allocations / reallocations, old -> new | Requested bytes/call, old -> new | Throughput change |
+| --- | ---: | ---: | ---: | ---: |
+| sn/uniform_detailed | 13,531 -> 11,619 | 2 / 0 -> 1 / 0 | 16,389 -> 160 | +15.7% |
+| sn/uniform_partial | 13,876 -> 11,606 | 2 / 0 -> 1 / 0 | 16,389 -> 160 | +19.3% |
+| sn/uniform_simple | 14,355 -> 12,022 | 2 / 0 -> 1 / 0 | 16,389 -> 160 | +17.9% |
+| sn/uniform_three | 15,384 -> 12,343 | 4 / 0 -> 3 / 0 | 16,399 -> 480 | +28.8% |
+| sn/fragmented_detailed | 154,830 -> 87,882 | 2 / 2 -> 1 / 6 | 125,603 -> 20,320 | +74.3% |
+| sn/fragmented_partial | 88,214 -> 79,724 | 2 / 2 -> 1 / 5 | 125,603 -> 10,080 | +10.6% |
+| sn/fragmented_simple | 90,616 -> 75,417 | 2 / 2 -> 1 / 5 | 125,603 -> 10,080 | +22.4% |
+| sn/fragmented_three | 180,393 -> 170,772 | 4 / 2 -> 3 / 16 | 147,433 -> 40,480 | +8.2% |
+| sn/empty_detailed | 5,002 -> 5,013 | 0 / 0 -> 0 / 0 | 0 -> 0 | -0.1% |
+| sn/empty_partial | 5,013 -> 5,087 | 0 / 0 -> 0 / 0 | 0 -> 0 | -2.4% |
+| sn/empty_simple | 4,932 -> 5,002 | 0 / 0 -> 0 / 0 | 0 -> 0 | +0.5% |
+| sn/empty_three | 4,906 -> 5,023 | 0 / 0 -> 0 / 0 | 0 -> 0 | -2.6% |
+| sn/short_detailed | 1,962 -> 1,176 | 2 / 0 -> 1 / 0 | 631 -> 155 | +66.5% |
+| sn/short_partial | 1,341 -> 1,116 | 2 / 0 -> 1 / 0 | 631 -> 155 | +20.2% |
+| sn/short_simple | 1,319 -> 1,108 | 2 / 0 -> 1 / 0 | 631 -> 155 | +18.9% |
+| sn/short_three | 3,013 -> 2,679 | 4 / 0 -> 3 / 0 | 901 -> 465 | +12.6% |
+
+Single outputs use one fewer allocation; three outputs also use one fewer.
+Fragmented detailed churn falls 83.8%, fragmented partial/simple churn falls
+92.0%, and uniform three-output churn falls 97.1%. Returned SN strings can
+retain up to 160 initially reserved bytes each; the combined analysis path's
+output reservation is unchanged. No-stream SN behavior performs no allocations.
+
+## Standard total results
+
+The same measure fixtures exercise the public total formatter. Total is the
+count of stream measures, excluding gaps; an all-break input preserves the
+`No Streams!` output.
+
+| Case | CPU cycles/call, old -> new | Allocations / reallocations, old -> new | Requested bytes/call, old -> new | Throughput change |
+| --- | ---: | ---: | ---: | ---: |
+| standard/uniform_total | 7,423 -> 6,230 | 3 / 1 -> 1 / 0 | 24,606 -> 26 | +24.2% |
+| standard/fragmented_total | 32,133 -> 6,490 | 3 / 2 -> 1 / 0 | 83,580 -> 26 | +405.1% |
+| standard/empty_total | 7,837 -> 6,117 | 2 / 0 -> 1 / 0 | 24,587 -> 11 | +30.5% |
+| standard/short_total | 790 -> 235 | 3 / 0 -> 1 / 0 | 500 -> 26 | +232.1% |
+
+Fragmented totals eliminate two allocations and two reallocations, reducing
+requested bytes from 83,580 to 26. Their median throughput improves about 5x.
+
+## Composed paths and controls
+
+| Case | CPU cycles/call, old -> new | Allocations / reallocations, old -> new | Requested bytes/call, old -> new | Throughput change |
+| --- | ---: | ---: | ---: | ---: |
+| streams/uniform_combined | 23,866 -> 23,936 | 6 / 0 -> 6 / 0 | 33 -> 33 | +0.8% |
+| streams/fragmented_combined | 230,481 -> 235,269 | 6 / 0 -> 6 / 0 | 72,039 -> 72,039 | -1.5% |
+| streams/empty_combined | 9,179 -> 9,161 | 3 / 0 -> 3 / 0 | 33 -> 33 | -2.1% |
+| streams/short_combined | 3,833 -> 3,814 | 6 / 0 -> 6 / 0 | 891 -> 891 | +0.6% |
+| analyze/fast_fake_lifts | 641,306 -> 654,366 | 31 / 4 -> 31 / 4 | 59,028 -> 59,028 | -3.6% |
+| analyze/camellia | 470,967,106 -> 449,241,285 | 110 / 0 -> 110 / 0 | 5,263,624 -> 5,263,624 | +3.4% |
+| analyze/fast_camellia | 60,683,629 -> 57,482,071 | 115 / 0 -> 115 / 0 | 7,051,152 -> 7,051,152 | +5.1% |
+| analyze/mixed_small | 52,600 -> 49,702 | 59 / 3 -> 59 / 3 | 7,460 -> 7,460 | +7.3% |
+
+Allocation counts and requested bytes in combined stream outputs and full
+analysis are unchanged. Unmodified standard output paths generally remain
+within a few percent of their original medians. Small timing changes, including
+clean duration timing, empty SN output, and fast fake/lift analysis, do not
+establish universal improvements or regressions on this shared machine.
+They are included as controls rather than claimed speedups. Targeted row-scan,
+nonempty SN, and total-format allocation reductions are reproducible.
+
+## Reproduction and behavior
+
+```powershell
+$env:RSSP_HOT_ITERS = '500'
+$env:RSSP_HOT_FILTER = 'duration_rows' # Or 'duration/', 'sn/', 'standard/', 'streams/'.
+cargo bench -p rssp --bench hotpath_perf
+
+$env:RSSP_HOT_VERIFY = '1'
+cargo bench -p rssp --bench hotpath_perf
+Remove-Item Env:RSSP_HOT_VERIFY
+```
+
+For a controlled baseline, save the final core `stats.rs` and `streams.rs`,
+replace their production code with `0aa0bcd` versions, and keep the current
+benchmark, fixtures, dependency lockfile, workspace version 0.4.273, checkout,
+and target directory. Build and save the baseline executable, restore the final
+sources, then build and save the optimized executable. Run the two executables
+alternately without other RSSP build/test workloads. Baseline code under
+`cfg(test)` has no effect on the bench executable. Use 30 iterations for the
+analysis filter to reproduce its smaller batch size.
+
+Verification emits sorted file paths, explicit density vectors, SN and standard
+breakdown strings, total strings, all duration/peak/snapshot fields, and errors.
+Numeric fields use exact bits. Original and final outputs are byte-identical
+across 30,489 valid simfiles and 56,125 charts, with the same 354 invalid-input
+errors for each analysis API. The native UTF-8 verification SHA-256 is
+`10766ede60ad22c0827cb425977e638af8cefbf883cd640b71ace80624ea8735`.
+
+An extended production-function test compares duration beats with the full
+minimizer across all supported lane counts, odd/reducible/dense measures,
+96/97-row spill boundaries, nested holds, blocking notes, ignored types,
+comments, CRLF, empty measures, EOF, and termination. A new integration test
+checks identical/different run categories around gaps of 0, 1, 2, 4, 5, 31, 32,
+33, and 128 measures, plus explicit expected strings and total counts.
+
+All 198 workspace library unit tests and all nine integration tests pass in
+release mode. Strict Clippy, formatting, and diff checks pass. After confirming
+the final benchmarks, the required command passes all 30,489 cases with zero
+failures before committing:
+
+```powershell
+cargo test --release --test all_parity -- --test-threads=22
+```
+
+```text
+test result: ok. 30489 passed; 0 failed
+```
