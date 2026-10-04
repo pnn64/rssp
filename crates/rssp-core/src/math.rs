@@ -96,13 +96,6 @@ pub(crate) fn push_dec6_itg(out: &mut String, value: f64) {
     write!(out, "{:.6}", value as f32).expect("writing to a String cannot fail");
 }
 
-#[inline]
-pub(crate) fn fmt_dec3_half_up(value: f64) -> String {
-    let mut out = String::with_capacity(16);
-    push_dec3_half_up(&mut out, value);
-    out
-}
-
 pub(crate) fn push_dec3_half_up(out: &mut String, value: f64) {
     let scaled = value.mul_add(1000.0, 0.5).floor();
     if !scaled.is_finite() || scaled <= i64::MIN as f64 || scaled >= i64::MAX as f64 {
@@ -177,7 +170,7 @@ pub fn roundtrip_bpm_itg(bpm: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{fmt_dec3_half_up, fmt_dec6_itg, round_sig_figs_6};
+    use super::{fmt_dec6_itg, push_dec3_half_up, round_sig_figs_6};
 
     #[test]
     fn round_sig_figs_common_range() {
@@ -214,7 +207,9 @@ mod tests {
 
         for value in values {
             let rounded = (value.mul_add(1000.0, 0.5).floor()) / 1000.0;
-            assert_eq!(fmt_dec3_half_up(value), format!("{rounded:.3}"));
+            let mut actual = String::new();
+            push_dec3_half_up(&mut actual, value);
+            assert_eq!(actual, format!("{rounded:.3}"));
         }
     }
 

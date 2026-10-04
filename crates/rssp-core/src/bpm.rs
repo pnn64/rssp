@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::fmt::Write as _;
 
-use crate::math::{fmt_dec3_half_up, push_dec3_half_up, round_sig_figs_itg, roundtrip_bpm_itg};
+use crate::math::{push_dec3_half_up, round_sig_figs_itg, roundtrip_bpm_itg};
 use crate::parse::{
     ParsedChartEntry, decode_bytes, decode_unescape_trim, extract_sections, parse_float_prefix,
     parse_version,
@@ -36,11 +36,6 @@ fn strip_control(s: &str) -> Cow<'_, str> {
     } else {
         Cow::Borrowed(s)
     }
-}
-
-fn normalize_decimal(s: &str) -> Option<String> {
-    let value = parse_normalized_decimal(s)?;
-    Some(fmt_dec3_half_up(value))
 }
 
 fn parse_normalized_decimal(s: &str) -> Option<f64> {
@@ -1317,59 +1312,10 @@ fn compute_tier_bpm_fixed(densities: &[usize], bpm: f64) -> f64 {
     }
 }
 
+/// Preserves the legacy fallback: decimal strings were rejected by integer parsing.
 #[must_use]
-pub fn normalize_and_tidy_bpms(param: &str) -> String {
-    let mut entries: Vec<_> = param
-        .split(',')
-        .enumerate()
-        .filter_map(|(i, e)| {
-            let (b, v) = e.trim().split_once('=')?;
-            let (bs, vs) = (normalize_decimal(b)?, normalize_decimal(v)?);
-            Some((bs.parse::<i64>().ok()?, bs, vs.parse::<i64>().ok()?, vs, i))
-        })
-        .collect();
-
-    if entries.is_empty() {
-        return "0.000=60.000".to_string();
-    }
-    entries.sort_by_key(|e| (e.0, e.4));
-
-    // Dedupe by beat, keeping last
-    let mut deduped = Vec::with_capacity(entries.len());
-    for e in entries {
-        if let Some(last) = deduped
-            .last_mut()
-            .filter(|last: &&mut (i64, String, i64, String, usize)| last.0 == e.0)
-        {
-            *last = e;
-        } else {
-            deduped.push(e);
-        }
-    }
-
-    if let Some(f) = deduped.first_mut()
-        && f.0 != 0
-    {
-        f.0 = 0;
-        f.1 = "0.000".into();
-    }
-
-    // Remove consecutive same values
-    let mut out = String::new();
-    let mut last_v = None;
-    for (_, bs, vt, vs, _) in deduped {
-        if last_v == Some(vt) {
-            continue;
-        }
-        last_v = Some(vt);
-        if !out.is_empty() {
-            out.push(',');
-        }
-        out.push_str(&bs);
-        out.push('=');
-        out.push_str(&vs);
-    }
-    out
+pub fn normalize_and_tidy_bpms(_param: &str) -> String {
+    "0.000=60.000".to_owned()
 }
 
 #[cfg(test)]

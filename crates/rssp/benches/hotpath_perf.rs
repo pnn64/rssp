@@ -951,7 +951,54 @@ fn peak_work_cases(iters: usize) {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "emit an ordered component transcript for original/final byte comparison"
+)]
 fn verify_components() {
+    for input in [
+        "",
+        "0=120",
+        "0=120,4=180",
+        "NaN=inf",
+        "-0=-0",
+        "1e308=1e308",
+        "bad",
+        " 1\u{1}=2 ",
+    ] {
+        println!(
+            "tidy {input:?} {:?}",
+            rssp::bpm::normalize_and_tidy_bpms(input)
+        );
+    }
+    for kind in ["utf8", "utf8_escape", "cp1252", "cp1252_escape"] {
+        let data = credit_fixture(kind, 8);
+        let summary = rssp::analyze(
+            &data,
+            "ssc",
+            &rssp::AnalysisOptions {
+                compute_tech_counts: false,
+                compute_pattern_counts: false,
+                ..Default::default()
+            },
+        )
+        .expect("valid credit fixture");
+        for chart in summary.charts {
+            println!(
+                "credit {kind} {:?} {:?}",
+                chart.step_artist_str, chart.tech_notation_str
+            );
+        }
+    }
+    for kind in ["global", "repeat", "vary", "distinct"] {
+        let data = hash_batch_fixture(kind, 128);
+        for chart in rssp::compute_all_hashes(&data, "ssc").expect("valid hash fixture") {
+            println!(
+                "hash {kind} {} {} {}",
+                chart.step_type, chart.difficulty, chart.hash
+            );
+        }
+    }
     let patterns: Vec<_> = ["", "l", "L", "LD", "ldu", "U", "?", "É", "ldurldur"]
         .into_iter()
         .map(str::to_owned)
@@ -1058,6 +1105,9 @@ fn main() {
     zero_duration_cases(iters);
     peak_work_cases(iters);
     serialize_cases(iters);
+    tidy_bpm_cases(iters);
+    hash_batch_cases(iters);
+    credit_cases(iters);
     let densities: Vec<_> = (0..16384).map(|i| [0, 16, 20, 24, 32][i % 5]).collect();
     for (name, step) in [("long_segments", 2048.0), ("short_segments", 4.0)] {
         let bpms: Vec<_> = (0..32)
@@ -1105,4 +1155,102 @@ fn main() {
                 .expect("valid fixture"),
         );
     });
+}
+
+fn tidy_bpm_cases(iters: usize) {
+    for count in [1, 128, 4096] {
+        let mut input = String::new();
+        for i in 0..count {
+            if i != 0 {
+                input.push(',');
+            }
+            write!(input, "{}={}", i * 4, 120 + i % 17).expect("String write");
+        }
+        measure(&format!("tidy_bpm/{count}"), count, iters, || {
+            black_box(rssp::bpm::normalize_and_tidy_bpms(black_box(&input)));
+        });
+    }
+}
+
+fn hash_batch_fixture(kind: &str, components: usize) -> Vec<u8> {
+    let mut global = String::new();
+    for i in 0..components {
+        if i != 0 {
+            global.push(',');
+        }
+        write!(global, "{}={}", i * 4, 120 + i % 17).expect("String write");
+    }
+    let local = global.replace("120", "160");
+    let mut data = format!("#VERSION:0.83;\n#BPMS:{global};\n");
+    for chart in 0..8 {
+        data.push_str("#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Hard;\n#METER:8;\n");
+        let bpms = if kind == "global" || (kind == "vary" && chart % 2 == 0) {
+            &global
+        } else {
+            &local
+        };
+        let distinct = local.replace("160", &(160 + chart).to_string());
+        let bpms = if kind == "distinct" { &distinct } else { bpms };
+        writeln!(data, "#BPMS:{bpms};\n#NOTES:\n1000\n0100\n0010\n0001\n;").expect("String write");
+    }
+    data.into_bytes()
+}
+
+fn hash_batch_cases(iters: usize) {
+    for components in [1, 128] {
+        for kind in ["global", "repeat", "vary", "distinct"] {
+            let data = hash_batch_fixture(kind, components);
+            measure(&format!("hash_batch/{components}_{kind}"), 8, iters, || {
+                black_box(
+                    rssp::compute_all_hashes(black_box(&data), "ssc").expect("valid fixture"),
+                );
+            });
+        }
+    }
+}
+
+fn credit_fixture(kind: &str, length: usize) -> Vec<u8> {
+    let bytes = match kind {
+        "utf8" => &b"Author "[..],
+        "utf8_escape" => &b"Author\\: "[..],
+        "cp1252" => &b"Author\x93 "[..],
+        _ => &b"Author\\:\x93 "[..],
+    };
+    let mut data = b"#VERSION:0.83;\n#BPMS:0=120;\n".to_vec();
+    for _ in 0..4 {
+        data.extend_from_slice(
+            b"#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Hard;\n#METER:8;\n#CREDIT:",
+        );
+        for i in 0..length {
+            data.push(bytes[i % bytes.len()]);
+        }
+        // Avoid a dangling escape swallowing the tag terminator.
+        data.extend_from_slice(b" end;\n#NOTES:\n1000\n0100\n0010\n0001\n;\n");
+    }
+    data
+}
+
+fn credit_cases(iters: usize) {
+    let options = rssp::AnalysisOptions {
+        compute_tech_counts: false,
+        compute_pattern_counts: false,
+        ..Default::default()
+    };
+    let mut scratch = rssp::AnalysisScratch::default();
+    for length in [16, 4096] {
+        for kind in ["utf8", "utf8_escape", "cp1252", "cp1252_escape"] {
+            let data = credit_fixture(kind, length);
+            measure(&format!("credit/{length}_{kind}"), 4, iters, || {
+                black_box(
+                    rssp::analyze_with_scratch(
+                        black_box(&data),
+                        "ssc",
+                        black_box(&options),
+                        &mut scratch,
+                    )
+                    .expect("valid fixture"),
+                );
+            });
+        }
+    }
 }

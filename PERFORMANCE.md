@@ -1302,3 +1302,149 @@ $bench = Get-ChildItem target/release/deps/hotpath_perf-*.exe | Sort-Object Last
 excluded performance guide and optimization scripts are not included in the
 commit. Hash coalescing trials were discarded after measured regressions;
 `hash.rs` is unchanged.
+
+
+# Performance pass 0.4.278
+
+Baseline: `c6fbe49` (0.4.277), compiled with version 0.4.278 and the same
+benchmark harness as the optimized code. This pass bumps the patch exactly
+once and removes 45 net production lines. `rust-performance.md` was reviewed;
+it and the two optimization scripts are excluded from the commit.
+
+## Changes
+
+1. **Delete ineffective BPM normalization.** `normalize_and_tidy_bpms` formatted
+   every accepted number with three decimal places and then parsed that string
+   as `i64`. No entry could survive: finite values contain a decimal point and
+   nonfinite values are not integers. Return the existing `0.000=60.000`
+   fallback directly and delete both now-unused formatting wrappers and the
+   unreachable sort/dedup/output pipeline. This preserves a legacy behavior;
+   it does not repair the API's normalization semantics. Its performance gain
+   applies to callers of this convenience API, which analysis does not call.
+2. **Reuse normalized BPM strings in batch hashing.** Borrow the global string
+   for identical raw local maps and retain one normalized local map across
+   charts. Compare raw bytes before normalization, preserving absent, empty,
+   invalid UTF-8 and distinct-map behavior. Move the source BPM tag into the
+   cache so unrelated owned chart tags are freed as entries are consumed;
+   no raw tag is cloned. The cache holds one entry for one caller-thread call;
+   misses replace it without I/O or pruning. The hash API belongs at load time.
+3. **Move decoded credits into their final field.** Replace
+   `decode_bytes -> unescape_tag -> into_owned` with the existing
+   `decode_unescape -> into_owned` path. Owned Windows-1252 decoding now reaches
+   `step_artist_str` without another allocation/copy. Escapes use the existing
+   in-place implementation; UTF-8 borrowing, whitespace and trailing escapes
+   retain their behavior. No new decoder, API or abstraction was added.
+
+The proposed matrix aggregation change was discarded after dense-input CPU
+regressions. `matrix.rs` is unchanged.
+
+## Measurements
+
+Rust 1.98.1 / LLVM 22.1.8, release fat LTO, Xeon E5-2696 v4, Windows,
+44 logical CPUs; benchmark thread pinned to CPU 2. Three alternating
+old/new process pairs, seven batches per process, medians of process medians.
+Use 200 iterations per batch, except composed analysis uses 30 (Camellia
+internally uses three). Setup is outside timing; counted allocations are a
+separate single invocation. CPU cycles are from `QueryThreadCycleTime`.
+Requested bytes include reallocations and represent allocation churn, not RSS.
+
+
+- At 4,096 BPM entries, fallback normalization eliminates 8,192 allocations
+  and 131,072 requested bytes; CPU cycles fall from 2,945,497 -> 149.
+- Eight charts with 128 identical global BPM entries: cycles 467,883 -> 147,350
+  (3.2x throughput), eight fewer allocations, 55,720 fewer requested bytes.
+  Repeated local maps: cycles 474,359 -> 191,536 (2.5x throughput), seven fewer
+  allocations, 48,755 fewer requested bytes.
+- Four charts with 4,096-byte Windows-1252 credits: four fewer allocations and
+  20,496 fewer requested bytes, a 41.1% churn reduction. Escaped credits save
+  19,672 bytes (40.8%). This is an allocation improvement; composed throughput
+  changes are +0.5% and -7.6% respectively.
+- Unique local-map misses retain the original allocation counts and bytes:
+  throughput -1.3% at one entry and -3.2% at 128 entries. The main Camellia
+  analysis control is +0.2%, fast Camellia -3.7%, duration Camellia -5.0%.
+  Small controls vary in both directions, including short UTF-8 credits -0.5%
+  and short warm streams +3.3%. These measurements do not establish a
+  universal CPU improvement or the cause of small declines. Behavioral results
+  are unchanged; the deterministic allocation reductions are the credit benefit.
+
+| Case | Cycles old -> new | Throughput | Allocs old -> new | Requested bytes old -> new |
+|---|---:|---:|---:|---:|
+| `tidy_bpm/1` | 754 -> 149 | +383.3% | 3 -> 1 | 44 -> 12 |
+| `tidy_bpm/128` | 88,379 -> 149 | +55962.5% | 257 -> 1 | 4,108 -> 12 |
+| `tidy_bpm/4096` | 2,945,497 -> 149 | +1867327.8% | 8193 -> 1 | 131,084 -> 12 |
+| `hash_batch/1_global` | 31,892 -> 22,798 | +39.3% | 36 -> 28 | 5,563 -> 5,283 |
+| `hash_batch/1_repeat` | 30,895 -> 23,373 | +31.7% | 36 -> 29 | 5,563 -> 5,318 |
+| `hash_batch/1_vary` | 30,675 -> 23,193 | +32.3% | 36 -> 29 | 5,563 -> 5,318 |
+| `hash_batch/1_distinct` | 29,807 -> 30,198 | -1.3% | 36 -> 36 | 5,563 -> 5,563 |
+| `hash_batch/128_global` | 467,883 -> 147,350 | +217.5% | 36 -> 28 | 67,933 -> 12,213 |
+| `hash_batch/128_repeat` | 474,359 -> 191,536 | +147.7% | 36 -> 29 | 67,933 -> 19,178 |
+| `hash_batch/128_vary` | 466,836 -> 190,698 | +144.9% | 36 -> 29 | 67,933 -> 19,178 |
+| `hash_batch/128_distinct` | 471,985 -> 487,737 | -3.2% | 36 -> 36 | 67,933 -> 67,933 |
+| `credit/16_utf8` | 31,482 -> 31,548 | -0.5% | 62 -> 62 | 8,930 -> 8,930 |
+| `credit/16_utf8_escape` | 31,847 -> 31,213 | +2.1% | 62 -> 62 | 8,930 -> 8,930 |
+| `credit/16_cp1252` | 32,511 -> 31,628 | +3.1% | 66 -> 62 | 9,042 -> 8,946 |
+| `credit/16_cp1252_escape` | 32,790 -> 31,755 | +3.4% | 66 -> 62 | 9,026 -> 8,938 |
+| `credit/4096_utf8` | 111,131 -> 117,985 | -5.8% | 62 -> 62 | 25,250 -> 25,250 |
+| `credit/4096_utf8_escape` | 181,015 -> 194,455 | -7.3% | 62 -> 62 | 25,250 -> 25,250 |
+| `credit/4096_cp1252` | 239,176 -> 238,075 | +0.5% | 66 -> 62 | 49,842 -> 29,346 |
+| `credit/4096_cp1252_escape` | 312,143 -> 337,918 | -7.6% | 66 -> 62 | 48,194 -> 28,522 |
+| `matrix/long_segments` | 130,938 -> 125,562 | +4.3% | 2 -> 2 | 5,200 -> 5,200 |
+| `matrix/short_segments` | 132,439 -> 125,871 | +5.2% | 2 -> 2 | 5,104 -> 5,104 |
+| `analyze/fast_fake_lifts` | 671,099 -> 623,270 | +7.6% | 31 -> 31 | 59,028 -> 59,028 |
+| `analyze/camellia` | 448,337,895 -> 448,300,364 | +0.2% | 110 -> 110 | 5,263,624 -> 5,263,624 |
+| `analyze/fast_camellia` | 56,283,020 -> 58,365,050 | -3.7% | 115 -> 115 | 7,051,152 -> 7,051,152 |
+| `analyze/mixed_small` | 48,414 -> 48,488 | +0.3% | 59 -> 59 | 7,460 -> 7,460 |
+| `duration/clean_hit` | 199,854 -> 199,449 | +1.0% | 21 -> 21 | 25,815 -> 25,815 |
+| `duration/dirty_hit` | 234,957 -> 233,799 | +0.4% | 25 -> 25 | 32,227 -> 32,227 |
+| `duration/dirty_miss` | 867,482 -> 866,384 | +0.2% | 70 -> 70 | 120,223 -> 120,223 |
+| `duration/camellia` | 13,213,318 -> 13,928,746 | -5.0% | 18 -> 18 | 3,635 -> 3,635 |
+| `streams/uniform_combined` | 23,836 -> 24,012 | -1.0% | 6 -> 6 | 33 -> 33 |
+| `streams/uniform_cold` | 24,676 -> 24,446 | +0.9% | 7 -> 7 | 16,417 -> 16,417 |
+| `streams/fragmented_combined` | 249,771 -> 243,061 | +2.8% | 6 -> 6 | 72,039 -> 72,039 |
+| `streams/fragmented_cold` | 243,837 -> 214,967 | +13.4% | 7 -> 7 | 186,727 -> 186,727 |
+| `streams/empty_combined` | 5,489 -> 5,331 | +3.5% | 3 -> 3 | 33 -> 33 |
+| `streams/empty_cold` | 5,583 -> 5,336 | +4.6% | 3 -> 3 | 33 -> 33 |
+| `streams/short_combined` | 3,971 -> 3,843 | +3.3% | 6 -> 6 | 891 -> 891 |
+| `streams/short_cold` | 4,724 -> 4,564 | +3.5% | 7 -> 7 | 1,403 -> 1,403 |
+| `streams/leading_combined` | 6,482 -> 6,306 | +3.1% | 6 -> 6 | 33 -> 33 |
+| `streams/leading_cold` | 7,250 -> 7,152 | +1.1% | 7 -> 7 | 1,569 -> 1,569 |
+
+## Validation
+
+- Release unit tests: 198 passed; focused optimization regressions: 24 passed.
+  New cases compare original credit decoding/unescaping semantics directly,
+  including invalid UTF-8, escaped Unicode and Windows-1252 text, preserved
+  whitespace, trailing escapes and both SSC versions. BPM/hash tests cover
+  nonfinite/extreme numeric inputs, empty tags and repeated/inherited/distinct
+  timing transitions.
+- Strict release Clippy for all workspace targets, formatting and diff checks
+  passed.
+- Standalone hash parity: 30,489 passed, zero failed, covering the changed
+  `compute_all_hashes` API across the native corpus.
+- After confirming the optimizations and before committing, the exact command
+  `cargo test --release --test all_parity -- --test-threads=22` passed all
+  30,489 tests with zero failures.
+- Original/final deterministic output is byte-identical across 30,843 corpus
+  files, 56,125 supported charts and the new component fixtures, with 354
+  matching malformed-file errors. SHA-256 of 163,409,264 output bytes:
+  `5f2dc873e903dbbf32ea004c19f9b317c3d878623eb817a6cf1ee443dbcab16f`.
+  The corpus trace checks densities, spacing, stream strings, normalized maps,
+  exact duration/peak bits and BPM snapshots; component fixtures additionally
+  check credits, batch hashes, custom matching and serialized output. The full
+  parity suite checks the composed analysis fields against the golden data.
+
+## Reproduction
+
+Build `c6fbe49` with only version 0.4.278 and the final benchmark harness;
+save the executable, then build the optimized production code with the same
+version/harness. Alternate the two saved executables three times:
+
+```powershell
+cargo bench -p rssp --bench hotpath_perf --no-run
+$env:RSSP_HOT_FILTER = 'hash_batch/' # also tidy_bpm/, credit/, matrix/, duration/, streams/
+$env:RSSP_HOT_ITERS = '200' # 30 for analyze/
+$bench = Get-ChildItem target/release/deps/hotpath_perf-*.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+& $bench.FullName
+```
+
+`RSSP_HOT_VERIFY=1` emits the deterministic component and corpus transcript.

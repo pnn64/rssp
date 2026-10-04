@@ -22,7 +22,7 @@ use crate::matrix::{MatrixProfile, compute_matrix_profile};
 use crate::parse::{
     ParsedChartEntry, SSC_VERSION_CHART_NAME_TAG, decode_bytes, decode_unescape,
     decode_unescape_trim, extract_sections, normalize_chart_desc_ref, parse_offset_seconds,
-    parse_version, strip_title_tags, unescape_tag,
+    parse_version, strip_title_tags,
 };
 use crate::patterns::{
     CompiledCustomPatterns, PATTERN_COUNT, PatternCounts, PatternVariant,
@@ -558,12 +558,11 @@ fn chart_metadata_strings(
     let difficulty =
         resolve_difficulty_label(difficulty_raw.as_ref(), &description, &rating, extension);
     let is_ssc = extension.eq_ignore_ascii_case("ssc");
-    let credit_decoded = if is_ssc {
-        decode_bytes(fields[4])
+    let credit = if is_ssc {
+        decode_unescape(fields[4])
     } else {
         Cow::Borrowed("")
     };
-    let credit = unescape_tag(credit_decoded.as_ref());
     let tech_notation = parse_tech_notation(credit.as_ref(), &description);
     let step_artist = if is_ssc {
         credit.into_owned()
@@ -1584,6 +1583,13 @@ pub fn compute_all_hashes(
     let mut results = Vec::with_capacity(entries.len());
     let mut hash_scratch = crate::hash::NoteHashScratch::default();
 
+    // Call-local, caller-thread cache holds one normalized map, capped by one
+    // source tag. It warms on a local-map miss and replaces without pruning or
+    // I/O; return frees it on the caller thread. Hits compare one raw slice.
+    // Moving the key preserves its ownership while consumed entries drop normally.
+    // Misses parse a tag once; hits compare at most its byte length. This
+    // load-time API does no gameplay work. Hash benchmarks instrument costs.
+    let mut last_chart_bpms: Option<(Cow<'_, [u8]>, String)> = None;
     for entry in entries {
         // 3. Split fields to get Metadata (StepType, Difficulty)
         if entry.field_count < 5 {
@@ -1609,20 +1615,30 @@ pub fn compute_all_hashes(
         );
 
         // 4. Normalize BPMs (Required for Hash consistency)
-        let bpms_to_use = entry.chart_bpms.as_deref().map_or(
-            Cow::Borrowed(normalized_global_bpms.as_str()),
-            |chart_bpms| {
-                let normalized =
-                    normalize_float_digits(std::str::from_utf8(chart_bpms).unwrap_or(""));
-                Cow::Owned(normalized)
-            },
-        );
+        let bpms_to_use = match entry.chart_bpms {
+            None => normalized_global_bpms.as_str(),
+            Some(raw) if raw.as_ref() == global_bpms_raw.as_bytes() => {
+                normalized_global_bpms.as_str()
+            }
+            Some(raw) => {
+                if last_chart_bpms.as_ref().is_some_and(|(key, _)| *key != raw) {
+                    last_chart_bpms = None;
+                }
+                &last_chart_bpms
+                    .get_or_insert_with(|| {
+                        let normalized =
+                            normalize_float_digits(std::str::from_utf8(raw.as_ref()).unwrap_or(""));
+                        (raw, normalized)
+                    })
+                    .1
+            }
+        };
 
         // 5. Minimize rows directly into SHA-1 without materializing the chart.
         let hash = crate::hash::compute_note_data_hash_with_scratch(
             chart_data,
             lanes,
-            bpms_to_use.as_ref(),
+            bpms_to_use,
             &mut hash_scratch,
         );
 

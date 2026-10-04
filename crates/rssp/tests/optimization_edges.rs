@@ -761,3 +761,98 @@ fn snapshot_aux_maps() {
         }
     }
 }
+#[test]
+fn tidy_bpm_fallback() {
+    for beat in [
+        "0", "-0", "1.2345", "1e308", "-1e308", "inf", "-inf", "NaN", "bad", " 1\u{1} ",
+    ] {
+        for bpm in ["120", "0", "-0", "-120", "1e308", "inf", "NaN", "bad"] {
+            let input = format!("{beat}={bpm},0=180,4=240");
+            assert_eq!(rssp::bpm::normalize_and_tidy_bpms(&input), "0.000=60.000");
+        }
+    }
+    for input in ["", ",", "no pairs", "0=120", "0=120,4=180"] {
+        assert_eq!(rssp::bpm::normalize_and_tidy_bpms(input), "0.000=60.000");
+    }
+}
+
+#[test]
+fn hash_bpm_transitions() {
+    let header = b"#VERSION:0.83;\n#BPMS:0=120,4=180;\n";
+    let maps: [&[u8]; 12] = [
+        b"#BPMS:0=120,4=180;",
+        b"#BPMS:0=160,4=200;",
+        b"#BPMS:0=160,4=200;",
+        b"",
+        b"#BPMS:0=160,4=200;",
+        b"#BPMS:;",
+        b"#BPMS:;",
+        b"#BPMS:\xff;",
+        b"#BPMS:\xff;",
+        b"#BPMS: 0=160,4=200 ;",
+        b"#BPMS: 0=160,4=200 ;",
+        b"#BPMS:0=120,4=180;",
+    ];
+    let mut batch = header.to_vec();
+    let mut expected = Vec::new();
+    for map in maps {
+        let mut chart =
+            b"#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Hard;\n#METER:8;\n".to_vec();
+        chart.extend_from_slice(map);
+        chart.extend_from_slice(b"\n#NOTES:\n1000\n0100\n0010\n0001\n;\n");
+        batch.extend_from_slice(&chart);
+        let mut single = header.to_vec();
+        single.extend_from_slice(&chart);
+        let isolated = rssp::compute_all_hashes(&single, "ssc").expect("valid single chart");
+        assert_eq!(isolated.len(), 1);
+        expected.push(isolated[0].hash.clone());
+    }
+    let actual = rssp::compute_all_hashes(&batch, "ssc").expect("valid batch");
+    assert_eq!(actual.len(), expected.len());
+    for (chart, hash) in actual.iter().zip(expected) {
+        assert_eq!(chart.step_type, "dance-single");
+        assert_eq!(chart.difficulty, "Hard");
+        assert_eq!(chart.hash, hash);
+    }
+}
+
+#[test]
+fn credit_owned_output() {
+    let options = rssp::AnalysisOptions {
+        compute_tech_counts: false,
+        compute_pattern_counts: false,
+        ..Default::default()
+    };
+    for bytes in [
+        &b" plain author "[..],
+        &b"escaped\\:author "[..],
+        &b" \x93author\x94 "[..],
+        &b" \x93author\\:\x94 "[..],
+        &b"\xff\\\\author\\"[..],
+        &b"\xc3\xa9\\:\xc3\xb1 "[..],
+    ] {
+        let decoded = rssp::parse::decode_bytes(bytes);
+        let expected = rssp::parse::unescape_tag(decoded.as_ref());
+        for version in ["0.6", "0.83"] {
+            let mut data = format!("#VERSION:{version};#BPMS:0=120;#NOTEDATA:;#STEPSTYPE:dance-single;#DIFFICULTY:Hard;#METER:8;#CREDIT:").into_bytes();
+            data.extend_from_slice(bytes);
+            // A terminator must not be escaped by the final input byte.
+            data.extend_from_slice(b" end;#NOTES:\n1000\n;\n");
+            let mut source = bytes.to_vec();
+            source.extend_from_slice(b" end");
+            let decoded = rssp::parse::decode_bytes(&source);
+            let complete = rssp::parse::unescape_tag(decoded.as_ref());
+            let summary = rssp::analyze(&data, "ssc", &options).expect("valid credit fixture");
+            assert_eq!(summary.charts.len(), 1);
+            assert_eq!(summary.charts[0].step_artist_str, complete.as_ref());
+            assert_eq!(
+                summary.charts[0].tech_notation_str,
+                rssp::tech::parse_tech_notation(complete.as_ref(), "")
+            );
+        }
+        assert_eq!(
+            rssp::parse::decode_unescape(bytes).as_ref(),
+            expected.as_ref()
+        );
+    }
+}
