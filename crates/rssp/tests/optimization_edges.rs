@@ -7,6 +7,105 @@ use rssp::bpm::{chart_bpm_snapshots, compute_tier_bpm};
 use rssp::nps::compute_chart_peak_nps;
 
 #[test]
+fn legacy_desc_fallback() {
+    for (version, expected) in [
+        ("0.6", "Easy"),
+        ("0.739999", "Easy"),
+        ("0.74", "Hard"),
+        ("0.83", "Hard"),
+        ("NaN", "Hard"),
+        ("", "Hard"),
+    ] {
+        let version_tag = if version.is_empty() {
+            String::new()
+        } else {
+            format!("#VERSION:{version};")
+        };
+        let data = format!(
+            "{version_tag}#BPMS:0=120;#NOTEDATA:;#STEPSTYPE:dance-single;\
+             #DESCRIPTION: \\H\\a\\r\\d ;#DIFFICULTY:invalid;#METER:3;\
+             #NOTES:1000\n0100\n,\n0010\n0001;"
+        );
+        let hashes = rssp::compute_all_hashes(data.as_bytes(), "ssc").expect("valid SSC");
+        let durations = rssp::duration::compute_chart_durations(
+            data.as_bytes(),
+            "ssc",
+            rssp::TimingOffsets::default(),
+        )
+        .expect("valid SSC");
+        let peaks = compute_chart_peak_nps(data.as_bytes(), "ssc").expect("valid SSC");
+        assert_eq!(hashes.len(), 1);
+        assert_eq!(durations.len(), 1);
+        assert_eq!(peaks.len(), 1);
+        assert_eq!(hashes[0].difficulty, expected);
+        assert_eq!(durations[0].difficulty, expected);
+        assert_eq!(peaks[0].difficulty, expected);
+        assert_eq!(durations[0].duration_seconds.to_bits(), 3.0f64.to_bits());
+        assert_eq!(peaks[0].peak_nps.to_bits(), 1.0f64.to_bits());
+        let summary = rssp::analyze(data.as_bytes(), "ssc", &rssp::AnalysisOptions::default())
+            .expect("valid SSC");
+        if expected == "Easy" {
+            assert_eq!(summary.charts[0].chart_name_str, "Hard");
+            assert_eq!(summary.charts[0].description_str, "");
+        } else {
+            assert_eq!(summary.charts[0].description_str, "Hard");
+        }
+    }
+    let sm = b"#BPMS:0=120;#NOTES:dance-single: \\C\\hallenge :Hard:3::1000;";
+    assert_eq!(
+        rssp::compute_all_hashes(sm, "sm").expect("valid SM")[0].difficulty,
+        "Challenge"
+    );
+    assert_eq!(
+        compute_chart_peak_nps(sm, "sm").expect("valid SM")[0].difficulty,
+        "Challenge"
+    );
+    assert_eq!(
+        rssp::duration::compute_chart_durations(sm, "sm", rssp::TimingOffsets::default())
+            .expect("valid SM")[0]
+            .difficulty,
+        "Challenge"
+    );
+}
+
+#[test]
+fn label_snapshot_merges() {
+    let mut summary = rssp::analyze(
+        b"#VERSION:0.83;#BPMS:0=120;#NOTEDATA:;#STEPSTYPE:dance-single;\
+          #DIFFICULTY:Hard;#METER:8;#NOTES:1000;",
+        "ssc",
+        &rssp::AnalysisOptions::default(),
+    )
+    .expect("valid SSC");
+    summary.charts[0].chart_has_own_timing = false;
+    for (text, expected) in [
+        ("8=A,0=B,4=A,4=C,12=C", vec![(0.0_f64, "B"), (4.0, "C")]),
+        (
+            "-4=Intro,-4=Start,0=Start,4=Verse,8=Verse,12=End",
+            vec![(-4.0, "Start"), (4.0, "Verse"), (12.0, "End")],
+        ),
+        (
+            "0= \u{65e5}\u{1f600} = A ,4=\u{65e5}\u{1f600} = A,8=End",
+            vec![(0.0, "\u{65e5}\u{1f600} = A"), (8.0, "End")],
+        ),
+        (
+            "\u{2003},\u{2003}-4 \u{2003}=\u{2003}Start\u{2003},\u{2003}0=Start\u{2003},\u{2003}8 = End\u{2003}",
+            vec![(-4.0, "Start"), (8.0, "End")],
+        ),
+        ("bad,no=label,0= , ,", vec![(0.0, "Song Start")]),
+    ] {
+        summary.normalized_labels = text.to_owned();
+        let snapshot = rssp::report::build_timing_snapshot(&summary.charts[0], &summary);
+        assert_eq!(snapshot.labels.len(), expected.len());
+        for ((beat, label), (expected_beat, expected_label)) in snapshot.labels.iter().zip(expected)
+        {
+            assert_eq!(beat.to_bits(), expected_beat.to_bits());
+            assert_eq!(label, expected_label);
+        }
+    }
+}
+
+#[test]
 fn unescape_prefix_bytes() {
     use std::borrow::Cow;
     for (input, expected) in [

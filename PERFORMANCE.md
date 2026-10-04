@@ -1879,3 +1879,315 @@ cargo test --release --test all_parity -- --test-threads=22
 cargo fmt --all -- --check
 git diff --check
 ```
+
+
+# Performance pass 0.4.281
+
+Baseline: `b6a8126` (0.4.280), compiled at version 0.4.281 with the
+same benchmark harness as the final implementation. The patch advances once.
+Reviewed `rust-performance.md`; it, `optimize.ps1` and `optimize.sh` are
+excluded from the commit.
+
+## Changes
+
+1. **Skip descriptions that legacy SSC discards.** Hash, duration and peak-NPS
+   utility APIs previously decoded, unescaped and trimmed a description before
+   replacing it with an empty string for SSC versions below 0.74.
+   `decode_chart_desc` checks the version first and returns a borrowed empty
+   string. Modern SSC, missing/NaN versions and SM retain the existing decoder.
+   Full analysis still decodes legacy descriptions used as chart names.
+2. **Own only labels that survive merging.** `parse_labels` inserts borrowed
+   `Cow<str>` values into the existing ordering and neighbor-merge algorithm.
+   It converts surviving labels to owned strings at the return boundary.
+   Equal-sized tuples permit the iterator collection to reuse the vector's
+   allocation, confirmed by counts for distinct-label controls. The public
+   snapshot type, retained vector capacity and label semantics stay unchanged.
+   Whole-segment trimming and its empty check are removed: trimming the two
+   fields already covers whitespace, and segments without '=' are skipped.
+3. **Skip the guaranteed BPM-buffer overflow pass.** Quantized beats and
+   round-tripped BPMs are finite, each requiring at least eight characters in
+   the existing fixed-six-decimal formatter. Including '=' and commas, a map
+   needs at least `18 * entries - 1` bytes. Above `16384 / 18` (910 entries),
+   bypass the first formatting attempt and use the existing streaming path.
+   Smaller maps keep their original buffering and overflow fallback.
+
+The edits remove discarded decoding, transient label copies and a failed
+formatting pass. No timing math, cache, dependency or production unsafe code
+is added. One shared decoding function has three runtime callers.
+
+## Measurements
+
+Rust 1.98.1 / LLVM 22.1.8, Windows, Xeon E5-2696 v4, 44 logical CPUs.
+Fat LTO and one codegen unit; measured thread/process pinned to CPU 2.
+Each value is the median of three alternating original/final process pairs,
+with seven batches per process. No rssp build, regression test or corpus
+comparison ran during the timed measurements.
+
+Fixtures are prepared outside measurement. Description cases use four small
+charts, 16-byte/4 KB descriptions and plain, escaped or CP1252 bytes. They
+measure all three changed utility APIs directly, including unchanged SM and
+modern-SSC controls (1,000 calls per batch).
+
+Label leaf cases call the private production parser; composed cases call
+`build_timing_snapshot` (10,000 and 1,000 calls respectively). They include
+distinct, repeated, same-row replacement, grouped, 1 KB and invalid labels.
+BPM leaf cases call the production JSON formatter using both a reused Vec
+and an 8 KB BufWriter; composed cases write the complete JSON report.
+Leaf iterations are 200,000 for 0/1 entries, 10,000 for 32, 1,000 for
+512/1,024 and 500 for 2,048; complete reports use 200.
+Analysis controls use 30 iterations (Camellia internally uses three).
+Seven short/control cases are also measured in fresh processes with 10,000
+iterations; both the initial and focused results are retained.
+
+`QueryThreadCycleTime` measures CPU cycles for the composed cases.
+Allocation/reallocation counts and requested bytes come from a separate
+invocation. Requested bytes represent allocation churn, not peak RSS.
+
+- Legacy 4 KB CP1252 descriptions, batch hashes:
+  3.63x throughput;
+  allocations 20 -> 16,
+  requested bytes 35,571 -> 2,787.
+- 256 repeated labels: parser
+  2.33x, complete snapshot
+  2.01x;
+  allocations 264 -> 9.
+  With 1 KB repeated labels, requested bytes
+  393,496 -> 132,376.
+- 1,024 BPM entries: buffered leaf
+  1.84x, complete report
+  1.43x.
+  2,048 entries: buffered leaf
+  1.40x, complete report
+  1.18x.
+
+All measured cases follow, including unchanged paths and slower samples.
+
+### Description utility APIs
+
+| Case | ns old -> new | cycles old -> new | allocs old -> new | reallocs old -> new | bytes old -> new | throughput |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `description/hash/0.6_16_plain` | 5,962 -> 5,647 | 13,021 -> 12,344 | 16 -> 16 | 2 -> 2 | 2,787 -> 2,787 | 1.06x |
+| `description/duration/0.6_16_plain` | 4,680 -> 4,613 | 10,207 -> 10,069 | 13 -> 13 | 0 -> 0 | 2,408 -> 2,408 | 1.01x |
+| `description/peak/0.6_16_plain` | 4,797 -> 4,677 | 10,497 -> 10,208 | 14 -> 14 | 0 -> 0 | 2,424 -> 2,424 | 1.03x |
+| `description/hash/0.6_16_escaped` | 6,174 -> 5,548 | 13,510 -> 12,114 | 20 -> 16 | 2 -> 2 | 2,867 -> 2,787 | 1.11x |
+| `description/duration/0.6_16_escaped` | 5,204 -> 4,683 | 11,344 -> 10,258 | 17 -> 13 | 0 -> 0 | 2,488 -> 2,408 | 1.11x |
+| `description/peak/0.6_16_escaped` | 5,391 -> 4,665 | 11,790 -> 10,188 | 18 -> 14 | 0 -> 0 | 2,504 -> 2,424 | 1.16x |
+| `description/hash/0.6_16_cp1252` | 6,566 -> 5,645 | 14,344 -> 12,367 | 20 -> 16 | 2 -> 2 | 2,931 -> 2,787 | 1.16x |
+| `description/duration/0.6_16_cp1252` | 5,334 -> 4,522 | 11,652 -> 9,869 | 17 -> 13 | 0 -> 0 | 2,552 -> 2,408 | 1.18x |
+| `description/peak/0.6_16_cp1252` | 5,592 -> 4,668 | 12,207 -> 10,224 | 18 -> 14 | 0 -> 0 | 2,568 -> 2,424 | 1.20x |
+| `description/hash/0.74_16_plain` | 5,858 -> 5,950 | 12,794 -> 12,995 | 16 -> 16 | 2 -> 2 | 2,787 -> 2,787 | 0.98x |
+| `description/duration/0.74_16_plain` | 4,798 -> 4,746 | 10,504 -> 10,363 | 13 -> 13 | 0 -> 0 | 2,408 -> 2,408 | 1.01x |
+| `description/peak/0.74_16_plain` | 4,946 -> 4,881 | 10,780 -> 10,658 | 14 -> 14 | 0 -> 0 | 2,424 -> 2,424 | 1.01x |
+| `description/hash/0.74_16_escaped` | 6,222 -> 6,311 | 13,605 -> 13,808 | 20 -> 20 | 2 -> 2 | 2,867 -> 2,867 | 0.99x |
+| `description/duration/0.74_16_escaped` | 5,197 -> 5,358 | 11,365 -> 11,749 | 17 -> 17 | 0 -> 0 | 2,488 -> 2,488 | 0.97x |
+| `description/peak/0.74_16_escaped` | 5,604 -> 5,363 | 12,248 -> 11,723 | 18 -> 18 | 0 -> 0 | 2,504 -> 2,504 | 1.04x |
+| `description/hash/0.74_16_cp1252` | 6,443 -> 6,437 | 14,089 -> 14,076 | 20 -> 20 | 2 -> 2 | 2,931 -> 2,931 | 1.00x |
+| `description/duration/0.74_16_cp1252` | 5,463 -> 5,508 | 11,943 -> 12,037 | 17 -> 17 | 0 -> 0 | 2,552 -> 2,552 | 0.99x |
+| `description/peak/0.74_16_cp1252` | 5,508 -> 5,557 | 12,038 -> 12,141 | 18 -> 18 | 0 -> 0 | 2,568 -> 2,568 | 0.99x |
+| `description/hash/NaN_16_plain` | 5,925 -> 5,872 | 12,940 -> 12,838 | 16 -> 16 | 2 -> 2 | 2,787 -> 2,787 | 1.01x |
+| `description/duration/NaN_16_plain` | 4,870 -> 4,901 | 10,635 -> 10,702 | 13 -> 13 | 0 -> 0 | 2,408 -> 2,408 | 0.99x |
+| `description/peak/NaN_16_plain` | 4,968 -> 5,116 | 10,846 -> 11,177 | 14 -> 14 | 0 -> 0 | 2,424 -> 2,424 | 0.97x |
+| `description/hash/NaN_16_escaped` | 6,250 -> 6,647 | 13,677 -> 14,535 | 20 -> 20 | 2 -> 2 | 2,867 -> 2,867 | 0.94x |
+| `description/duration/NaN_16_escaped` | 5,152 -> 5,283 | 11,262 -> 11,542 | 17 -> 17 | 0 -> 0 | 2,488 -> 2,488 | 0.98x |
+| `description/peak/NaN_16_escaped` | 5,338 -> 5,344 | 11,667 -> 11,710 | 18 -> 18 | 0 -> 0 | 2,504 -> 2,504 | 1.00x |
+| `description/hash/NaN_16_cp1252` | 6,612 -> 6,422 | 14,460 -> 14,037 | 20 -> 20 | 2 -> 2 | 2,931 -> 2,931 | 1.03x |
+| `description/duration/NaN_16_cp1252` | 5,500 -> 5,384 | 12,008 -> 11,715 | 17 -> 17 | 0 -> 0 | 2,552 -> 2,552 | 1.02x |
+| `description/peak/NaN_16_cp1252` | 5,368 -> 5,556 | 11,755 -> 12,166 | 18 -> 18 | 0 -> 0 | 2,568 -> 2,568 | 0.97x |
+| `description/hash/sm_16_plain` | 4,794 -> 4,759 | 10,488 -> 10,390 | 16 -> 16 | 2 -> 2 | 3,307 -> 3,307 | 1.01x |
+| `description/duration/sm_16_plain` | 3,715 -> 3,755 | 8,097 -> 8,193 | 15 -> 15 | 0 -> 0 | 2,952 -> 2,952 | 0.99x |
+| `description/peak/sm_16_plain` | 3,765 -> 4,063 | 8,254 -> 8,899 | 16 -> 16 | 0 -> 0 | 2,968 -> 2,968 | 0.93x |
+| `description/hash/sm_16_escaped` | 5,094 -> 5,140 | 11,119 -> 11,225 | 20 -> 20 | 2 -> 2 | 3,387 -> 3,387 | 0.99x |
+| `description/duration/sm_16_escaped` | 4,341 -> 4,316 | 9,452 -> 9,431 | 19 -> 19 | 0 -> 0 | 3,032 -> 3,032 | 1.01x |
+| `description/peak/sm_16_escaped` | 4,315 -> 4,356 | 9,461 -> 9,547 | 20 -> 20 | 0 -> 0 | 3,048 -> 3,048 | 0.99x |
+| `description/hash/sm_16_cp1252` | 5,546 -> 5,460 | 12,090 -> 11,919 | 20 -> 20 | 2 -> 2 | 3,451 -> 3,451 | 1.02x |
+| `description/duration/sm_16_cp1252` | 4,411 -> 4,648 | 9,671 -> 10,138 | 19 -> 19 | 0 -> 0 | 3,096 -> 3,096 | 0.95x |
+| `description/peak/sm_16_cp1252` | 4,610 -> 4,474 | 10,100 -> 9,806 | 20 -> 20 | 0 -> 0 | 3,112 -> 3,112 | 1.03x |
+| `description/hash/0.6_4096_plain` | 25,974 -> 24,102 | 56,796 -> 52,734 | 16 -> 16 | 2 -> 2 | 2,787 -> 2,787 | 1.08x |
+| `description/duration/0.6_4096_plain` | 24,201 -> 22,844 | 52,899 -> 49,933 | 13 -> 13 | 0 -> 0 | 2,408 -> 2,408 | 1.06x |
+| `description/peak/0.6_4096_plain` | 23,803 -> 23,274 | 52,038 -> 50,891 | 14 -> 14 | 0 -> 0 | 2,424 -> 2,424 | 1.02x |
+| `description/hash/0.6_4096_escaped` | 54,780 -> 36,944 | 119,853 -> 80,788 | 20 -> 16 | 2 -> 2 | 19,187 -> 2,787 | 1.48x |
+| `description/duration/0.6_4096_escaped` | 51,397 -> 35,883 | 112,482 -> 78,505 | 17 -> 13 | 0 -> 0 | 18,808 -> 2,408 | 1.43x |
+| `description/peak/0.6_4096_escaped` | 51,590 -> 35,477 | 112,707 -> 77,581 | 18 -> 14 | 0 -> 0 | 18,824 -> 2,424 | 1.45x |
+| `description/hash/0.6_4096_cp1252` | 87,400 -> 24,101 | 190,990 -> 52,235 | 20 -> 16 | 2 -> 2 | 35,571 -> 2,787 | 3.63x |
+| `description/duration/0.6_4096_cp1252` | 82,488 -> 22,897 | 180,442 -> 50,098 | 17 -> 13 | 0 -> 0 | 35,192 -> 2,408 | 3.60x |
+| `description/peak/0.6_4096_cp1252` | 83,610 -> 22,767 | 182,903 -> 49,747 | 18 -> 14 | 0 -> 0 | 35,208 -> 2,424 | 3.67x |
+| `description/hash/0.74_4096_plain` | 25,616 -> 25,060 | 55,973 -> 54,817 | 16 -> 16 | 2 -> 2 | 2,787 -> 2,787 | 1.02x |
+| `description/duration/0.74_4096_plain` | 24,728 -> 24,186 | 54,042 -> 52,907 | 13 -> 13 | 0 -> 0 | 2,408 -> 2,408 | 1.02x |
+| `description/peak/0.74_4096_plain` | 23,872 -> 23,996 | 52,230 -> 52,488 | 14 -> 14 | 0 -> 0 | 2,424 -> 2,424 | 0.99x |
+| `description/hash/0.74_4096_escaped` | 55,332 -> 56,067 | 120,997 -> 122,667 | 20 -> 20 | 2 -> 2 | 19,187 -> 19,187 | 0.99x |
+| `description/duration/0.74_4096_escaped` | 52,335 -> 55,114 | 114,426 -> 120,535 | 17 -> 17 | 0 -> 0 | 18,808 -> 18,808 | 0.95x |
+| `description/peak/0.74_4096_escaped` | 51,575 -> 54,804 | 112,686 -> 119,820 | 18 -> 18 | 0 -> 0 | 18,824 -> 18,824 | 0.94x |
+| `description/hash/0.74_4096_cp1252` | 85,309 -> 84,728 | 186,563 -> 185,329 | 20 -> 20 | 2 -> 2 | 35,571 -> 35,571 | 1.01x |
+| `description/duration/0.74_4096_cp1252` | 83,356 -> 84,153 | 182,315 -> 183,930 | 17 -> 17 | 0 -> 0 | 35,192 -> 35,192 | 0.99x |
+| `description/peak/0.74_4096_cp1252` | 85,262 -> 83,225 | 186,546 -> 182,101 | 18 -> 18 | 0 -> 0 | 35,208 -> 35,208 | 1.02x |
+| `description/hash/NaN_4096_plain` | 25,889 -> 25,412 | 56,627 -> 55,541 | 16 -> 16 | 2 -> 2 | 2,787 -> 2,787 | 1.02x |
+| `description/duration/NaN_4096_plain` | 24,515 -> 24,379 | 53,536 -> 53,352 | 13 -> 13 | 0 -> 0 | 2,408 -> 2,408 | 1.01x |
+| `description/peak/NaN_4096_plain` | 24,311 -> 24,501 | 53,184 -> 53,561 | 14 -> 14 | 0 -> 0 | 2,424 -> 2,424 | 0.99x |
+| `description/hash/NaN_4096_escaped` | 54,951 -> 54,697 | 120,142 -> 119,592 | 20 -> 20 | 2 -> 2 | 19,187 -> 19,187 | 1.00x |
+| `description/duration/NaN_4096_escaped` | 52,885 -> 54,558 | 115,663 -> 119,394 | 17 -> 17 | 0 -> 0 | 18,808 -> 18,808 | 0.97x |
+| `description/peak/NaN_4096_escaped` | 52,622 -> 52,459 | 115,064 -> 114,766 | 18 -> 18 | 0 -> 0 | 18,824 -> 18,824 | 1.00x |
+| `description/hash/NaN_4096_cp1252` | 84,132 -> 84,858 | 183,997 -> 185,476 | 20 -> 20 | 2 -> 2 | 35,571 -> 35,571 | 0.99x |
+| `description/duration/NaN_4096_cp1252` | 86,162 -> 83,554 | 188,389 -> 182,798 | 17 -> 17 | 0 -> 0 | 35,192 -> 35,192 | 1.03x |
+| `description/peak/NaN_4096_cp1252` | 84,538 -> 84,138 | 184,885 -> 184,102 | 18 -> 18 | 0 -> 0 | 35,208 -> 35,208 | 1.00x |
+| `description/hash/sm_4096_plain` | 26,521 -> 24,887 | 57,998 -> 54,431 | 16 -> 16 | 2 -> 2 | 3,307 -> 3,307 | 1.07x |
+| `description/duration/sm_4096_plain` | 24,445 -> 23,726 | 53,458 -> 51,917 | 15 -> 15 | 0 -> 0 | 2,952 -> 2,952 | 1.03x |
+| `description/peak/sm_4096_plain` | 24,649 -> 24,381 | 53,860 -> 53,356 | 16 -> 16 | 0 -> 0 | 2,968 -> 2,968 | 1.01x |
+| `description/hash/sm_4096_escaped` | 40,384 -> 38,909 | 88,337 -> 85,087 | 20 -> 20 | 2 -> 2 | 19,707 -> 19,707 | 1.04x |
+| `description/duration/sm_4096_escaped` | 38,109 -> 37,726 | 83,324 -> 82,491 | 19 -> 19 | 0 -> 0 | 19,352 -> 19,352 | 1.01x |
+| `description/peak/sm_4096_escaped` | 37,999 -> 37,586 | 83,081 -> 82,165 | 20 -> 20 | 0 -> 0 | 19,368 -> 19,368 | 1.01x |
+| `description/hash/sm_4096_cp1252` | 87,325 -> 87,295 | 190,924 -> 190,926 | 20 -> 20 | 2 -> 2 | 36,091 -> 36,091 | 1.00x |
+| `description/duration/sm_4096_cp1252` | 85,679 -> 83,586 | 187,283 -> 182,782 | 19 -> 19 | 0 -> 0 | 35,736 -> 35,736 | 1.03x |
+| `description/peak/sm_4096_cp1252` | 86,451 -> 83,584 | 187,942 -> 182,796 | 20 -> 20 | 0 -> 0 | 35,752 -> 35,752 | 1.03x |
+
+### Complete timing snapshots
+
+| Case | ns old -> new | cycles old -> new | allocs old -> new | reallocs old -> new | bytes old -> new | throughput |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `label_snapshot/0_unique` | 1,494 -> 1,641 | 3,271 -> 3,550 | 9 -> 9 | 0 -> 0 | 322 -> 322 | 0.91x |
+| `label_snapshot/0_repeat` | 1,492 -> 1,657 | 3,266 -> 3,629 | 9 -> 9 | 0 -> 0 | 322 -> 322 | 0.90x |
+| `label_snapshot/0_replace` | 1,553 -> 1,682 | 3,376 -> 3,687 | 9 -> 9 | 0 -> 0 | 322 -> 322 | 0.92x |
+| `label_snapshot/0_mixed` | 1,493 -> 1,687 | 3,271 -> 3,637 | 9 -> 9 | 0 -> 0 | 322 -> 322 | 0.89x |
+| `label_snapshot/0_long` | 1,503 -> 1,514 | 3,275 -> 3,318 | 9 -> 9 | 0 -> 0 | 322 -> 322 | 0.99x |
+| `label_snapshot/0_invalid` | 1,578 -> 1,663 | 3,463 -> 3,631 | 9 -> 9 | 0 -> 0 | 322 -> 322 | 0.95x |
+| `label_snapshot/1_unique` | 1,632 -> 1,692 | 3,546 -> 3,704 | 9 -> 9 | 0 -> 0 | 415 -> 415 | 0.96x |
+| `label_snapshot/1_repeat` | 1,713 -> 1,783 | 3,751 -> 3,901 | 9 -> 9 | 0 -> 0 | 413 -> 413 | 0.96x |
+| `label_snapshot/1_replace` | 1,885 -> 1,754 | 4,125 -> 3,840 | 9 -> 9 | 0 -> 0 | 415 -> 415 | 1.07x |
+| `label_snapshot/1_mixed` | 1,784 -> 1,761 | 3,877 -> 3,861 | 9 -> 9 | 0 -> 0 | 414 -> 414 | 1.01x |
+| `label_snapshot/1_long` | 1,784 -> 2,068 | 3,905 -> 4,526 | 9 -> 9 | 0 -> 0 | 3,384 -> 3,384 | 0.86x |
+| `label_snapshot/1_invalid` | 1,560 -> 1,724 | 3,415 -> 3,715 | 9 -> 9 | 0 -> 0 | 322 -> 322 | 0.90x |
+| `label_snapshot/32_unique` | 7,769 -> 7,378 | 16,966 -> 16,141 | 40 -> 40 | 1 -> 1 | 2,830 -> 2,830 | 1.05x |
+| `label_snapshot/32_repeat` | 6,686 -> 4,345 | 14,644 -> 9,512 | 40 -> 9 | 0 -> 0 | 1,048 -> 893 | 1.54x |
+| `label_snapshot/32_replace` | 7,499 -> 5,002 | 16,408 -> 10,964 | 40 -> 9 | 0 -> 0 | 1,230 -> 992 | 1.50x |
+| `label_snapshot/32_mixed` | 7,582 -> 4,758 | 16,562 -> 10,407 | 40 -> 12 | 0 -> 0 | 1,144 -> 976 | 1.59x |
+| `label_snapshot/32_long` | 13,960 -> 10,042 | 30,502 -> 21,955 | 40 -> 9 | 0 -> 0 | 98,872 -> 67,128 | 1.39x |
+| `label_snapshot/32_invalid` | 3,550 -> 3,326 | 7,783 -> 7,286 | 9 -> 9 | 0 -> 0 | 322 -> 322 | 1.07x |
+| `label_snapshot/256_unique` | 48,792 -> 46,657 | 106,673 -> 102,009 | 264 -> 264 | 1 -> 1 | 23,210 -> 23,210 | 1.05x |
+| `label_snapshot/256_repeat` | 43,857 -> 21,840 | 95,883 -> 47,755 | 264 -> 9 | 0 -> 0 | 6,648 -> 5,373 | 2.01x |
+| `label_snapshot/256_replace` | 44,952 -> 26,043 | 98,289 -> 56,971 | 264 -> 9 | 0 -> 0 | 8,426 -> 6,241 | 1.73x |
+| `label_snapshot/256_mixed` | 46,918 -> 23,681 | 102,668 -> 51,758 | 264 -> 40 | 0 -> 0 | 7,944 -> 6,446 | 1.98x |
+| `label_snapshot/256_long` | 93,978 -> 71,354 | 205,575 -> 155,923 | 264 -> 9 | 0 -> 0 | 393,496 -> 132,376 | 1.32x |
+| `label_snapshot/256_invalid` | 17,003 -> 15,574 | 37,203 -> 34,014 | 9 -> 9 | 0 -> 0 | 322 -> 322 | 1.09x |
+
+### Complete BPM JSON reports
+
+| Case | ns old -> new | cycles old -> new | allocs old -> new | reallocs old -> new | bytes old -> new | throughput |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `bpm_report/0` | 27,665 -> 26,448 | 60,499 -> 57,957 | 6 -> 6 | 0 -> 0 | 106 -> 106 | 1.05x |
+| `bpm_report/1` | 28,242 -> 29,522 | 61,680 -> 64,658 | 6 -> 6 | 0 -> 0 | 106 -> 106 | 0.96x |
+| `bpm_report/32` | 52,870 -> 53,256 | 115,606 -> 116,460 | 6 -> 6 | 0 -> 0 | 106 -> 106 | 0.99x |
+| `bpm_report/512` | 427,781 -> 444,361 | 934,994 -> 971,601 | 6 -> 6 | 0 -> 0 | 106 -> 106 | 0.96x |
+| `bpm_report/1024` | 1,215,664 -> 847,960 | 2,658,846 -> 1,852,419 | 6 -> 6 | 0 -> 0 | 106 -> 106 | 1.43x |
+| `bpm_report/2048` | 2,041,664 -> 1,725,230 | 4,462,363 -> 3,759,376 | 6 -> 6 | 0 -> 0 | 106 -> 106 | 1.18x |
+
+### Analysis controls
+
+| Case | ns old -> new | cycles old -> new | allocs old -> new | reallocs old -> new | bytes old -> new | throughput |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `analyze/fast_fake_lifts` | 320,177 -> 313,427 | 700,183 -> 684,811 | 31 -> 31 | 4 -> 4 | 59,028 -> 59,028 | 1.02x |
+| `analyze/camellia` | 208,876,867 -> 207,029,567 | 456,659,652 -> 452,483,300 | 110 -> 110 | 0 -> 0 | 5,263,624 -> 5,263,624 | 1.01x |
+| `analyze/fast_camellia` | 26,569,467 -> 26,459,433 | 58,033,971 -> 57,861,078 | 115 -> 115 | 0 -> 0 | 7,051,152 -> 7,051,152 | 1.00x |
+| `analyze/mixed_small` | 24,500 -> 22,213 | 53,287 -> 48,692 | 59 -> 59 | 3 -> 3 | 7,460 -> 7,460 | 1.10x |
+
+### JSON control
+
+| Case | ns old -> new | cycles old -> new | allocs old -> new | reallocs old -> new | bytes old -> new | throughput |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `report/json/16_clean` | 40,611 -> 44,889 | 88,848 -> 98,166 | 18 -> 18 | 0 -> 0 | 318 -> 318 | 0.90x |
+
+### Focused controls, 10,000 calls per batch
+
+| Case | ns old -> new | cycles old -> new | allocs old -> new | reallocs old -> new | bytes old -> new | throughput |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `analyze/mixed_small` | 23,297 -> 23,810 | 50,921 -> 52,004 | 59 -> 59 | 3 -> 3 | 7,460 -> 7,460 | 0.98x |
+| `label_snapshot/256_invalid` | 16,686 -> 15,624 | 36,501 -> 34,158 | 9 -> 9 | 0 -> 0 | 322 -> 322 | 1.07x |
+
+### Isolated short inputs, 10,000 calls per batch
+
+| Case | ns old -> new | cycles old -> new | allocs old -> new | reallocs old -> new | bytes old -> new | throughput |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `description/duration/0.74_16_plain` | 4,893 -> 4,875 | 10,702 -> 10,618 | 13 -> 13 | 0 -> 0 | 2,408 -> 2,408 | 1.00x |
+| `description/peak/sm_16_plain` | 3,999 -> 4,078 | 8,749 -> 8,925 | 16 -> 16 | 0 -> 0 | 2,968 -> 2,968 | 0.98x |
+| `description/hash/NaN_16_escaped` | 6,460 -> 6,459 | 14,126 -> 14,113 | 20 -> 20 | 2 -> 2 | 2,867 -> 2,867 | 1.00x |
+| `label_snapshot/1_replace` | 1,811 -> 1,788 | 3,960 -> 3,913 | 9 -> 9 | 0 -> 0 | 415 -> 415 | 1.01x |
+| `bpm_report/0` | 27,919 -> 26,660 | 61,052 -> 58,294 | 6 -> 6 | 0 -> 0 | 106 -> 106 | 1.05x |
+
+### Private production leaf functions
+
+| Case | ns old -> new | throughput |
+| --- | ---: | ---: |
+| `report_leaf/labels/0_unique` | 154 -> 159 | 0.97x |
+| `report_leaf/labels/0_repeat` | 152 -> 174 | 0.87x |
+| `report_leaf/labels/0_replace` | 161 -> 164 | 0.98x |
+| `report_leaf/labels/0_mixed` | 160 -> 177 | 0.90x |
+| `report_leaf/labels/0_long` | 159 -> 162 | 0.98x |
+| `report_leaf/labels/0_invalid` | 158 -> 154 | 1.03x |
+| `report_leaf/labels/1_unique` | 251 -> 234 | 1.07x |
+| `report_leaf/labels/1_repeat` | 245 -> 225 | 1.09x |
+| `report_leaf/labels/1_replace` | 255 -> 229 | 1.11x |
+| `report_leaf/labels/1_mixed` | 241 -> 227 | 1.06x |
+| `report_leaf/labels/1_long` | 418 -> 384 | 1.09x |
+| `report_leaf/labels/1_invalid` | 208 -> 198 | 1.05x |
+| `report_leaf/labels/32_unique` | 5,825 -> 5,141 | 1.13x |
+| `report_leaf/labels/32_repeat` | 5,830 -> 2,544 | 2.29x |
+| `report_leaf/labels/32_replace` | 6,166 -> 3,111 | 1.98x |
+| `report_leaf/labels/32_mixed` | 5,892 -> 2,851 | 2.07x |
+| `report_leaf/labels/32_long` | 12,330 -> 9,413 | 1.31x |
+| `report_leaf/labels/32_invalid` | 2,083 -> 1,858 | 1.12x |
+| `report_leaf/labels/256_unique` | 48,807 -> 42,774 | 1.14x |
+| `report_leaf/labels/256_repeat` | 45,347 -> 19,434 | 2.33x |
+| `report_leaf/labels/256_replace` | 50,016 -> 24,264 | 2.06x |
+| `report_leaf/labels/256_mixed` | 48,689 -> 21,897 | 2.22x |
+| `report_leaf/labels/256_long` | 98,159 -> 68,525 | 1.43x |
+| `report_leaf/labels/256_invalid` | 15,973 -> 13,782 | 1.16x |
+| `report_leaf/native_bpms/0_false` | 230 -> 229 | 1.00x |
+| `report_leaf/native_bpms/0_true` | 239 -> 244 | 0.98x |
+| `report_leaf/native_bpms/1_false` | 499 -> 502 | 0.99x |
+| `report_leaf/native_bpms/1_true` | 515 -> 504 | 1.02x |
+| `report_leaf/native_bpms/32_false` | 16,756 -> 16,720 | 1.00x |
+| `report_leaf/native_bpms/32_true` | 16,885 -> 16,664 | 1.01x |
+| `report_leaf/native_bpms/512_false` | 272,727 -> 274,204 | 0.99x |
+| `report_leaf/native_bpms/512_true` | 275,407 -> 278,378 | 0.99x |
+| `report_leaf/native_bpms/1024_false` | 1,028,159 -> 556,069 | 1.85x |
+| `report_leaf/native_bpms/1024_true` | 1,024,572 -> 556,680 | 1.84x |
+| `report_leaf/native_bpms/2048_false` | 1,562,016 -> 1,168,871 | 1.34x |
+| `report_leaf/native_bpms/2048_true` | 1,665,520 -> 1,192,476 | 1.40x |
+
+
+## Validation and limits
+
+- 238 release unit/edge tests pass, including the original implementation's
+  29 edge fixtures. New checks cover SSC version boundaries, SM difficulty
+  promotion, retained legacy chart names, Unicode labels, merging, empty maps,
+  extreme floats, the 910/911-entry lower bound and partial-write failures.
+- Original/final UTF-8 component and corpus transcripts are byte-identical:
+  168,735,139 bytes, SHA-256 `34c70dab6f97cc907f1ee626f3456ac4958fd9898802b62311e1c0fda0972710`.
+  The corpus includes 30,843 files / 56,125 supported charts, with matching
+  parse errors. Added component cases compare utility outputs, snapshots and
+  complete reports at all fixture sizes.
+- After the optimizations were confirmed, the required command
+  `cargo test --release --test all_parity -- --test-threads=22`
+  passes all 30,489 cases. Strict release Clippy for the workspace/all targets,
+  formatting and whitespace checks pass.
+
+Description savings apply to legacy SSC utility APIs. Distinct labels retain
+the same allocations, and label vectors retain their original capacity.
+The BPM change retains the 16 KB stack buffer; it saves the abandoned
+formatting work for large maps, without claiming a stack-memory reduction.
+The focused controls and isolated short-input measurements above use longer
+batches to distinguish stable differences from short-run variation. Invalid
+label defaults and all unchanged controls retain their allocation counts.
+No universal CPU-speedup claim is made; all slower cases are retained.
+
+A broader direct-streaming candidate was rejected: its three-pair medians
+were slower by 2.1% for buffered 32-entry maps and 1.6% for buffered 512-entry
+maps (2.8% for 512 entries into Vec), despite large gains on empty and
+oversized maps. The final change preserves the existing smaller-map path.
+
+Reproduce the composed groups with `cargo bench -p rssp --bench hotpath_perf`,
+`RSSP_HOT_FILTER` set to `description/`, `label_snapshot/`, `bpm_report/`,
+`analyze/` or `report/json/16_clean`, and `RSSP_HOT_ITERS` as above.
+Run private leaves with
+`cargo test --release -p rssp --lib report::perf::report_hotpath -- --ignored --nocapture --test-threads=1`,
+`RSSP_REPORT_FILTER=labels/` or `native_bpms/<count>_` and
+`RSSP_REPORT_ITERS` as above; pin this process to CPU 2.
+`RSSP_HOT_VERIFY=1` emits the deterministic comparison transcript.

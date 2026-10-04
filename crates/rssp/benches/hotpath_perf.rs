@@ -10,6 +10,9 @@ use std::time::Instant;
 #[path = "support/metadata_perf.rs"]
 mod metadata_perf;
 
+#[path = "support/load_perf.rs"]
+mod load_perf;
+
 struct CountingAllocator;
 static COUNT: AtomicBool = AtomicBool::new(false);
 static ALLOCS: AtomicU64 = AtomicU64::new(0);
@@ -973,6 +976,7 @@ fn peak_work_cases(iters: usize) {
 fn verify_components() {
     verify_reports();
     metadata_perf::verify();
+    load_perf::verify();
     for input in [
         "",
         "0=120",
@@ -1127,6 +1131,7 @@ fn main() {
     credit_cases(iters);
     report_cases(iters);
     metadata_perf::cases(iters);
+    load_perf::cases(iters);
     let densities: Vec<_> = (0..16384).map(|i| [0, 16, 20, 24, 32][i % 5]).collect();
     for (name, step) in [("long_segments", 2048.0), ("short_segments", 4.0)] {
         let bpms: Vec<_> = (0..32)

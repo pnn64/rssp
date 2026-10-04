@@ -297,6 +297,16 @@ pub fn parse_version(version: Option<&[u8]>, fmt: TimingFormat) -> f32 {
 
 pub const SSC_VERSION_CHART_NAME_TAG: f32 = 0.74;
 
+/// Decodes a description, excluding legacy SSC descriptions used as chart names.
+#[must_use]
+pub fn decode_chart_desc(bytes: &[u8], fmt: TimingFormat, ver: f32) -> Cow<'_, str> {
+    if fmt == TimingFormat::Ssc && ver < SSC_VERSION_CHART_NAME_TAG {
+        Cow::Borrowed("")
+    } else {
+        decode_unescape_trim(bytes)
+    }
+}
+
 #[must_use]
 pub fn normalize_chart_desc(desc: String, fmt: TimingFormat, ver: f32) -> String {
     if normalize_chart_desc_ref(&desc, fmt, ver).is_empty() && !desc.is_empty() {
@@ -1218,6 +1228,25 @@ mod tests {
         decode_cp1252, decode_unescape_trim, extract_sections, parse_version, unescape_trim_cow,
     };
     use crate::timing::{STEPFILE_VERSION_NUMBER, TimingFormat};
+
+    #[test]
+    fn decode_desc_versions() {
+        for (raw, expected, owned) in [
+            (&b" Hard "[..], "Hard", false),
+            (&b" \\H\\a\\r\\d "[..], "Hard", true),
+            (&b" \xe9\\:\x81 "[..], "\u{e9}:\u{fffd}", true),
+            (&b""[..], "", false),
+        ] {
+            for version in [0.6, 0.739_999, 0.74, 0.83, f32::NAN] {
+                for format in [TimingFormat::Sm, TimingFormat::Ssc] {
+                    let discarded = format == TimingFormat::Ssc && version < 0.74;
+                    let value = super::decode_chart_desc(raw, format, version);
+                    assert_eq!(value, if discarded { "" } else { expected });
+                    assert_eq!(matches!(value, Cow::Owned(_)), owned && !discarded);
+                }
+            }
+        }
+    }
 
     #[test]
     fn delimiter_scan_edges() {

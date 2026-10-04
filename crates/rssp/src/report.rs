@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt::{self, Write as _};
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -1064,10 +1065,6 @@ fn parse_labels(opt: Option<&str>) -> Vec<(f64, String)> {
 
     let mut segments = Vec::new();
     for segment in s.split(',') {
-        let segment = segment.trim();
-        if segment.is_empty() {
-            continue;
-        }
         let Some((beat_str, label_raw)) = segment.split_once('=') else {
             continue;
         };
@@ -1081,14 +1078,18 @@ fn parse_labels(opt: Option<&str>) -> Vec<(f64, String)> {
         if segments.is_empty() {
             segments.reserve(capacity);
         }
-        add_indefinite_segment(&mut segments, beat, label.to_string());
+        add_indefinite_segment(&mut segments, beat, Cow::Borrowed(label));
     }
 
     if segments.is_empty() {
         return vec![(0.0, "Song Start".to_string())];
     }
 
+    // Own only surviving labels; equal-sized tuples let collect reuse the Vec.
     segments
+        .into_iter()
+        .map(|(beat, label)| (beat, label.into_owned()))
+        .collect()
 }
 
 fn count_timing_segments_from_str(s: &str) -> u32 {
@@ -1931,7 +1932,9 @@ impl<const N: usize> std::fmt::Write for StackText<N> {
 
 fn write_json_native_bpms<W: Write>(writer: &mut W, bpms: &[(f32, f32)]) -> io::Result<()> {
     let mut buffer = StackText::<16_384>::new();
-    if write!(&mut buffer, "{}", native_bpms_display(bpms)).is_err() {
+    // Quantized beats and round-tripped BPMs are finite and need at least 8
+    // characters each. With '=' and commas, the minimum is 18 * len - 1.
+    if bpms.len() > 16_384 / 18 || write!(&mut buffer, "{}", native_bpms_display(bpms)).is_err() {
         writer.write_all(b"\"")?;
         write!(writer, "{}", native_bpms_display(bpms))?;
         return writer.write_all(b"\"");
@@ -3823,5 +3826,84 @@ mod tests {
         assert_eq!(actual.first(), Some(&b'"'));
         assert_eq!(actual.last(), Some(&b'"'));
         assert_eq!(&actual[1..actual.len() - 1], formatted.as_bytes());
+    }
+
+    #[test]
+    fn bpm_partial_errors() {
+        for bpms in [
+            vec![],
+            vec![(0.0, 120.0), (0.03, 180.0), (-0.0, 90.0)],
+            vec![
+                (f32::NAN, f32::INFINITY),
+                (f32::NEG_INFINITY, -0.0),
+                (f32::MAX, f32::MAX),
+            ],
+        ] {
+            let expected = format!("\"{}\"", crate::timing::native_bpms_display(&bpms));
+            for limit in 0..=expected.len() {
+                let mut writer = PartialWriter {
+                    bytes: Vec::new(),
+                    limit,
+                    failures: 0,
+                };
+                let result = write_json_native_bpms(&mut writer, &bpms);
+                assert_eq!(writer.bytes, expected.as_bytes()[..limit]);
+                assert_eq!(result.is_ok(), limit == expected.len());
+                if let Err(error) = result {
+                    assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+                    assert_eq!(writer.failures, 1);
+                }
+            }
+        }
+        let bpms: Vec<_> = (0..1024).map(|index| (index as f32 * 4.0, 120.0)).collect();
+        let expected = format!("\"{}\"", crate::timing::native_bpms_display(&bpms));
+        for limit in [0, 1, 8191, 16383, expected.len() - 1, expected.len()] {
+            let mut writer = PartialWriter {
+                bytes: Vec::new(),
+                limit,
+                failures: 0,
+            };
+            let result = write_json_native_bpms(&mut writer, &bpms);
+            assert_eq!(writer.bytes, expected.as_bytes()[..limit]);
+            assert_eq!(result.is_ok(), limit == expected.len());
+            if let Err(error) = result {
+                assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+                assert_eq!(writer.failures, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn native_bpm_size_boundary() {
+        // Positive scaling is monotonic; finite extrema stay finite, and the
+        // roundtrip maps nonfinite inputs to zero before fixed formatting.
+        for bpm in [
+            f32::MIN,
+            f32::MAX,
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        ] {
+            assert!(crate::math::roundtrip_bpm_itg(f64::from(bpm)).is_finite());
+        }
+        for count in [910, 911] {
+            let bpms = vec![(0.0, f32::NAN); count];
+            let expected = format!("\"{}\"", crate::timing::native_bpms_display(&bpms));
+            assert_eq!(expected.len(), 18 * count + 1);
+            for limit in [0, 1, 8191, expected.len() - 1, expected.len()] {
+                let mut writer = PartialWriter {
+                    bytes: Vec::new(),
+                    limit,
+                    failures: 0,
+                };
+                let result = write_json_native_bpms(&mut writer, &bpms);
+                assert_eq!(writer.bytes, expected.as_bytes()[..limit]);
+                assert_eq!(result.is_ok(), limit == expected.len());
+                if let Err(error) = result {
+                    assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+                    assert_eq!(writer.failures, 1);
+                }
+            }
+        }
     }
 }

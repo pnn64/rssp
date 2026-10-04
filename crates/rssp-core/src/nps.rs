@@ -3,8 +3,7 @@ use std::cmp::Ordering;
 use crate::bpm::{chart_map_mode, clean_map_mode, is_display_bpm};
 use crate::math::lrint_f32;
 use crate::parse::{
-    decode_unescape_trim, extract_sections, normalize_chart_desc_ref, parse_offset_seconds,
-    parse_version,
+    decode_chart_desc, decode_unescape_trim, extract_sections, parse_offset_seconds, parse_version,
 };
 use crate::timing::{
     BeatTimeCursorF32, ROWS_PER_BEAT, TimingData, compute_timing_segments, fixed_timing_parts,
@@ -90,14 +89,12 @@ pub fn compute_chart_peak_nps(
             continue;
         };
         let step_type = decode_unescape_trim(fields[0]).into_owned();
-        let description_raw = decode_unescape_trim(fields[1]);
-        let description =
-            normalize_chart_desc_ref(description_raw.as_ref(), timing_format, ssc_version);
+        let description = decode_chart_desc(fields[1], timing_format, ssc_version);
         let difficulty_raw = decode_unescape_trim(fields[2]);
         let meter_raw = decode_unescape_trim(fields[3]);
         let difficulty = crate::resolve_difficulty_label(
             difficulty_raw.as_ref(),
-            description,
+            description.as_ref(),
             meter_raw.as_ref(),
             extension,
         );

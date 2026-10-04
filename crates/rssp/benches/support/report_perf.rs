@@ -3,6 +3,9 @@ use std::hint::black_box;
 use std::io::{BufWriter, Write};
 use std::time::Instant;
 
+#[path = "timing_fixtures.rs"]
+mod fixtures;
+
 fn measure(name: &str, items: usize, mut run: impl FnMut()) {
     if std::env::var("RSSP_REPORT_FILTER").is_ok_and(|filter| !name.contains(&filter)) {
         return;
@@ -34,6 +37,34 @@ fn measure(name: &str, items: usize, mut run: impl FnMut()) {
 #[ignore = "explicit report throughput benchmark"]
 fn report_hotpath() {
     let mut writer = BufWriter::with_capacity(8192, Vec::with_capacity(16384));
+    for count in [0, 1, 32, 256] {
+        for kind in ["unique", "repeat", "replace", "mixed", "long", "invalid"] {
+            let text = fixtures::labels(count, kind);
+            measure(&format!("labels/{count}_{kind}"), count, || {
+                black_box(super::parse_labels(black_box(Some(&text))));
+            });
+        }
+    }
+    let mut output = Vec::with_capacity(131_072);
+    for count in [0, 1, 32, 512, 1024, 2048] {
+        let bpms = fixtures::bpms(count);
+        for buffered in [false, true] {
+            measure(&format!("native_bpms/{count}_{buffered}"), count, || {
+                if buffered {
+                    writer.get_mut().clear();
+                    super::write_json_native_bpms(black_box(&mut writer), black_box(&bpms))
+                        .expect("Vec write");
+                    writer.flush().expect("Vec flush");
+                    black_box(writer.get_ref());
+                } else {
+                    output.clear();
+                    super::write_json_native_bpms(black_box(&mut output), black_box(&bpms))
+                        .expect("Vec write");
+                    black_box(&output);
+                }
+            });
+        }
+    }
     for key in [
         "title",
         "sn_detailed_breakdown",

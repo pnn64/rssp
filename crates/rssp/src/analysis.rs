@@ -20,9 +20,8 @@ use crate::hash::compute_chart_hash_pair;
 use crate::math::{round_dp, round_sig_figs_6};
 use crate::matrix::{MatrixProfile, compute_matrix_profile};
 use crate::parse::{
-    ParsedChartEntry, SSC_VERSION_CHART_NAME_TAG, decode_bytes, decode_unescape,
-    decode_unescape_trim, extract_sections, normalize_chart_desc_ref, parse_offset_seconds,
-    parse_version, strip_title_tags,
+    ParsedChartEntry, SSC_VERSION_CHART_NAME_TAG, decode_bytes, decode_chart_desc, decode_unescape,
+    decode_unescape_trim, extract_sections, parse_offset_seconds, parse_version, strip_title_tags,
 };
 use crate::patterns::{
     CompiledCustomPatterns, PATTERN_COUNT, PatternCounts, PatternVariant,
@@ -1603,14 +1602,12 @@ pub fn compute_all_hashes(
         };
 
         let step_type = decode_unescape_trim(fields[0]).into_owned();
-        let description_raw = decode_unescape_trim(fields[1]);
-        let description =
-            normalize_chart_desc_ref(description_raw.as_ref(), timing_format, ssc_version);
+        let description = decode_chart_desc(fields[1], timing_format, ssc_version);
         let difficulty_raw = decode_unescape_trim(fields[2]);
         let meter_raw = decode_unescape_trim(fields[3]);
         let difficulty = resolve_difficulty_label(
             difficulty_raw.as_ref(),
-            description,
+            description.as_ref(),
             meter_raw.as_ref(),
             extension,
         );
