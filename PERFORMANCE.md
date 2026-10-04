@@ -186,3 +186,111 @@ lines were verified exactly before committing:
 test result: FAILED. 30479 passed; 10 failed
 error: test failed, to rerun pass `-p rssp --test all_parity`
 ```
+
+# Performance measurements: 0.4.271
+
+Baseline: `ca14356`, version 0.4.270. This pass removes work before changing
+the remaining arithmetic, following `M-HOTPATH`, `M-MEM-REUSE`,
+`M-AVOID-INDIRECTION`, and `M-THROUGHPUT` in `rust-performance.md`:
+
+1. Peak NPS stops cleaning, parsing, storing, and building runtime tables for
+   speeds, scrolls, and fakes. These cannot affect elapsed measure time. Raw
+   chart tags still participate in timing ownership, including empty auxiliary
+   tags that suppress inherited song timing. Stops, delays, warps, offsets,
+   and SSC version behavior are preserved.
+2. BPM snapshots borrow clean timing tags with the existing `Cow` cleaning
+   functions. Dirty tags retain the owned fallback. Two field-identical tag
+   structs, their conversion/overlay helpers, a macro, and a forwarding function
+   are removed; fixed arrays hold the seven timing sources directly.
+3. Fixed-BPM tier calculation finds the maximum density within eligible runs
+   using integers, then performs the original floating-point multiplication and
+   division once. Category changes and the four-measure minimum are preserved.
+
+Production code shrinks by 81 lines. Public APIs and returned fields are unchanged.
+
+## Measurements
+
+Windows MSVC, Rust 1.98.1, Intel Xeon E5-2696 v4, system allocator, repository
+bench profile (fat LTO, one codegen unit, debug symbols). The original and updated
+implementations use identical benchmark source, fixture bytes, and dependency
+versions. Both executables were built before measurement, with no concurrent
+compilation or corpus scans. The measuring thread is pinned to logical CPU 2.
+
+Each process reports medians of seven batches after four warmup calls. Values
+below are medians of three process pairs with alternating old/new order, 1,000
+calls per batch (100 for peak NPS on Camellia). Input construction and I/O are
+outside measurement; destruction of returned outputs is included. CPU cycles
+come from `QueryThreadCycleTime`. Allocation counting runs separately.
+
+| Case | CPU cycles, old -> new | Allocations / reallocations, old -> new | Requested bytes, old -> new | Throughput change |
+| --- | ---: | ---: | ---: | ---: |
+| Peak NPS, plain | 25,317 -> 25,586 | 15 / 0 -> 15 / 0 | 3,287 -> 3,287 | -1.0% |
+| Peak NPS, global auxiliary timing | 176,735 -> 25,486 | 27 / 1 -> 15 / 0 | 23,183 -> 3,287 | +593.9% |
+| Peak NPS, local auxiliary timing | 650,192 -> 53,197 | 96 / 4 -> 56 / 0 | 83,679 -> 4,095 | +1122.0% |
+| Peak NPS, Camellia fixture | 11,430,923 -> 11,231,758 | 26 / 2 -> 26 / 2 | 256,595 -> 213,459 | +1.8% |
+| BPM snapshots, plain | 17,231 -> 17,177 | 27 / 2 -> 26 / 2 | 3,559 -> 3,554 | +0.5% |
+| BPM snapshots, global auxiliary timing | 166,657 -> 160,789 | 36 / 3 -> 32 / 3 | 24,168 -> 20,794 | +3.7% |
+| BPM snapshots, local auxiliary timing | 642,739 -> 611,054 | 108 / 14 -> 79 / 14 | 86,947 -> 73,346 | +5.2% |
+| BPM snapshots, Camellia fixture | 269,402 -> 228,431 | 41 / 0 -> 37 / 0 | 4,587 -> 4,511 | +18.0% |
+| Fixed-BPM tier, stream | 130,265 -> 91,063 | 0 / 0 -> 0 / 0 | 0 -> 0 | +43.1% |
+| Fixed-BPM tier, mixed densities | 127,897 -> 92,468 | 0 / 0 -> 0 / 0 | 0 -> 0 | +37.9% |
+
+The timing batches have four charts, each with 32 measures of four rows. Auxiliary
+cases contain 128 entries each for speeds, scrolls, and fakes, globally or on
+each chart. Local cases also contain BPM changes, a stop, a delay, and a warp.
+Tier cases contain 16,384 measures at 137.125 BPM. Requested bytes sum successful
+allocation and full reallocation requests; they measure churn, not peak live
+memory. Peak NPS local timing reduces this churn by 95.1%.
+
+Small timing differences should not be treated as universal speedups. Plain
+peak-NPS samples overlap (old 11.50-12.63 us, new 11.58-11.76 us), with unchanged
+allocation counts and a 1% median difference. Snapshot measurements include
+transient outliers; Camellia's new process medians range from 104.26 to 165.64 us.
+The allocation reductions are deterministic, while tier throughput improves in
+both measured cases. No behavioral regressions were found.
+
+## Reproduction and behavior
+
+```powershell
+$env:RSSP_HOT_ITERS = '1000'
+$env:RSSP_HOT_FILTER = 'peak/' # Or 'snapshot/' or 'tier/'.
+cargo bench -p rssp --bench hotpath_perf
+
+# Emit every component output, with numeric fields represented by exact bits.
+$env:RSSP_HOT_VERIFY = '1'
+cargo bench -p rssp --bench hotpath_perf
+Remove-Item Env:RSSP_HOT_VERIFY
+```
+
+For comparison, check out `ca14356` separately, copy the current
+`crates/rssp/benches/hotpath_perf.rs`, and use the same fixture corpus and
+dependency lockfile (adjust only the three workspace package versions to
+0.4.270). Build both executables first and run three alternating pairs. The
+baseline already registers this benchmark. Verify mode emits the relative file
+path, every peak-NPS field, every BPM-snapshot field, and errors in sorted file
+order. Compare the output files byte-for-byte.
+
+The original and updated component outputs match exactly across 30,489 valid
+simfiles and 56,125 charts. The 354 invalid-input errors also match. The UTF-16
+PowerShell output has SHA-256
+`32b29a5626b1696dcac85509e48d1a7f4a93162ccc0303c6fd971c9c823f252e`.
+Five new integration tests cover auxiliary-only timing overrides, old SSC
+versions, time-affecting segments, dirty/empty tag fallback, display BPM, run
+boundaries, extreme densities, subnormal BPM, and invalid BPM. Tests call
+production APIs directly; the variable-timing tier path supplies an independent
+bit-exact comparison for the fixed-timing path.
+
+All 198 existing workspace library/binary unit tests and all five new integration
+tests pass in release mode. Strict Clippy passes for both libraries, the benchmark,
+and the new tests. Formatting and diff checks pass. The original implementation
+passes all 30,489 cases in `all_parity`. After confirming the optimizations, the
+required final command also passed all 30,489 cases with zero failures before
+committing:
+
+```powershell
+cargo test --release --test all_parity -- --test-threads=22
+```
+
+```text
+test result: ok. 30489 passed; 0 failed
+```

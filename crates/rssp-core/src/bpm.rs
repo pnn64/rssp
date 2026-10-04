@@ -3,8 +3,8 @@ use std::fmt::Write as _;
 
 use crate::math::{fmt_dec3_half_up, push_dec3_half_up, round_sig_figs_itg, roundtrip_bpm_itg};
 use crate::parse::{
-    ParsedChartEntry, ParsedSimfileData, decode_bytes, decode_unescape_trim, extract_sections,
-    parse_float_prefix, parse_version,
+    ParsedChartEntry, decode_bytes, decode_unescape_trim, extract_sections, parse_float_prefix,
+    parse_version,
 };
 use crate::timing::{
     ROWS_PER_BEAT, TimingFormat, compute_timing_segments, format_bpm_segments_f32_like_itg,
@@ -483,81 +483,10 @@ pub struct ChartBpmSnapshot {
     pub display_bpm_max: f64,
 }
 
-// Unified timing tags - single struct with optional chart overlay
-#[derive(Clone, Default)]
-struct TimingTags {
-    bpms: String,
-    stops: String,
-    delays: String,
-    warps: String,
-    speeds: String,
-    scrolls: String,
-    fakes: String,
-}
-
-fn timing_tags_from_global(p: &ParsedSimfileData<'_>) -> TimingTags {
-    TimingTags {
-        bpms: map_tag(p.bpms, clean_timing_map),
-        stops: map_tag(p.stops, clean_timing_map),
-        delays: map_tag(p.delays, clean_timing_map),
-        warps: map_tag(p.warps, clean_timing_map),
-        speeds: map_tag(p.speeds, clean_timing_map),
-        scrolls: map_tag(p.scrolls, clean_timing_map),
-        fakes: map_tag(p.fakes, clean_timing_map),
-    }
-}
-
-#[derive(Clone, Default)]
-struct ChartTags {
-    bpms: Option<String>,
-    stops: Option<String>,
-    delays: Option<String>,
-    warps: Option<String>,
-    speeds: Option<String>,
-    scrolls: Option<String>,
-    fakes: Option<String>,
-}
-
 struct BpmSnapshotTiming {
     bpms_formatted: String,
     bpm_min_raw: f64,
     bpm_max_raw: f64,
-}
-
-fn chart_tags_from_entry(e: &ParsedChartEntry<'_>) -> ChartTags {
-    ChartTags {
-        bpms: map_tag_opt(e.chart_bpms.as_deref(), clean_timing_map),
-        stops: map_tag_opt(e.chart_stops.as_deref(), clean_timing_map),
-        delays: map_tag_opt(e.chart_delays.as_deref(), clean_timing_map),
-        warps: map_tag_opt(e.chart_warps.as_deref(), clean_timing_map),
-        speeds: map_tag_opt(e.chart_speeds.as_deref(), clean_timing_map),
-        scrolls: map_tag_opt(e.chart_scrolls.as_deref(), clean_timing_map),
-        fakes: map_tag_opt(e.chart_fakes.as_deref(), clean_timing_map),
-    }
-}
-
-fn resolve_chart_tags<'a>(
-    chart: &'a ChartTags,
-    global: &'a TimingTags,
-    use_chart: bool,
-) -> [(&'a str, Option<&'a str>); 7] {
-    macro_rules! pair {
-        ($f:ident) => {
-            (
-                &global.$f,
-                if use_chart { chart.$f.as_deref() } else { None },
-            )
-        };
-    }
-    [
-        pair!(bpms),
-        pair!(stops),
-        pair!(delays),
-        pair!(warps),
-        pair!(speeds),
-        pair!(scrolls),
-        pair!(fakes),
-    ]
 }
 
 fn chart_metadata(fields: &[&[u8]], fmt: TimingFormat) -> Option<(String, String)> {
@@ -578,7 +507,7 @@ fn chart_metadata(fields: &[&[u8]], fmt: TimingFormat) -> Option<(String, String
 
 fn chart_bpm_snapshot(
     entry: &ParsedChartEntry<'_>,
-    global: &TimingTags,
+    global: &[Cow<'_, str>; 7],
     bpms_norm: &str,
     fmt: TimingFormat,
     use_chart: bool,
@@ -588,22 +517,24 @@ fn chart_bpm_snapshot(
         return None;
     }
     let (step_type, difficulty) = chart_metadata(&entry.fields, fmt)?;
-    let chart = chart_tags_from_entry(entry);
-    let hash_bpms = chart
-        .bpms
-        .as_ref()
-        .map(|s| normalize_float_digits(s))
+    // Keep the same BPM/stops/delays/warps/speeds/scrolls/fakes order as global.
+    let chart = [
+        entry.chart_bpms.as_deref(),
+        entry.chart_stops.as_deref(),
+        entry.chart_delays.as_deref(),
+        entry.chart_warps.as_deref(),
+        entry.chart_speeds.as_deref(),
+        entry.chart_scrolls.as_deref(),
+        entry.chart_fakes.as_deref(),
+    ]
+    .map(chart_timing_tag_cow);
+    let hash_bpms = chart[0]
+        .as_deref()
+        .map(normalize_float_digits)
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| bpms_norm.to_string());
 
-    let has_chart_timing = use_chart
-        && (chart.bpms.is_some()
-            || chart.stops.is_some()
-            || chart.delays.is_some()
-            || chart.warps.is_some()
-            || chart.speeds.is_some()
-            || chart.scrolls.is_some()
-            || chart.fakes.is_some());
+    let has_chart_timing = use_chart && chart.iter().any(Option::is_some);
     let timing = if has_chart_timing {
         bpm_snapshot_timing(&chart, global, fmt, true)
     } else {
@@ -637,12 +568,17 @@ fn chart_bpm_snapshot(
 }
 
 fn bpm_snapshot_timing(
-    chart: &ChartTags,
-    global: &TimingTags,
+    chart: &[Option<Cow<'_, str>>; 7],
+    global: &[Cow<'_, str>; 7],
     fmt: TimingFormat,
     use_chart: bool,
 ) -> BpmSnapshotTiming {
-    let r = resolve_chart_tags(chart, global, use_chart);
+    let r: [(&str, Option<&str>); 7] = std::array::from_fn(|i| {
+        (
+            global[i].as_ref(),
+            if use_chart { chart[i].as_deref() } else { None },
+        )
+    });
     let segments = compute_timing_segments(
         r[0].1, r[0].0, r[1].1, r[1].0, r[2].1, r[2].0, r[3].1, r[3].0, r[4].1, r[4].0, r[5].1,
         r[5].0, r[6].1, r[6].0, fmt, true,
@@ -691,14 +627,24 @@ pub fn actual_bpm_range_raw_f32(map: &[(f32, f32)]) -> (f64, f64) {
 /// Returns an error when `ext` is not `sm` or `ssc`, or when the simfile
 /// structure cannot be parsed.
 pub fn chart_bpm_snapshots(data: &[u8], ext: &str) -> Result<Vec<ChartBpmSnapshot>, String> {
-    chart_bpm_snapshots_impl(data, ext)
-}
-
-fn chart_bpm_snapshots_impl(data: &[u8], ext: &str) -> Result<Vec<ChartBpmSnapshot>, String> {
     let parsed = extract_sections(data, ext).map_err(|e| e.to_string())?;
     let fmt = timing_format_from_ext(ext);
     let use_chart = steps_timing_allowed(parse_version(parsed.version, fmt), fmt);
-    let global = timing_tags_from_global(&parsed);
+    let global = [
+        parsed.bpms,
+        parsed.stops,
+        parsed.delays,
+        parsed.warps,
+        parsed.speeds,
+        parsed.scrolls,
+        parsed.fakes,
+    ]
+    .map(|tag| {
+        clean_timing_map_cow(
+            tag.and_then(|bytes| std::str::from_utf8(bytes).ok())
+                .unwrap_or(""),
+        )
+    });
     let bpms_norm = map_tag(parsed.bpms, normalize_float_digits);
     let mut snapshots = Vec::with_capacity(parsed.notes_list.len());
     let mut global_timing = None;
@@ -1309,33 +1255,33 @@ fn compute_tier_bpm_fixed(densities: &[usize], bpm: f64) -> f64 {
         return bpm;
     }
 
-    let (mut max_e, mut cat, mut len, mut run_e) = (0.0f64, RunDensity::Break, 0usize, 0.0f64);
+    let (mut max_density, mut cat, mut len, mut run_max) =
+        (0usize, RunDensity::Break, 0usize, 0usize);
     for &density in densities {
         let c = categorize_measure_density(density);
-        if c == RunDensity::Break {
+        if c != cat {
             if len >= 4 {
-                max_e = max_e.max(run_e);
+                max_density = max_density.max(run_max);
             }
-            cat = RunDensity::Break;
+            cat = c;
             len = 0;
-            run_e = 0.0;
-        } else {
-            if len == 0 || c != cat {
-                if len >= 4 {
-                    max_e = max_e.max(run_e);
-                }
-                cat = c;
-                len = 0;
-                run_e = 0.0;
-            }
+            run_max = 0;
+        }
+        if c != RunDensity::Break {
             len += 1;
-            run_e = run_e.max(density as f64 * bpm / 16.0);
+            run_max = run_max.max(density);
         }
     }
     if len >= 4 {
-        max_e = max_e.max(run_e);
+        max_density = max_density.max(run_max);
     }
-    if max_e > 0.0 { max_e } else { bpm }
+    // For a fixed positive BPM, rating is monotonic in density. Preserve the
+    // original multiply/divide order, but apply it only to the eligible maximum.
+    if max_density != 0 {
+        max_density as f64 * bpm / 16.0
+    } else {
+        bpm
+    }
 }
 
 #[must_use]

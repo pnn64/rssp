@@ -2,6 +2,7 @@
 #![allow(clippy::cast_precision_loss)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::fmt::Write as _;
 use std::hint::black_box;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
@@ -313,7 +314,156 @@ fn fast_timing_case(iters: usize) {
     });
 }
 
+fn batch_timing_cases(iters: usize) {
+    for (name, count, local) in [
+        ("plain", 0, false),
+        ("global_aux", 128, false),
+        ("local_aux", 128, true),
+    ] {
+        let mut data = String::from("#VERSION:0.83;\n#TITLE:Timing batch;\n#BPMS:0=120;\n");
+        let mut aux = String::new();
+        for (tag, value) in [("SPEEDS", "2=1=0"), ("SCROLLS", "0.5"), ("FAKES", "0.25")] {
+            write!(aux, "#{tag}:").expect("String write cannot fail");
+            for i in 0..count {
+                if i != 0 {
+                    aux.push(',');
+                }
+                write!(aux, "{}={value}", i * 4).expect("String write cannot fail");
+            }
+            aux.push_str(";\n");
+        }
+        if !local {
+            data.push_str(&aux);
+        }
+        for difficulty in ["Easy", "Medium", "Hard", "Challenge"] {
+            write!(
+                data,
+                "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:{difficulty};\n#METER:10;\n"
+            )
+            .expect("String write cannot fail");
+            if local {
+                data.push_str(
+                    "#BPMS:0=180,16=150;\n#STOPS:8=0.25;\n#DELAYS:12=0.125;\n#WARPS:20=1;\n",
+                );
+                data.push_str(&aux);
+            }
+            data.push_str("#NOTES:\n");
+            for m in 0..32 {
+                if m != 0 {
+                    data.push_str(",\n");
+                }
+                data.push_str("1000\n0100\n0010\n0001\n");
+            }
+            data.push_str(";\n");
+        }
+        measure(&format!("peak/{name}"), 4, iters, || {
+            black_box(
+                rssp::nps::compute_chart_peak_nps(black_box(data.as_bytes()), "ssc")
+                    .expect("valid fixture"),
+            );
+        });
+        measure(&format!("snapshot/{name}"), 4, iters, || {
+            black_box(
+                rssp::bpm::chart_bpm_snapshots(black_box(data.as_bytes()), "ssc")
+                    .expect("valid fixture"),
+            );
+        });
+    }
+    let data = include_bytes!("fixtures/camellia_mix.ssc");
+    measure("peak/camellia", 5, (iters / 10).max(1), || {
+        black_box(
+            rssp::nps::compute_chart_peak_nps(black_box(data), "ssc").expect("valid fixture"),
+        );
+    });
+    measure("snapshot/camellia", 5, iters, || {
+        black_box(rssp::bpm::chart_bpm_snapshots(black_box(data), "ssc").expect("valid fixture"));
+    });
+}
+
+fn tier_cases(iters: usize) {
+    for (name, densities) in [
+        ("stream", vec![16; 16384]),
+        (
+            "mixed",
+            (0..16384)
+                .map(|i| [0, 16, 19, 16, 19, 20, 23, 20, 23, 32, 256, 32, 256][i % 13])
+                .collect(),
+        ),
+    ] {
+        let bpms = [(0.0, 137.125)];
+        measure(&format!("tier/{name}"), densities.len(), iters, || {
+            black_box(rssp::bpm::compute_tier_bpm(
+                black_box(&densities),
+                black_box(&bpms),
+                4.0,
+            ));
+        });
+    }
+}
+
+fn verify_corpus() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/packs");
+    let mut files: Vec<_> = walkdir::WalkDir::new(&root)
+        .into_iter()
+        .map(|entry| entry.expect("read corpus"))
+        .filter(|entry| entry.file_type().is_file())
+        .map(walkdir::DirEntry::into_path)
+        .filter(|path| path.extension().is_some_and(|ext| ext == "zst"))
+        .collect();
+    files.sort_unstable();
+    assert!(!files.is_empty(), "corpus must be populated");
+    for path in files {
+        let stem = std::path::Path::new(path.file_stem().expect("file stem"));
+        let ext = stem
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .expect("inner extension");
+        let bytes = std::fs::read(&path).expect("read simfile");
+        let data = zstd::decode_all(bytes.as_slice()).expect("decode simfile");
+        println!(
+            "file {}",
+            path.strip_prefix(&root).expect("corpus prefix").display()
+        );
+        match rssp::nps::compute_chart_peak_nps(&data, ext) {
+            Ok(charts) => {
+                for chart in charts {
+                    println!(
+                        "peak {:?} {:?} {}",
+                        chart.step_type,
+                        chart.difficulty,
+                        chart.peak_nps.to_bits()
+                    );
+                }
+            }
+            Err(err) => println!("peak error {err:?}"),
+        }
+        match rssp::bpm::chart_bpm_snapshots(&data, ext) {
+            Ok(charts) => {
+                for chart in charts {
+                    println!(
+                        "bpm {:?} {:?} {:?} {:?} {} {} {:?} {} {}",
+                        chart.step_type,
+                        chart.difficulty,
+                        chart.hash_bpms,
+                        chart.bpms_formatted,
+                        chart.bpm_min.to_bits(),
+                        chart.bpm_max.to_bits(),
+                        chart.display_bpm,
+                        chart.display_bpm_min.to_bits(),
+                        chart.display_bpm_max.to_bits()
+                    );
+                }
+            }
+            Err(err) => println!("bpm error {err:?}"),
+        }
+    }
+}
+
 fn main() {
+    if std::env::var_os("RSSP_HOT_VERIFY").is_some() {
+        verify_corpus();
+        return;
+    }
     cpu::pin();
     let iters = std::env::var("RSSP_HOT_ITERS")
         .ok()
@@ -324,6 +474,8 @@ fn main() {
     timing_cases::<4>(iters);
     timing_cases::<8>(iters);
     fast_timing_case(iters);
+    batch_timing_cases(iters);
+    tier_cases(iters);
     let densities: Vec<_> = (0..16384).map(|i| [0, 16, 20, 24, 32][i % 5]).collect();
     for (name, step) in [("long_segments", 2048.0), ("short_segments", 4.0)] {
         let bpms: Vec<_> = (0..32)

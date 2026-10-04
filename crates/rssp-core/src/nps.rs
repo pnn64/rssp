@@ -56,21 +56,6 @@ pub fn compute_chart_peak_nps(
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("");
     let cleaned_global_warps = clean_map_mode::<true>(global_warps_raw);
-    let global_speeds_raw = parsed_data
-        .speeds
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .unwrap_or("");
-    let cleaned_global_speeds = clean_map_mode::<true>(global_speeds_raw);
-    let global_scrolls_raw = parsed_data
-        .scrolls
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .unwrap_or("");
-    let cleaned_global_scrolls = clean_map_mode::<true>(global_scrolls_raw);
-    let global_fakes_raw = parsed_data
-        .fakes
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .unwrap_or("");
-    let cleaned_global_fakes = clean_map_mode::<true>(global_fakes_raw);
 
     let entries = parsed_data.notes_list;
     let density_capacity = entries
@@ -127,9 +112,9 @@ pub fn compute_chart_peak_nps(
             cleaned_global_stops.as_ref(),
             cleaned_global_delays.as_ref(),
             cleaned_global_warps.as_ref(),
-            cleaned_global_speeds.as_ref(),
-            cleaned_global_scrolls.as_ref(),
-            cleaned_global_fakes.as_ref(),
+            "",
+            "",
+            "",
         );
         let chart_offset = timing_src.chart_offset_seconds;
         let chart_bpms = if allow_steps_timing {
@@ -152,21 +137,9 @@ pub fn compute_chart_peak_nps(
         } else {
             None
         };
-        let chart_speeds = if allow_steps_timing {
-            chart_map_mode::<true>(entry.chart_speeds.as_deref())
-        } else {
-            None
-        };
-        let chart_scrolls = if allow_steps_timing {
-            chart_map_mode::<true>(entry.chart_scrolls.as_deref())
-        } else {
-            None
-        };
-        let chart_fakes = if allow_steps_timing {
-            chart_map_mode::<true>(entry.chart_fakes.as_deref())
-        } else {
-            None
-        };
+        // Peak NPS uses elapsed measure time, including stops, delays and warps.
+        // Speeds, scrolls and fakes cannot change it; their raw tags above still
+        // determine whether chart timing overrides the song's timing.
         let chart_timing;
         let timing = if timing_src.chart_has_own_timing {
             let timing_segments = compute_timing_segments(
@@ -178,12 +151,12 @@ pub fn compute_chart_peak_nps(
                 timing_src.global_delays,
                 chart_warps.as_deref(),
                 timing_src.global_warps,
-                chart_speeds.as_deref(),
-                timing_src.global_speeds,
-                chart_scrolls.as_deref(),
-                timing_src.global_scrolls,
-                chart_fakes.as_deref(),
-                timing_src.global_fakes,
+                None,
+                "",
+                None,
+                "",
+                None,
+                "",
                 timing_format,
                 true,
             );
@@ -201,11 +174,11 @@ pub fn compute_chart_peak_nps(
                     None,
                     &cleaned_global_warps,
                     None,
-                    &cleaned_global_speeds,
+                    "",
                     None,
-                    &cleaned_global_scrolls,
+                    "",
                     None,
-                    &cleaned_global_fakes,
+                    "",
                     timing_format,
                     true,
                 );
