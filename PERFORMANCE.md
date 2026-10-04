@@ -1132,3 +1132,173 @@ Alternate baseline/final executables three times. The filter matches substrings,
 so the driver records only cases starting with the selected namespace to avoid
 counting `zero_duration/` again under `duration/`. Set `RSSP_HOT_VERIFY=1` to emit
 the deterministic component and corpus comparison.
+
+# 0.4.277: skip empty peak timing and repeated stream work
+
+
+Three changes remove work from peak NPS and combined stream analysis:
+
+1. `compute_chart_peak_nps` counts density before constructing timing. When
+   every measure has zero density, it returns the existing zero peak with its
+   metadata. Mines, fakes, lifts, keysounds and hold tails do not contribute to
+   density; a scored note at beat zero still follows the normal timing path.
+2. Peak NPS retains the last local elapsed-time data for this call. Equal raw
+   offset/BPM/stop/delay/warp tags reuse it before cleanup and construction.
+   Cleanup now occurs only on local timing misses. The cache stores the source
+   chart's index and compares its raw fields directly, avoiding a copied timing
+   key or any new key type/helper. Parsed entries remain immutable and stable
+   throughout the call. `duration.rs` is unchanged.
+3. Combined stream counting finds the first stream before reserving token
+   storage. No-stream charts need no token allocation. Leading breaks use the
+   first index directly, skipping their counting/tokenization loop work.
+   Reservation excludes the leading gap. The active-range loop keeps its
+   existing structure, which measured better for short cold inputs.
+
+The patch version increases exactly once: **0.4.276 → 0.4.277**.
+
+## Method
+
+The baseline is `e469cfc` production code built with version 0.4.277 and the
+same final benchmark harness. Both executables use Rust 1.98.1 / LLVM 22.1.8,
+Windows x86-64 and fat LTO. The benchmark pins its thread to logical CPU 2.
+Three process pairs alternate old/new, new/old and old/new. Each process uses
+seven warmed batches; tables report the median across the three process
+medians. The counting allocator runs separately from CPU/timing measurement.
+
+Fixtures are prepared outside measurement. Peak and duration cases intentionally
+include parsing and timing construction, with no disk I/O. Heap churn sums
+allocation/reallocation requests, not resident memory. All 32 measured cases,
+raw runs, comparison JSON and saved executables remain in `target/perf-277/`.
+
+## Zero-density peak NPS
+
+Each fixture has four charts, with either 1 or 128 stops and delays per source.
+`objects_local` contains only non-scoring objects. The original builds timing
+for all four charts; the new implementation skips each local build. Global
+normalization remains part of the API and is included in the measurements.
+
+
+| Case | ns old → new | cycles old → new | allocations old → new | churn bytes old → new | throughput change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `peak_work/1_empty_global` | 5,942 → 3,838 | 13,006 → 8,405 | 22 → 13 | 2,526 → 2,398 | +54.8% |
+| `peak_work/1_objects_local` | 12,468 → 4,353 | 27,334 → 9,545 | 61 → 13 | 3,034 → 2,398 | +186.4% |
+| `peak_work/128_empty_global` | 54,191 → 15,395 | 118,679 → 33,760 | 22 → 13 | 17,206 → 5,902 | +252.0% |
+| `peak_work/128_objects_local` | 224,046 → 16,764 | 490,786 → 36,698 | 61 → 13 | 65,258 → 5,902 | +1236.5% |
+
+## Repeated local timing
+
+`first_local` has one scored note at beat zero, which has nonzero peak NPS.
+`repeat_local` has four notes per measure. Equal dirty timing tags across four
+charts eliminate three cleanup/build cycles. The inherited/global and varying
+local timing controls are shown below as well.
+
+The cache is owned by the caller during this parsing operation, single-threaded
+and local to the call. It holds at most one local timing entry, warming on the
+first nonempty local chart. Misses perform the original CPU-only build;
+replacement and return destroy the old data on the caller thread. There are no
+scans, pruning, locks or I/O. Lookups compare at most five tags, bounded by
+their input byte lengths; misses retain the original input-dependent build
+cost. Empty and inherited charts preserve the last local entry. This API runs
+at chart load and must not run during gameplay. Allocation counters in the
+benchmark expose the skipped builds; no persistent instrumentation is added.
+
+
+| Case | ns old → new | cycles old → new | allocations old → new | churn bytes old → new | throughput change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `peak_work/1_first_local` | 12,318 → 6,958 | 26,989 → 15,240 | 61 → 25 | 3,034 → 2,557 | +77.0% |
+| `peak_work/1_repeat_local` | 12,450 → 7,048 | 27,295 → 15,426 | 61 → 25 | 3,042 → 2,565 | +76.6% |
+| `peak_work/128_first_local` | 226,674 → 66,158 | 496,178 → 144,920 | 61 → 25 | 65,258 → 20,741 | +242.6% |
+| `peak_work/128_repeat_local` | 222,447 → 66,374 | 487,119 → 145,178 | 61 → 25 | 65,266 → 20,749 | +235.1% |
+
+## Combined stream counts and breakdowns
+
+The empty fixture alternates densities 0 and 15 across 4,096 measures. The
+leading fixture has 4,000 leading breaks and a 96-measure stream. Both APIs
+return identical counts and all six breakdown strings. Warm cases reuse token
+storage; cold cases include its creation and destruction. A token is 16 bytes:
+skipping the empty reservation saves 16,384 requested bytes, and reserving only
+the leading fixture's active suffix saves 14,848 bytes.
+
+
+| Case | ns old → new | cycles old → new | allocations old → new | churn bytes old → new | throughput change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `streams/empty_combined` | 4,506 → 2,473 | 9,858 → 5,417 | 3 → 3 | 33 → 33 | +82.2% |
+| `streams/empty_cold` | 4,600 → 2,534 | 10,088 → 5,479 | 4 → 3 | 16,417 → 33 | +81.5% |
+| `streams/leading_combined` | 4,776 → 2,967 | 10,469 → 6,503 | 6 → 6 | 33 → 33 | +61.0% |
+| `streams/leading_cold` | 4,898 → 3,364 | 10,721 → 7,333 | 7 → 7 | 16,417 → 1,569 | +45.6% |
+| `streams/uniform_combined` | 10,970 → 11,570 | 24,012 → 25,324 | 6 → 6 | 33 → 33 | -5.2% |
+| `streams/uniform_cold` | 10,969 → 11,466 | 24,026 → 25,127 | 7 → 7 | 16,417 → 16,417 | -4.3% |
+| `streams/fragmented_combined` | 123,764 → 124,716 | 270,886 → 271,089 | 6 → 6 | 72,039 → 72,039 | -0.8% |
+| `streams/fragmented_cold` | 112,568 → 111,280 | 246,520 → 243,655 | 7 → 7 | 186,727 → 186,727 | +1.2% |
+| `streams/short_combined` | 1,887 → 1,858 | 4,132 → 4,060 | 6 → 6 | 891 → 891 | +1.6% |
+| `streams/short_cold` | 2,152 → 2,209 | 4,712 → 4,833 | 7 → 7 | 1,403 → 1,403 | -2.6% |
+
+## Other paths and composed controls
+
+The remaining controls exercise ordinary timing, local cache misses, unchanged
+duration processing, and full analysis. Allocation counts and requested
+bytes are unchanged except where peak timing construction is avoided. Timings
+on this shared machine vary; the component gains do not imply the same gain in
+default analysis, where parity processing dominates.
+
+Not every CPU control improved: the unchanged `duration/camellia` path measured
+6.7% lower throughput, uniform stream controls were 4.3–5.2% lower, and default
+Camellia analysis was 1.2% lower. This pass establishes allocation savings and
+the targeted empty/repeated-timing gains, with exact behavioral parity; it does
+not establish regression-free throughput for every workload. The cause of the
+unchanged-duration slowdown was not established. Whole-program code layout and
+shared-machine variation are possible explanations, not confirmed causes.
+
+
+| Case | ns old → new | cycles old → new | allocations old → new | churn bytes old → new | throughput change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `peak_work/1_vary_local` | 12,414 → 12,442 | 27,213 → 27,266 | 61 → 61 | 3,042 → 3,042 | -0.2% |
+| `peak_work/128_vary_local` | 222,639 → 209,322 | 487,643 → 458,348 | 61 → 61 | 65,266 → 65,266 | +6.4% |
+| `peak/plain` | 10,935 → 10,598 | 23,952 → 23,229 | 14 → 14 | 3,223 → 3,223 | +3.2% |
+| `peak/global_aux` | 11,111 → 10,963 | 24,344 → 24,024 | 14 → 14 | 3,223 → 3,223 | +1.3% |
+| `peak/local_aux` | 22,785 → 17,394 | 49,819 → 38,141 | 55 → 22 | 4,031 → 3,395 | +31.0% |
+| `peak/camellia` | 4,393,635 → 4,031,770 | 9,619,665 → 8,830,836 | 25 → 19 | 213,011 → 212,867 | +9.0% |
+| `duration/clean_hit` | 91,620 → 92,206 | 200,524 → 202,039 | 21 → 21 | 25,815 → 25,815 | -0.6% |
+| `duration/dirty_hit` | 111,050 → 111,500 | 243,227 → 244,075 | 25 → 25 | 32,227 → 32,227 | -0.4% |
+| `duration/dirty_miss` | 396,426 → 397,688 | 868,153 → 870,558 | 70 → 70 | 120,223 → 120,223 | -0.3% |
+| `duration/camellia` | 5,944,230 → 6,374,435 | 12,960,860 → 13,955,821 | 18 → 18 | 3,635 → 3,635 | -6.7% |
+| `analyze/fast_fake_lifts` | 289,637 → 301,357 | 633,579 → 660,285 | 31 → 31 | 59,028 → 59,028 | -3.9% |
+| `analyze/camellia` | 206,212,533 → 208,797,733 | 451,466,209 → 456,118,074 | 110 → 110 | 5,263,624 → 5,263,624 | -1.2% |
+| `analyze/fast_camellia` | 27,286,400 → 26,304,833 | 59,734,877 → 57,586,118 | 115 → 115 | 7,051,152 → 7,051,152 | +3.7% |
+| `analyze/mixed_small` | 24,400 → 22,563 | 53,192 → 49,205 | 59 → 59 | 7,460 → 7,460 | +8.1% |
+
+## Validation
+
+- Release library tests: 60 rssp and 138 core passed; 21 optimization regressions
+  passed. New cases cover all supported lane counts, non-scoring objects, a
+  beat-zero note, legacy SSC versions, all timing key fields, inherited timing,
+  auxiliary override tags, skipped unsupported charts, large leading/trailing
+  gaps and reused token storage.
+- `cargo test --release --test all_parity -- --test-threads=22`: 30,489 passed,
+  zero failed, after the final optimizations were confirmed and before commit.
+- Strict release Clippy for every workspace target, formatting and diff checks
+  passed.
+- Original/final output is byte-identical across 30,843 corpus files and 56,125
+  supported charts, including matching parse errors. This checks exact peak and
+  duration bits, densities, spacing, stream strings, normalized timing, BPM
+  snapshots, custom matching and serialized fixtures. SHA-256:
+  `9cd4f319db50e03f9861ddf483e447afcf78a32200292972d245f0692b581ab3`.
+
+## Reproduction
+
+Build `e469cfc` with only version 0.4.277 and the final benchmark harness to
+save the original executable; build the final production code with the same
+version and harness. Alternate the executables three times:
+
+```powershell
+cargo bench -p rssp --bench hotpath_perf --no-run
+$env:RSSP_HOT_FILTER = 'peak_work/' # also peak/, streams/, duration/, analyze/
+$env:RSSP_HOT_ITERS = '200' # 30 for analyze/
+$bench = Get-ChildItem target/release/deps/hotpath_perf-*.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+& $bench.FullName
+```
+
+`RSSP_HOT_VERIFY=1` prints deterministic component and corpus outputs. The
+excluded performance guide and optimization scripts are not included in the
+commit. Hash coalescing trials were discarded after measured regressions;
+`hash.rs` is unchanged.

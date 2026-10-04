@@ -7,6 +7,119 @@ use rssp::bpm::{chart_bpm_snapshots, compute_tier_bpm};
 use rssp::nps::compute_chart_peak_nps;
 
 #[test]
+fn composed_stream_prefixes() {
+    use rssp::streams::{
+        StreamCounts, Token, compute_stream_counts, compute_stream_outputs,
+        compute_stream_outputs_with_scratch, generate_breakdowns, stream_breakdowns,
+    };
+    let mut tokens = vec![Token::Break(123)];
+    for prefix in [0, 1, 2, 4000] {
+        for tail in [0, 1, 2, 4096] {
+            let mut densities = vec![0; prefix];
+            densities.extend_from_slice(&[16, 16, 0, 20, 0, 0, 32, 32, 24]);
+            densities.resize(densities.len() + tail, 15);
+            let expected = (
+                compute_stream_counts(&densities),
+                generate_breakdowns(&densities),
+                stream_breakdowns(&densities),
+            );
+            assert_eq!(compute_stream_outputs(&densities), expected);
+            assert_eq!(
+                compute_stream_outputs_with_scratch(&densities, &mut tokens),
+                expected
+            );
+        }
+    }
+    let empty = compute_stream_outputs_with_scratch(&[0, 15, 0], &mut tokens);
+    assert_eq!(empty.0, StreamCounts::default());
+    assert_eq!(empty.1, (String::new(), String::new(), String::new()));
+    assert_eq!(
+        empty.2,
+        (
+            "No Streams!".into(),
+            "No Streams!".into(),
+            "No Streams!".into()
+        )
+    );
+    assert!(tokens.is_empty());
+}
+
+#[test]
+fn peak_empty_notes() {
+    for version in ["0.6", "0.83"] {
+        for (kind, lanes) in [
+            ("dance-single", 4),
+            ("pump-single", 5),
+            ("dance-double", 8),
+            ("pump-double", 10),
+        ] {
+            for tags in [
+                "",
+                "#BPMS:NaN;#STOPS:0=2;#DELAYS:0=1;#WARPS:1=2;#OFFSET:-100000;",
+                "#SPEEDS:;#FAKES:0=4;",
+            ] {
+                let mut notes = format!("{}\n,\n", "0".repeat(lanes));
+                for object in ['M', 'F', 'L', 'K', '3'] {
+                    notes.push(object);
+                    notes.push_str(&"0".repeat(lanes - 1));
+                    notes.push('\n');
+                }
+                let data = format!(
+                    "#VERSION:{version};#BPMS:0=120;#STOPS:0=1;#NOTEDATA:;#STEPSTYPE:{kind};#DIFFICULTY:Easy;#METER:3;{tags}#NOTES:\n{notes};"
+                );
+                let charts = compute_chart_peak_nps(data.as_bytes(), "ssc").expect("valid fixture");
+                assert_eq!(charts.len(), 1);
+                assert_eq!(charts[0].step_type, kind);
+                assert_eq!(charts[0].difficulty, "Easy");
+                assert_eq!(charts[0].peak_nps.to_bits(), 0.0f64.to_bits());
+            }
+        }
+    }
+    // A note at beat zero still has nonzero measure density, unlike duration.
+    let sm = b"#BPMS:0=120;#NOTES:dance-single::Easy:3::\n1000\n;";
+    assert_eq!(
+        compute_chart_peak_nps(sm, "sm").expect("valid SM")[0].peak_nps,
+        0.5
+    );
+}
+
+#[test]
+fn peak_cache_transitions() {
+    let header = "#VERSION:0.83;#OFFSET:0.25;#BPMS:0=120;#STOPS:2=1;";
+    let tags = [
+        "#BPMS: \u{1}0=180, ;#STOPS: 2=0.25, ;#DELAYS: 1=0.125, ;#WARPS: 3=0.5, ;",
+        "#BPMS: \u{1}0=180, ;#STOPS: 2=0.25, ;#DELAYS: 1=0.125, ;#WARPS: 3=0.5, ;#FAKES:0=8;",
+        "",
+        "#BPMS: \u{1}0=180, ;#STOPS: 2=0.25, ;#DELAYS: 1=0.125, ;#WARPS: 3=0.5, ;",
+        "#OFFSET:100000;#BPMS:0=180;#STOPS:2=0.25;#DELAYS:1=0.125;#WARPS:3=0.5;",
+        "#BPMS:0=180;#STOPS:2=0.5;#DELAYS:1=0.125;#WARPS:3=0.5;",
+        "#BPMS:0=180;#STOPS:2=0.5;#DELAYS:1=0.25;#WARPS:3=0.5;",
+        "#BPMS:0=180;#STOPS:2=0.5;#DELAYS:1=0.25;#WARPS:3=1;",
+        "#BPMS:0=240;#STOPS:2=0.5;#DELAYS:1=0.25;#WARPS:3=1;",
+        "#SPEEDS:;",
+        "#LABELS:0=x;",
+    ];
+    let charts: Vec<_> = tags.iter().enumerate().map(|(i, tags)| {
+        let notes = if i == 2 { "0000\n" } else { "1000\n0100\n0010\n0001\n,\n1000\n1000\n" };
+        format!("#NOTEDATA:;#STEPSTYPE:dance-single;#DIFFICULTY:Hard;#METER:9;{tags}#NOTES:\n{notes};\n")
+    }).collect();
+    let skipped = concat!(
+        "#NOTEDATA:;#STEPSTYPE:lights-cabinet;#DIFFICULTY:Hard;#METER:9;",
+        "#BPMS:0=999;#NOTES:\n11111111\n;\n",
+    );
+    let batch = format!("{header}{skipped}{}", charts.join(skipped));
+    let actual = compute_chart_peak_nps(batch.as_bytes(), "ssc").expect("valid batch");
+    assert_eq!(actual.len(), charts.len());
+    for (chart, isolated) in actual.iter().zip(&charts) {
+        let isolated = format!("{header}{isolated}");
+        let expected = compute_chart_peak_nps(isolated.as_bytes(), "ssc").expect("valid chart");
+        assert_eq!(chart.step_type, expected[0].step_type);
+        assert_eq!(chart.difficulty, expected[0].difficulty);
+        assert_eq!(chart.peak_nps.to_bits(), expected[0].peak_nps.to_bits());
+    }
+}
+
+#[test]
 fn zero_duration_cache() {
     use rssp::{TimingOffsets, compute_chart_durations};
     let header = "#VERSION:0.83;\n#OFFSET:0.25;\n#BPMS:0=120;\n";

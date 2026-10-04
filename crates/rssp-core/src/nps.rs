@@ -71,8 +71,15 @@ pub fn compute_chart_peak_nps(
     let mut results = Vec::with_capacity(entries.len());
     let mut global_timing = None;
     let mut density_scratch = Vec::with_capacity(density_capacity);
+    // Caller-owned, single-thread, call-local storage retains one chart's timing.
+    // It warms on the first nonempty local chart; misses build normally and replace
+    // the entry without scans or I/O. Return destroys it on the caller thread.
+    // Each lookup compares at most five raw tags; benchmarks count build churn.
+    // This parsing API belongs at chart load, not on a live gameplay frame.
+    // Indices remain valid: entries is immutable after parsing and never resized.
+    let mut last_chart_timing: Option<(usize, TimingData)> = None;
 
-    for entry in entries {
+    for (index, entry) in entries.iter().enumerate() {
         if entry.field_count < 5 {
             continue;
         }
@@ -94,6 +101,17 @@ pub fn compute_chart_peak_nps(
             meter_raw.as_ref(),
             extension,
         );
+
+        let densities =
+            crate::stats::measure_densities_with_scratch(chart_data, lanes, &mut density_scratch);
+        if !densities.iter().any(|&density| density != 0) {
+            results.push(ChartNpsInfo {
+                step_type,
+                difficulty,
+                peak_nps: 0.0,
+            });
+            continue;
+        }
 
         let timing_src = crate::timing::resolve_chart_timing(
             allow_steps_timing,
@@ -119,51 +137,49 @@ pub fn compute_chart_peak_nps(
             "",
         );
         let chart_offset = timing_src.chart_offset_seconds;
-        let chart_bpms = if allow_steps_timing {
-            chart_map_mode::<true>(entry.chart_bpms.as_deref())
-        } else {
-            None
-        };
-        let chart_stops = if allow_steps_timing {
-            chart_map_mode::<true>(entry.chart_stops.as_deref())
-        } else {
-            None
-        };
-        let chart_delays = if allow_steps_timing {
-            chart_map_mode::<true>(entry.chart_delays.as_deref())
-        } else {
-            None
-        };
-        let chart_warps = if allow_steps_timing {
-            chart_map_mode::<true>(entry.chart_warps.as_deref())
-        } else {
-            None
-        };
         // Peak NPS uses elapsed measure time, including stops, delays and warps.
         // Speeds, scrolls and fakes cannot change it; their raw tags above still
         // determine whether chart timing overrides the song's timing.
-        let chart_timing;
         let timing = if timing_src.chart_has_own_timing {
-            let timing_segments = compute_timing_segments(
-                chart_bpms.as_deref(),
-                timing_src.global_bpms,
-                chart_stops.as_deref(),
-                timing_src.global_stops,
-                chart_delays.as_deref(),
-                timing_src.global_delays,
-                chart_warps.as_deref(),
-                timing_src.global_warps,
-                None,
-                "",
-                None,
-                "",
-                None,
-                "",
-                timing_format,
-                true,
-            );
-            chart_timing = timing_data_from_segments(chart_offset, 0.0, &timing_segments);
-            &chart_timing
+            if last_chart_timing.as_ref().is_some_and(|&(cached, _)| {
+                let cached = &entries[cached];
+                cached.chart_offset != entry.chart_offset
+                    || cached.chart_bpms != entry.chart_bpms
+                    || cached.chart_stops != entry.chart_stops
+                    || cached.chart_delays != entry.chart_delays
+                    || cached.chart_warps != entry.chart_warps
+            }) {
+                last_chart_timing = None;
+            }
+            let (_, timing) = last_chart_timing.get_or_insert_with(|| {
+                let chart_bpms = chart_map_mode::<true>(entry.chart_bpms.as_deref());
+                let chart_stops = chart_map_mode::<true>(entry.chart_stops.as_deref());
+                let chart_delays = chart_map_mode::<true>(entry.chart_delays.as_deref());
+                let chart_warps = chart_map_mode::<true>(entry.chart_warps.as_deref());
+                let timing_segments = compute_timing_segments(
+                    chart_bpms.as_deref(),
+                    timing_src.global_bpms,
+                    chart_stops.as_deref(),
+                    timing_src.global_stops,
+                    chart_delays.as_deref(),
+                    timing_src.global_delays,
+                    chart_warps.as_deref(),
+                    timing_src.global_warps,
+                    None,
+                    "",
+                    None,
+                    "",
+                    None,
+                    "",
+                    timing_format,
+                    true,
+                );
+                (
+                    index,
+                    timing_data_from_segments(chart_offset, 0.0, &timing_segments),
+                )
+            });
+            timing
         } else {
             global_timing.get_or_insert_with(|| {
                 let timing_segments = compute_timing_segments(
@@ -188,8 +204,6 @@ pub fn compute_chart_peak_nps(
             })
         };
 
-        let densities =
-            crate::stats::measure_densities_with_scratch(chart_data, lanes, &mut density_scratch);
         let max_nps = compute_peak_nps_with_timing(densities, timing);
 
         results.push(ChartNpsInfo {

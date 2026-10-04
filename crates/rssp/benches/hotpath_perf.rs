@@ -524,8 +524,17 @@ fn breakdown_cases(iters: usize) {
         ),
         ("empty", 4096, &[0, 15][..]),
         ("short", 32, &[16, 0, 20, 0, 0, 24, 32][..]),
+        ("leading", 4096, &[16][..]),
     ] {
-        let densities: Vec<_> = (0..len).map(|i| pattern[i % pattern.len()]).collect();
+        let densities: Vec<_> = (0..len)
+            .map(|i| {
+                if name == "leading" && i < 4000 {
+                    0
+                } else {
+                    pattern[i % pattern.len()]
+                }
+            })
+            .collect();
         for (mode, tag) in [
             (BreakdownMode::Detailed, "detailed"),
             (BreakdownMode::Partial, "partial"),
@@ -563,6 +572,9 @@ fn breakdown_cases(iters: usize) {
                 black_box(&densities),
                 &mut tokens,
             ));
+        });
+        measure(&format!("streams/{name}_cold"), len, iters, || {
+            black_box(rssp::streams::compute_stream_outputs(black_box(&densities)));
         });
     }
 }
@@ -897,6 +909,48 @@ fn zero_duration_cases(iters: usize) {
     }
 }
 
+fn peak_work_cases(iters: usize) {
+    for len in [1, 128] {
+        let mut pairs = String::new();
+        for i in 0..len {
+            if i != 0 {
+                pairs.push(',');
+            }
+            write!(pairs, " {} = 0.125 ", i * 4).expect("String write");
+        }
+        for (name, notes, local, varying) in [
+            ("empty_global", "0000\n", false, false),
+            ("objects_local", "MFLK\n3000\n", true, false),
+            ("first_local", "1000\n", true, false),
+            ("repeat_local", "1000\n0100\n0010\n0001\n", true, false),
+            ("vary_local", "1000\n0100\n0010\n0001\n", true, true),
+        ] {
+            let mut data =
+                format!("#VERSION:0.83;\n#BPMS:0=120;\n#STOPS:{pairs};\n#DELAYS:{pairs};\n");
+            for i in 0..4 {
+                data.push_str(
+                    "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Hard;\n#METER:10;\n",
+                );
+                if local {
+                    let offset = if varying { i } else { 0 };
+                    write!(
+                        data,
+                        "#OFFSET:{offset};\n#BPMS: 0 = 180 ;\n#STOPS:{pairs};\n#DELAYS:{pairs};\n"
+                    )
+                    .expect("String write");
+                }
+                write!(data, "#NOTES:\n{notes};\n").expect("String write");
+            }
+            measure(&format!("peak_work/{len}_{name}"), 4, iters, || {
+                black_box(
+                    rssp::compute_chart_peak_nps(black_box(data.as_bytes()), "ssc")
+                        .expect("valid fixture"),
+                );
+            });
+        }
+    }
+}
+
 fn verify_components() {
     let patterns: Vec<_> = ["", "l", "L", "LD", "ldu", "U", "?", "É", "ldurldur"]
         .into_iter()
@@ -1002,6 +1056,7 @@ fn main() {
     custom_cases(iters);
     bpm_stats_cases(iters);
     zero_duration_cases(iters);
+    peak_work_cases(iters);
     serialize_cases(iters);
     let densities: Vec<_> = (0..16384).map(|i| [0, 16, 20, 24, 32][i % 5]).collect();
     for (name, step) in [("long_segments", 2048.0), ("short_segments", 4.0)] {

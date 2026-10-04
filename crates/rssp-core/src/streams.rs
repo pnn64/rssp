@@ -238,11 +238,17 @@ fn compute_stream_counts_and_range(measures: &[usize]) -> (StreamCounts, Option<
 fn compute_stream_counts_and_tokens(measures: &[usize], tokens: &mut Vec<Token>) -> StreamCounts {
     let mut counts = StreamCounts::default();
     tokens.clear();
-    tokens.reserve(scratch_cap(measures.len()));
-    let (mut seen_stream, mut leading_breaks, mut pending_breaks) = (false, 0usize, 0usize);
+    let Some(first) = measures
+        .iter()
+        .position(|&density| is_stream_measure(density))
+    else {
+        return counts;
+    };
+    tokens.reserve(scratch_cap(measures.len() - first));
+    let (mut seen_stream, mut leading_breaks, mut pending_breaks) = (false, first, 0usize);
     let (mut token_category, mut token_len) = (RunDensity::Break, 0usize);
 
-    for &density in measures {
+    for &density in &measures[first..] {
         let category = categorize_measure_density(density);
         if category == RunDensity::Break {
             if seen_stream {
@@ -297,9 +303,6 @@ fn compute_stream_counts_and_tokens(measures: &[usize], tokens: &mut Vec<Token>)
         }
     }
 
-    if !seen_stream {
-        return StreamCounts::default();
-    }
     if pending_breaks >= 2 {
         counts.total_breaks += pending_breaks as u32;
     }
