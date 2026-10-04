@@ -305,12 +305,11 @@ fn ac_search_array(text: &[u8], dfa: &AcDfa<PatternVariant>) -> PatternCounts {
     counts
 }
 
-/// Specialized search returning a compact vector for contiguous usize IDs.
+/// Count contiguous pattern IDs directly in their output records.
 #[inline]
-fn ac_search_vec(text: &[u8], dfa: &AcDfa<usize>, count: usize) -> Vec<u32> {
-    let mut counts = vec![0u32; count];
-    if count == 0 {
-        return counts;
+fn count_custom_patterns(text: &[u8], dfa: &AcDfa<usize>, output: &mut [CustomPatternSummary]) {
+    if output.is_empty() {
+        return;
     }
     let mut state = 0u32;
 
@@ -318,11 +317,9 @@ fn ac_search_vec(text: &[u8], dfa: &AcDfa<usize>, count: usize) -> Vec<u32> {
         let sym = (b & 0x0F) as usize;
         state = dfa.goto[state as usize * AC_ALPHA + sym];
         for &id in ac_output_slice(dfa, state) {
-            counts[id] += 1;
+            output[id].count += 1;
         }
     }
-
-    counts
 }
 
 fn ac_empty<T>() -> AcDfa<T> {
@@ -726,7 +723,13 @@ fn pattern_hash_ci(pattern: &str) -> u64 {
     hash ^ (hash >> 32)
 }
 
-fn compile_custom_patterns_impl(patterns: &[String]) -> CompiledCustomPatterns {
+/// Compiles ASCII case-insensitive custom patterns, keeping their first occurrence.
+///
+/// # Panics
+///
+/// Panics if the pattern count or table capacity exceeds its indexed storage limits.
+#[must_use]
+pub fn compile_custom_patterns(patterns: &[String]) -> CompiledCustomPatterns {
     if patterns.is_empty() {
         return compiled_custom_empty();
     }
@@ -783,31 +786,26 @@ fn compile_custom_patterns_impl(patterns: &[String]) -> CompiledCustomPatterns {
 }
 
 #[must_use]
-pub fn compile_custom_patterns(patterns: &[String]) -> CompiledCustomPatterns {
-    compile_custom_patterns_impl(patterns)
-}
-
-#[must_use]
 pub fn detect_custom_patterns_compiled(
     bitmasks: &[u8],
     compiled: &CompiledCustomPatterns,
 ) -> Vec<CustomPatternSummary> {
-    let counts = ac_search_vec(bitmasks, &compiled.dfa, compiled.patterns.len());
-
-    custom_pattern_summaries(compiled, &counts)
+    let mut output = custom_pattern_summaries(compiled, std::iter::repeat(0));
+    count_custom_patterns(bitmasks, &compiled.dfa, &mut output);
+    output
 }
 
 fn custom_pattern_summaries(
     compiled: &CompiledCustomPatterns,
-    counts: &[u32],
+    counts: impl Iterator<Item = u32>,
 ) -> Vec<CustomPatternSummary> {
     compiled
         .patterns
         .iter()
-        .enumerate()
-        .map(|(i, p)| CustomPatternSummary {
+        .zip(counts)
+        .map(|(p, count)| CustomPatternSummary {
             pattern: p.pattern.clone(),
-            count: counts[i],
+            count,
         })
         .collect()
 }
@@ -815,7 +813,16 @@ fn custom_pattern_summaries(
 #[must_use]
 pub fn detect_custom_patterns(bitmasks: &[u8], patterns: &[String]) -> Vec<CustomPatternSummary> {
     let compiled = compile_custom_patterns(patterns);
-    detect_custom_patterns_compiled(bitmasks, &compiled)
+    let mut output = compiled
+        .patterns
+        .into_iter()
+        .map(|p| CustomPatternSummary {
+            pattern: p.pattern,
+            count: 0,
+        })
+        .collect::<Vec<_>>();
+    count_custom_patterns(bitmasks, &compiled.dfa, &mut output);
+    output
 }
 
 const NOTE_BYTE: [u8; 256] = {
@@ -893,7 +900,7 @@ pub fn analyze_patterns_from_rows_with_scratch(
         detected_patterns,
         anchors: (anchors[0], anchors[1], anchors[2], anchors[3]),
         facing_steps: facing.finish(),
-        custom_patterns: custom_pattern_summaries(compiled, custom_counts),
+        custom_patterns: custom_pattern_summaries(compiled, custom_counts.iter().copied()),
     }
 }
 
@@ -1201,8 +1208,8 @@ pub const fn compute_box_counts(counts: &PatternCounts) -> BoxCounts {
 #[cfg(test)]
 mod tests {
     use super::{
-        AC_ALPHA, ac_build, ac_output_slice, ac_search_vec, analyze_patterns_from_rows,
-        compile_custom_patterns, count_anchors, count_facing_steps,
+        AC_ALPHA, CustomPatternSummary, ac_build, ac_output_slice, analyze_patterns_from_rows,
+        compile_custom_patterns, count_anchors, count_custom_patterns, count_facing_steps,
         detect_custom_patterns_compiled, detect_default_patterns, note_mask4,
     };
 
@@ -1296,7 +1303,15 @@ mod tests {
         ];
         let text = [3, 2, 1, 2, 1, 1, 3, 2, 1];
         let dfa = ac_build(patterns.iter().copied(), |byte| byte);
-        let actual = ac_search_vec(&text, &dfa, patterns.len());
+        let mut output = vec![
+            CustomPatternSummary {
+                pattern: String::new(),
+                count: 0
+            };
+            patterns.len()
+        ];
+        count_custom_patterns(&text, &dfa, &mut output);
+        let actual: Vec<_> = output.iter().map(|summary| summary.count).collect();
         let suffix_state = [3, 2, 1].into_iter().fold(0u32, |state, symbol| {
             dfa.goto[state as usize * AC_ALPHA + symbol]
         });

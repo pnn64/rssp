@@ -1030,8 +1030,12 @@ pub fn compute_mines_nonfake(
 
 #[must_use]
 pub fn compute_bpm_stats(values: &[f64]) -> (f64, f64) {
-    if values.is_empty() {
-        return (0.0, 0.0);
+    // Keep non-finite values on the original arithmetic path, including
+    // signaling NaNs whose average is quieted by the runtime sum.
+    if values.len() <= 1 && values.first().is_none_or(|bpm| bpm.is_finite()) {
+        return values.first().map_or((0.0, 0.0), |&bpm| {
+            bpm_stats_from_values::<false>(&mut [bpm], false, 0.0)
+        });
     }
     let displayable_count = values.iter().filter(|&&bpm| is_display_bpm(bpm)).count();
     let all_values_are_displayable = displayable_count != 0;
@@ -1051,8 +1055,10 @@ pub fn compute_bpm_stats(values: &[f64]) -> (f64, f64) {
 
 #[must_use]
 pub fn compute_bpm_map_stats(map: &[(f64, f64)]) -> (f64, f64) {
-    if map.is_empty() {
-        return (0.0, 0.0);
+    if map.len() <= 1 && map.first().is_none_or(|&(_, bpm)| bpm.is_finite()) {
+        return map.first().map_or((0.0, 0.0), |&(_, bpm)| {
+            bpm_stats_from_values::<false>(&mut [bpm], false, 0.0)
+        });
     }
     let mut filtered = Vec::with_capacity(map.len());
     filtered.extend(
@@ -1069,6 +1075,11 @@ pub fn compute_bpm_map_stats(map: &[(f64, f64)]) -> (f64, f64) {
 
 #[must_use]
 pub fn compute_bpm_range_and_stats(map: &[(f64, f64)]) -> (i32, i32, f64, f64) {
+    if map.len() <= 1 && map.first().is_none_or(|&(_, bpm)| bpm.is_finite()) {
+        return map
+            .first()
+            .map_or((0, 0, 0.0, 0.0), |&(_, bpm)| bpm_summary_one(bpm));
+    }
     let mut values = Vec::with_capacity(map.len());
     compute_bpm_range_and_stats_with_scratch(map, &mut values)
 }
@@ -1134,6 +1145,16 @@ fn compute_bpm_summary(map: &[(f64, f64)], values: &mut Vec<f64>) -> (i32, i32, 
     (
         min.max(0.0).round() as i32,
         max.max(0.0).round() as i32,
+        median,
+        average,
+    )
+}
+
+fn bpm_summary_one(bpm: f64) -> (i32, i32, f64, f64) {
+    let (median, average) = bpm_stats_from_values::<false>(&mut [bpm], false, 0.0);
+    (
+        f64::MAX.min(bpm).max(0.0).round() as i32,
+        f64::MIN.max(bpm).max(0.0).round() as i32,
         median,
         average,
     )

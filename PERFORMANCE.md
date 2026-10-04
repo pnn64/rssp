@@ -810,3 +810,172 @@ $env:RSSP_HOT_VERIFY = '1'
 Local executables, three-pair raw logs, measurement JSON and corpus output are
 under the ignored target/perf-274 directory. rust-performance.md, optimize.sh
 and optimize.ps1 are excluded from this commit.
+
+
+# 0.4.275: move pattern strings, count in results, and skip single-BPM storage
+
+## Changes
+
+1. One-shot custom-pattern matching moves the temporary matcher's owned pattern
+   strings into its result records. It eliminates a clone and heap allocation
+   per unique nonempty pattern. Compiled matchers retain their reusable ownership.
+2. Both custom-pattern matching APIs accumulate hits directly in result records.
+   The temporary count vector, its zero-fill, and the subsequent count copy are
+   removed. The row-analysis API retains its existing caller-owned count storage.
+   The compilation forwarding function is also removed.
+3. The allocating BPM statistics APIs handle empty and single finite values
+   directly, using a one-element array for the existing numeric calculation.
+   They avoid filtering, heap storage, and the general summary handoff. Non-finite
+   values retain their original path, preserving signaling-NaN quieting as well
+   as ordinary NaN payloads, infinities, signed zero, and range sentinels. The
+   reusable scratch API retains its original implementation and buffer effects.
+
+The workspace patch version increases exactly once: 0.4.274 → 0.4.275.
+Public signatures, pattern ordering, case-insensitive deduplication, overlapping
+counts, and numeric outputs remain compatible.
+
+## Method
+
+Baseline production code is `bbc8488`. Baseline, ownership-only pattern search,
+and final executables use version 0.4.275, identical measured benchmark code and
+fixtures, the same checkout and target directory, and rustc 1.98.1 / LLVM 22.1.8
+on x86_64-pc-windows-msvc. The release profile uses fat LTO and one codegen unit.
+Hardware is an Intel Xeon E5-2696 v4 (22 cores / 44 logical processors); the
+measurement thread is pinned to logical CPU 2.
+
+Each process reports medians of seven warmed batches. The tables aggregate three
+alternating baseline/new process pairs. Component cases use 500 calls per batch;
+BPM statistics use 5,000; analysis uses 30 (three for Camellia). Compilation,
+fixture construction, and I/O stay outside measurement loops. Allocation counting
+is a separate pass. Cycles use Windows QueryThreadCycleTime. Churn bytes sum
+requested allocation/reallocation sizes, rather than measuring peak RSS. There
+are no reallocations in the custom-pattern or BPM-statistics cases below.
+No builds or tests run during final measurements. Shared-machine activity and
+code layout affect timing; deterministic allocation changes are the strongest
+evidence for small differences.
+
+## String ownership in isolation
+
+This intermediate measurement retains the original count vector and search
+implementation. Each eight-character pattern loses one eight-byte string
+allocation. Inputs contain 128 periodic masks and 4, 32, or 256 unique patterns.
+
+| Case | ns old → new | cycles old → new | allocations old → new | churn bytes old → new | throughput change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `custom/4_128_owned` | 3,337 → 2,877 | 7,254 → 6,302 | 20 → 16 | 3,328 → 3,296 | +16.0% |
+| `custom/32_128_owned` | 15,772 → 14,444 | 34,484 → 31,581 | 76 → 44 | 25,184 → 24,928 | +9.2% |
+| `custom/256_128_owned` | 122,294 → 99,393 | 267,369 → 216,770 | 524 → 268 | 194,272 → 192,224 | +23.0% |
+
+
+## Direct result counting and final custom matching
+
+Compiled cases isolate removal of the count vector: one fewer allocation and
+9.1% less requested heap storage per call. One-shot cases include both ownership
+reuse and direct counting. Compilation cases are controls. Each pattern contains
+eight symbols; texts contain 128 or 4,096 periodic masks. Compilation and compiled
+search are measured separately from the composed one-shot API.
+
+| Case | ns old → new | cycles old → new | allocations old → new | churn bytes old → new | throughput change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `custom/4_compile` | 3,005 → 2,931 | 6,570 → 6,365 | 14 → 14 | 3,152 → 3,152 | +2.5% |
+| `custom/4_128_owned` | 3,189 → 2,863 | 6,969 → 6,258 | 20 → 15 | 3,328 → 3,280 | +11.4% |
+| `custom/4_128_compiled` | 767 → 731 | 1,680 → 1,600 | 6 → 5 | 176 → 160 | +4.9% |
+| `custom/4_4096_owned` | 14,898 → 14,560 | 32,639 → 31,843 | 20 → 15 | 3,328 → 3,280 | +2.3% |
+| `custom/4_4096_compiled` | 12,491 → 12,352 | 27,261 → 26,986 | 6 → 5 | 176 → 160 | +1.1% |
+| `custom/32_compile` | 17,172 → 17,152 | 37,505 → 37,482 | 42 → 42 | 23,776 → 23,776 | +0.1% |
+| `custom/32_128_owned` | 16,866 → 13,946 | 36,834 → 30,497 | 76 → 43 | 25,184 → 24,800 | +20.9% |
+| `custom/32_128_compiled` | 3,219 → 3,028 | 7,046 → 6,633 | 34 → 33 | 1,408 → 1,280 | +6.3% |
+| `custom/32_4096_owned` | 28,450 → 26,160 | 62,154 → 57,135 | 76 → 43 | 25,184 → 24,800 | +8.8% |
+| `custom/32_4096_compiled` | 15,043 → 14,878 | 32,962 → 32,552 | 34 → 33 | 1,408 → 1,280 | +1.1% |
+| `custom/256_compile` | 97,675 → 100,753 | 213,464 → 220,158 | 266 → 266 | 183,008 → 183,008 | -3.1% |
+| `custom/256_128_owned` | 118,392 → 99,530 | 258,850 → 217,510 | 524 → 267 | 194,272 → 191,200 | +19.0% |
+| `custom/256_128_compiled` | 19,491 → 19,640 | 42,652 → 42,970 | 258 → 257 | 11,264 → 10,240 | -0.8% |
+| `custom/256_4096_owned` | 129,439 → 111,182 | 283,072 → 243,047 | 524 → 267 | 194,272 → 191,200 | +16.4% |
+| `custom/256_4096_compiled` | 32,713 → 32,379 | 71,518 → 70,793 | 258 → 257 | 11,264 → 10,240 | +1.0% |
+
+
+## BPM statistics
+
+The finite single-value convenience APIs eliminate their allocation and eight
+requested bytes per call. Empty, multi-value, and caller-owned scratch cases
+provide controls. Selection and arithmetic for larger inputs retain the existing
+implementation. Cold cases include allocation when it is part of the public API;
+warm scratch cases reuse preallocated storage.
+
+| Case | ns old → new | cycles old → new | allocations old → new | churn bytes old → new | throughput change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `bpm_stats/0_values` | 6 → 6 | 12 → 13 | 0 → 0 | 0 → 0 | +0.0% |
+| `bpm_stats/0_map` | 6 → 6 | 13 → 13 | 0 → 0 | 0 → 0 | +0.0% |
+| `bpm_stats/0_summary_cold` | 11 → 6 | 25 → 12 | 0 → 0 | 0 → 0 | +83.3% |
+| `bpm_stats/0_summary_warm` | 8 → 8 | 16 → 16 | 0 → 0 | 0 → 0 | +0.0% |
+| `bpm_stats/1_values` | 77 → 6 | 165 → 13 | 1 → 0 | 8 → 0 | +1183.3% |
+| `bpm_stats/1_map` | 75 → 6 | 163 → 13 | 1 → 0 | 8 → 0 | +1150.0% |
+| `bpm_stats/1_summary_cold` | 85 → 13 | 186 → 28 | 1 → 0 | 8 → 0 | +553.8% |
+| `bpm_stats/1_summary_warm` | 18 → 18 | 40 → 40 | 0 → 0 | 0 → 0 | +0.0% |
+| `bpm_stats/2_values` | 82 → 82 | 180 → 180 | 1 → 1 | 16 → 16 | +0.0% |
+| `bpm_stats/2_map` | 82 → 82 | 179 → 178 | 1 → 1 | 16 → 16 | +0.0% |
+| `bpm_stats/2_summary_cold` | 101 → 100 | 220 → 220 | 1 → 1 | 16 → 16 | +1.0% |
+| `bpm_stats/2_summary_warm` | 28 → 28 | 60 → 60 | 0 → 0 | 0 → 0 | +0.0% |
+| `bpm_stats/8_values` | 103 → 108 | 225 → 237 | 1 → 1 | 64 → 64 | -4.6% |
+| `bpm_stats/8_map` | 105 → 107 | 230 → 234 | 1 → 1 | 64 → 64 | -1.9% |
+| `bpm_stats/8_summary_cold` | 131 → 137 | 287 → 299 | 1 → 1 | 64 → 64 | -4.4% |
+| `bpm_stats/8_summary_warm` | 59 → 65 | 128 → 141 | 0 → 0 | 0 → 0 | -9.2% |
+| `bpm_stats/64_values` | 451 → 443 | 987 → 971 | 1 → 1 | 512 → 512 | +1.8% |
+| `bpm_stats/64_map` | 413 → 406 | 899 → 887 | 1 → 1 | 512 → 512 | +1.7% |
+| `bpm_stats/64_summary_cold` | 530 → 524 | 1,153 → 1,149 | 1 → 1 | 512 → 512 | +1.1% |
+| `bpm_stats/64_summary_warm` | 445 → 450 | 972 → 978 | 0 → 0 | 0 → 0 | -1.1% |
+
+
+## Composed paths and controls
+
+Default analysis uses empty custom-pattern configurations and warm BPM storage,
+so these changes primarily benefit callers of the targeted convenience APIs.
+Serialization is unchanged and serves as another control. Timing variations in
+these controls do not establish a whole-analysis improvement.
+
+| Case | ns old → new | cycles old → new | allocations old → new | churn bytes old → new | throughput change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `serialize/small_sm` | 4,476 → 4,498 | 9,804 → 9,848 | 0 → 0 | 0 → 0 | -0.5% |
+| `serialize/small_ssc` | 6,284 → 6,179 | 13,753 → 13,547 | 0 → 0 | 0 → 0 | +1.7% |
+| `serialize/timing_ssc` | 20,679 → 20,529 | 45,222 → 44,852 | 0 → 0 | 0 → 0 | +0.7% |
+| `serialize/large_ssc` | 193,092 → 191,540 | 421,702 → 418,861 | 0 → 0 | 0 → 0 | +0.8% |
+| `analyze/fast_fake_lifts` | 307,230 → 308,003 | 670,821 → 672,489 | 31 → 31 | 59,028 → 59,028 | -0.3% |
+| `analyze/camellia` | 210,674,033 → 212,967,867 | 460,587,530 → 465,558,916 | 110 → 110 | 5,263,624 → 5,263,624 | -1.1% |
+| `analyze/fast_camellia` | 27,944,433 → 27,630,767 | 60,941,029 → 60,341,282 | 115 → 115 | 7,051,152 → 7,051,152 | +1.1% |
+| `analyze/mixed_small` | 33,933 → 23,887 | 73,935 → 51,773 | 59 → 59 | 7,460 → 7,460 | +42.1% |
+
+
+## Behavioral validation
+
+- Release library suites: 60 rssp tests and 138 core tests passed.
+- Release optimization regressions: 14 passed. These cover mixed-case duplicates,
+  empty/unknown/Unicode patterns, high mask bits, repeated matcher reuse, and 64
+  overlapping suffix patterns; BPM checks compare exact output bits and original
+  scratch-buffer contents/capacity, including signaling NaNs.
+- `cargo test --release --test all_parity -- --test-threads=22`: 30,489 passed,
+  zero failed, after final benchmarks and before commit.
+- Strict release Clippy for all workspace targets, formatting, and diff checks
+  passed.
+- Baseline/final corpus output is byte-identical across 30,843 files and 56,125
+  supported charts, including 354 matching parse errors. The explicit comparison
+  includes custom matching, finite/non-finite single BPMs, serialized fixtures,
+  densities, spacing, breakdowns, durations, peak NPS, normalization, and BPM
+  snapshots. UTF-8 SHA-256: `9cd4f319db50e03f9861ddf483e447afcf78a32200292972d245f0692b581ab3`.
+
+## Reproduction
+
+Build `bbc8488` with the checked-in benchmark changes and version 0.4.275 to save
+the baseline executable, then build the final implementation with the same version:
+
+```powershell
+cargo bench -p rssp --bench hotpath_perf --no-run
+$env:RSSP_HOT_FILTER = 'custom/' # also bpm_stats/, analyze/, serialize/
+$env:RSSP_HOT_ITERS = '500' # 30 for analyze/
+$bench = Get-ChildItem target/release/deps/hotpath_perf-*.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+& $bench.FullName
+```
+
+Alternate saved baseline/final executables three times and aggregate their seven
+batch medians. Set `RSSP_HOT_VERIFY=1` to emit the deterministic corpus comparison.
+Local binaries, raw runs, JSON results, and verification logs are in
+`target/perf-275/` and remain outside the commit.

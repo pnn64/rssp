@@ -7,6 +7,98 @@ use rssp::bpm::{chart_bpm_snapshots, compute_tier_bpm};
 use rssp::nps::compute_chart_peak_nps;
 
 #[test]
+fn custom_owned_matches_reuse() {
+    use rssp::patterns::{
+        compile_custom_patterns, detect_custom_patterns, detect_custom_patterns_compiled,
+    };
+    for patterns in [
+        Vec::new(),
+        vec![String::new()],
+        ["", "l", "L", "ld", "LD", "du", "?", "é", "É"]
+            .map(str::to_owned)
+            .to_vec(),
+    ] {
+        let compiled = compile_custom_patterns(&patterns);
+        for masks in [&[][..], &[1, 2, 4, 8, 1, 2, 0, 0, 17, 18, 31][..]] {
+            let expected = detect_custom_patterns_compiled(masks, &compiled);
+            assert_eq!(detect_custom_patterns(masks, &patterns), expected);
+            assert_eq!(detect_custom_patterns_compiled(masks, &compiled), expected);
+        }
+    }
+    let patterns = ["l", "L", "ld", "u"].map(str::to_owned);
+    let actual = detect_custom_patterns(&[1, 2, 1, 2, 4], &patterns);
+    assert_eq!(
+        actual
+            .iter()
+            .map(|p| (p.pattern.as_str(), p.count))
+            .collect::<Vec<_>>(),
+        [("L", 2), ("LD", 2), ("U", 1)]
+    );
+    let patterns: Vec<_> = (1..=64).map(|len| "L".repeat(len)).collect();
+    let compiled = compile_custom_patterns(&patterns);
+    let actual = detect_custom_patterns_compiled(&[1; 256], &compiled);
+    assert_eq!(detect_custom_patterns(&[1; 256], &patterns), actual);
+    for (len, summary) in (1u32..=64).zip(actual) {
+        assert_eq!(summary.count, 257 - len); // Every overlapping suffix matches.
+    }
+}
+
+#[test]
+fn single_bpm_preserves_bits() {
+    use rssp::bpm::{
+        compute_bpm_map_stats, compute_bpm_range, compute_bpm_range_and_stats,
+        compute_bpm_range_and_stats_with_scratch, compute_bpm_stats,
+    };
+    for bpm in [
+        120.0,
+        0.0,
+        -0.0,
+        -120.0,
+        10_000.0,
+        f64::MAX,
+        f64::MIN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+        f64::from_bits(0x7ff8_0000_0000_1234),
+    ] {
+        let map = [(0.0, bpm)];
+        let expected_range = compute_bpm_range(&map);
+        let actual = compute_bpm_stats(&[bpm]);
+        assert_eq!(actual.0.to_bits(), bpm.to_bits());
+        assert_eq!(actual.1.to_bits(), bpm.to_bits());
+        let mapped = compute_bpm_map_stats(&map);
+        assert_eq!(mapped.0.to_bits(), actual.0.to_bits());
+        assert_eq!(mapped.1.to_bits(), actual.1.to_bits());
+        let combined = compute_bpm_range_and_stats(&map);
+        assert_eq!((combined.0, combined.1), expected_range);
+        assert_eq!(combined.2.to_bits(), actual.0.to_bits());
+        assert_eq!(combined.3.to_bits(), actual.1.to_bits());
+        let mut scratch = vec![180.0; 8];
+        let capacity = scratch.capacity();
+        let warm = compute_bpm_range_and_stats_with_scratch(&map, &mut scratch);
+        assert_eq!((warm.0, warm.1), expected_range);
+        assert_eq!(warm.2.to_bits(), actual.0.to_bits());
+        assert_eq!(warm.3.to_bits(), actual.1.to_bits());
+        assert_eq!(scratch.len(), 1);
+        assert_eq!(scratch[0].to_bits(), bpm.to_bits());
+        assert_eq!(scratch.capacity(), capacity);
+    }
+    // The scratch API retains the original arithmetic for signaling NaNs.
+    let bpm = f64::from_bits(0x7ff0_0000_0000_1234);
+    let map = [(0.0, bpm)];
+    let expected = compute_bpm_range_and_stats_with_scratch(&map, &mut Vec::new());
+    for actual in [compute_bpm_stats(&[bpm]), compute_bpm_map_stats(&map)] {
+        assert_eq!(actual.0.to_bits(), expected.2.to_bits());
+        assert_eq!(actual.1.to_bits(), expected.3.to_bits());
+    }
+    let actual = compute_bpm_range_and_stats(&map);
+    assert_eq!((actual.0, actual.1), (expected.0, expected.1));
+    assert_eq!(actual.2.to_bits(), expected.2.to_bits());
+    assert_eq!(actual.3.to_bits(), expected.3.to_bits());
+}
+
+#[test]
 fn cleanup_preserves_prefixes() {
     use rssp::bpm::{clean_norm_map_cow, clean_norm_speeds_cow};
     for prefix in ["", "0=120,", "0=\u{b}120,", "bad,0=120,", "0=NaN,4=inf,"] {

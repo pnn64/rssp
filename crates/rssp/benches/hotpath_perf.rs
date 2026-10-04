@@ -745,8 +745,191 @@ fn verify_corpus() {
     }
 }
 
+fn custom_cases(iters: usize) {
+    for count in [4, 32, 256] {
+        let patterns: Vec<_> = (0..count)
+            .map(|i| {
+                (0..8)
+                    .map(|shift| char::from(b"LDUR"[(i >> (shift * 2)) % 4]))
+                    .collect::<String>()
+            })
+            .collect();
+        let compiled = rssp::patterns::compile_custom_patterns(&patterns);
+        measure(&format!("custom/{count}_compile"), count, iters, || {
+            black_box(rssp::patterns::compile_custom_patterns(black_box(
+                &patterns,
+            )));
+        });
+        for rows in [128, 4096] {
+            let masks: Vec<_> = (0..rows).map(|i| [1, 2, 4, 8][i % 4]).collect();
+            measure(&format!("custom/{count}_{rows}_owned"), rows, iters, || {
+                black_box(rssp::patterns::detect_custom_patterns(
+                    black_box(&masks),
+                    black_box(&patterns),
+                ));
+            });
+            measure(
+                &format!("custom/{count}_{rows}_compiled"),
+                rows,
+                iters,
+                || {
+                    black_box(rssp::patterns::detect_custom_patterns_compiled(
+                        black_box(&masks),
+                        black_box(&compiled),
+                    ));
+                },
+            );
+        }
+    }
+}
+
+fn bpm_stats_cases(iters: usize) {
+    for len in [0, 1, 2, 8, 64] {
+        let values: Vec<_> = (0..len).map(|i| 120.0 + (i % 5) as f64).collect();
+        let map: Vec<_> = values
+            .iter()
+            .enumerate()
+            .map(|(i, &bpm)| (i as f64 * 4.0, bpm))
+            .collect();
+        measure(&format!("bpm_stats/{len}_values"), len, iters * 10, || {
+            black_box(rssp::bpm::compute_bpm_stats(black_box(&values)));
+        });
+        measure(&format!("bpm_stats/{len}_map"), len, iters * 10, || {
+            black_box(rssp::bpm::compute_bpm_map_stats(black_box(&map)));
+        });
+        measure(
+            &format!("bpm_stats/{len}_summary_cold"),
+            len,
+            iters * 10,
+            || {
+                black_box(rssp::bpm::compute_bpm_range_and_stats(black_box(&map)));
+            },
+        );
+        let mut scratch = Vec::with_capacity(len);
+        measure(
+            &format!("bpm_stats/{len}_summary_warm"),
+            len,
+            iters * 10,
+            || {
+                black_box(rssp::bpm::compute_bpm_range_and_stats_with_scratch(
+                    black_box(&map),
+                    &mut scratch,
+                ));
+            },
+        );
+    }
+}
+
+fn serialize_cases(iters: usize) {
+    let options = rssp::AnalysisOptions {
+        compute_tech_counts: false,
+        compute_pattern_counts: false,
+        ..Default::default()
+    };
+    for (name, data) in [
+        ("small", &include_bytes!("fixtures/hash_fixture.ssc")[..]),
+        ("timing", &include_bytes!("fixtures/bpm_fixture.ssc")[..]),
+        ("large", &include_bytes!("fixtures/camellia_mix.ssc")[..]),
+    ] {
+        let summary = rssp::analyze(data, "ssc", &options).expect("valid fixture");
+        for ext in ["sm", "ssc"] {
+            let mut output = Vec::new();
+            if rssp::serialize::serialize_simfile(&summary, ext, &mut output).is_err() {
+                continue; // SM cannot represent chart-local timing.
+            }
+            let size = output.len();
+            measure(&format!("serialize/{name}_{ext}"), size, iters, || {
+                output.clear();
+                black_box(
+                    rssp::serialize::serialize_simfile(black_box(&summary), ext, &mut output)
+                        .expect("valid output"),
+                );
+                black_box(&output);
+            });
+        }
+    }
+}
+
+fn verify_components() {
+    let patterns: Vec<_> = ["", "l", "L", "LD", "ldu", "U", "?", "É", "ldurldur"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let masks: Vec<_> = (0..256).map(|i| [1, 2, 4, 8, 0, 17, 31][i % 7]).collect();
+    println!(
+        "custom {:?}",
+        rssp::patterns::detect_custom_patterns(&masks, &patterns)
+    );
+    let compiled = rssp::patterns::compile_custom_patterns(&patterns);
+    println!(
+        "compiled {:?}",
+        rssp::patterns::detect_custom_patterns_compiled(&masks, &compiled)
+    );
+    for bpm in [
+        120.0,
+        0.0,
+        -0.0,
+        -120.0,
+        10_000.0,
+        f64::MAX,
+        f64::MIN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+        f64::from_bits(0x7ff8_0000_0000_1234),
+    ] {
+        let map = [(0.0, bpm)];
+        let stats = rssp::bpm::compute_bpm_stats(&[bpm]);
+        let mapped = rssp::bpm::compute_bpm_map_stats(&map);
+        let summary = rssp::bpm::compute_bpm_range_and_stats(&map);
+        let mut scratch = vec![180.0; 3];
+        let warm = rssp::bpm::compute_bpm_range_and_stats_with_scratch(&map, &mut scratch);
+        println!(
+            "single {} {} {} {} {} {} {} {} {} {} {} {} {} {:?}",
+            bpm.to_bits(),
+            stats.0.to_bits(),
+            stats.1.to_bits(),
+            mapped.0.to_bits(),
+            mapped.1.to_bits(),
+            summary.0,
+            summary.1,
+            summary.2.to_bits(),
+            summary.3.to_bits(),
+            warm.0,
+            warm.1,
+            warm.2.to_bits(),
+            warm.3.to_bits(),
+            scratch
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
+    }
+    let options = rssp::AnalysisOptions {
+        compute_tech_counts: false,
+        compute_pattern_counts: false,
+        ..Default::default()
+    };
+    for data in [
+        &include_bytes!("fixtures/hash_fixture.ssc")[..],
+        &include_bytes!("fixtures/bpm_fixture.ssc")[..],
+        &include_bytes!("fixtures/camellia_mix.ssc")[..],
+    ] {
+        let summary = rssp::analyze(data, "ssc", &options).expect("valid fixture");
+        for ext in ["sm", "ssc"] {
+            let mut output = Vec::new();
+            println!(
+                "serialized {ext} {:?} {:?}",
+                rssp::serialize::serialize_simfile(&summary, ext, &mut output),
+                output
+            );
+        }
+    }
+}
+
 fn main() {
     if std::env::var_os("RSSP_HOT_VERIFY").is_some() {
+        verify_components();
         verify_corpus();
         return;
     }
@@ -769,6 +952,9 @@ fn main() {
     cleanup_cases(iters);
     spacing_cases(iters);
     nps_stats_cases(iters);
+    custom_cases(iters);
+    bpm_stats_cases(iters);
+    serialize_cases(iters);
     let densities: Vec<_> = (0..16384).map(|i| [0, 16, 20, 24, 32][i % 5]).collect();
     for (name, step) in [("long_segments", 2048.0), ("short_segments", 4.0)] {
         let bpms: Vec<_> = (0..32)
