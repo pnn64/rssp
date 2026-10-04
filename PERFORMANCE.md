@@ -1646,3 +1646,236 @@ $bench = Get-ChildItem target/release/deps/hotpath_perf-*.exe | Sort-Object Last
 
 Pin the leaf benchmark process to CPU 2 for the recorded configuration.
 `RSSP_HOT_VERIFY=1` emits the deterministic component/corpus transcript.
+
+# Performance pass 0.4.280
+
+Baseline: `a0454cf` (0.4.279), compiled at version 0.4.280 with the same
+benchmark harness as the final implementation. Patch version advances once.
+Reviewed `rust-performance.md`; it and `optimize.sh` / `optimize.ps1` remain
+outside the commit.
+
+## Changes
+
+1. **Strip title tags in the existing string.** The stripping function returns
+   a suffix, so drain the prefix rather than compare strings, allocate a copy,
+   and drop the original buffer. Cleanup, trimming and marker translation
+   retain their original order. Nonempty stripped titles avoid one allocation.
+   The title retains its original capacity; requested allocation bytes below
+   measure churn, not retained capacity or peak RSS.
+2. **Copy the clean escape prefix in bulk.** Reuse the first backslash position
+   from `memchr`, copy the UTF-8 prefix once, and run the original character
+   unescaping loop only on the remaining suffix. Clean values still borrow;
+   escaped values retain the original capacity and trailing-backslash behavior.
+   CP1252 decoding and owned-buffer unescaping are unchanged.
+3. **Reuse the marker scan position.** Find the first ampersand once and start
+   the existing in-place translation scan there. This removes a repeated
+   search through the prefix. Compaction, numeric/alias handling, unknown
+   markers and the caller's allocation remain unchanged.
+
+No production API, helper, cache, dependency, unsafe block or inline attribute
+is added. The three production edits add two net lines while eliminating the
+redundant allocation/copy and prefix scans.
+
+## Measurements
+
+Rust 1.98.1 / LLVM 22.1.8, Windows, Xeon E5-2696 v4, 44 logical CPUs.
+Both executables use fat LTO and one codegen unit, and pin the measured thread
+to CPU 2. Each entry is the median of three alternating original/final process
+pairs, each with seven batches. No rssp build, test or corpus comparison ran
+during the timed measurements.
+
+Leaf cases use 10,000 invocations per batch. The in-place marker benchmark
+prepares independent owned strings before starting the timer and drops them
+after stopping it; preparation is excluded from the separate allocation
+count. The owned marker API measures its required copy as part of that API.
+Unescaping and UTF-8 decode/unescape are measured separately. Fixtures use
+16-byte and 4 KB prefixes with clean, early/late/dense, Unicode, unknown,
+nested and trailing delimiter variants.
+
+Composed metadata cases call production `analyze_with_scratch` on a small
+single-chart fixture, with reusable scratch and 1,000 invocations per batch.
+Controls use 30 iterations (Camellia internally uses three).
+`QueryThreadCycleTime` supplies CPU cycles; allocations/reallocations and
+requested bytes are counted in a separate invocation.
+
+- Tagged 4 KB title: 1.06x throughput,
+  with one fewer allocation.
+- Late escape after 4 KB: 34.66x throughput;
+  complete analysis: 1.63x.
+- Late marker after 4 KB: 1.44x in-place throughput;
+  owned API: 2.61x;
+  complete analysis: 1.47x.
+
+The tables include unchanged paths and all measured cases, including any
+small timing variation. Allocation counts are deterministic; timings are
+specific to this host and workload.
+
+Limits: several short leaf cases cost 2-6 ns more; the in-place 4 KB early
+marker case is 10.9% slower, while its owned API is 8.8% faster and complete
+analysis is 1.7% faster. Dense 4 KB owned marker translation is 1.4% slower.
+All 36 composed metadata cases and the four analysis controls improve in
+the retained measurements. A larger translation-loop rewrite was rejected
+after repeated 5.7-9.3% slowdowns on analysis controls; it is absent from the
+final source. Leaf timings should not be substituted for composed results.
+
+## Leaf functions
+
+| Case | CPU cycles old -> new | Throughput change | Allocations old -> new | Reallocations old -> new | Requested bytes old -> new |
+|---|---:|---:|---:|---:|---:|
+| `unescape/16_clean` | 17 -> 21 | -20.0% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `unescape/16_early` | 237 -> 246 | -3.6% | 1 -> 1 | 0 -> 0 | 18 -> 18 |
+| `unescape/16_late` | 244 -> 183 | +33.3% | 1 -> 1 | 0 -> 0 | 18 -> 18 |
+| `unescape/16_dense` | 191 -> 198 | -3.3% | 1 -> 1 | 0 -> 0 | 16 -> 16 |
+| `unescape/16_unicode` | 226 -> 185 | +21.2% | 1 -> 1 | 0 -> 0 | 22 -> 22 |
+| `unescape/16_trailing` | 230 -> 184 | +25.0% | 1 -> 1 | 0 -> 0 | 17 -> 17 |
+| `unescape/4096_clean` | 841 -> 115 | +638.5% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `unescape/4096_early` | 16,426 -> 16,417 | +0.0% | 1 -> 1 | 0 -> 0 | 4,098 -> 4,098 |
+| `unescape/4096_late` | 17,225 -> 498 | +3365.6% | 1 -> 1 | 0 -> 0 | 4,098 -> 4,098 |
+| `unescape/4096_dense` | 9,098 -> 9,114 | -0.1% | 1 -> 1 | 0 -> 0 | 4,096 -> 4,096 |
+| `unescape/4096_unicode` | 16,235 -> 481 | +3267.3% | 1 -> 1 | 0 -> 0 | 4,102 -> 4,102 |
+| `unescape/4096_trailing` | 17,255 -> 493 | +3400.0% | 1 -> 1 | 0 -> 0 | 4,097 -> 4,097 |
+| `decode_escape/16_clean` | 54 -> 59 | -7.4% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `decode_escape/16_early` | 282 -> 286 | -1.5% | 1 -> 1 | 0 -> 0 | 18 -> 18 |
+| `decode_escape/16_late` | 285 -> 218 | +30.0% | 1 -> 1 | 0 -> 0 | 18 -> 18 |
+| `decode_escape/16_dense` | 229 -> 237 | -2.8% | 1 -> 1 | 0 -> 0 | 16 -> 16 |
+| `decode_escape/16_unicode` | 298 -> 254 | +17.2% | 1 -> 1 | 0 -> 0 | 22 -> 22 |
+| `decode_escape/16_trailing` | 264 -> 222 | +18.8% | 1 -> 1 | 0 -> 0 | 17 -> 17 |
+| `decode_escape/4096_clean` | 1,183 -> 451 | +162.6% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `decode_escape/4096_early` | 16,798 -> 16,757 | +0.3% | 1 -> 1 | 0 -> 0 | 4,098 -> 4,098 |
+| `decode_escape/4096_late` | 17,601 -> 847 | +1975.7% | 1 -> 1 | 0 -> 0 | 4,098 -> 4,098 |
+| `decode_escape/4096_dense` | 9,438 -> 9,441 | -0.0% | 1 -> 1 | 0 -> 0 | 4,096 -> 4,096 |
+| `decode_escape/4096_unicode` | 22,839 -> 7,078 | +222.6% | 1 -> 1 | 0 -> 0 | 4,102 -> 4,102 |
+| `decode_escape/4096_trailing` | 17,573 -> 840 | +1993.5% | 1 -> 1 | 0 -> 0 | 4,097 -> 4,097 |
+| `markers/16_clean` | 17 -> 22 | -20.0% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `markers/16_early` | 94 -> 100 | -6.5% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `markers/16_late` | 86 -> 93 | -9.3% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `markers/16_dense` | 207 -> 220 | -6.0% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `markers/16_unknown` | 108 -> 113 | -5.8% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `markers/16_nested` | 123 -> 131 | -6.7% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `markers/16_unicode` | 104 -> 107 | -2.0% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `markers/16_trailing` | 37 -> 43 | -15.0% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `markers/4096_clean` | 1,418 -> 1,106 | +27.9% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `markers/4096_early` | 1,638 -> 1,845 | -10.9% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `markers/4096_late` | 1,607 -> 1,121 | +43.6% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `markers/4096_dense` | 55,441 -> 55,075 | +0.8% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `markers/4096_unknown` | 1,720 -> 1,270 | +35.5% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `markers/4096_nested` | 1,698 -> 1,401 | +20.9% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `markers/4096_unicode` | 1,736 -> 1,223 | +41.9% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `markers/4096_trailing` | 1,575 -> 1,213 | +30.1% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `markers_owned/16_clean` | 168 -> 178 | -4.9% | 1 -> 1 | 0 -> 0 | 16 -> 16 |
+| `markers_owned/16_early` | 278 -> 280 | -0.8% | 1 -> 1 | 0 -> 0 | 21 -> 21 |
+| `markers_owned/16_late` | 259 -> 253 | +2.6% | 1 -> 1 | 0 -> 0 | 21 -> 21 |
+| `markers_owned/16_dense` | 366 -> 375 | -2.3% | 1 -> 1 | 0 -> 0 | 15 -> 15 |
+| `markers_owned/16_unknown` | 280 -> 282 | -0.8% | 1 -> 1 | 0 -> 0 | 25 -> 25 |
+| `markers_owned/16_nested` | 301 -> 300 | +0.7% | 1 -> 1 | 0 -> 0 | 24 -> 24 |
+| `markers_owned/16_unicode` | 271 -> 269 | +0.8% | 1 -> 1 | 0 -> 0 | 27 -> 27 |
+| `markers_owned/16_trailing` | 205 -> 205 | +1.1% | 1 -> 1 | 0 -> 0 | 17 -> 17 |
+| `markers_owned/4096_clean` | 1,185 -> 425 | +178.9% | 1 -> 1 | 0 -> 0 | 4,096 -> 4,096 |
+| `markers_owned/4096_early` | 753 -> 692 | +8.9% | 1 -> 1 | 0 -> 0 | 4,101 -> 4,101 |
+| `markers_owned/4096_late` | 1,390 -> 533 | +161.3% | 1 -> 1 | 0 -> 0 | 4,101 -> 4,101 |
+| `markers_owned/4096_dense` | 54,185 -> 54,947 | -1.4% | 1 -> 1 | 0 -> 0 | 4,095 -> 4,095 |
+| `markers_owned/4096_unknown` | 1,394 -> 602 | +132.1% | 1 -> 1 | 0 -> 0 | 4,105 -> 4,105 |
+| `markers_owned/4096_nested` | 1,432 -> 617 | +131.9% | 1 -> 1 | 0 -> 0 | 4,104 -> 4,104 |
+| `markers_owned/4096_unicode` | 1,432 -> 579 | +147.7% | 1 -> 1 | 0 -> 0 | 4,107 -> 4,107 |
+| `markers_owned/4096_trailing` | 1,322 -> 512 | +157.7% | 1 -> 1 | 0 -> 0 | 4,097 -> 4,097 |
+
+## Composed metadata
+
+| Case | CPU cycles old -> new | Throughput change | Allocations old -> new | Reallocations old -> new | Requested bytes old -> new |
+|---|---:|---:|---:|---:|---:|
+| `metadata/title_16_clean` | 12,949 -> 12,251 | +5.8% | 21 -> 21 | 2 -> 2 | 2,424 -> 2,424 |
+| `metadata/title_16_tagged` | 13,168 -> 12,725 | +3.4% | 22 -> 21 | 2 -> 2 | 2,460 -> 2,443 |
+| `metadata/title_16_spaces` | 12,942 -> 12,259 | +5.5% | 22 -> 21 | 2 -> 2 | 2,449 -> 2,430 |
+| `metadata/title_16_unicode` | 12,980 -> 12,426 | +4.3% | 22 -> 21 | 2 -> 2 | 2,451 -> 2,435 |
+| `metadata/escape_16_clean` | 12,532 -> 11,844 | +5.8% | 21 -> 21 | 2 -> 2 | 2,428 -> 2,428 |
+| `metadata/escape_16_early` | 12,479 -> 12,194 | +2.4% | 21 -> 21 | 2 -> 2 | 2,430 -> 2,430 |
+| `metadata/escape_16_late` | 12,595 -> 11,891 | +5.9% | 21 -> 21 | 2 -> 2 | 2,430 -> 2,430 |
+| `metadata/escape_16_dense` | 12,622 -> 11,897 | +6.1% | 21 -> 21 | 2 -> 2 | 2,428 -> 2,428 |
+| `metadata/escape_16_unicode` | 11,302 -> 10,834 | +4.2% | 21 -> 21 | 2 -> 2 | 2,434 -> 2,434 |
+| `metadata/escape_16_trailing` | 12,669 -> 11,978 | +5.7% | 21 -> 21 | 2 -> 2 | 2,429 -> 2,429 |
+| `metadata/marker_16_clean` | 12,719 -> 11,939 | +6.4% | 21 -> 21 | 2 -> 2 | 2,424 -> 2,424 |
+| `metadata/marker_16_early` | 11,744 -> 11,076 | +6.0% | 21 -> 21 | 2 -> 2 | 2,430 -> 2,430 |
+| `metadata/marker_16_late` | 11,825 -> 11,036 | +7.0% | 21 -> 21 | 2 -> 2 | 2,430 -> 2,430 |
+| `metadata/marker_16_dense` | 11,938 -> 11,236 | +6.3% | 21 -> 21 | 2 -> 2 | 2,426 -> 2,426 |
+| `metadata/marker_16_unknown` | 11,880 -> 11,197 | +6.1% | 21 -> 21 | 2 -> 2 | 2,434 -> 2,434 |
+| `metadata/marker_16_nested` | 11,905 -> 10,742 | +10.9% | 21 -> 21 | 2 -> 2 | 2,433 -> 2,433 |
+| `metadata/marker_16_unicode` | 12,069 -> 10,779 | +12.0% | 21 -> 21 | 2 -> 2 | 2,436 -> 2,436 |
+| `metadata/marker_16_trailing` | 11,341 -> 10,785 | +5.2% | 21 -> 21 | 2 -> 2 | 2,425 -> 2,425 |
+| `metadata/title_4096_clean` | 33,390 -> 31,702 | +5.3% | 21 -> 21 | 2 -> 2 | 6,504 -> 6,504 |
+| `metadata/title_4096_tagged` | 34,350 -> 32,278 | +6.4% | 22 -> 21 | 2 -> 2 | 10,620 -> 6,523 |
+| `metadata/title_4096_spaces` | 36,159 -> 34,691 | +4.3% | 22 -> 21 | 2 -> 2 | 10,609 -> 6,510 |
+| `metadata/title_4096_unicode` | 38,897 -> 37,266 | +4.3% | 22 -> 21 | 2 -> 2 | 10,611 -> 6,515 |
+| `metadata/escape_4096_clean` | 29,283 -> 28,035 | +4.6% | 21 -> 21 | 2 -> 2 | 6,508 -> 6,508 |
+| `metadata/escape_4096_early` | 44,358 -> 43,955 | +0.8% | 21 -> 21 | 2 -> 2 | 6,510 -> 6,510 |
+| `metadata/escape_4096_late` | 45,974 -> 28,125 | +63.4% | 21 -> 21 | 2 -> 2 | 6,510 -> 6,510 |
+| `metadata/escape_4096_dense` | 29,275 -> 28,493 | +2.6% | 21 -> 21 | 2 -> 2 | 6,508 -> 6,508 |
+| `metadata/escape_4096_unicode` | 49,457 -> 33,250 | +48.8% | 21 -> 21 | 2 -> 2 | 6,514 -> 6,514 |
+| `metadata/escape_4096_trailing` | 45,776 -> 28,108 | +62.8% | 21 -> 21 | 2 -> 2 | 6,509 -> 6,509 |
+| `metadata/marker_4096_clean` | 30,455 -> 28,222 | +7.9% | 21 -> 21 | 2 -> 2 | 6,504 -> 6,504 |
+| `metadata/marker_4096_early` | 55,467 -> 54,553 | +1.7% | 21 -> 21 | 2 -> 2 | 6,510 -> 6,510 |
+| `metadata/marker_4096_late` | 56,933 -> 38,662 | +47.3% | 21 -> 21 | 2 -> 2 | 6,510 -> 6,510 |
+| `metadata/marker_4096_dense` | 149,321 -> 148,287 | +0.6% | 21 -> 21 | 2 -> 2 | 7,322 -> 7,322 |
+| `metadata/marker_4096_unknown` | 47,523 -> 32,241 | +47.4% | 21 -> 21 | 2 -> 2 | 6,514 -> 6,514 |
+| `metadata/marker_4096_nested` | 47,781 -> 31,985 | +49.5% | 21 -> 21 | 2 -> 2 | 6,513 -> 6,513 |
+| `metadata/marker_4096_unicode` | 60,996 -> 43,568 | +40.0% | 21 -> 21 | 2 -> 2 | 6,516 -> 6,516 |
+| `metadata/marker_4096_trailing` | 31,091 -> 28,623 | +8.6% | 21 -> 21 | 2 -> 2 | 6,505 -> 6,505 |
+
+## Analysis controls
+
+| Case | CPU cycles old -> new | Throughput change | Allocations old -> new | Reallocations old -> new | Requested bytes old -> new |
+|---|---:|---:|---:|---:|---:|
+| `analyze/fast_fake_lifts` | 667,565 -> 655,551 | +1.9% | 31 -> 31 | 4 -> 4 | 59,028 -> 59,028 |
+| `analyze/camellia` | 443,543,648 -> 443,397,609 | +0.1% | 110 -> 110 | 0 -> 0 | 5,263,624 -> 5,263,624 |
+| `analyze/fast_camellia` | 57,209,822 -> 56,550,735 | +1.0% | 115 -> 115 | 0 -> 0 | 7,051,152 -> 7,051,152 |
+| `analyze/mixed_small` | 50,712 -> 49,234 | +3.6% | 59 -> 59 | 3 -> 3 | 7,460 -> 7,460 |
+
+
+## Regression checks
+
+- The three new edge tests pass on both the original and final code; 27 edge
+  tests and 206 library tests pass in release mode.
+- Full original/final component and corpus transcripts match byte-for-byte:
+  167,859,340 UTF-8 bytes, SHA-256
+  `88893da2c498a787c62ec3f80ea9e53999a87562e3f499ae3c28349f08a53887`.
+  The corpus covers 30,843 files, 56,125 supported charts, 30,489 successful
+  parses and 354 matching parse failures. Component checks include complete
+  JSON/CSV/SM/SSC output, all metadata option combinations, escape outputs,
+  and marker buffer pointer/capacity preservation.
+- After confirming the optimizations:
+  `cargo test --release --test all_parity -- --test-threads=22`:
+  **30,489 passed, zero failures**.
+- Strict release workspace/all-target Clippy, formatting and diff checks pass.
+
+## Reproduction
+
+Before editing production code, bump only the workspace version to 0.4.280,
+apply the final benchmark harness/tests, and save the original executable:
+
+```powershell
+cargo bench -p rssp --bench hotpath_perf --no-run
+```
+
+After applying the three production edits, build and save the final executable
+with the same command/profile. Run each filter three times per executable,
+alternating old/new then new/old then old/new:
+
+```powershell
+$env:RSSP_HOT_ITERS='10000'
+$env:RSSP_HOT_FILTER='unescape/' # also decode_escape/, markers/, markers_owned/
+& $exe
+$env:RSSP_HOT_ITERS='1000'
+$env:RSSP_HOT_FILTER='metadata/'
+& $exe
+$env:RSSP_HOT_ITERS='30'
+$env:RSSP_HOT_FILTER='analyze/'
+& $exe
+Remove-Item Env:RSSP_HOT_FILTER
+$env:RSSP_HOT_VERIFY='1'
+& $exe # redirect UTF-8 bytes via Python subprocess for an exact comparison
+cargo test --release --workspace --lib
+cargo test --release -p rssp --test optimization_edges
+cargo clippy --release --workspace --all-targets -- -D warnings
+cargo test --release --test all_parity -- --test-threads=22
+cargo fmt --all -- --check
+git diff --check
+```

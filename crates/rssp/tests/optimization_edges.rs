@@ -7,6 +7,100 @@ use rssp::bpm::{chart_bpm_snapshots, compute_tier_bpm};
 use rssp::nps::compute_chart_peak_nps;
 
 #[test]
+fn unescape_prefix_bytes() {
+    use std::borrow::Cow;
+    for (input, expected) in [
+        ("", ""),
+        ("plain\u{e9}", "plain\u{e9}"),
+        ("\\", "\\"),
+        ("\\:", ":"),
+        ("prefix\\", "prefix\\"),
+        ("prefix\\\\", "prefix\\"),
+        ("prefix\\\u{1f600}", "prefix\u{1f600}"),
+        (
+            "\u{65e5}\u{e9}\\:\u{1f600}\\\\\\x\\",
+            "\u{65e5}\u{e9}:\u{1f600}\\x\\",
+        ),
+        ("a\\\0b\\\n", "a\0b\n"),
+    ] {
+        let actual = rssp::parse::unescape_tag(input);
+        assert_eq!(actual, expected);
+        assert_eq!(matches!(actual, Cow::Borrowed(_)), !input.contains('\\'));
+        assert_eq!(rssp::parse::decode_unescape(input.as_bytes()), expected);
+    }
+}
+
+#[test]
+fn translated_prefix_bytes() {
+    for (input, expected) in [
+        ("", ""),
+        ("plain\u{e9}", "plain\u{e9}"),
+        ("&", "&"),
+        ("prefix&", "prefix&"),
+        ("prefix&unknown;", "prefix&unknown;"),
+        ("prefix&bad&ha;", "prefix&bad\u{3042}"),
+        ("prefix&&#65;", "prefix&A"),
+        ("\u{65e5}\u{1f600}&#x266F;", "\u{65e5}\u{1f600}\u{266f}"),
+        ("&unknown;&#0;&ha;&", "&unknown;\0\u{3042}&"),
+        ("&#xD800;&#65536;", "\u{fffd}\u{fffd}"),
+    ] {
+        let mut text = String::with_capacity(128);
+        text.push_str(input);
+        let pointer = text.as_ptr();
+        let capacity = text.capacity();
+        rssp::translate::replace_markers_in_place(&mut text);
+        assert_eq!(text, expected);
+        assert_eq!(text.as_ptr(), pointer);
+        assert_eq!(text.capacity(), capacity);
+        assert_eq!(rssp::translate::replace_markers(input), expected);
+    }
+}
+
+#[test]
+fn stripped_title_bytes() {
+    for (input, stripped, plain) in [
+        (" [Pack] [01] 2.5- Name ", "Name", "[Pack] [01] 2.5- Name"),
+        (
+            "\u{2003}[Pack]\u{2003}2- \u{65e5}\u{2003}",
+            "\u{65e5}",
+            "[Pack]\u{2003}2- \u{65e5}",
+        ),
+        (" [Unclosed ", "[Unclosed", "[Unclosed"),
+        (" [Done] ", "", "[Done]"),
+        ("   ", "", ""),
+        ("&#65; Song", "&#65; Song", "&#65; Song"),
+        ("[P]\\:&#65; Song", ":&#65; Song", "[P]:&#65; Song"),
+    ] {
+        for strip_tags in [false, true] {
+            for translate_markers in [false, true] {
+                let data = format!(
+                    "#TITLE:{};#BPMS:0=120;#NOTES:dance-single::Hard:8::1000;",
+                    input.replace(';', "\\;")
+                );
+                let options = rssp::AnalysisOptions {
+                    strip_tags,
+                    translate_markers,
+                    compute_tech_counts: false,
+                    compute_pattern_counts: false,
+                    ..Default::default()
+                };
+                let summary =
+                    rssp::analyze(data.as_bytes(), "sm", &options).expect("valid fixture");
+                let expected = if strip_tags { stripped } else { plain };
+                if translate_markers {
+                    assert_eq!(
+                        summary.title_str,
+                        rssp::translate::replace_markers(expected)
+                    );
+                } else {
+                    assert_eq!(summary.title_str, expected);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn composed_stream_prefixes() {
     use rssp::streams::{
         StreamCounts, Token, compute_stream_counts, compute_stream_outputs,

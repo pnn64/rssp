@@ -50,11 +50,12 @@ pub fn clean_tag(tag: &str) -> Cow<'_, str> {
 
 #[must_use]
 pub fn unescape_tag(tag: &str) -> Cow<'_, str> {
-    if !tag.as_bytes().contains(&b'\\') {
+    let Some(first) = memchr(b'\\', tag.as_bytes()) else {
         return Cow::Borrowed(tag);
-    }
+    };
     let mut out = String::with_capacity(tag.len());
-    let mut chars = tag.chars();
+    out.push_str(&tag[..first]);
+    let mut chars = tag[first..].chars();
     while let Some(c) = chars.next() {
         out.push(if c == '\\' {
             chars.next().unwrap_or(c)

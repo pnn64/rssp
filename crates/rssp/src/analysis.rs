@@ -1204,9 +1204,10 @@ fn analyze_with_scratch_impl<T, MapNote: FnMut(ParsedChartNote) -> T>(
         },
     );
     if options.strip_tags {
-        let stripped = strip_title_tags(&title_str);
-        if stripped.as_ref() != title_str.as_str() {
-            title_str = stripped.into_owned();
+        // Title stripping returns a suffix at a UTF-8 boundary.
+        let prefix = title_str.len() - strip_title_tags(&title_str).len();
+        if prefix != 0 {
+            title_str.drain(..prefix);
         }
     }
     trim_owned(&mut title_str);

@@ -7,6 +7,9 @@ use std::hint::black_box;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
+#[path = "support/metadata_perf.rs"]
+mod metadata_perf;
+
 struct CountingAllocator;
 static COUNT: AtomicBool = AtomicBool::new(false);
 static ALLOCS: AtomicU64 = AtomicU64::new(0);
@@ -80,19 +83,30 @@ mod cpu {
 }
 
 fn measure(name: &str, items: usize, iters: usize, mut run: impl FnMut()) {
+    measure_prepared(name, items, iters, || (), |()| run());
+}
+
+fn measure_prepared<T>(
+    name: &str,
+    items: usize,
+    iters: usize,
+    mut setup: impl FnMut() -> T,
+    mut run: impl FnMut(&mut T),
+) {
     if std::env::var("RSSP_HOT_FILTER").is_ok_and(|filter| !name.contains(&filter)) {
         return;
     }
     for _ in 0..4 {
-        run();
+        run(&mut setup());
     }
     let mut times = [0.0; 7];
     let mut cycles = [0.0; 7];
     for (time, cycle) in times.iter_mut().zip(&mut cycles) {
+        let mut inputs: Vec<_> = (0..iters).map(|_| setup()).collect();
         let start = Instant::now();
         let before = cpu::cycles();
-        for _ in 0..iters {
-            run();
+        for input in &mut inputs {
+            run(input);
         }
         *cycle = (cpu::cycles() - before) as f64 / iters as f64;
         *time = start.elapsed().as_nanos() as f64 / iters as f64;
@@ -102,8 +116,9 @@ fn measure(name: &str, items: usize, iters: usize, mut run: impl FnMut()) {
     ALLOCS.store(0, Ordering::Relaxed);
     REALLOCS.store(0, Ordering::Relaxed);
     BYTES.store(0, Ordering::Relaxed);
+    let mut input = setup();
     COUNT.store(true, Ordering::Relaxed);
-    run();
+    run(&mut input);
     COUNT.store(false, Ordering::Relaxed);
     println!(
         "{name}: ns={:.0} cycles={:.0} items/s={:.0} allocs={} reallocs={} churn_bytes={}",
@@ -957,6 +972,7 @@ fn peak_work_cases(iters: usize) {
 )]
 fn verify_components() {
     verify_reports();
+    metadata_perf::verify();
     for input in [
         "",
         "0=120",
@@ -1110,6 +1126,7 @@ fn main() {
     hash_batch_cases(iters);
     credit_cases(iters);
     report_cases(iters);
+    metadata_perf::cases(iters);
     let densities: Vec<_> = (0..16384).map(|i| [0, 16, 20, 24, 32][i % 5]).collect();
     for (name, step) in [("long_segments", 2048.0), ("short_segments", 4.0)] {
         let bpms: Vec<_> = (0..32)

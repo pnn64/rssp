@@ -522,14 +522,14 @@ fn parse_numeric_marker(element: &str, invalid: char) -> Option<char> {
 /// Replace &alias; markers and unicode markers in place, matching `ITGmania` behavior.
 // Keep the scan/copy state machine inline so its cursors cannot diverge across buffer helpers.
 pub fn replace_markers_in_place(text: &mut String) {
-    if !text.contains('&') {
+    let Some(first) = memchr::memchr(b'&', text.as_bytes()) else {
         return;
-    }
+    };
     let mut bytes = std::mem::take(text).into_bytes();
     let len = bytes.len();
     let invalid = char::REPLACEMENT_CHARACTER;
     let mut output_len = None;
-    let mut scan = 0usize;
+    let mut scan = first;
     let mut copy_from = 0usize;
 
     while scan < len {
