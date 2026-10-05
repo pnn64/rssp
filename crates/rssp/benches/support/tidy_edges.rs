@@ -3,6 +3,177 @@ use crate::perf::{measure, measure_prepared};
 use std::fmt::Write as _;
 use std::hint::black_box;
 
+fn filter_maps(count: usize, kind: &str) -> (String, String) {
+    let mut pairs = String::with_capacity(count * 12);
+    let mut speeds = String::with_capacity(count * 16);
+    for i in 0..count {
+        let beat = match kind {
+            "reverse" => (count - i - 1) * 4,
+            "duplicates" => i / 2 * 4,
+            _ => i * 4,
+        };
+        let value = if kind == "negative" && i % 2 == 0 {
+            -1
+        } else {
+            (i % 7 + 1) as i32
+        };
+        let pad = if kind == "padded" { " \u{2003}" } else { "" };
+        write!(pairs, "{pad}{beat}={value}{pad},").expect("String write");
+        write!(speeds, "{pad}{beat}={value}=0=0{pad},").expect("String write");
+    }
+    pairs.pop();
+    speeds.pop();
+    (pairs, speeds)
+}
+
+#[test]
+fn positive_filter_edges() {
+    let segments = compute_timing_segments(
+        None,
+        "0=120",
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        None,
+        " 0=-1,1=0,2=-0,3=1,4=NaN,5=inf,6=1e40,7=1e-50,8=2,bad,9=bad ",
+        TimingFormat::Ssc,
+        true,
+    );
+    assert_eq!(segments.fakes, [(3.0, 1.0), (6.0, 0.0), (8.0, 2.0)]);
+    assert_eq!(segments.bpms, [(0.0, 120.0)]);
+    assert!(segments.stops.is_empty());
+    let padded = compute_timing_segments(
+        None,
+        "0=120",
+        None,
+        "\u{2003}0=1\u{2003},\u{2003}4=2\u{2003}",
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        None,
+        "",
+        TimingFormat::Ssc,
+        true,
+    );
+    assert_eq!(padded.stops, [(0.0, 1.0), (4.0, 2.0)]);
+}
+
+#[test]
+#[ignore = "explicit timing parser benchmark"]
+fn filter_hotpath() {
+    for count in [0, 1, 32, 4096] {
+        for kind in ["ordered", "negative", "padded", "reverse", "duplicates"] {
+            let (pairs, _) = filter_maps(count, kind);
+            measure(&format!("segment_parse/{count}_{kind}_all"), count, || {
+                black_box(parse_segments::<false>(black_box(&pairs)));
+            });
+            measure(
+                &format!("segment_parse/{count}_{kind}_positive"),
+                count,
+                || {
+                    black_box(parse_segments::<true>(black_box(&pairs)));
+                },
+            );
+            for source in ["stops", "delays", "fakes"] {
+                let selected = |name| if source == name { pairs.as_str() } else { "" };
+                measure(
+                    &format!("timing_filter/{count}_{kind}_{source}"),
+                    count,
+                    || {
+                        black_box(compute_timing_segments(
+                            None,
+                            "0=120",
+                            None,
+                            black_box(selected("stops")),
+                            None,
+                            black_box(selected("delays")),
+                            None,
+                            "",
+                            None,
+                            "",
+                            None,
+                            "",
+                            None,
+                            black_box(selected("fakes")),
+                            TimingFormat::Ssc,
+                            true,
+                        ));
+                    },
+                );
+                measure(
+                    &format!("timing_raw_filter/{count}_{kind}_{source}"),
+                    count,
+                    || {
+                        black_box(timing_data_from_chart_data(
+                            0.0,
+                            0.0,
+                            None,
+                            "0=120",
+                            None,
+                            black_box(selected("stops")),
+                            None,
+                            black_box(selected("delays")),
+                            None,
+                            "",
+                            None,
+                            "",
+                            None,
+                            "",
+                            None,
+                            black_box(selected("fakes")),
+                            TimingFormat::Ssc,
+                            true,
+                        ));
+                    },
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "explicit timing parser parity transcript"]
+fn filter_trace() {
+    for count in [0, 1, 2, 32, 129] {
+        for kind in ["ordered", "negative", "padded", "reverse", "duplicates"] {
+            let (pairs, speeds) = filter_maps(count, kind);
+            for format in [TimingFormat::Sm, TimingFormat::Ssc] {
+                let segments = compute_timing_segments(
+                    None,
+                    "0=120,8=240",
+                    None,
+                    &pairs,
+                    None,
+                    &pairs,
+                    None,
+                    &pairs,
+                    None,
+                    &speeds,
+                    None,
+                    &pairs,
+                    None,
+                    &pairs,
+                    format,
+                    true,
+                );
+                println!("timing-filter {count} {kind} {format:?} {segments:?}");
+            }
+        }
+    }
+}
+
 fn pack_fixture(count: usize, mask: usize, spare: bool) -> [Vec<Segment>; 4] {
     std::array::from_fn(|source| {
         let len = if mask & (1 << source) == 0 { 0 } else { count };

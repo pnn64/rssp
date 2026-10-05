@@ -5,6 +5,10 @@ use memchr::{memchr, memchr2, memchr3};
 
 use crate::timing::{STEPFILE_VERSION_NUMBER, TimingFormat};
 
+#[cfg(test)]
+#[path = "../../rssp/benches/support/escape_edges.rs"]
+mod pass_edges;
+
 #[must_use]
 pub fn strip_title_tags(mut title: &str) -> Cow<'_, str> {
     loop {
@@ -53,17 +57,52 @@ pub fn unescape_tag(tag: &str) -> Cow<'_, str> {
     let Some(first) = memchr(b'\\', tag.as_bytes()) else {
         return Cow::Borrowed(tag);
     };
+    // Short and densely escaped suffixes favor the original character loop.
+    if tag.len() - first > SCAN_PREFIX
+        && find_byte(
+            &tag.as_bytes()[first + 2..(first + SCAN_PREFIX).min(tag.len())],
+            b'\\',
+        )
+        .is_none()
+    {
+        return Cow::Owned(unescape_runs(tag, first));
+    }
     let mut out = String::with_capacity(tag.len());
     out.push_str(&tag[..first]);
     let mut chars = tag[first..].chars();
-    while let Some(c) = chars.next() {
-        out.push(if c == '\\' {
-            chars.next().unwrap_or(c)
+    while let Some(ch) = chars.next() {
+        out.push(if ch == '\\' {
+            chars.next().unwrap_or(ch)
         } else {
-            c
+            ch
         });
     }
     Cow::Owned(out)
+}
+
+// Keep the bulk path out of the measured short/dense character loop's codegen.
+#[inline(never)]
+fn unescape_runs(tag: &str, first: usize) -> String {
+    let mut out = String::with_capacity(tag.len());
+    let mut start = 0;
+    let mut slash = first;
+    loop {
+        out.push_str(&tag[start..slash]);
+        start = slash + 1;
+        let search = start + 1;
+        if search > tag.len() {
+            out.push('\\');
+            break;
+        }
+        // Skip the first byte of the escaped character. UTF-8 continuation
+        // bytes cannot be a backslash; each copied span still has valid boundaries.
+        let Some(next) = find_byte(&tag.as_bytes()[search..], b'\\') else {
+            out.push_str(&tag[start..]);
+            break;
+        };
+        slash = search + next;
+    }
+    out
 }
 
 fn unescape_owned(mut value: String) -> String {

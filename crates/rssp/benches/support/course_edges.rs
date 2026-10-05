@@ -5,7 +5,14 @@ use crate::perf::fixtures;
 
 #[test]
 fn title_match_edges() {
-    for kind in ["plain", "escaped", "cp1252", "cp_escape"] {
+    for kind in [
+        "plain",
+        "escaped",
+        "cp1252",
+        "cp_escape",
+        "controls",
+        "cp_controls",
+    ] {
         let (data, expected) = fixtures::title(4, kind);
         assert_eq!(
             super::simfile_translit_title_eq(&data, "sm", &expected),
@@ -65,7 +72,14 @@ fn course_scan_edges() {
 #[ignore = "explicit loader benchmark"]
 fn loader_hotpath() {
     for length in [16, 4096] {
-        for kind in ["plain", "escaped", "cp1252", "cp_escape"] {
+        for kind in [
+            "plain",
+            "escaped",
+            "cp1252",
+            "cp_escape",
+            "controls",
+            "cp_controls",
+        ] {
             let (data, expected) = fixtures::title(length, kind);
             measure(&format!("title_match/{length}_{kind}"), 1, || {
                 black_box(super::simfile_translit_title_eq(
@@ -90,6 +104,31 @@ fn loader_hotpath() {
             measure(&format!("course_scan/{length}_{kind}"), length, || {
                 black_box(super::scan_term(black_box(&data)));
             });
+        }
+    }
+}
+
+#[test]
+#[ignore = "explicit course title parity transcript"]
+fn title_trace() {
+    for length in [0, 1, 16, 4096] {
+        for kind in [
+            "plain",
+            "escaped",
+            "cp1252",
+            "cp_escape",
+            "controls",
+            "cp_controls",
+        ] {
+            let (data, expected) = fixtures::title(length, kind);
+            for extension in ["sm", "ssc", "bad"] {
+                for value in [&expected, "other"] {
+                    println!(
+                        "course-title {length} {kind} {extension} {value:?} {:?}",
+                        super::simfile_translit_title_eq(&data, extension, value)
+                    );
+                }
+            }
         }
     }
 }

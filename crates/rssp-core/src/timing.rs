@@ -206,7 +206,7 @@ fn parse_f64_fast(s: &str) -> Option<f64> {
 }
 
 // --- Unified parsing ---
-fn parse_segments(s: &str) -> Vec<Segment> {
+fn parse_segments<const POSITIVE: bool>(s: &str) -> Vec<Segment> {
     const ESTIMATED_COMPONENT_BYTES: usize = 9;
     const LARGE_MAP_BYTES: usize = 32 * 1_024;
     const MAX_INITIAL_COMPONENTS: usize = 4_096;
@@ -222,8 +222,8 @@ fn parse_segments(s: &str) -> Vec<Segment> {
         crate::stats::count_byte(s.as_bytes(), b',') + 1
     };
     let mut segments = Vec::with_capacity(capacity);
-    for part in s.trim().split(',') {
-        let Some((beat_str, val_str)) = part.trim().split_once('=') else {
+    for part in s.split(',') {
+        let Some((beat_str, val_str)) = part.split_once('=') else {
             continue;
         };
         let Some(beat) = parse_beat_or_row(beat_str) else {
@@ -232,19 +232,15 @@ fn parse_segments(s: &str) -> Vec<Segment> {
         let Some(value) = parse_f64_fast(val_str) else {
             continue;
         };
-        if beat.is_finite() && value.is_finite() {
-            segments.push(Segment {
-                beat,
-                value: f64::from(value as f32),
-            });
+        // parse_beat_or_row already rejects nonfinite beats. Filter after
+        // the f32 conversion so underflow and overflow keep their original rules.
+        if value.is_finite() {
+            let value = f64::from(value as f32);
+            if !POSITIVE || value > 0.0 {
+                segments.push(Segment { beat, value });
+            }
         }
     }
-    segments
-}
-
-fn parse_segments_positive(s: &str) -> Vec<Segment> {
-    let mut segments = parse_segments(s);
-    segments.retain(|segment| segment.value > 0.0);
     segments
 }
 
@@ -691,7 +687,7 @@ pub(crate) fn parse_bpm_stops(
     if bpms.is_empty() {
         bpms.push((0.0, DEFAULT_BPM));
     }
-    let stops = parse_optional_timing(chart_stops, global_stops, parse_segments, cleaned);
+    let stops = parse_optional_timing(chart_stops, global_stops, parse_segments::<false>, cleaned);
     let (mut bpms, stops, extra_warps, offset) = process_bpms_and_stops(format, bpms, stops);
     if bpms.is_empty() {
         bpms.push((0.0, DEFAULT_BPM));
@@ -745,14 +741,18 @@ pub fn compute_timing_segments(
         value: seg.value,
     };
 
-    let delays: Vec<_> =
-        parse_optional_timing(chart_delays, global_delays, parse_segments, cleaned)
-            .into_iter()
-            .map(quantize_seg)
-            .collect();
+    let delays: Vec<_> = parse_optional_timing(
+        chart_delays,
+        global_delays,
+        parse_segments::<false>,
+        cleaned,
+    )
+    .into_iter()
+    .map(quantize_seg)
+    .collect();
     let delays = tidy_row_segments(delays);
 
-    let warps = parse_optional_timing(chart_warps, global_warps, parse_segments, cleaned);
+    let warps = parse_optional_timing(chart_warps, global_warps, parse_segments::<false>, cleaned);
     let warps = merge_extra_warps(warps, extra_warps);
     let warps: Vec<_> = warps
         .into_iter()
@@ -772,15 +772,19 @@ pub fn compute_timing_segments(
         .collect();
     let speeds = tidy_speed_segments(speeds);
 
-    let scrolls: Vec<_> =
-        parse_optional_timing(chart_scrolls, global_scrolls, parse_segments, cleaned)
-            .into_iter()
-            .map(quantize_seg)
-            .collect();
+    let scrolls: Vec<_> = parse_optional_timing(
+        chart_scrolls,
+        global_scrolls,
+        parse_segments::<false>,
+        cleaned,
+    )
+    .into_iter()
+    .map(quantize_seg)
+    .collect();
     let scrolls = tidy_scroll_segments(scrolls);
 
     let fakes: Vec<_> =
-        parse_optional_timing(chart_fakes, global_fakes, parse_segments_positive, cleaned)
+        parse_optional_timing(chart_fakes, global_fakes, parse_segments::<true>, cleaned)
             .into_iter()
             .map(|s| Segment {
                 beat: quantize_beat(s.beat),
@@ -1543,12 +1547,17 @@ pub fn timing_data_from_chart_data(
     };
 
     let delays = tidy_row_segments(
-        parse_optional_timing(chart_delays, global_delays, parse_segments, cleaned)
-            .into_iter()
-            .map(q)
-            .collect(),
+        parse_optional_timing(
+            chart_delays,
+            global_delays,
+            parse_segments::<false>,
+            cleaned,
+        )
+        .into_iter()
+        .map(q)
+        .collect(),
     );
-    let warps = parse_optional_timing(chart_warps, global_warps, parse_segments, cleaned);
+    let warps = parse_optional_timing(chart_warps, global_warps, parse_segments::<false>, cleaned);
     let warps = merge_extra_warps(warps, extra_warps);
     let warps = tidy_row_segments(warps.into_iter().map(qv).collect());
     let speeds = tidy_speed_segments(
@@ -1561,13 +1570,18 @@ pub fn timing_data_from_chart_data(
             .collect(),
     );
     let scrolls = tidy_scroll_segments(
-        parse_optional_timing(chart_scrolls, global_scrolls, parse_segments, cleaned)
-            .into_iter()
-            .map(q)
-            .collect(),
+        parse_optional_timing(
+            chart_scrolls,
+            global_scrolls,
+            parse_segments::<false>,
+            cleaned,
+        )
+        .into_iter()
+        .map(q)
+        .collect(),
     );
     let fakes = tidy_row_segments(
-        parse_optional_timing(chart_fakes, global_fakes, parse_segments_positive, cleaned)
+        parse_optional_timing(chart_fakes, global_fakes, parse_segments::<true>, cleaned)
             .into_iter()
             .map(qv)
             .collect(),
@@ -2459,16 +2473,17 @@ mod tests {
 
     #[test]
     fn parse_segments_preserves_sparse_entries_and_row_beats() {
-        assert!(parse_segments("").is_empty());
+        assert!(parse_segments::<false>("").is_empty());
 
-        let segments = parse_segments(" ,0=1,missing,4=2,=3,8=nope,96r=-0.5,12=NaN,16=inf, ");
+        let segments =
+            parse_segments::<false>(" ,0=1,missing,4=2,=3,8=nope,96r=-0.5,12=NaN,16=inf, ");
         assert_eq!(segments.len(), 3);
         assert_eq!((segments[0].beat, segments[0].value), (0.0, 1.0));
         assert_eq!((segments[1].beat, segments[1].value), (4.0, 2.0));
         assert_eq!((segments[2].beat, segments[2].value), (2.0, -0.5));
 
         let positive =
-            parse_segments_positive(" ,0=1,missing,4=2,=3,8=nope,96r=-0.5,12=NaN,16=inf, ");
+            parse_segments::<true>(" ,0=1,missing,4=2,=3,8=nope,96r=-0.5,12=NaN,16=inf, ");
         assert_eq!(positive.len(), 2);
         assert_eq!((positive[0].beat, positive[0].value), (0.0, 1.0));
         assert_eq!((positive[1].beat, positive[1].value), (4.0, 2.0));
@@ -2487,7 +2502,7 @@ mod tests {
         }
         assert!(map.len() >= 32 * 1_024);
 
-        let segments = parse_segments(&map);
+        let segments = parse_segments::<false>(&map);
         assert_eq!(segments.len(), 4_096);
         assert_eq!((segments[0].beat, segments[0].value), (0.0, 60.0));
         assert_eq!(

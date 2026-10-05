@@ -1056,8 +1056,19 @@ fn simfile_translit_title_eq(data: &[u8], ext: &str, expected: &str) -> Option<b
     let parsed = extract_sections(data, ext).ok()?;
     let title_bytes = parsed.title_translit.or(parsed.title).unwrap_or_default();
     let title_decoded = decode_bytes(title_bytes);
-    let title_unescaped = unescape_tag(title_decoded.as_ref());
-    let title_cleaned = clean_tag(title_unescaped.as_ref());
+    let mut title_unescaped = unescape_tag(title_decoded.as_ref());
+    let title_cleaned = match &mut title_unescaped {
+        // Reuse the escaped ASCII title; retaining non-ASCII text costs more
+        // CPU than the existing decoder/cleaner in measured course matching.
+        Cow::Owned(value) if value.is_ascii() => {
+            if value.bytes().any(|byte| byte.is_ascii_control()) {
+                value.retain(|ch| !ch.is_control());
+            }
+            Cow::Borrowed(value.as_str())
+        }
+        Cow::Borrowed(value) => clean_tag(value),
+        Cow::Owned(value) => clean_tag(value.as_str()),
+    };
 
     let subtitle_bytes = parsed
         .subtitle_translit

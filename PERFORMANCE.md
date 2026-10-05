@@ -4536,3 +4536,513 @@ cargo clippy --release --workspace --all-targets -- -D warnings
 cargo test --release --test optimization_edges
 cargo test --release --test all_parity -- --test-threads=22
 ```
+
+## Performance pass 0.4.288
+
+Original production: `2832eb5` (0.4.287). This pass bumps the workspace patch once to 0.4.288.
+
+1. Timing parsing filters positive fake segments before pushing them, removing the post-parse `retain` pass and its wrapper. It also removes whole-map/per-entry trims that the numeric parsers already perform, and the finite-beat check already guaranteed by `parse_beat_or_row`. Filtering still happens after conversion to f32, preserving underflow/overflow behavior.
+2. `unescape_tag` copies long literal spans instead of decoding and pushing every character after the first escape. Short/dense suffixes keep the original character loop; a bounded 64-byte probe selects the path. The bulk implementation stays in a private non-inlined function to keep its frame and code out of the original character loop. UTF-8 continuation bytes cannot contain an ASCII backslash, so copied span boundaries stay valid even when the byte search starts inside an escaped multibyte character. Capacity, borrowed/owned results, escaped characters and trailing backslashes are preserved.
+3. Course title matching cleans an already-owned ASCII title in place. It avoids allocating/copying another string when removing controls. Non-ASCII titles keep the original decoder and cleaner: the attempted CP1252 buffer reuse saved allocations but slowed CPU execution, so it was rejected. Subtitle handling remains the original path.
+
+### Measurement method
+
+Windows MSVC, Rust 1.98.1, Intel Xeon E5-2696 v4, System allocator, fat LTO and one codegen unit. Core/leaf tests use release; public caller benchmarks use the repository bench profile with debug symbols. Both sides use version 0.4.288, identical fixtures and measurement loops. The original direct parser calls use its original names (`parse_segments` / `parse_segments_positive`); optimized calls use the corresponding const specializations. No adapters are timed.
+
+The measured thread is pinned to logical CPU 2. Four warmups precede seven batches; each process reports their median. Three original/optimized process pairs alternate order (old/new, new/old, old/new), then the process medians are combined. `QueryThreadCycleTime` supplies CPU cycles and `Instant` supplies wall time. Fixture construction stays outside measurement; target parsing, returned-output destruction and allocations stay inside it. Allocation counting runs separately from timing and counts successful alloc/realloc requests and requested bytes, not peak RSS. No own compilation, tests or corpus verification runs during timing.
+
+Core counts: 5,000 iterations for sizes 0/1/16/32, 1,000 for large escape/title cases, and 100 for 4,096-entry parsers/builders. Public caller counts: 1,000 for standard/streams/SN/hash and escape primitives; 100 for analyze/report/cleanup/metadata (Camellia analysis uses 10). Focused repeats use 1,000 iterations for the first eight cases and 10,000 for the remaining fifteen; original/original calibration uses 10,000 for every case. All fixtures are deterministic; no RNG or I/O is included in the timed loops.
+
+### Representative final results
+
+| Case | CPU cycles, original → optimized | ns | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `segment_parse/32_ordered_all` | 6,616 → 5,618 | 3,027 → 2,571 | +17.7% | 1 → 1 | 0 → 0 | 512 → 512 |
+| `segment_parse/4096_ordered_all` | 872,071 → 724,894 | 398,917 → 331,405 | +20.4% | 1 → 1 | 0 → 0 | 65,536 → 65,536 |
+| `timing_filter/32_ordered_fakes` | 9,473 → 8,393 | 4,333 → 3,837 | +12.9% | 4 → 4 | 0 → 0 | 792 → 792 |
+| `timing_raw_filter/4096_ordered_fakes` | 1,072,073 → 1,046,256 | 489,642 → 478,897 | +2.2% | 3 → 3 | 0 → 0 | 81,936 → 81,936 |
+| `escape_runs/16_early` | 249 → 258 | 114 → 118 | -3.4% | 1 → 1 | 0 → 0 | 18 → 18 |
+| `escape_runs/4096_early` | 17,796 → 669 | 8,121 → 323 | +2414.2% | 1 → 1 | 0 → 0 | 4,098 → 4,098 |
+| `escape_runs/4096_unicode` | 15,531 → 671 | 7,089 → 307 | +2209.1% | 1 → 1 | 0 → 0 | 4,103 → 4,103 |
+| `escape_runs/4096_dense` | 9,742 → 9,687 | 4,446 → 4,430 | +0.4% | 1 → 1 | 0 → 0 | 4,096 → 4,096 |
+| `title_match/16_controls` | 2,278 → 2,094 | 1,040 → 955 | +8.9% | 4 → 3 | 0 → 0 | 648 → 616 |
+| `title_match/4096_controls` | 122,107 → 120,612 | 55,868 → 55,168 | +1.3% | 4 → 3 | 0 → 0 | 33,288 → 25,096 |
+| `title_match/4096_cp_escape` | 198,232 → 199,205 | 90,556 → 91,115 | -0.6% | 5 → 5 | 0 → 0 | 49,672 → 49,672 |
+| `title_match/4096_cp_controls` | 323,121 → 331,298 | 147,833 → 151,562 | -2.5% | 6 → 6 | 0 → 0 | 78,344 → 78,344 |
+
+The initial unrestricted span loop slowed dense escaped text; it was replaced before final measurement. The final fallback restores dense throughput while retaining the large literal-run gain. The in-place cleanup saves one allocation for escaped ASCII titles containing controls. No final benchmark increases alloc/realloc counts or requested bytes. The ASCII control fixture with 4,096 repetitions saves 24.6% of requested allocation bytes (33,288 to 25,096); peak RSS was not measured. Individual CPU/time samples can still be slower; the complete comparisons, focused repeats and same-executable calibration below expose those limits rather than claiming every call is faster.
+
+### Complete final comparisons (362 cases)
+
+### Direct timing parsers
+
+| Case | CPU cycles, original → optimized | ns | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `segment_parse/0_ordered_all` | 20 → 20 | 9 → 9 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `segment_parse/0_ordered_positive` | 36 → 20 | 17 → 9 | +88.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `segment_parse/0_negative_all` | 20 → 26 | 9 → 12 | -25.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `segment_parse/0_negative_positive` | 36 → 20 | 17 → 9 | +88.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `segment_parse/0_padded_all` | 20 → 20 | 9 → 9 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `segment_parse/0_padded_positive` | 36 → 20 | 17 → 9 | +88.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `segment_parse/0_reverse_all` | 20 → 20 | 9 → 9 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `segment_parse/0_reverse_positive` | 36 → 20 | 17 → 9 | +88.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `segment_parse/0_duplicates_all` | 20 → 26 | 9 → 12 | -25.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `segment_parse/0_duplicates_positive` | 36 → 20 | 17 → 9 | +88.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `segment_parse/1_ordered_all` | 401 → 345 | 184 → 158 | +16.5% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `segment_parse/1_ordered_positive` | 414 → 350 | 189 → 160 | +18.1% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `segment_parse/1_negative_all` | 367 → 335 | 168 → 153 | +9.8% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `segment_parse/1_negative_positive` | 372 → 361 | 170 → 165 | +3.0% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `segment_parse/1_padded_all` | 426 → 385 | 198 → 176 | +12.5% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `segment_parse/1_padded_positive` | 424 → 418 | 194 → 191 | +1.6% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `segment_parse/1_reverse_all` | 382 → 332 | 174 → 155 | +12.3% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `segment_parse/1_reverse_positive` | 384 → 363 | 175 → 166 | +5.4% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `segment_parse/1_duplicates_all` | 385 → 335 | 176 → 154 | +14.3% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `segment_parse/1_duplicates_positive` | 391 → 330 | 178 → 151 | +17.9% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `segment_parse/32_ordered_all` | 6,616 → 5,618 | 3,027 → 2,571 | +17.7% | 1 → 1 | 0 → 0 | 512 → 512 |
+| `segment_parse/32_ordered_positive` | 6,754 → 5,893 | 3,091 → 2,701 | +14.4% | 1 → 1 | 0 → 0 | 512 → 512 |
+| `segment_parse/32_negative_all` | 6,793 → 5,842 | 3,105 → 2,671 | +16.2% | 1 → 1 | 0 → 0 | 512 → 512 |
+| `segment_parse/32_negative_positive` | 6,818 → 5,949 | 3,120 → 2,721 | +14.7% | 1 → 1 | 0 → 0 | 512 → 512 |
+| `segment_parse/32_padded_all` | 8,649 → 7,456 | 3,957 → 3,408 | +16.1% | 1 → 1 | 0 → 0 | 512 → 512 |
+| `segment_parse/32_padded_positive` | 8,854 → 7,616 | 4,052 → 3,482 | +16.4% | 1 → 1 | 0 → 0 | 512 → 512 |
+| `segment_parse/32_reverse_all` | 6,715 → 5,632 | 3,071 → 2,576 | +19.2% | 1 → 1 | 0 → 0 | 512 → 512 |
+| `segment_parse/32_reverse_positive` | 6,746 → 5,907 | 3,088 → 2,702 | +14.3% | 1 → 1 | 0 → 0 | 512 → 512 |
+| `segment_parse/32_duplicates_all` | 6,641 → 5,681 | 3,036 → 2,602 | +16.7% | 1 → 1 | 0 → 0 | 512 → 512 |
+| `segment_parse/32_duplicates_positive` | 6,758 → 6,084 | 3,090 → 2,783 | +11.0% | 1 → 1 | 0 → 0 | 512 → 512 |
+| `segment_parse/4096_ordered_all` | 872,071 → 724,894 | 398,917 → 331,405 | +20.4% | 1 → 1 | 0 → 0 | 65,536 → 65,536 |
+| `segment_parse/4096_ordered_positive` | 886,288 → 764,753 | 405,260 → 349,744 | +15.9% | 1 → 1 | 0 → 0 | 65,536 → 65,536 |
+| `segment_parse/4096_negative_all` | 865,622 → 742,121 | 396,095 → 339,337 | +16.7% | 1 → 1 | 0 → 0 | 65,536 → 65,536 |
+| `segment_parse/4096_negative_positive` | 884,302 → 770,193 | 404,471 → 352,255 | +14.8% | 1 → 1 | 0 → 0 | 65,536 → 65,536 |
+| `segment_parse/4096_padded_all` | 1,180,965 → 1,052,667 | 540,231 → 481,352 | +12.2% | 1 → 1 | 0 → 0 | 65,536 → 65,536 |
+| `segment_parse/4096_padded_positive` | 1,146,238 → 1,045,024 | 524,235 → 478,037 | +9.7% | 1 → 1 | 0 → 0 | 65,536 → 65,536 |
+| `segment_parse/4096_reverse_all` | 904,467 → 774,989 | 413,638 → 354,658 | +16.6% | 1 → 1 | 0 → 0 | 65,536 → 65,536 |
+| `segment_parse/4096_reverse_positive` | 906,621 → 801,408 | 414,759 → 366,766 | +13.1% | 1 → 1 | 0 → 0 | 65,536 → 65,536 |
+| `segment_parse/4096_duplicates_all` | 892,142 → 750,337 | 408,176 → 343,256 | +18.9% | 1 → 1 | 0 → 0 | 65,536 → 65,536 |
+| `segment_parse/4096_duplicates_positive` | 882,102 → 770,445 | 403,573 → 352,489 | +14.5% | 1 → 1 | 0 → 0 | 65,536 → 65,536 |
+
+### Normalized timing builder
+
+| Case | CPU cycles, original → optimized | ns | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `timing_filter/0_ordered_stops` | 990 → 1,060 | 453 → 484 | -6.4% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `timing_filter/0_ordered_delays` | 1,040 → 1,104 | 476 → 508 | -6.3% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `timing_filter/0_ordered_fakes` | 1,087 → 1,025 | 498 → 469 | +6.2% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `timing_filter/0_negative_stops` | 1,068 → 996 | 487 → 456 | +6.8% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `timing_filter/0_negative_delays` | 1,057 → 1,074 | 486 → 494 | -1.6% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `timing_filter/0_negative_fakes` | 1,000 → 1,058 | 458 → 484 | -5.4% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `timing_filter/0_padded_stops` | 1,075 → 1,043 | 493 → 476 | +3.6% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `timing_filter/0_padded_delays` | 1,063 → 1,103 | 485 → 505 | -4.0% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `timing_filter/0_padded_fakes` | 1,040 → 1,037 | 475 → 477 | -0.4% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `timing_filter/0_reverse_stops` | 1,029 → 1,083 | 471 → 494 | -4.7% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `timing_filter/0_reverse_delays` | 1,029 → 1,069 | 470 → 491 | -4.3% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `timing_filter/0_reverse_fakes` | 1,010 → 1,037 | 463 → 476 | -2.7% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `timing_filter/0_duplicates_stops` | 1,039 → 979 | 474 → 447 | +6.0% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `timing_filter/0_duplicates_delays` | 1,046 → 1,061 | 479 → 484 | -1.0% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `timing_filter/0_duplicates_fakes` | 1,042 → 1,017 | 480 → 464 | +3.4% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `timing_filter/1_ordered_stops` | 1,767 → 1,690 | 811 → 773 | +4.9% | 4 → 4 | 0 → 0 | 48 → 48 |
+| `timing_filter/1_ordered_delays` | 1,715 → 1,572 | 785 → 718 | +9.3% | 4 → 4 | 0 → 0 | 48 → 48 |
+| `timing_filter/1_ordered_fakes` | 1,642 → 1,656 | 749 → 759 | -1.3% | 4 → 4 | 0 → 0 | 48 → 48 |
+| `timing_filter/1_negative_stops` | 1,439 → 1,395 | 659 → 637 | +3.5% | 3 → 3 | 0 → 0 | 40 → 40 |
+| `timing_filter/1_negative_delays` | 1,581 → 1,608 | 723 → 734 | -1.5% | 4 → 4 | 0 → 0 | 48 → 48 |
+| `timing_filter/1_negative_fakes` | 1,399 → 1,360 | 642 → 623 | +3.0% | 3 → 3 | 0 → 0 | 40 → 40 |
+| `timing_filter/1_padded_stops` | 1,785 → 1,710 | 815 → 784 | +4.0% | 4 → 4 | 0 → 0 | 48 → 48 |
+| `timing_filter/1_padded_delays` | 1,711 → 1,617 | 783 → 740 | +5.8% | 4 → 4 | 0 → 0 | 48 → 48 |
+| `timing_filter/1_padded_fakes` | 1,621 → 1,691 | 742 → 774 | -4.1% | 4 → 4 | 0 → 0 | 48 → 48 |
+| `timing_filter/1_reverse_stops` | 1,695 → 1,635 | 774 → 746 | +3.8% | 4 → 4 | 0 → 0 | 48 → 48 |
+| `timing_filter/1_reverse_delays` | 1,679 → 1,617 | 769 → 738 | +4.2% | 4 → 4 | 0 → 0 | 48 → 48 |
+| `timing_filter/1_reverse_fakes` | 1,640 → 1,559 | 749 → 714 | +4.9% | 4 → 4 | 0 → 0 | 48 → 48 |
+| `timing_filter/1_duplicates_stops` | 1,616 → 1,641 | 738 → 751 | -1.7% | 4 → 4 | 0 → 0 | 48 → 48 |
+| `timing_filter/1_duplicates_delays` | 1,644 → 1,669 | 753 → 764 | -1.4% | 4 → 4 | 0 → 0 | 48 → 48 |
+| `timing_filter/1_duplicates_fakes` | 1,645 → 1,534 | 752 → 700 | +7.4% | 4 → 4 | 0 → 0 | 48 → 48 |
+| `timing_filter/32_ordered_stops` | 9,163 → 8,356 | 4,192 → 3,819 | +9.8% | 4 → 4 | 0 → 0 | 792 → 792 |
+| `timing_filter/32_ordered_delays` | 9,020 → 8,307 | 4,130 → 3,802 | +8.6% | 4 → 4 | 0 → 0 | 792 → 792 |
+| `timing_filter/32_ordered_fakes` | 9,473 → 8,393 | 4,333 → 3,837 | +12.9% | 4 → 4 | 0 → 0 | 792 → 792 |
+| `timing_filter/32_negative_stops` | 8,712 → 7,844 | 3,986 → 3,587 | +11.1% | 4 → 4 | 0 → 0 | 664 → 664 |
+| `timing_filter/32_negative_delays` | 9,390 → 8,173 | 4,300 → 3,738 | +15.0% | 4 → 4 | 0 → 0 | 792 → 792 |
+| `timing_filter/32_negative_fakes` | 8,845 → 7,919 | 4,046 → 3,626 | +11.6% | 4 → 4 | 0 → 0 | 664 → 664 |
+| `timing_filter/32_padded_stops` | 11,154 → 10,279 | 5,102 → 4,700 | +8.6% | 4 → 4 | 0 → 0 | 792 → 792 |
+| `timing_filter/32_padded_delays` | 11,263 → 9,942 | 5,152 → 4,546 | +13.3% | 4 → 4 | 0 → 0 | 792 → 792 |
+| `timing_filter/32_padded_fakes` | 11,485 → 10,439 | 5,263 → 4,775 | +10.2% | 4 → 4 | 0 → 0 | 792 → 792 |
+| `timing_filter/32_reverse_stops` | 10,054 → 9,051 | 4,596 → 4,137 | +11.1% | 6 → 6 | 0 → 0 | 1,560 → 1,560 |
+| `timing_filter/32_reverse_delays` | 10,032 → 9,016 | 4,588 → 4,132 | +11.0% | 6 → 6 | 0 → 0 | 1,560 → 1,560 |
+| `timing_filter/32_reverse_fakes` | 10,329 → 9,422 | 4,725 → 4,312 | +9.6% | 6 → 6 | 0 → 0 | 1,560 → 1,560 |
+| `timing_filter/32_duplicates_stops` | 9,122 → 8,351 | 4,176 → 3,822 | +9.3% | 4 → 4 | 0 → 0 | 664 → 664 |
+| `timing_filter/32_duplicates_delays` | 9,119 → 7,986 | 4,177 → 3,652 | +14.4% | 4 → 4 | 0 → 0 | 664 → 664 |
+| `timing_filter/32_duplicates_fakes` | 9,392 → 8,373 | 4,299 → 3,826 | +12.4% | 4 → 4 | 0 → 0 | 664 → 664 |
+| `timing_filter/4096_ordered_stops` | 1,188,408 → 1,043,492 | 543,860 → 477,592 | +13.9% | 4 → 4 | 0 → 0 | 98,328 → 98,328 |
+| `timing_filter/4096_ordered_delays` | 1,101,627 → 964,163 | 504,167 → 440,986 | +14.3% | 4 → 4 | 0 → 0 | 98,328 → 98,328 |
+| `timing_filter/4096_ordered_fakes` | 1,180,954 → 1,027,124 | 540,615 → 469,879 | +15.1% | 4 → 4 | 0 → 0 | 98,328 → 98,328 |
+| `timing_filter/4096_negative_stops` | 1,010,034 → 884,052 | 462,182 → 404,485 | +14.3% | 4 → 4 | 0 → 0 | 81,944 → 81,944 |
+| `timing_filter/4096_negative_delays` | 1,051,565 → 915,462 | 480,892 → 418,711 | +14.9% | 4 → 4 | 0 → 0 | 98,328 → 98,328 |
+| `timing_filter/4096_negative_fakes` | 983,498 → 876,580 | 451,701 → 401,074 | +12.6% | 4 → 4 | 0 → 0 | 81,944 → 81,944 |
+| `timing_filter/4096_padded_stops` | 1,246,367 → 1,122,176 | 570,355 → 513,436 | +11.1% | 4 → 4 | 0 → 0 | 98,328 → 98,328 |
+| `timing_filter/4096_padded_delays` | 1,223,565 → 1,095,753 | 559,848 → 501,060 | +11.7% | 4 → 4 | 0 → 0 | 98,328 → 98,328 |
+| `timing_filter/4096_padded_fakes` | 1,248,815 → 1,145,421 | 571,278 → 523,954 | +9.0% | 4 → 4 | 0 → 0 | 98,328 → 98,328 |
+| `timing_filter/4096_reverse_stops` | 1,115,038 → 954,248 | 510,347 → 436,307 | +17.0% | 6 → 6 | 0 → 0 | 196,632 → 196,632 |
+| `timing_filter/4096_reverse_delays` | 1,070,798 → 943,505 | 489,753 → 431,567 | +13.5% | 6 → 6 | 0 → 0 | 196,632 → 196,632 |
+| `timing_filter/4096_reverse_fakes` | 1,124,891 → 977,376 | 514,683 → 447,251 | +15.1% | 6 → 6 | 0 → 0 | 196,632 → 196,632 |
+| `timing_filter/4096_duplicates_stops` | 983,404 → 866,426 | 449,740 → 396,452 | +13.4% | 4 → 4 | 0 → 0 | 81,944 → 81,944 |
+| `timing_filter/4096_duplicates_delays` | 968,588 → 840,757 | 442,914 → 384,445 | +15.2% | 4 → 4 | 0 → 0 | 81,944 → 81,944 |
+| `timing_filter/4096_duplicates_fakes` | 1,014,538 → 925,566 | 464,035 → 423,266 | +9.6% | 4 → 4 | 0 → 0 | 81,944 → 81,944 |
+
+### Raw timing builder
+
+| Case | CPU cycles, original → optimized | ns | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `timing_raw_filter/0_ordered_stops` | 925 → 953 | 422 → 438 | -3.7% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `timing_raw_filter/0_ordered_delays` | 935 → 906 | 429 → 413 | +3.9% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `timing_raw_filter/0_ordered_fakes` | 900 → 919 | 411 → 422 | -2.6% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `timing_raw_filter/0_negative_stops` | 938 → 887 | 428 → 405 | +5.7% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `timing_raw_filter/0_negative_delays` | 912 → 952 | 418 → 438 | -4.6% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `timing_raw_filter/0_negative_fakes` | 924 → 944 | 423 → 433 | -2.3% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `timing_raw_filter/0_padded_stops` | 901 → 937 | 412 → 428 | -3.7% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `timing_raw_filter/0_padded_delays` | 902 → 903 | 412 → 413 | -0.2% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `timing_raw_filter/0_padded_fakes` | 909 → 944 | 418 → 433 | -3.5% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `timing_raw_filter/0_reverse_stops` | 944 → 893 | 431 → 410 | +5.1% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `timing_raw_filter/0_reverse_delays` | 946 → 916 | 434 → 418 | +3.8% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `timing_raw_filter/0_reverse_fakes` | 942 → 948 | 432 → 433 | -0.2% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `timing_raw_filter/0_duplicates_stops` | 940 → 989 | 429 → 451 | -4.9% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `timing_raw_filter/0_duplicates_delays` | 906 → 942 | 421 → 435 | -3.2% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `timing_raw_filter/0_duplicates_fakes` | 904 → 890 | 415 → 407 | +2.0% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `timing_raw_filter/1_ordered_stops` | 1,642 → 1,586 | 751 → 726 | +3.4% | 3 → 3 | 0 → 0 | 36 → 36 |
+| `timing_raw_filter/1_ordered_delays` | 1,556 → 1,564 | 713 → 717 | -0.6% | 3 → 3 | 0 → 0 | 36 → 36 |
+| `timing_raw_filter/1_ordered_fakes` | 1,499 → 1,532 | 684 → 703 | -2.7% | 3 → 3 | 0 → 0 | 36 → 36 |
+| `timing_raw_filter/1_negative_stops` | 1,321 → 1,344 | 607 → 614 | -1.1% | 2 → 2 | 0 → 0 | 32 → 32 |
+| `timing_raw_filter/1_negative_delays` | 1,556 → 1,591 | 710 → 726 | -2.2% | 3 → 3 | 0 → 0 | 36 → 36 |
+| `timing_raw_filter/1_negative_fakes` | 1,331 → 1,261 | 610 → 575 | +6.1% | 2 → 2 | 0 → 0 | 32 → 32 |
+| `timing_raw_filter/1_padded_stops` | 1,601 → 1,607 | 735 → 737 | -0.3% | 3 → 3 | 0 → 0 | 36 → 36 |
+| `timing_raw_filter/1_padded_delays` | 1,631 → 1,600 | 748 → 735 | +1.8% | 3 → 3 | 0 → 0 | 36 → 36 |
+| `timing_raw_filter/1_padded_fakes` | 1,620 → 1,570 | 739 → 718 | +2.9% | 3 → 3 | 0 → 0 | 36 → 36 |
+| `timing_raw_filter/1_reverse_stops` | 1,553 → 1,568 | 713 → 720 | -1.0% | 3 → 3 | 0 → 0 | 36 → 36 |
+| `timing_raw_filter/1_reverse_delays` | 1,540 → 1,593 | 703 → 728 | -3.4% | 3 → 3 | 0 → 0 | 36 → 36 |
+| `timing_raw_filter/1_reverse_fakes` | 1,496 → 1,522 | 683 → 700 | -2.4% | 3 → 3 | 0 → 0 | 36 → 36 |
+| `timing_raw_filter/1_duplicates_stops` | 1,601 → 1,491 | 734 → 685 | +7.2% | 3 → 3 | 0 → 0 | 36 → 36 |
+| `timing_raw_filter/1_duplicates_delays` | 1,545 → 1,539 | 709 → 705 | +0.6% | 3 → 3 | 0 → 0 | 36 → 36 |
+| `timing_raw_filter/1_duplicates_fakes` | 1,549 → 1,553 | 710 → 711 | -0.1% | 3 → 3 | 0 → 0 | 36 → 36 |
+| `timing_raw_filter/32_ordered_stops` | 9,804 → 9,145 | 4,483 → 4,184 | +7.1% | 3 → 3 | 0 → 0 | 656 → 656 |
+| `timing_raw_filter/32_ordered_delays` | 9,635 → 8,900 | 4,405 → 4,069 | +8.3% | 3 → 3 | 0 → 0 | 656 → 656 |
+| `timing_raw_filter/32_ordered_fakes` | 9,694 → 9,009 | 4,437 → 4,122 | +7.6% | 3 → 3 | 0 → 0 | 656 → 656 |
+| `timing_raw_filter/32_negative_stops` | 8,934 → 8,357 | 4,086 → 3,823 | +6.9% | 3 → 3 | 0 → 0 | 592 → 592 |
+| `timing_raw_filter/32_negative_delays` | 9,428 → 8,547 | 4,317 → 3,908 | +10.5% | 3 → 3 | 0 → 0 | 656 → 656 |
+| `timing_raw_filter/32_negative_fakes` | 8,879 → 8,280 | 4,063 → 3,790 | +7.2% | 4 → 4 | 0 → 0 | 848 → 848 |
+| `timing_raw_filter/32_padded_stops` | 12,114 → 10,853 | 5,541 → 4,967 | +11.6% | 3 → 3 | 0 → 0 | 656 → 656 |
+| `timing_raw_filter/32_padded_delays` | 11,601 → 10,890 | 5,308 → 4,979 | +6.6% | 3 → 3 | 0 → 0 | 656 → 656 |
+| `timing_raw_filter/32_padded_fakes` | 11,760 → 10,801 | 5,374 → 4,937 | +8.9% | 3 → 3 | 0 → 0 | 656 → 656 |
+| `timing_raw_filter/32_reverse_stops` | 10,674 → 10,048 | 4,878 → 4,596 | +6.1% | 5 → 5 | 0 → 0 | 1,424 → 1,424 |
+| `timing_raw_filter/32_reverse_delays` | 10,579 → 9,654 | 4,839 → 4,419 | +9.5% | 5 → 5 | 0 → 0 | 1,424 → 1,424 |
+| `timing_raw_filter/32_reverse_fakes` | 10,323 → 9,523 | 4,724 → 4,353 | +8.5% | 5 → 5 | 0 → 0 | 1,424 → 1,424 |
+| `timing_raw_filter/32_duplicates_stops` | 9,564 → 8,683 | 4,373 → 3,971 | +10.1% | 3 → 3 | 0 → 0 | 592 → 592 |
+| `timing_raw_filter/32_duplicates_delays` | 9,735 → 8,635 | 4,455 → 3,949 | +12.8% | 4 → 4 | 0 → 0 | 848 → 848 |
+| `timing_raw_filter/32_duplicates_fakes` | 9,734 → 8,907 | 4,457 → 4,074 | +9.4% | 4 → 4 | 0 → 0 | 848 → 848 |
+| `timing_raw_filter/4096_ordered_stops` | 1,151,708 → 1,108,714 | 525,851 → 507,311 | +3.7% | 3 → 3 | 0 → 0 | 81,936 → 81,936 |
+| `timing_raw_filter/4096_ordered_delays` | 1,131,900 → 1,042,456 | 517,068 → 476,712 | +8.5% | 3 → 3 | 0 → 0 | 81,936 → 81,936 |
+| `timing_raw_filter/4096_ordered_fakes` | 1,072,073 → 1,046,256 | 489,642 → 478,897 | +2.2% | 3 → 3 | 0 → 0 | 81,936 → 81,936 |
+| `timing_raw_filter/4096_negative_stops` | 970,495 → 929,007 | 443,498 → 425,043 | +4.3% | 3 → 3 | 0 → 0 | 73,744 → 73,744 |
+| `timing_raw_filter/4096_negative_delays` | 1,025,210 → 884,214 | 468,180 → 404,220 | +15.8% | 3 → 3 | 0 → 0 | 81,936 → 81,936 |
+| `timing_raw_filter/4096_negative_fakes` | 1,135,291 → 908,653 | 518,879 → 415,436 | +24.9% | 4 → 4 | 0 → 0 | 106,512 → 106,512 |
+| `timing_raw_filter/4096_padded_stops` | 1,316,168 → 1,174,540 | 601,053 → 536,083 | +12.1% | 3 → 3 | 0 → 0 | 81,936 → 81,936 |
+| `timing_raw_filter/4096_padded_delays` | 1,245,333 → 1,124,424 | 568,877 → 513,238 | +10.8% | 3 → 3 | 0 → 0 | 81,936 → 81,936 |
+| `timing_raw_filter/4096_padded_fakes` | 1,251,879 → 1,112,149 | 571,752 → 507,355 | +12.7% | 3 → 3 | 0 → 0 | 81,936 → 81,936 |
+| `timing_raw_filter/4096_reverse_stops` | 1,180,609 → 1,057,424 | 539,166 → 482,710 | +11.7% | 5 → 5 | 0 → 0 | 180,240 → 180,240 |
+| `timing_raw_filter/4096_reverse_delays` | 1,139,673 → 997,838 | 520,383 → 455,742 | +14.2% | 5 → 5 | 0 → 0 | 180,240 → 180,240 |
+| `timing_raw_filter/4096_reverse_fakes` | 1,123,910 → 1,031,909 | 513,169 → 471,568 | +8.8% | 5 → 5 | 0 → 0 | 180,240 → 180,240 |
+| `timing_raw_filter/4096_duplicates_stops` | 1,021,524 → 927,071 | 466,568 → 423,813 | +10.1% | 3 → 3 | 0 → 0 | 73,744 → 73,744 |
+| `timing_raw_filter/4096_duplicates_delays` | 1,009,184 → 873,314 | 460,971 → 399,041 | +15.5% | 4 → 4 | 0 → 0 | 106,512 → 106,512 |
+| `timing_raw_filter/4096_duplicates_fakes` | 1,070,049 → 937,691 | 489,555 → 428,185 | +14.3% | 4 → 4 | 0 → 0 | 106,512 → 106,512 |
+
+### Escaped text and course matching
+
+| Case | CPU cycles, original → optimized | ns | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `escape_runs/0_clean` | 18 → 18 | 9 → 8 | +12.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `escape_runs/0_early` | 202 → 225 | 92 → 104 | -11.5% | 1 → 1 | 0 → 0 | 2 → 2 |
+| `escape_runs/0_late` | 199 → 201 | 93 → 92 | +1.1% | 1 → 1 | 0 → 0 | 2 → 2 |
+| `escape_runs/0_dense` | 18 → 18 | 8 → 8 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `escape_runs/0_unicode` | 188 → 190 | 86 → 87 | -1.1% | 1 → 1 | 0 → 0 | 8 → 8 |
+| `escape_runs/0_trailing` | 189 → 174 | 86 → 80 | +7.5% | 1 → 1 | 0 → 0 | 1 → 1 |
+| `escape_runs/16_clean` | 21 → 25 | 10 → 12 | -16.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `escape_runs/16_early` | 249 → 258 | 114 → 118 | -3.4% | 1 → 1 | 0 → 0 | 18 → 18 |
+| `escape_runs/16_late` | 188 → 190 | 86 → 87 | -1.1% | 1 → 1 | 0 → 0 | 18 → 18 |
+| `escape_runs/16_dense` | 198 → 208 | 91 → 95 | -4.2% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `escape_runs/16_unicode` | 255 → 255 | 117 → 116 | +0.9% | 1 → 1 | 0 → 0 | 23 → 23 |
+| `escape_runs/16_trailing` | 193 → 200 | 88 → 92 | -4.3% | 1 → 1 | 0 → 0 | 17 → 17 |
+| `escape_runs/4096_clean` | 124 → 119 | 57 → 55 | +3.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `escape_runs/4096_early` | 17,796 → 669 | 8,121 → 323 | +2414.2% | 1 → 1 | 0 → 0 | 4,098 → 4,098 |
+| `escape_runs/4096_late` | 485 → 547 | 222 → 251 | -11.6% | 1 → 1 | 0 → 0 | 4,098 → 4,098 |
+| `escape_runs/4096_dense` | 9,742 → 9,687 | 4,446 → 4,430 | +0.4% | 1 → 1 | 0 → 0 | 4,096 → 4,096 |
+| `escape_runs/4096_unicode` | 15,531 → 671 | 7,089 → 307 | +2209.1% | 1 → 1 | 0 → 0 | 4,103 → 4,103 |
+| `escape_runs/4096_trailing` | 509 → 515 | 233 → 236 | -1.3% | 1 → 1 | 0 → 0 | 4,097 → 4,097 |
+| `title_match/16_plain` | 1,278 → 1,250 | 584 → 571 | +2.3% | 1 → 1 | 0 → 0 | 520 → 520 |
+| `title_match/16_escaped` | 1,795 → 1,671 | 821 → 764 | +7.5% | 3 → 3 | 0 → 0 | 584 → 584 |
+| `title_match/16_cp1252` | 1,971 → 1,983 | 901 → 906 | -0.6% | 3 → 3 | 0 → 0 | 584 → 584 |
+| `title_match/16_cp_escape` | 2,751 → 2,700 | 1,258 → 1,232 | +2.1% | 5 → 5 | 0 → 0 | 712 → 712 |
+| `title_match/16_controls` | 2,278 → 2,094 | 1,040 → 955 | +8.9% | 4 → 3 | 0 → 0 | 648 → 616 |
+| `title_match/16_cp_controls` | 3,818 → 3,619 | 1,745 → 1,653 | +5.6% | 6 → 6 | 0 → 0 | 824 → 824 |
+| `title_match/4096_plain` | 18,204 → 16,831 | 8,329 → 7,689 | +8.3% | 1 → 1 | 0 → 0 | 520 → 520 |
+| `title_match/4096_escaped` | 55,972 → 48,938 | 25,596 → 22,385 | +14.3% | 3 → 3 | 0 → 0 | 16,904 → 16,904 |
+| `title_match/4096_cp1252` | 89,040 → 88,157 | 40,709 → 40,302 | +1.0% | 3 → 3 | 0 → 0 | 16,904 → 16,904 |
+| `title_match/4096_cp_escape` | 198,232 → 199,205 | 90,556 → 91,115 | -0.6% | 5 → 5 | 0 → 0 | 49,672 → 49,672 |
+| `title_match/4096_controls` | 122,107 → 120,612 | 55,868 → 55,168 | +1.3% | 4 → 3 | 0 → 0 | 33,288 → 25,096 |
+| `title_match/4096_cp_controls` | 323,121 → 331,298 | 147,833 → 151,562 | -2.5% | 6 → 6 | 0 → 0 | 78,344 → 78,344 |
+
+### Public metadata callers and text primitives
+
+| Case | CPU cycles, original → optimized | ns | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `unescape/16_clean` | 24 → 23 | 12 → 12 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `unescape/16_early` | 245 → 243 | 112 → 112 | +0.0% | 1 → 1 | 0 → 0 | 18 → 18 |
+| `unescape/16_late` | 185 → 178 | 86 → 82 | +4.9% | 1 → 1 | 0 → 0 | 18 → 18 |
+| `unescape/16_dense` | 199 → 187 | 91 → 86 | +5.8% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `unescape/16_unicode` | 214 → 192 | 99 → 88 | +12.5% | 1 → 1 | 0 → 0 | 22 → 22 |
+| `unescape/16_trailing` | 209 → 178 | 96 → 82 | +17.1% | 1 → 1 | 0 → 0 | 17 → 17 |
+| `unescape/4096_clean` | 132 → 112 | 61 → 52 | +17.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `unescape/4096_early` | 17,507 → 654 | 8,027 → 309 | +2497.7% | 1 → 1 | 0 → 0 | 4,098 → 4,098 |
+| `unescape/4096_late` | 453 → 462 | 208 → 212 | -1.9% | 1 → 1 | 0 → 0 | 4,098 → 4,098 |
+| `unescape/4096_dense` | 9,796 → 9,615 | 4,471 → 4,404 | +1.5% | 1 → 1 | 0 → 0 | 4,096 → 4,096 |
+| `unescape/4096_unicode` | 430 → 598 | 198 → 274 | -27.7% | 1 → 1 | 0 → 0 | 4,102 → 4,102 |
+| `unescape/4096_trailing` | 466 → 485 | 216 → 222 | -2.7% | 1 → 1 | 0 → 0 | 4,097 → 4,097 |
+| `decode_escape/16_clean` | 69 → 61 | 32 → 28 | +14.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `decode_escape/16_early` | 360 → 284 | 165 → 130 | +26.9% | 1 → 1 | 0 → 0 | 18 → 18 |
+| `decode_escape/16_late` | 220 → 210 | 101 → 96 | +5.2% | 1 → 1 | 0 → 0 | 18 → 18 |
+| `decode_escape/16_dense` | 241 → 221 | 111 → 102 | +8.8% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `decode_escape/16_unicode` | 288 → 238 | 132 → 109 | +21.1% | 1 → 1 | 0 → 0 | 22 → 22 |
+| `decode_escape/16_trailing` | 221 → 254 | 102 → 116 | -12.1% | 1 → 1 | 0 → 0 | 17 → 17 |
+| `decode_escape/4096_clean` | 464 → 507 | 212 → 232 | -8.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `decode_escape/4096_early` | 17,781 → 972 | 8,132 → 444 | +1731.5% | 1 → 1 | 0 → 0 | 4,098 → 4,098 |
+| `decode_escape/4096_late` | 826 → 781 | 377 → 357 | +5.6% | 1 → 1 | 0 → 0 | 4,098 → 4,098 |
+| `decode_escape/4096_dense` | 10,113 → 9,344 | 4,624 → 4,270 | +8.3% | 1 → 1 | 0 → 0 | 4,096 → 4,096 |
+| `decode_escape/4096_unicode` | 7,744 → 7,630 | 3,544 → 3,497 | +1.3% | 1 → 1 | 0 → 0 | 4,102 → 4,102 |
+| `decode_escape/4096_trailing` | 965 → 907 | 440 → 414 | +6.3% | 1 → 1 | 0 → 0 | 4,097 → 4,097 |
+| `metadata/title_16_clean` | 13,541 → 14,423 | 6,226 → 6,581 | -5.4% | 21 → 21 | 2 → 2 | 2,424 → 2,424 |
+| `metadata/title_16_tagged` | 15,045 → 17,477 | 6,971 → 7,970 | -12.5% | 21 → 21 | 2 → 2 | 2,443 → 2,443 |
+| `metadata/title_16_spaces` | 16,217 → 15,249 | 7,402 → 6,978 | +6.1% | 21 → 21 | 2 → 2 | 2,430 → 2,430 |
+| `metadata/title_16_unicode` | 12,608 → 11,774 | 5,754 → 5,404 | +6.5% | 21 → 21 | 2 → 2 | 2,435 → 2,435 |
+| `metadata/escape_16_clean` | 13,537 → 13,925 | 6,181 → 6,423 | -3.8% | 21 → 21 | 2 → 2 | 2,428 → 2,428 |
+| `metadata/escape_16_early` | 12,619 → 14,902 | 5,756 → 6,805 | -15.4% | 21 → 21 | 2 → 2 | 2,430 → 2,430 |
+| `metadata/escape_16_late` | 12,957 → 11,258 | 5,953 → 5,171 | +15.1% | 21 → 21 | 2 → 2 | 2,430 → 2,430 |
+| `metadata/escape_16_dense` | 12,814 → 11,818 | 5,847 → 5,399 | +8.3% | 21 → 21 | 2 → 2 | 2,428 → 2,428 |
+| `metadata/escape_16_unicode` | 11,276 → 13,242 | 5,148 → 6,084 | -15.4% | 21 → 21 | 2 → 2 | 2,434 → 2,434 |
+| `metadata/escape_16_trailing` | 15,841 → 11,846 | 7,308 → 5,434 | +34.5% | 21 → 21 | 2 → 2 | 2,429 → 2,429 |
+| `metadata/marker_16_clean` | 12,494 → 12,823 | 5,749 → 5,885 | -2.3% | 21 → 21 | 2 → 2 | 2,424 → 2,424 |
+| `metadata/marker_16_early` | 11,396 → 11,506 | 5,202 → 5,382 | -3.3% | 21 → 21 | 2 → 2 | 2,430 → 2,430 |
+| `metadata/marker_16_late` | 12,375 → 12,261 | 5,646 → 5,603 | +0.8% | 21 → 21 | 2 → 2 | 2,430 → 2,430 |
+| `metadata/marker_16_dense` | 13,278 → 11,636 | 6,100 → 5,310 | +14.9% | 21 → 21 | 2 → 2 | 2,426 → 2,426 |
+| `metadata/marker_16_unknown` | 12,955 → 11,702 | 5,929 → 5,502 | +7.8% | 21 → 21 | 2 → 2 | 2,434 → 2,434 |
+| `metadata/marker_16_nested` | 10,861 → 11,256 | 4,963 → 5,170 | -4.0% | 21 → 21 | 2 → 2 | 2,433 → 2,433 |
+| `metadata/marker_16_unicode` | 11,568 → 14,709 | 5,288 → 6,732 | -21.4% | 21 → 21 | 2 → 2 | 2,436 → 2,436 |
+| `metadata/marker_16_trailing` | 11,157 → 12,667 | 5,131 → 5,941 | -13.6% | 21 → 21 | 2 → 2 | 2,425 → 2,425 |
+| `metadata/title_4096_clean` | 32,664 → 34,036 | 15,082 → 15,731 | -4.1% | 21 → 21 | 2 → 2 | 6,504 → 6,504 |
+| `metadata/title_4096_tagged` | 34,666 → 36,610 | 15,850 → 16,725 | -5.2% | 21 → 21 | 2 → 2 | 6,523 → 6,523 |
+| `metadata/title_4096_spaces` | 43,461 → 39,670 | 19,866 → 18,135 | +9.5% | 21 → 21 | 2 → 2 | 6,510 → 6,510 |
+| `metadata/title_4096_unicode` | 40,759 → 43,560 | 18,624 → 19,993 | -6.8% | 21 → 21 | 2 → 2 | 6,515 → 6,515 |
+| `metadata/escape_4096_clean` | 30,728 → 29,496 | 14,037 → 13,461 | +4.3% | 21 → 21 | 2 → 2 | 6,508 → 6,508 |
+| `metadata/escape_4096_early` | 48,411 → 29,330 | 22,188 → 13,423 | +65.3% | 21 → 21 | 2 → 2 | 6,510 → 6,510 |
+| `metadata/escape_4096_late` | 33,610 → 32,324 | 15,348 → 14,773 | +3.9% | 21 → 21 | 2 → 2 | 6,510 → 6,510 |
+| `metadata/escape_4096_dense` | 29,784 → 33,491 | 13,604 → 15,307 | -11.1% | 21 → 21 | 2 → 2 | 6,508 → 6,508 |
+| `metadata/escape_4096_unicode` | 39,600 → 32,712 | 18,247 → 14,946 | +22.1% | 21 → 21 | 2 → 2 | 6,514 → 6,514 |
+| `metadata/escape_4096_trailing` | 31,088 → 31,441 | 14,214 → 14,366 | -1.1% | 21 → 21 | 2 → 2 | 6,509 → 6,509 |
+| `metadata/marker_4096_clean` | 32,242 → 30,383 | 14,743 → 13,889 | +6.1% | 21 → 21 | 2 → 2 | 6,504 → 6,504 |
+| `metadata/marker_4096_early` | 56,980 → 40,592 | 26,298 → 18,542 | +41.8% | 21 → 21 | 2 → 2 | 6,510 → 6,510 |
+| `metadata/marker_4096_late` | 44,918 → 45,030 | 20,566 → 20,698 | -0.6% | 21 → 21 | 2 → 2 | 6,510 → 6,510 |
+| `metadata/marker_4096_dense` | 159,004 → 161,054 | 72,853 → 73,619 | -1.0% | 21 → 21 | 2 → 2 | 7,322 → 7,322 |
+| `metadata/marker_4096_unknown` | 36,817 → 33,630 | 16,956 → 15,465 | +9.6% | 21 → 21 | 2 → 2 | 6,514 → 6,514 |
+| `metadata/marker_4096_nested` | 35,054 → 35,680 | 16,028 → 16,307 | -1.7% | 21 → 21 | 2 → 2 | 6,513 → 6,513 |
+| `metadata/marker_4096_unicode` | 48,578 → 47,276 | 22,399 → 21,722 | +3.1% | 21 → 21 | 2 → 2 | 6,516 → 6,516 |
+| `metadata/marker_4096_trailing` | 29,244 → 30,291 | 13,371 → 13,936 | -4.1% | 21 → 21 | 2 → 2 | 6,505 → 6,505 |
+
+### Other caller controls
+
+| Case | CPU cycles, original → optimized | ns | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `standard/uniform_detailed` | 11,142 → 11,777 | 5,107 → 5,390 | -5.3% | 2 → 2 | 0 → 0 | 24,582 → 24,582 |
+| `standard/uniform_partial` | 7,625 → 8,026 | 3,499 → 3,683 | -5.0% | 2 → 2 | 0 → 0 | 24,582 → 24,582 |
+| `standard/uniform_simple` | 7,088 → 7,606 | 3,262 → 3,489 | -6.5% | 2 → 2 | 0 → 0 | 24,582 → 24,582 |
+| `standard/uniform_total` | 6,204 → 6,438 | 2,840 → 2,955 | -3.9% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `standard/uniform_three` | 5,955 → 5,904 | 2,732 → 2,704 | +1.0% | 3 → 3 | 0 → 0 | 16 → 16 |
+| `standard/fragmented_detailed` | 41,130 → 41,983 | 18,813 → 19,210 | -2.1% | 2 → 2 | 1 → 1 | 83,556 → 83,556 |
+| `standard/fragmented_partial` | 44,424 → 44,733 | 20,321 → 20,478 | -0.8% | 2 → 2 | 1 → 1 | 83,556 → 83,556 |
+| `standard/fragmented_simple` | 46,036 → 45,065 | 21,047 → 20,624 | +2.1% | 2 → 2 | 1 → 1 | 83,556 → 83,556 |
+| `standard/fragmented_total` | 5,999 → 6,799 | 2,741 → 3,107 | -11.8% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `standard/fragmented_three` | 79,714 → 79,184 | 36,467 → 36,261 | +0.6% | 3 → 3 | 0 → 0 | 29,484 → 29,484 |
+| `standard/empty_detailed` | 5,322 → 5,378 | 2,444 → 2,455 | -0.4% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `standard/empty_partial` | 5,114 → 5,360 | 2,334 → 2,452 | -4.8% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `standard/empty_simple` | 5,209 → 5,528 | 2,378 → 2,532 | -6.1% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `standard/empty_total` | 6,054 → 6,312 | 2,765 → 2,897 | -4.6% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `standard/empty_three` | 5,415 → 5,579 | 2,474 → 2,551 | -3.0% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `standard/short_detailed` | 616 → 716 | 283 → 327 | -13.5% | 2 → 2 | 0 → 0 | 492 → 492 |
+| `standard/short_partial` | 592 → 655 | 271 → 299 | -9.4% | 2 → 2 | 0 → 0 | 492 → 492 |
+| `standard/short_simple` | 671 → 632 | 307 → 289 | +6.2% | 2 → 2 | 0 → 0 | 492 → 492 |
+| `standard/short_total` | 214 → 225 | 99 → 104 | -4.8% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `standard/short_three` | 1,098 → 1,184 | 504 → 544 | -7.4% | 3 → 3 | 0 → 0 | 252 → 252 |
+| `standard/leading_detailed` | 6,005 → 6,008 | 2,744 → 2,752 | -0.3% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `standard/leading_partial` | 5,967 → 5,941 | 2,724 → 2,724 | +0.0% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `standard/leading_simple` | 5,994 → 5,872 | 2,745 → 2,680 | +2.4% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `standard/leading_total` | 6,109 → 6,114 | 2,800 → 2,791 | +0.3% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `standard/leading_three` | 5,655 → 5,823 | 2,596 → 2,666 | -2.6% | 3 → 3 | 0 → 0 | 12 → 12 |
+| `streams/uniform_combined` | 26,907 → 26,592 | 12,313 → 12,157 | +1.3% | 6 → 6 | 0 → 0 | 33 → 33 |
+| `streams/uniform_cold` | 27,486 → 27,261 | 12,567 → 12,466 | +0.8% | 7 → 7 | 0 → 0 | 16,417 → 16,417 |
+| `streams/fragmented_combined` | 221,584 → 210,098 | 101,397 → 96,158 | +5.4% | 6 → 6 | 0 → 0 | 72,039 → 72,039 |
+| `streams/fragmented_cold` | 227,747 → 214,033 | 104,227 → 97,969 | +6.4% | 7 → 7 | 2 → 2 | 186,727 → 186,727 |
+| `streams/empty_combined` | 5,523 → 5,578 | 2,526 → 2,547 | -0.8% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `streams/empty_cold` | 5,846 → 5,763 | 2,710 → 2,637 | +2.8% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `streams/short_combined` | 3,814 → 3,516 | 1,743 → 1,606 | +8.5% | 6 → 6 | 0 → 0 | 891 → 891 |
+| `streams/short_cold` | 4,195 → 4,072 | 1,917 → 1,871 | +2.5% | 7 → 7 | 0 → 0 | 1,403 → 1,403 |
+| `streams/leading_combined` | 6,863 → 6,973 | 3,136 → 3,180 | -1.4% | 6 → 6 | 0 → 0 | 33 → 33 |
+| `streams/leading_cold` | 7,902 → 7,717 | 3,609 → 3,541 | +1.9% | 7 → 7 | 0 → 0 | 1,569 → 1,569 |
+| `sn/uniform_detailed` | 12,752 → 12,842 | 5,834 → 5,875 | -0.7% | 1 → 1 | 0 → 0 | 160 → 160 |
+| `sn/uniform_partial` | 12,495 → 12,358 | 5,733 → 5,639 | +1.7% | 1 → 1 | 0 → 0 | 160 → 160 |
+| `sn/uniform_simple` | 12,419 → 12,824 | 5,676 → 5,877 | -3.4% | 1 → 1 | 0 → 0 | 160 → 160 |
+| `sn/uniform_three` | 13,371 → 13,086 | 6,122 → 5,972 | +2.5% | 3 → 3 | 0 → 0 | 480 → 480 |
+| `sn/fragmented_detailed` | 91,546 → 94,405 | 41,859 → 43,202 | -3.1% | 1 → 1 | 6 → 6 | 20,320 → 20,320 |
+| `sn/fragmented_partial` | 83,309 → 83,349 | 38,148 → 38,135 | +0.0% | 1 → 1 | 5 → 5 | 10,080 → 10,080 |
+| `sn/fragmented_simple` | 78,503 → 77,595 | 35,884 → 35,506 | +1.1% | 1 → 1 | 5 → 5 | 10,080 → 10,080 |
+| `sn/fragmented_three` | 162,916 → 164,537 | 74,570 → 75,322 | -1.0% | 3 → 3 | 16 → 16 | 40,480 → 40,480 |
+| `sn/empty_detailed` | 5,146 → 5,061 | 2,358 → 2,311 | +2.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `sn/empty_partial` | 5,039 → 5,036 | 2,301 → 2,304 | -0.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `sn/empty_simple` | 5,155 → 5,041 | 2,362 → 2,303 | +2.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `sn/empty_three` | 5,128 → 5,263 | 2,348 → 2,409 | -2.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `sn/short_detailed` | 1,222 → 1,135 | 558 → 522 | +6.9% | 1 → 1 | 0 → 0 | 155 → 155 |
+| `sn/short_partial` | 1,231 → 1,195 | 562 → 550 | +2.2% | 1 → 1 | 0 → 0 | 155 → 155 |
+| `sn/short_simple` | 1,035 → 1,062 | 481 → 488 | -1.4% | 1 → 1 | 0 → 0 | 155 → 155 |
+| `sn/short_three` | 2,274 → 2,334 | 1,040 → 1,067 | -2.5% | 3 → 3 | 0 → 0 | 465 → 465 |
+| `sn/leading_detailed` | 5,689 → 5,687 | 2,611 → 2,605 | +0.2% | 1 → 1 | 0 → 0 | 160 → 160 |
+| `sn/leading_partial` | 5,720 → 5,602 | 2,633 → 2,627 | +0.2% | 1 → 1 | 0 → 0 | 160 → 160 |
+| `sn/leading_simple` | 5,462 → 5,746 | 2,492 → 2,624 | -5.0% | 1 → 1 | 0 → 0 | 160 → 160 |
+| `sn/leading_three` | 6,159 → 6,207 | 2,816 → 2,867 | -1.8% | 3 → 3 | 0 → 0 | 480 → 480 |
+| `hash_batch/1_global` | 26,119 → 26,746 | 11,941 → 12,250 | -2.5% | 28 → 28 | 2 → 2 | 5,283 → 5,283 |
+| `hash_batch/1_repeat` | 27,656 → 26,981 | 12,647 → 12,339 | +2.5% | 29 → 29 | 4 → 4 | 5,318 → 5,318 |
+| `hash_batch/1_vary` | 27,812 → 26,419 | 12,753 → 12,079 | +5.6% | 29 → 29 | 4 → 4 | 5,318 → 5,318 |
+| `hash_batch/1_distinct` | 37,010 → 35,176 | 16,920 → 16,092 | +5.1% | 36 → 36 | 18 → 18 | 5,563 → 5,563 |
+| `hash_batch/128_global` | 172,041 → 170,853 | 78,752 → 78,172 | +0.7% | 28 → 28 | 2 → 2 | 12,213 → 12,213 |
+| `hash_batch/128_repeat` | 221,286 → 222,438 | 101,254 → 101,778 | -0.5% | 29 → 29 | 4 → 4 | 19,178 → 19,178 |
+| `hash_batch/128_vary` | 220,936 → 225,248 | 101,100 → 103,104 | -1.9% | 29 → 29 | 4 → 4 | 19,178 → 19,178 |
+| `hash_batch/128_distinct` | 563,644 → 591,320 | 257,803 → 270,577 | -4.7% | 36 → 36 | 18 → 18 | 67,933 → 67,933 |
+| `analyze/fast_fake_lifts` | 683,890 → 718,373 | 312,706 → 328,530 | -4.8% | 31 → 31 | 4 → 4 | 59,028 → 59,028 |
+| `analyze/camellia` | 478,542,989 → 481,544,894 | 218,985,580 → 220,352,350 | -0.6% | 110 → 110 | 0 → 0 | 5,263,624 → 5,263,624 |
+| `analyze/fast_camellia` | 60,900,495 → 61,533,357 | 27,876,680 → 28,168,340 | -1.0% | 115 → 115 | 0 → 0 | 7,051,152 → 7,051,152 |
+| `analyze/mixed_small` | 56,368 → 65,644 | 25,827 → 29,995 | -13.9% | 59 → 59 | 3 → 3 | 7,460 → 7,460 |
+| `report/json/16_clean` | 107,039 → 95,272 | 48,975 → 43,629 | +12.3% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/16_early` | 111,809 → 99,682 | 51,056 → 45,636 | +11.9% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/16_late` | 109,449 → 98,062 | 50,144 → 44,858 | +11.8% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/16_dense` | 104,908 → 99,409 | 48,113 → 45,557 | +5.6% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/16_comma` | 109,748 → 104,855 | 50,136 → 48,001 | +4.4% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/16_comma_quote` | 100,219 → 102,634 | 45,740 → 46,964 | -2.6% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/16_custom` | 110,617 → 109,719 | 50,542 → 50,280 | +0.5% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_clean` | 159,105 → 148,986 | 72,653 → 68,021 | +6.8% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_early` | 171,754 → 157,733 | 78,612 → 72,325 | +8.7% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_late` | 220,968 → 212,970 | 101,359 → 97,384 | +4.1% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_dense` | 420,531 → 386,188 | 192,793 → 176,912 | +9.0% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_comma` | 146,319 → 154,684 | 67,074 → 70,688 | -5.1% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_comma_quote` | 211,741 → 212,292 | 96,755 → 97,185 | -0.4% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_custom` | 153,301 → 146,652 | 70,042 → 67,147 | +4.3% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/camellia` | 23,514,811 → 23,439,038 | 10,760,796 → 10,725,380 | +0.3% | 30 → 30 | 0 → 0 | 850 → 850 |
+| `cleanup/pair_1_clean` | 713 → 716 | 333 → 334 | -0.3% | 1 → 1 | 1 → 1 | 27 → 27 |
+| `cleanup/speed_1_clean` | 920 → 935 | 427 → 434 | -1.6% | 1 → 1 | 1 → 1 | 36 → 36 |
+| `cleanup/pair_1_early` | 924 → 810 | 435 → 377 | +15.4% | 2 → 2 | 0 → 0 | 26 → 26 |
+| `cleanup/speed_1_early` | 2,739 → 1,275 | 1,311 → 589 | +122.6% | 2 → 2 | 1 → 1 | 64 → 64 |
+| `cleanup/pair_1_late` | 1,227 → 810 | 572 → 378 | +51.3% | 2 → 2 | 0 → 0 | 26 → 26 |
+| `cleanup/speed_1_late` | 1,337 → 1,262 | 620 → 583 | +6.3% | 2 → 2 | 1 → 1 | 64 → 64 |
+| `cleanup/pair_128_clean` | 49,791 → 49,355 | 22,740 → 22,775 | -0.2% | 1 → 1 | 1 → 1 | 4,521 → 4,521 |
+| `cleanup/speed_128_clean` | 70,703 → 85,410 | 32,259 → 39,017 | -17.3% | 1 → 1 | 1 → 1 | 5,673 → 5,673 |
+| `cleanup/pair_128_early` | 62,081 → 53,156 | 28,375 → 24,260 | +17.0% | 2 → 2 | 1 → 1 | 6,044 → 6,044 |
+| `cleanup/speed_128_early` | 86,970 → 81,636 | 39,679 → 37,323 | +6.3% | 2 → 2 | 1 → 1 | 7,580 → 7,580 |
+| `cleanup/pair_128_late` | 62,687 → 60,496 | 28,748 → 27,604 | +4.1% | 2 → 2 | 1 → 1 | 6,044 → 6,044 |
+| `cleanup/speed_128_late` | 96,729 → 92,491 | 44,335 → 42,221 | +5.0% | 2 → 2 | 1 → 1 | 7,580 → 7,580 |
+| `cleanup/pair_4096_clean` | 1,611,240 → 1,707,322 | 737,077 → 781,770 | -5.7% | 1 → 1 | 1 → 1 | 163,695 → 163,695 |
+| `cleanup/speed_4096_clean` | 2,521,056 → 2,598,406 | 1,153,896 → 1,189,073 | -3.0% | 1 → 1 | 1 → 1 | 200,559 → 200,559 |
+| `cleanup/pair_4096_early` | 2,141,923 → 1,965,348 | 980,351 → 899,422 | +9.0% | 2 → 2 | 1 → 1 | 218,276 → 218,276 |
+| `cleanup/speed_4096_early` | 2,738,201 → 2,718,044 | 1,252,691 → 1,243,493 | +0.7% | 2 → 2 | 1 → 1 | 267,428 → 267,428 |
+| `cleanup/pair_4096_late` | 2,041,574 → 2,125,728 | 934,514 → 973,115 | -4.0% | 2 → 2 | 1 → 1 | 218,276 → 218,276 |
+| `cleanup/speed_4096_late` | 2,991,364 → 3,050,161 | 1,369,137 → 1,395,960 | -1.9% | 2 → 2 | 1 → 1 | 267,428 → 267,428 |
+| `cleanup/0_ordered` | 823 → 854 | 383 → 397 | -3.5% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `cleanup/0_duplicates` | 904 → 852 | 421 → 396 | +6.3% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `cleanup/0_reverse` | 904 → 918 | 421 → 426 | -1.2% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `cleanup/1_ordered` | 5,395 → 4,689 | 2,666 → 2,143 | +24.4% | 14 → 14 | 0 → 0 | 192 → 192 |
+| `cleanup/1_duplicates` | 4,820 → 4,331 | 2,205 → 1,985 | +11.1% | 14 → 14 | 0 → 0 | 192 → 192 |
+| `cleanup/1_reverse` | 4,445 → 4,537 | 2,034 → 2,075 | -2.0% | 14 → 14 | 0 → 0 | 192 → 192 |
+| `cleanup/32_ordered` | 54,980 → 53,714 | 25,128 → 24,592 | +2.2% | 14 → 14 | 0 → 0 | 5,528 → 5,528 |
+| `cleanup/32_duplicates` | 55,832 → 52,864 | 25,599 → 24,132 | +6.1% | 14 → 14 | 0 → 0 | 4,600 → 4,600 |
+| `cleanup/32_reverse` | 62,722 → 61,006 | 28,634 → 27,831 | +2.9% | 24 → 24 | 0 → 0 | 10,136 → 10,136 |
+| `cleanup/4096_ordered` | 7,370,404 → 6,828,331 | 3,372,005 → 3,125,074 | +7.9% | 14 → 14 | 0 → 0 | 731,704 → 731,704 |
+| `cleanup/4096_duplicates` | 6,992,135 → 6,433,571 | 3,198,567 → 2,943,363 | +8.7% | 14 → 14 | 0 → 0 | 611,032 → 611,032 |
+| `cleanup/4096_reverse` | 41,971,271 → 40,705,283 | 19,204,005 → 18,627,914 | +3.1% | 24 → 24 | 0 → 0 | 1,321,528 → 1,321,528 |
+
+### Focused final repeats
+
+Long repeats bring the late-escape and short metadata cases close to baseline. The unchanged `analyze/mixed_small` and `cleanup/speed_128_clean` controls remain 10.4% and 7.8% slower in this repeat; their original/original calibration below is stable. This pass does not establish a uniform composed CPU improvement. The escaped ASCII title allocation saving and long-run text gain remain confirmed.
+
+| Case | CPU cycles, original → optimized | ns | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `title_match/4096_cp_controls` | 325,573 → 339,797 | 148,960 → 155,417 | -4.2% | 6 → 6 | 0 → 0 | 78,344 → 78,344 |
+| `title_match/4096_cp_escape` | 203,157 → 197,837 | 92,999 → 90,500 | +2.8% | 5 → 5 | 0 → 0 | 49,672 → 49,672 |
+| `title_match/4096_controls` | 126,832 → 125,646 | 58,129 → 57,686 | +0.8% | 4 → 3 | 0 → 0 | 33,288 → 25,096 |
+| `escape_runs/4096_dense` | 9,262 → 9,204 | 4,240 → 4,199 | +1.0% | 1 → 1 | 0 → 0 | 4,096 → 4,096 |
+| `escape_runs/4096_early` | 16,899 → 713 | 7,734 → 326 | +2272.4% | 1 → 1 | 0 → 0 | 4,098 → 4,098 |
+| `unescape/16_unicode` | 161 → 185 | 74 → 86 | -14.0% | 1 → 1 | 0 → 0 | 22 → 22 |
+| `metadata/escape_16_trailing` | 13,947 → 13,684 | 6,380 → 6,260 | +1.9% | 21 → 21 | 2 → 2 | 2,429 → 2,429 |
+| `analyze/fast_fake_lifts` | 578,066 → 595,844 | 264,460 → 272,563 | -3.0% | 31 → 31 | 4 → 4 | 59,028 → 59,028 |
+| `unescape/4096_unicode` | 549 → 525 | 251 → 241 | +4.1% | 1 → 1 | 0 → 0 | 4,102 → 4,102 |
+| `decode_escape/4096_clean` | 491 → 482 | 224 → 221 | +1.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `standard/short_detailed` | 649 → 644 | 296 → 295 | +0.3% | 2 → 2 | 0 → 0 | 492 → 492 |
+| `standard/fragmented_total` | 6,051 → 5,982 | 2,769 → 2,736 | +1.2% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `analyze/mixed_small` | 52,248 → 58,296 | 23,899 → 26,674 | -10.4% | 59 → 59 | 3 → 3 | 7,460 → 7,460 |
+| `cleanup/speed_128_clean` | 69,243 → 75,020 | 31,661 → 34,338 | -7.8% | 1 → 1 | 1 → 1 | 5,673 → 5,673 |
+| `metadata/title_16_tagged` | 12,981 → 13,044 | 5,936 → 5,963 | -0.5% | 21 → 21 | 2 → 2 | 2,443 → 2,443 |
+| `metadata/escape_16_early` | 12,589 → 12,669 | 5,754 → 5,790 | -0.6% | 21 → 21 | 2 → 2 | 2,430 → 2,430 |
+| `metadata/escape_16_unicode` | 11,547 → 11,395 | 5,281 → 5,218 | +1.2% | 21 → 21 | 2 → 2 | 2,434 → 2,434 |
+| `metadata/marker_16_unicode` | 12,015 → 11,971 | 5,496 → 5,478 | +0.3% | 21 → 21 | 2 → 2 | 2,436 → 2,436 |
+| `metadata/escape_4096_dense` | 31,980 → 31,978 | 14,626 → 14,629 | -0.0% | 21 → 21 | 2 → 2 | 6,508 → 6,508 |
+| `escape_runs/4096_late` | 545 → 527 | 250 → 240 | +4.2% | 1 → 1 | 0 → 0 | 4,098 → 4,098 |
+| `timing_filter/0_ordered_stops` | 1,059 → 1,049 | 484 → 481 | +0.6% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `segment_parse/0_duplicates_all` | 20 → 20 | 9 → 9 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `escape_runs/16_clean` | 21 → 21 | 10 → 10 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+
+### Original/original calibration
+
+Both sides here run the identical original executable. Differences quantify host/process variability; they do not automatically explain every slower optimized sample.
+
+| Case | CPU cycles, original → optimized | ns | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `standard/short_partial` | 690 → 647 | 315 → 296 | +6.4% | 2 → 2 | 0 → 0 | 492 → 492 |
+| `standard/leading_simple` | 6,128 → 6,157 | 2,804 → 2,819 | -0.5% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `unescape/16_unicode` | 192 → 187 | 88 → 86 | +2.3% | 1 → 1 | 0 → 0 | 22 → 22 |
+| `metadata/marker_16_late` | 14,257 → 13,936 | 6,523 → 6,374 | +2.3% | 21 → 21 | 2 → 2 | 2,430 → 2,430 |
+| `metadata/escape_16_trailing` | 13,287 → 14,016 | 6,068 → 6,414 | -5.4% | 21 → 21 | 2 → 2 | 2,429 → 2,429 |
+| `segment_parse/1_padded_all` | 596 → 436 | 273 → 199 | +37.2% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `timing_filter/32_negative_fakes` | 8,026 → 8,142 | 3,663 → 3,717 | -1.5% | 4 → 4 | 0 → 0 | 664 → 664 |
+| `title_match/16_cp_escape` | 3,585 → 3,610 | 1,637 → 1,647 | -0.6% | 5 → 5 | 0 → 0 | 712 → 712 |
+| `analyze/mixed_small` | 48,715 → 48,438 | 22,247 → 22,114 | +0.6% | 59 → 59 | 3 → 3 | 7,460 → 7,460 |
+| `cleanup/speed_128_clean` | 65,659 → 65,697 | 29,965 → 29,979 | -0.0% | 1 → 1 | 1 → 1 | 5,673 → 5,673 |
+
+### Validation
+
+- 154 core + 79 rssp + 29 integration release tests pass (262 total), zero failed.
+- After confirming the optimizations, `cargo test --release --test all_parity -- --test-threads=22`: 30,489 passed, zero failed.
+- Strict release workspace Clippy with all targets, `cargo fmt --all -- --check`, and `git diff --check` pass.
+- Explicit tests cover borrowed/owned escape outputs, Unicode immediately after escapes, repeated/trailing backslashes, controls, CP1252 titles, transliteration precedence, padded numbers, nonfinite values, f32 overflow/underflow, empty inputs, ordering and duplicate rows.
+- Complete corpus output remains byte-identical: 30,843 files, 56,125 supported charts, 30,489 successes and 354 matched errors. Reports, hashes, timing, durations and NPS are unchanged; no golden data is updated.
+- Corpus: 174,790,323 UTF-8 bytes; SHA-256 `e7d2f22bd7b7f48c0335075d8d2ac355063b58809fdd77c42dcec23927a5759d`.
+- Core trace: 14,417 rows, 17,171,715 UTF-8 bytes (including 9,331 exhaustive escape combinations); SHA-256 `0cc119ac2330c3ef43c9fd9bbb4432fcc99ca52d6b94dc89ee96c81a4bb5d5c0`.
+- Leaf trace: 201 rows, 29,475,978 UTF-8 bytes; SHA-256 `a4119df5e7f479587d617afd8e5117dd63d2232d10e467792f42ac92a2e2d29e`.
+
+### Reproduction
+
+Keep this harness, fixtures and package version for both builds. For the original build, restore production bodies in `parse.rs`, `timing.rs` and `course.rs` from `2832eb5`, keeping test module declarations. The direct parser benchmark calls need the original callee names in that build. Save the executables before rebuilding the optimized bodies.
+
+```powershell
+cargo test --release -p rssp-core --lib
+cargo test --release -p rssp --lib
+cargo bench -p rssp --bench hotpath_perf --no-run
+$env:RSSP_PASS_FILTER='segment_parse/32_'
+$env:RSSP_PASS_ITERS='5000'
+.\saved-core.exe timing::pass_edges::filter_hotpath --exact --ignored --nocapture --test-threads=1
+# Builders: timing_filter/ or timing_raw_filter/ with the same ignored test.
+# Text: parse::pass_edges::escape_hotpath with escape_runs/.
+# Course: course::pass_edges::loader_hotpath in saved-leaf.exe with title_match/.
+$env:RSSP_HOT_FILTER='metadata/'
+$env:RSSP_HOT_ITERS='100'
+.\saved-hotpath.exe
+# Alternate old/new, new/old, old/new; compare _trace and RSSP_HOT_VERIFY=1 output separately.
+cargo clippy --release --workspace --all-targets -- -D warnings
+cargo test --release --test optimization_edges
+cargo test --release --test all_parity -- --test-threads=22
+```

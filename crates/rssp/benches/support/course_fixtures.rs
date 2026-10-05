@@ -18,11 +18,13 @@ pub fn course(count: usize, length: usize, escaped: bool) -> Vec<u8> {
 }
 
 pub fn title(length: usize, kind: &str) -> (Vec<u8>, String) {
-    let (raw, decoded): (&[u8], &str) = match kind {
-        "plain" => (b"a", "a"),
-        "escaped" => (b"\\a", "a"),
-        "cp1252" => (&[0xe9], "é"),
-        "cp_escape" => (&[b'\\', 0xe9], "é"),
+    let (raw, title, subtitle): (&[u8], &str, &str) = match kind {
+        "plain" => (b"a", "a", "a"),
+        "escaped" => (b"\\a", "a", "a"),
+        "cp1252" => (&[0xe9], "é", "é"),
+        "cp_escape" => (&[b'\\', 0xe9], "é", "é"),
+        "controls" => (b"\\a\x01", "a", "a\x01"),
+        "cp_controls" => (&[b'\\', 0xe9, 0x01], "é", "é\x01"),
         _ => unreachable!("known fixture kind"),
     };
     let mut data = b"#TITLE:".to_vec();
@@ -32,7 +34,7 @@ pub fn title(length: usize, kind: &str) -> (Vec<u8>, String) {
     data.extend_from_slice(b";#BPMS:0=120;#NOTES:dance-single::Hard:8::1000;");
     (
         data,
-        format!("{} {}", decoded.repeat(length), decoded.repeat(length)),
+        format!("{} {}", title.repeat(length), subtitle.repeat(length)),
     )
 }
 
