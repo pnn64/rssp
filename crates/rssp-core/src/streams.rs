@@ -1,3 +1,9 @@
+use crate::math::push_u64;
+
+#[cfg(test)]
+#[path = "../../rssp/benches/support/streams_edges.rs"]
+mod pass_edges;
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct StreamCounts {
     pub run16_streams: u32,
@@ -77,12 +83,15 @@ const fn is_stream_measure(d: usize) -> bool {
 }
 
 #[must_use]
+// Keep the shared collecting scan out of the level-specific formatting paths.
+// Inlining slowed uniform detailed output in original/optimized benchmarks.
+#[inline(never)]
 pub fn stream_sequences(measures: &[usize]) -> Vec<StreamSegment> {
     let Some(first) = measures.iter().position(|&d| is_stream_measure(d)) else {
         return Vec::new();
     };
     let mut segs = Vec::with_capacity(scratch_cap(measures.len() / 2 + 1));
-    match visit_streams_from(measures, first, |segment| {
+    match visit_streams_from(measures, first, None, |segment| {
         segs.push(segment);
         Ok::<(), std::convert::Infallible>(())
     }) {
@@ -105,7 +114,7 @@ pub fn visit_stream_sequences<E>(
         .iter()
         .position(|&d| is_stream_measure(d))
         .unwrap_or(measures.len());
-    visit_streams_from(measures, first, visit)
+    visit_streams_from(measures, first, None, visit)
 }
 
 // Starting at the first stream lets the collecting caller allocate only when
@@ -113,10 +122,9 @@ pub fn visit_stream_sequences<E>(
 fn visit_streams_from<E>(
     measures: &[usize],
     mut i: usize,
+    mut prev_stream_end: Option<usize>,
     mut visit: impl FnMut(StreamSegment) -> Result<(), E>,
 ) -> Result<(), E> {
-    let mut prev_stream_end = None;
-
     while i < measures.len() {
         if !is_stream_measure(measures[i]) {
             i += 1;
@@ -549,6 +557,9 @@ fn format_breakdown_tokens(
     out
 }
 
+// Keep this shared scan separate: inlining it into the three-output renderer
+// slowed long empty/leading ranges in the original/optimized benchmarks.
+#[inline(never)]
 fn active_range(m: &[usize]) -> Option<(usize, usize)> {
     let s = m.iter().position(|&d| is_stream_measure(d))?;
     let e = m.iter().rposition(|&d| is_stream_measure(d))?;
@@ -580,28 +591,10 @@ fn write_run(out: &mut String, cat: RunDensity, len: usize, star: bool) {
         RunDensity::Break => unreachable!(),
     };
     out.push_str(pre);
-    push_usize(out, len);
+    push_u64(out, len as u64);
     out.push_str(suf);
     if star {
         out.push('*');
-    }
-}
-
-fn push_usize(out: &mut String, mut n: usize) {
-    if n == 0 {
-        out.push('0');
-        return;
-    }
-
-    let mut buf = [0u8; 20];
-    let mut i = buf.len();
-    while n != 0 {
-        i -= 1;
-        buf[i] = b'0' + (n % 10) as u8;
-        n /= 10;
-    }
-    for &b in &buf[i..] {
-        out.push(char::from(b));
     }
 }
 
@@ -612,7 +605,7 @@ fn format_break(out: &mut String, n: usize, mode: BreakdownMode) {
                 out.push(' ');
             }
             out.push('(');
-            push_usize(out, n);
+            push_u64(out, n as u64);
             out.push(')');
             return;
         }
@@ -640,7 +633,14 @@ fn format_break(out: &mut String, n: usize, mode: BreakdownMode) {
 
 #[must_use]
 pub fn format_run_symbol(cat: RunDensity, len: usize, star: bool) -> String {
-    let mut out = String::new();
+    // Short symbols fit the first eight-byte String allocation.
+    let mut out = if len < 100_000 {
+        String::new()
+    } else {
+        let digits = len.checked_ilog10().unwrap_or(0) as usize + 1;
+        let affixes = usize::from(cat != RunDensity::Run16) * 2 + usize::from(star);
+        String::with_capacity(digits + affixes)
+    };
     write_run(&mut out, cat, len, star);
     out
 }
@@ -654,7 +654,7 @@ pub fn stream_breakdown(measures: &[usize], level: StreamBreakdownLevel) -> Stri
         }
         // A usize needs at most 20 decimal digits, followed by " Total".
         let mut out = String::with_capacity(26);
-        push_usize(&mut out, total);
+        push_u64(&mut out, total as u64);
         out.push_str(" Total");
         return out;
     }
@@ -672,16 +672,60 @@ pub fn stream_breakdown(measures: &[usize], level: StreamBreakdownLevel) -> Stri
 
 #[must_use]
 pub fn stream_breakdowns(measures: &[usize]) -> (String, String, String) {
-    if measures.is_empty() {
+    let Some((first, last)) = active_range(measures) else {
         return no_streams3();
-    }
+    };
+    format_stream_measures3(&measures[first..=last])
+}
 
-    let segs = stream_sequences(measures);
-    if segs.is_empty() {
-        return no_streams3();
+// Parse the first run once; a uniform chart or trailing break needs no segment pass.
+fn format_stream_measures3(measures: &[usize]) -> (String, String, String) {
+    let first_end = measures
+        .iter()
+        .position(|&d| !is_stream_measure(d))
+        .unwrap_or(measures.len());
+    let segments = count_stream_segments(measures, first_end);
+    if segments == 1 {
+        let run = format_run_symbol(RunDensity::Run16, first_end, false);
+        return (run.clone(), run.clone(), run);
     }
-
-    format_segments3(&segs)
+    let cap = segments.saturating_mul(SEGMENT_TEXT_CAP);
+    let mut detailed = String::with_capacity(cap);
+    let mut partial = String::with_capacity(cap);
+    let mut simple = String::with_capacity(cap);
+    let (mut simple_sum, mut simple_broken, mut previous_break) = (first_end, false, false);
+    push_u64(&mut detailed, first_end as u64);
+    push_u64(&mut partial, first_end as u64);
+    visit_streams_from(measures, first_end, Some(first_end), |seg| {
+        let size = seg.end - seg.start;
+        if seg.is_break {
+            if seg.start != 0 && seg.end != measures.len() {
+                flush_detailed(&mut detailed, size);
+                partial.push_str(break_symbol(size));
+                flush_simple(&mut simple, &mut simple_sum, &mut simple_broken, size);
+            }
+        } else {
+            if !previous_break {
+                detailed.push('-');
+                partial.push('-');
+                simple_broken = true;
+                simple_sum += 1;
+            }
+            push_u64(&mut detailed, size as u64);
+            push_u64(&mut partial, size as u64);
+            simple_sum += size;
+        }
+        previous_break = seg.is_break;
+        Ok::<(), std::convert::Infallible>(())
+    })
+    .expect("infallible stream formatter");
+    if simple_sum != 0 {
+        push_u64(&mut simple, simple_sum as u64);
+        if simple_broken {
+            simple.push('*');
+        }
+    }
+    (detailed, partial, simple)
 }
 
 fn no_streams3() -> (String, String, String) {
@@ -690,6 +734,16 @@ fn no_streams3() -> (String, String, String) {
         "No Streams!".into(),
         "No Streams!".into(),
     )
+}
+
+fn count_stream_segments(measures: &[usize], first_end: usize) -> usize {
+    let mut count = 1; // The first run is already parsed.
+    visit_streams_from(measures, first_end, Some(first_end), |_| {
+        count += 1;
+        Ok::<(), std::convert::Infallible>(())
+    })
+    .expect("infallible segment counter");
+    count
 }
 
 fn format_stream_segments(segs: &[StreamSegment], level: StreamBreakdownLevel) -> String {
@@ -717,7 +771,7 @@ fn format_stream_segments(segs: &[StreamSegment], level: StreamBreakdownLevel) -
                     if i > 0 && !segs[i - 1].is_break {
                         out.push('-');
                     }
-                    push_usize(&mut out, size);
+                    push_u64(&mut out, size as u64);
                 }
             }
         }
@@ -726,7 +780,7 @@ fn format_stream_segments(segs: &[StreamSegment], level: StreamBreakdownLevel) -
     if sum != 0 {
         match level {
             StreamBreakdownLevel::Simple => {
-                push_usize(&mut out, sum);
+                push_u64(&mut out, sum as u64);
                 if broken {
                     out.push('*');
                 }
@@ -738,7 +792,7 @@ fn format_stream_segments(segs: &[StreamSegment], level: StreamBreakdownLevel) -
 
     if level == StreamBreakdownLevel::Total {
         let mut out = String::new();
-        push_usize(&mut out, total);
+        push_u64(&mut out, total as u64);
         out.push_str(" Total");
         return out;
     }
@@ -747,48 +801,6 @@ fn format_stream_segments(segs: &[StreamSegment], level: StreamBreakdownLevel) -
     } else {
         out
     }
-}
-
-fn format_segments3(segs: &[StreamSegment]) -> (String, String, String) {
-    let cap = segs.len().saturating_mul(SEGMENT_TEXT_CAP);
-    let mut detailed = String::with_capacity(cap);
-    let mut partial = String::with_capacity(cap);
-    let mut simple = String::with_capacity(cap);
-    let (mut simple_sum, mut simple_broken) = (0usize, false);
-
-    for (i, seg) in segs.iter().enumerate() {
-        let size = seg.end - seg.start;
-        if seg.is_break {
-            if i != 0 && i + 1 != segs.len() {
-                flush_detailed(&mut detailed, size);
-                partial.push_str(break_symbol(size));
-                flush_simple(&mut simple, &mut simple_sum, &mut simple_broken, size);
-            }
-        } else {
-            if i > 0 && !segs[i - 1].is_break {
-                detailed.push('-');
-                partial.push('-');
-                simple_broken = true;
-                simple_sum += 1;
-            }
-            push_usize(&mut detailed, size);
-            push_usize(&mut partial, size);
-            simple_sum += size;
-        }
-    }
-
-    if simple_sum != 0 {
-        push_usize(&mut simple, simple_sum);
-        if simple_broken {
-            simple.push('*');
-        }
-    }
-
-    (
-        nonempty_stream(detailed),
-        nonempty_stream(partial),
-        nonempty_stream(simple),
-    )
 }
 
 fn format_stream_tokens3(tokens: &[Token]) -> (String, String, String) {
@@ -833,7 +845,7 @@ fn format_stream_tokens3(tokens: &[Token]) -> (String, String, String) {
     );
 
     if simple_sum != 0 {
-        push_usize(&mut simple, simple_sum);
+        push_u64(&mut simple, simple_sum as u64);
         if simple_broken {
             simple.push('*');
         }
@@ -863,8 +875,8 @@ fn append_stream_run(
         *simple_broken = true;
         *simple_sum += 1;
     }
-    push_usize(detailed, size);
-    push_usize(partial, size);
+    push_u64(detailed, size as u64);
+    push_u64(partial, size as u64);
     *simple_sum += size;
     *unseparated = false;
 }
@@ -887,13 +899,13 @@ fn break_symbol(size: usize) -> &'static str {
 
 fn flush_detailed(out: &mut String, size: usize) {
     out.push_str(" (");
-    push_usize(out, size);
+    push_u64(out, size as u64);
     out.push_str(") ");
 }
 
 fn flush_simple(out: &mut String, sum: &mut usize, broken: &mut bool, size: usize) {
     if *sum != 0 {
-        push_usize(out, *sum);
+        push_u64(out, *sum as u64);
         if *broken {
             out.push('*');
         }
@@ -917,7 +929,7 @@ fn flush_stream(
     }
 
     if *sum != 0 && level == StreamBreakdownLevel::Simple {
-        push_usize(out, *sum);
+        push_u64(out, *sum as u64);
         if *broken {
             out.push('*');
         }

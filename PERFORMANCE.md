@@ -3267,3 +3267,415 @@ $env:RSSP_HOT_ITERS='100'
 # Alternate original/optimized, optimized/original, original/optimized.
 cargo test --release --test all_parity -- --test-threads=22
 ```
+
+## Pass 0.4.286: render stream breakdowns without a segment vector
+
+Baseline: `3772598` (0.4.285). This pass increments the workspace patch version exactly once to **0.4.286**. It retains three optimizations:
+
+1. **Render the three standard breakdowns directly from measures.** Remove the temporary `Vec<StreamSegment>` and its formatter. Trim ignored boundary breaks with the existing range scan, parse the first run once, and resume the existing segment visitor for sizing and output. The sizing pass counts actual segments using the same visitor and retains the original per-segment reservation policy for segmented outputs. Uniform active ranges require no segment pass. Single-output APIs keep their original collecting implementation.
+2. **Share one bulk decimal writer.** Delete the duplicate `push_usize`. The existing integer writer handles single digits directly and appends its populated ASCII suffix once instead of reserving and pushing each character. Its unchecked UTF-8 conversion has a local ASCII invariant and safety comment; every suffix byte is generated from a decimal digit. Stream lengths and decimal timing formatting use the same implementation.
+3. **Pre-size long run symbols.** Symbols of six or more decimal digits allocate their exact digit/affix length before writing. Short symbols retain the original first-allocation path. Large decorated values avoid one or two reallocations and copies; symbol text and affixes are unchanged.
+
+Two measured code-layout hints keep shared range/collecting scans outside their callers. Without them, inlining produced regressions on long empty/leading ranges and uniform detailed output. The focused final check records those paths explicitly. No cache, dependency, dynamic dispatch, or public API is added.
+
+On the 4,096-measure mixed fixture, the three-output path uses 81,958 → 73,756 cycles and 103,212 → 29,484 requested bytes (71.4% less churn), with four allocations plus one reallocation reduced to three allocations. Maximum `u64` decimal output uses 148 → 87 cycles (41.2% less). The maximum decorated run symbol uses 720 → 252 cycles (65.0% less) and 56 → 23 requested bytes, reducing three allocation/reallocation operations to one.
+
+### Method
+
+Windows x86-64, Intel Xeon E5-2696 v4, 44 logical processors, benchmark thread pinned to CPU 2; rustc 1.98.1, LLVM 22.1.8. Original and optimized builds use identical current fixtures/harnesses and package version, with only the production implementations restored to the baseline commit for the original build. Cargo release/bench profiles use fat LTO and one codegen unit.
+
+Four warmup calls and seven timed batches per process; three alternating process pairs (old/new, new/old, old/new). Tables report the median of the three batch medians. Windows `QueryThreadCycleTime` measures thread CPU cycles; wall-clock ns and derived call throughput are also shown. Rounded ns limit precision for tiny calls. The counting System allocator runs separately from timing; bytes are total successful allocation/reallocation requests per call, **not peak live memory or RSS**. Returned outputs are destroyed inside both timed loops. Fixtures, reusable number buffers, and labels are prepared outside measurement. No own builds, tests, or corpus verification run during the final timed comparisons.
+
+Main iterations: integers/decimals 100,000; stream 0/1/32 measures 10,000 and 4,096 measures 1,000; run symbols 20,000; standard/SN streams and hash batches 1,000; analysis/report/cleanup 100 (existing Camellia full-analysis fixture uses 10). Dense, mixed, alternating, empty, leading, trailing, and late-gap fixtures check both leaves and callers. The main sweep has 292 cases. Longer focused checks below preserve the slower main samples rather than replacing them. All measured allocation counts, reallocations, and requested bytes are non-increasing.
+
+CPU gains are workload-specific; the control tables include slower samples. The stable allocation reduction is the primary gain for dense stream output. This pass makes no claim of uniformly faster end-to-end analysis. Broad single-output rewrites, speculative hash changes, approximate sizing that over-reserved returned strings, and exact sizing on tiny symbols were rejected.
+
+### Decimal writer and composed decimal formatting
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `uint/0` | 19 → 9 | 9 → 4 | +125.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `uint/7` | 14 → 10 | 6 → 4 | +50.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `uint/123` | 27 → 25 | 12 → 11 | +9.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `uint/1234567` | 55 → 40 | 25 → 18 | +38.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `uint/18446744073709551615` | 148 → 87 | 68 → 40 | +70.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `decimal/zero` | 35 → 34 | 16 → 15 | +6.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `decimal/bpm` | 62 → 52 | 28 → 24 | +16.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `decimal/negative` | 82 → 64 | 37 → 29 | +27.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+
+### Standard stream leaves and three-output renderer
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `stream/0_empty_visit` | 3 → 2 | 1 → 1 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/0_empty_detailed` | 159 → 142 | 72 → 65 | +10.8% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_empty_partial` | 159 → 142 | 73 → 65 | +12.3% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_empty_simple` | 140 → 145 | 64 → 66 | -3.0% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_empty_total` | 137 → 139 | 62 → 64 | -3.1% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_empty_three` | 441 → 387 | 201 → 177 | +13.6% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `stream/0_single_visit` | 3 → 2 | 1 → 1 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/0_single_detailed` | 157 → 147 | 71 → 67 | +6.0% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_single_partial` | 156 → 150 | 71 → 69 | +2.9% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_single_simple` | 163 → 151 | 75 → 69 | +8.7% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_single_total` | 158 → 151 | 72 → 69 | +4.3% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_single_three` | 415 → 429 | 189 → 196 | -3.6% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `stream/0_mixed_visit` | 3 → 3 | 1 → 1 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/0_mixed_detailed` | 155 → 150 | 71 → 69 | +2.9% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_mixed_partial` | 152 → 150 | 69 → 69 | +0.0% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_mixed_simple` | 153 → 150 | 70 → 69 | +1.4% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_mixed_total` | 157 → 149 | 71 → 68 | +4.4% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_mixed_three` | 427 → 427 | 195 → 195 | +0.0% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `stream/0_leading_visit` | 3 → 3 | 1 → 1 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/0_leading_detailed` | 157 → 158 | 72 → 72 | +0.0% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_leading_partial` | 160 → 160 | 73 → 73 | +0.0% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_leading_simple` | 154 → 151 | 71 → 69 | +2.9% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_leading_total` | 154 → 151 | 70 → 69 | +1.4% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_leading_three` | 419 → 405 | 191 → 185 | +3.2% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `stream/0_alternating_visit` | 3 → 3 | 1 → 1 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/0_alternating_detailed` | 154 → 153 | 70 → 70 | +0.0% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_alternating_partial` | 151 → 151 | 69 → 69 | +0.0% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_alternating_simple` | 167 → 144 | 76 → 66 | +15.2% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_alternating_total` | 153 → 141 | 70 → 64 | +9.4% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_alternating_three` | 424 → 407 | 193 → 186 | +3.8% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `stream/0_late_visit` | 3 → 2 | 1 → 1 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/0_late_detailed` | 156 → 139 | 71 → 64 | +10.9% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_late_partial` | 156 → 150 | 71 → 69 | +2.9% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_late_simple` | 149 → 140 | 68 → 64 | +6.2% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_late_total` | 153 → 150 | 70 → 69 | +1.4% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_late_three` | 422 → 429 | 193 → 196 | -1.5% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `stream/0_trailing_visit` | 3 → 2 | 1 → 1 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/0_trailing_detailed` | 140 → 150 | 64 → 69 | -7.2% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_trailing_partial` | 153 → 151 | 70 → 69 | +1.4% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_trailing_simple` | 139 → 151 | 64 → 69 | -7.2% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_trailing_total` | 141 → 151 | 64 → 69 | -7.2% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/0_trailing_three` | 400 → 427 | 182 → 195 | -6.7% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `stream/1_empty_visit` | 4 → 4 | 2 → 2 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/1_empty_detailed` | 167 → 163 | 77 → 75 | +2.7% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/1_empty_partial` | 164 → 161 | 75 → 73 | +2.7% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/1_empty_simple` | 165 → 160 | 76 → 73 | +4.1% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/1_empty_total` | 157 → 150 | 72 → 68 | +5.9% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/1_empty_three` | 434 → 409 | 198 → 188 | +5.3% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `stream/1_single_visit` | 10 → 10 | 4 → 4 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/1_single_detailed` | 331 → 334 | 151 → 152 | -0.7% | 2 → 2 | 0 → 0 | 30 → 30 |
+| `stream/1_single_partial` | 333 → 314 | 152 → 144 | +5.6% | 2 → 2 | 0 → 0 | 30 → 30 |
+| `stream/1_single_simple` | 334 → 326 | 153 → 149 | +2.7% | 2 → 2 | 0 → 0 | 30 → 30 |
+| `stream/1_single_total` | 176 → 177 | 81 → 81 | +0.0% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `stream/1_single_three` | 637 → 485 | 291 → 221 | +31.7% | 4 → 3 | 0 → 0 | 42 → 10 |
+| `stream/1_mixed_visit` | 4 → 4 | 2 → 2 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/1_mixed_detailed` | 169 → 166 | 78 → 76 | +2.6% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/1_mixed_partial` | 165 → 169 | 75 → 77 | -2.6% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/1_mixed_simple` | 165 → 167 | 75 → 76 | -1.3% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/1_mixed_total` | 153 → 159 | 70 → 72 | -2.8% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/1_mixed_three` | 441 → 428 | 201 → 195 | +3.1% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `stream/1_leading_visit` | 10 → 10 | 4 → 4 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/1_leading_detailed` | 331 → 315 | 151 → 144 | +4.9% | 2 → 2 | 0 → 0 | 30 → 30 |
+| `stream/1_leading_partial` | 333 → 315 | 152 → 144 | +5.6% | 2 → 2 | 0 → 0 | 30 → 30 |
+| `stream/1_leading_simple` | 334 → 329 | 152 → 150 | +1.3% | 2 → 2 | 0 → 0 | 30 → 30 |
+| `stream/1_leading_total` | 176 → 174 | 80 → 79 | +1.3% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `stream/1_leading_three` | 631 → 484 | 288 → 221 | +30.3% | 4 → 3 | 0 → 0 | 42 → 10 |
+| `stream/1_alternating_visit` | 10 → 10 | 4 → 4 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/1_alternating_detailed` | 336 → 321 | 153 → 147 | +4.1% | 2 → 2 | 0 → 0 | 30 → 30 |
+| `stream/1_alternating_partial` | 333 → 314 | 152 → 144 | +5.6% | 2 → 2 | 0 → 0 | 30 → 30 |
+| `stream/1_alternating_simple` | 335 → 323 | 153 → 147 | +4.1% | 2 → 2 | 0 → 0 | 30 → 30 |
+| `stream/1_alternating_total` | 176 → 173 | 80 → 79 | +1.3% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `stream/1_alternating_three` | 658 → 448 | 301 → 204 | +47.5% | 4 → 3 | 0 → 0 | 42 → 10 |
+| `stream/1_late_visit` | 10 → 10 | 4 → 4 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/1_late_detailed` | 328 → 303 | 150 → 138 | +8.7% | 2 → 2 | 0 → 0 | 30 → 30 |
+| `stream/1_late_partial` | 333 → 315 | 152 → 144 | +5.6% | 2 → 2 | 0 → 0 | 30 → 30 |
+| `stream/1_late_simple` | 336 → 314 | 153 → 143 | +7.0% | 2 → 2 | 0 → 0 | 30 → 30 |
+| `stream/1_late_total` | 174 → 173 | 80 → 79 | +1.3% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `stream/1_late_three` | 640 → 451 | 292 → 207 | +41.1% | 4 → 3 | 0 → 0 | 42 → 10 |
+| `stream/1_trailing_visit` | 10 → 9 | 4 → 4 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/1_trailing_detailed` | 328 → 323 | 150 → 147 | +2.0% | 2 → 2 | 0 → 0 | 30 → 30 |
+| `stream/1_trailing_partial` | 328 → 316 | 150 → 145 | +3.4% | 2 → 2 | 0 → 0 | 30 → 30 |
+| `stream/1_trailing_simple` | 332 → 328 | 151 → 150 | +0.7% | 2 → 2 | 0 → 0 | 30 → 30 |
+| `stream/1_trailing_total` | 172 → 183 | 79 → 84 | -6.0% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `stream/1_trailing_three` | 622 → 488 | 284 → 223 | +27.4% | 4 → 3 | 0 → 0 | 42 → 10 |
+| `stream/32_empty_visit` | 37 → 37 | 17 → 17 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/32_empty_detailed` | 181 → 191 | 83 → 88 | -5.7% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/32_empty_partial` | 180 → 194 | 82 → 88 | -6.8% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/32_empty_simple` | 189 → 193 | 86 → 88 | -2.3% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/32_empty_total` | 176 → 189 | 80 → 87 | -8.0% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/32_empty_three` | 419 → 416 | 191 → 190 | +0.5% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `stream/32_single_visit` | 58 → 58 | 27 → 27 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/32_single_detailed` | 394 → 412 | 180 → 188 | -4.3% | 2 → 2 | 0 → 0 | 414 → 414 |
+| `stream/32_single_partial` | 368 → 421 | 168 → 192 | -12.5% | 2 → 2 | 0 → 0 | 414 → 414 |
+| `stream/32_single_simple` | 384 → 417 | 175 → 191 | -8.4% | 2 → 2 | 0 → 0 | 414 → 414 |
+| `stream/32_single_total` | 205 → 223 | 94 → 102 | -7.8% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `stream/32_single_three` | 698 → 547 | 319 → 250 | +27.6% | 4 → 3 | 0 → 0 | 426 → 12 |
+| `stream/32_mixed_visit` | 92 → 101 | 42 → 46 | -8.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/32_mixed_detailed` | 719 → 632 | 328 → 289 | +13.5% | 2 → 2 | 0 → 0 | 486 → 486 |
+| `stream/32_mixed_partial` | 607 → 620 | 277 → 283 | -2.1% | 2 → 2 | 0 → 0 | 486 → 486 |
+| `stream/32_mixed_simple` | 669 → 616 | 305 → 281 | +8.5% | 2 → 2 | 0 → 0 | 486 → 486 |
+| `stream/32_mixed_total` | 219 → 223 | 100 → 102 | -2.0% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `stream/32_mixed_three` | 1,312 → 1,049 | 601 → 478 | +25.7% | 4 → 3 | 0 → 0 | 642 → 234 |
+| `stream/32_leading_visit` | 42 → 43 | 19 → 20 | -5.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/32_leading_detailed` | 380 → 376 | 173 → 172 | +0.6% | 2 → 2 | 0 → 0 | 420 → 420 |
+| `stream/32_leading_partial` | 368 → 384 | 168 → 175 | -4.0% | 2 → 2 | 0 → 0 | 420 → 420 |
+| `stream/32_leading_simple` | 385 → 375 | 176 → 171 | +2.9% | 2 → 2 | 0 → 0 | 420 → 420 |
+| `stream/32_leading_total` | 218 → 224 | 100 → 102 | -2.0% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `stream/32_leading_three` | 678 → 554 | 311 → 253 | +22.9% | 4 → 3 | 0 → 0 | 444 → 10 |
+| `stream/32_alternating_visit` | 137 → 134 | 63 → 62 | +1.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/32_alternating_detailed` | 818 → 654 | 374 → 298 | +25.5% | 2 → 2 | 0 → 0 | 504 → 504 |
+| `stream/32_alternating_partial` | 811 → 663 | 370 → 303 | +22.1% | 2 → 2 | 0 → 0 | 504 → 504 |
+| `stream/32_alternating_simple` | 674 → 654 | 307 → 298 | +3.0% | 2 → 2 | 0 → 0 | 504 → 504 |
+| `stream/32_alternating_total` | 230 → 217 | 105 → 99 | +6.1% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `stream/32_alternating_three` | 1,406 → 1,169 | 642 → 533 | +20.5% | 4 → 3 | 0 → 0 | 696 → 288 |
+| `stream/32_late_visit` | 65 → 63 | 30 → 29 | +3.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/32_late_detailed` | 427 → 438 | 195 → 200 | -2.5% | 2 → 2 | 0 → 0 | 420 → 420 |
+| `stream/32_late_partial` | 416 → 434 | 190 → 198 | -4.0% | 2 → 2 | 0 → 0 | 420 → 420 |
+| `stream/32_late_simple` | 423 → 422 | 193 → 193 | +0.0% | 2 → 2 | 0 → 0 | 420 → 420 |
+| `stream/32_late_total` | 219 → 228 | 100 → 104 | -3.8% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `stream/32_late_three` | 796 → 598 | 364 → 273 | +33.3% | 4 → 3 | 0 → 0 | 444 → 36 |
+| `stream/32_trailing_visit` | 59 → 59 | 27 → 27 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/32_trailing_detailed` | 415 → 367 | 189 → 167 | +13.2% | 2 → 2 | 0 → 0 | 420 → 420 |
+| `stream/32_trailing_partial` | 400 → 345 | 182 → 158 | +15.2% | 2 → 2 | 0 → 0 | 420 → 420 |
+| `stream/32_trailing_simple` | 419 → 387 | 191 → 176 | +8.5% | 2 → 2 | 0 → 0 | 420 → 420 |
+| `stream/32_trailing_total` | 213 → 224 | 97 → 102 | -4.9% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `stream/32_trailing_three` | 714 → 519 | 326 → 237 | +37.6% | 4 → 3 | 0 → 0 | 444 → 10 |
+| `stream/4096_empty_visit` | 4,418 → 4,616 | 2,016 → 2,113 | -4.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/4096_empty_detailed` | 4,940 → 4,968 | 2,256 → 2,272 | -0.7% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/4096_empty_partial` | 5,173 → 4,959 | 2,362 → 2,263 | +4.4% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/4096_empty_simple` | 5,106 → 4,960 | 2,345 → 2,265 | +3.5% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/4096_empty_total` | 6,060 → 5,841 | 2,764 → 2,672 | +3.4% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/4096_empty_three` | 5,030 → 5,291 | 2,299 → 2,413 | -4.7% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `stream/4096_single_visit` | 5,841 → 5,725 | 2,664 → 2,611 | +2.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/4096_single_detailed` | 6,400 → 6,489 | 2,918 → 2,964 | -1.6% | 2 → 2 | 0 → 0 | 24,582 → 24,582 |
+| `stream/4096_single_partial` | 6,407 → 6,488 | 2,921 → 2,962 | -1.4% | 2 → 2 | 0 → 0 | 24,582 → 24,582 |
+| `stream/4096_single_simple` | 6,401 → 6,499 | 2,928 → 2,965 | -1.2% | 2 → 2 | 0 → 0 | 24,582 → 24,582 |
+| `stream/4096_single_total` | 5,899 → 5,836 | 2,696 → 2,663 | +1.2% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `stream/4096_single_three` | 6,905 → 5,344 | 3,150 → 2,438 | +29.2% | 4 → 3 | 0 → 0 | 24,594 → 16 |
+| `stream/4096_mixed_visit` | 11,275 → 11,575 | 5,147 → 5,285 | -2.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/4096_mixed_detailed` | 53,316 → 45,823 | 24,330 → 20,917 | +16.3% | 2 → 2 | 1 → 1 | 83,556 → 83,556 |
+| `stream/4096_mixed_partial` | 43,945 → 38,205 | 20,073 → 17,450 | +15.0% | 2 → 2 | 1 → 1 | 83,556 → 83,556 |
+| `stream/4096_mixed_simple` | 40,098 → 38,071 | 18,313 → 17,376 | +5.4% | 2 → 2 | 1 → 1 | 83,556 → 83,556 |
+| `stream/4096_mixed_total` | 5,604 → 5,905 | 2,557 → 2,702 | -5.4% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `stream/4096_mixed_three` | 81,958 → 73,756 | 37,400 → 33,649 | +11.1% | 4 → 3 | 1 → 0 | 103,212 → 29,484 |
+| `stream/4096_leading_visit` | 4,762 → 4,614 | 2,174 → 2,112 | +2.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/4096_leading_detailed` | 5,733 → 5,661 | 2,620 → 2,584 | +1.4% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `stream/4096_leading_partial` | 5,786 → 5,746 | 2,647 → 2,633 | +0.5% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `stream/4096_leading_simple` | 5,878 → 5,610 | 2,689 → 2,565 | +4.8% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `stream/4096_leading_total` | 5,943 → 5,793 | 2,710 → 2,644 | +2.5% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `stream/4096_leading_three` | 6,276 → 5,603 | 2,863 → 2,562 | +11.7% | 4 → 3 | 0 → 0 | 24,612 → 10 |
+| `stream/4096_alternating_visit` | 14,705 → 14,685 | 6,718 → 6,709 | +0.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/4096_alternating_detailed` | 56,304 → 43,945 | 25,713 → 20,066 | +28.1% | 2 → 2 | 1 → 1 | 86,016 → 86,016 |
+| `stream/4096_alternating_partial` | 55,958 → 43,907 | 25,530 → 20,034 | +27.4% | 2 → 2 | 1 → 1 | 86,016 → 86,016 |
+| `stream/4096_alternating_simple` | 35,723 → 35,156 | 16,310 → 16,047 | +1.6% | 2 → 2 | 1 → 1 | 86,016 → 86,016 |
+| `stream/4096_alternating_total` | 5,930 → 5,668 | 2,706 → 2,587 | +4.6% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `stream/4096_alternating_three` | 91,187 → 82,242 | 41,613 → 37,531 | +10.9% | 4 → 3 | 1 → 0 | 110,592 → 36,864 |
+| `stream/4096_late_visit` | 5,915 → 5,539 | 2,702 → 2,529 | +6.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/4096_late_detailed` | 6,662 → 5,975 | 3,046 → 2,726 | +11.7% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `stream/4096_late_partial` | 6,675 → 6,201 | 3,046 → 2,832 | +7.6% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `stream/4096_late_simple` | 6,692 → 6,082 | 3,056 → 2,774 | +10.2% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `stream/4096_late_total` | 5,949 → 5,430 | 2,720 → 2,479 | +9.7% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `stream/4096_late_three` | 7,152 → 5,206 | 3,276 → 2,383 | +37.5% | 4 → 3 | 0 → 0 | 24,612 → 36 |
+| `stream/4096_trailing_visit` | 6,498 → 5,872 | 2,970 → 2,679 | +10.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream/4096_trailing_detailed` | 7,381 → 6,780 | 3,367 → 3,093 | +8.9% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `stream/4096_trailing_partial` | 7,395 → 7,287 | 3,374 → 3,324 | +1.5% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `stream/4096_trailing_simple` | 7,425 → 7,286 | 3,388 → 3,324 | +1.9% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `stream/4096_trailing_total` | 5,779 → 5,801 | 2,637 → 2,648 | -0.4% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `stream/4096_trailing_three` | 7,624 → 5,413 | 3,479 → 2,469 | +40.9% | 4 → 3 | 0 → 0 | 24,612 → 10 |
+
+### Run symbol allocation
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `stream_run/1` | 166 → 168 | 77 → 77 | +0.0% | 1 → 1 | 0 → 0 | 8 → 8 |
+| `stream_run/123` | 170 → 171 | 78 → 78 | +0.0% | 1 → 1 | 0 → 0 | 8 → 8 |
+| `stream_run/1234567` | 424 → 184 | 194 → 84 | +131.0% | 1 → 1 | 1 → 0 | 24 → 10 |
+| `stream_run/18446744073709551615` | 720 → 252 | 329 → 115 | +186.1% | 1 → 1 | 2 → 0 | 56 → 23 |
+
+### Standard stream callers
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `standard/uniform_detailed` | 11,011 → 9,766 | 5,029 → 4,461 | +12.7% | 2 → 2 | 0 → 0 | 24,582 → 24,582 |
+| `standard/uniform_partial` | 6,941 → 7,395 | 3,175 → 3,374 | -5.9% | 2 → 2 | 0 → 0 | 24,582 → 24,582 |
+| `standard/uniform_simple` | 6,531 → 6,598 | 2,978 → 3,019 | -1.4% | 2 → 2 | 0 → 0 | 24,582 → 24,582 |
+| `standard/uniform_total` | 5,911 → 6,572 | 2,706 → 3,001 | -9.8% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `standard/uniform_three` | 6,974 → 5,484 | 3,182 → 2,503 | +27.1% | 4 → 3 | 0 → 0 | 24,594 → 16 |
+| `standard/fragmented_detailed` | 47,523 → 40,759 | 21,694 → 18,607 | +16.6% | 2 → 2 | 1 → 1 | 83,556 → 83,556 |
+| `standard/fragmented_partial` | 46,924 → 42,237 | 21,418 → 19,286 | +11.1% | 2 → 2 | 1 → 1 | 83,556 → 83,556 |
+| `standard/fragmented_simple` | 43,077 → 42,904 | 19,661 → 19,585 | +0.4% | 2 → 2 | 1 → 1 | 83,556 → 83,556 |
+| `standard/fragmented_total` | 5,740 → 6,214 | 2,621 → 2,835 | -7.5% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `standard/fragmented_three` | 85,605 → 74,061 | 39,086 → 33,812 | +15.6% | 4 → 3 | 1 → 0 | 103,212 → 29,484 |
+| `standard/empty_detailed` | 4,965 → 5,119 | 2,267 → 2,343 | -3.2% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `standard/empty_partial` | 4,963 → 5,233 | 2,266 → 2,395 | -5.4% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `standard/empty_simple` | 4,957 → 5,084 | 2,267 → 2,319 | -2.2% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `standard/empty_total` | 5,840 → 5,892 | 2,664 → 2,694 | -1.1% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `standard/empty_three` | 5,355 → 5,446 | 2,445 → 2,484 | -1.6% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `standard/short_detailed` | 717 → 589 | 330 → 269 | +22.7% | 2 → 2 | 0 → 0 | 492 → 492 |
+| `standard/short_partial` | 720 → 603 | 331 → 276 | +19.9% | 2 → 2 | 0 → 0 | 492 → 492 |
+| `standard/short_simple` | 657 → 645 | 300 → 294 | +2.0% | 2 → 2 | 0 → 0 | 492 → 492 |
+| `standard/short_total` | 210 → 214 | 96 → 98 | -2.0% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `standard/short_three` | 1,315 → 1,108 | 600 → 506 | +18.6% | 4 → 3 | 0 → 0 | 660 → 252 |
+| `standard/leading_detailed` | 5,758 → 5,887 | 2,626 → 2,687 | -2.3% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `standard/leading_partial` | 5,747 → 5,865 | 2,625 → 2,675 | -1.9% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `standard/leading_simple` | 5,775 → 5,836 | 2,638 → 2,662 | -0.9% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `standard/leading_total` | 6,245 → 6,719 | 2,849 → 3,066 | -7.1% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `standard/leading_three` | 6,080 → 5,333 | 2,774 → 2,434 | +14.0% | 4 → 3 | 0 → 0 | 24,612 → 12 |
+
+### Stream outputs and SN controls
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `streams/uniform_combined` | 24,123 → 24,131 | 11,019 → 11,020 | -0.0% | 6 → 6 | 0 → 0 | 33 → 33 |
+| `streams/uniform_cold` | 24,377 → 24,049 | 11,125 → 10,976 | +1.4% | 7 → 7 | 0 → 0 | 16,417 → 16,417 |
+| `streams/fragmented_combined` | 216,392 → 179,428 | 98,773 → 81,894 | +20.6% | 6 → 6 | 0 → 0 | 72,039 → 72,039 |
+| `streams/fragmented_cold` | 220,248 → 181,598 | 100,533 → 82,894 | +21.3% | 7 → 7 | 2 → 2 | 186,727 → 186,727 |
+| `streams/empty_combined` | 5,216 → 5,269 | 2,381 → 2,411 | -1.2% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `streams/empty_cold` | 5,248 → 5,249 | 2,394 → 2,395 | -0.0% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `streams/short_combined` | 3,777 → 3,323 | 1,724 → 1,516 | +13.7% | 6 → 6 | 0 → 0 | 891 → 891 |
+| `streams/short_cold` | 3,938 → 3,520 | 1,797 → 1,607 | +11.8% | 7 → 7 | 0 → 0 | 1,403 → 1,403 |
+| `streams/leading_combined` | 6,219 → 6,304 | 2,844 → 2,880 | -1.2% | 6 → 6 | 0 → 0 | 33 → 33 |
+| `streams/leading_cold` | 6,783 → 6,626 | 3,101 → 3,025 | +2.5% | 7 → 7 | 0 → 0 | 1,569 → 1,569 |
+| `sn/uniform_detailed` | 12,107 → 11,704 | 5,522 → 5,344 | +3.3% | 1 → 1 | 0 → 0 | 160 → 160 |
+| `sn/uniform_partial` | 11,986 → 11,922 | 5,473 → 5,440 | +0.6% | 1 → 1 | 0 → 0 | 160 → 160 |
+| `sn/uniform_simple` | 11,664 → 11,923 | 5,330 → 5,457 | -2.3% | 1 → 1 | 0 → 0 | 160 → 160 |
+| `sn/uniform_three` | 12,254 → 12,089 | 5,594 → 5,518 | +1.4% | 3 → 3 | 0 → 0 | 480 → 480 |
+| `sn/fragmented_detailed` | 82,503 → 76,172 | 37,645 → 34,764 | +8.3% | 1 → 1 | 6 → 6 | 20,320 → 20,320 |
+| `sn/fragmented_partial` | 73,995 → 69,071 | 33,777 → 31,514 | +7.2% | 1 → 1 | 5 → 5 | 10,080 → 10,080 |
+| `sn/fragmented_simple` | 71,596 → 66,604 | 32,664 → 30,393 | +7.5% | 1 → 1 | 5 → 5 | 10,080 → 10,080 |
+| `sn/fragmented_three` | 153,574 → 136,509 | 70,097 → 62,313 | +12.5% | 3 → 3 | 16 → 16 | 40,480 → 40,480 |
+| `sn/empty_detailed` | 4,833 → 4,964 | 2,212 → 2,267 | -2.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `sn/empty_partial` | 4,707 → 4,847 | 2,147 → 2,218 | -3.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `sn/empty_simple` | 4,692 → 4,804 | 2,140 → 2,192 | -2.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `sn/empty_three` | 4,651 → 4,730 | 2,127 → 2,158 | -1.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `sn/short_detailed` | 1,169 → 979 | 535 → 449 | +19.2% | 1 → 1 | 0 → 0 | 155 → 155 |
+| `sn/short_partial` | 1,054 → 911 | 481 → 421 | +14.3% | 1 → 1 | 0 → 0 | 155 → 155 |
+| `sn/short_simple` | 1,047 → 883 | 478 → 403 | +18.6% | 1 → 1 | 0 → 0 | 155 → 155 |
+| `sn/short_three` | 2,552 → 2,187 | 1,165 → 1,000 | +16.5% | 3 → 3 | 0 → 0 | 465 → 465 |
+| `sn/leading_detailed` | 5,272 → 5,246 | 2,406 → 2,393 | +0.5% | 1 → 1 | 0 → 0 | 160 → 160 |
+| `sn/leading_partial` | 5,315 → 5,269 | 2,427 → 2,403 | +1.0% | 1 → 1 | 0 → 0 | 160 → 160 |
+| `sn/leading_simple` | 5,514 → 5,415 | 2,515 → 2,471 | +1.8% | 1 → 1 | 0 → 0 | 160 → 160 |
+| `sn/leading_three` | 5,558 → 5,736 | 2,539 → 2,616 | -2.9% | 3 → 3 | 0 → 0 | 480 → 480 |
+
+### Hash, analysis, report and cleanup controls
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `hash_batch/1_global` | 23,672 → 22,724 | 10,806 → 10,367 | +4.2% | 28 → 28 | 2 → 2 | 5,283 → 5,283 |
+| `hash_batch/1_repeat` | 23,849 → 23,365 | 10,878 → 10,662 | +2.0% | 29 → 29 | 4 → 4 | 5,318 → 5,318 |
+| `hash_batch/1_vary` | 24,162 → 24,273 | 11,044 → 11,080 | -0.3% | 29 → 29 | 4 → 4 | 5,318 → 5,318 |
+| `hash_batch/1_distinct` | 31,179 → 31,117 | 14,228 → 14,204 | +0.2% | 36 → 36 | 18 → 18 | 5,563 → 5,563 |
+| `hash_batch/128_global` | 155,152 → 147,475 | 70,842 → 67,326 | +5.2% | 28 → 28 | 2 → 2 | 12,213 → 12,213 |
+| `hash_batch/128_repeat` | 198,666 → 191,521 | 90,708 → 87,419 | +3.8% | 29 → 29 | 4 → 4 | 19,178 → 19,178 |
+| `hash_batch/128_vary` | 194,594 → 188,300 | 88,814 → 85,958 | +3.3% | 29 → 29 | 4 → 4 | 19,178 → 19,178 |
+| `hash_batch/128_distinct` | 512,275 → 472,371 | 233,826 → 215,621 | +8.4% | 36 → 36 | 18 → 18 | 67,933 → 67,933 |
+| `analyze/fast_fake_lifts` | 648,627 → 665,891 | 296,261 → 304,541 | -2.7% | 31 → 31 | 4 → 4 | 59,028 → 59,028 |
+| `analyze/camellia` | 453,608,034 → 462,040,541 | 207,131,820 → 210,955,520 | -1.8% | 110 → 110 | 0 → 0 | 5,263,624 → 5,263,624 |
+| `analyze/fast_camellia` | 57,753,063 → 56,283,838 | 26,389,810 → 25,701,490 | +2.7% | 115 → 115 | 0 → 0 | 7,051,152 → 7,051,152 |
+| `analyze/mixed_small` | 51,240 → 49,333 | 23,378 → 22,655 | +3.2% | 59 → 59 | 3 → 3 | 7,460 → 7,460 |
+| `report/json/16_clean` | 89,778 → 84,734 | 40,985 → 38,663 | +6.0% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/16_early` | 85,502 → 85,844 | 39,089 → 39,178 | -0.2% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/16_late` | 87,526 → 84,854 | 39,931 → 38,715 | +3.1% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/16_dense` | 87,947 → 85,225 | 40,131 → 38,885 | +3.2% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/16_comma` | 85,304 → 83,788 | 39,000 → 38,295 | +1.8% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/16_comma_quote` | 85,069 → 84,448 | 38,811 → 38,549 | +0.7% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/16_custom` | 84,716 → 85,010 | 38,644 → 38,881 | -0.6% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_clean` | 128,278 → 123,820 | 58,597 → 56,503 | +3.7% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_early` | 148,391 → 144,609 | 67,708 → 65,986 | +2.6% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_late` | 188,981 → 185,899 | 86,248 → 84,798 | +1.7% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_dense` | 328,431 → 318,328 | 150,208 → 145,323 | +3.4% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_comma` | 127,284 → 124,885 | 58,176 → 56,956 | +2.1% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_comma_quote` | 186,263 → 186,729 | 85,167 → 85,280 | -0.1% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_custom` | 131,650 → 123,414 | 60,203 → 56,309 | +6.9% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/camellia` | 21,275,485 → 21,121,851 | 9,713,845 → 9,643,297 | +0.7% | 30 → 30 | 0 → 0 | 850 → 850 |
+| `cleanup/pair_1_clean` | 702 → 709 | 328 → 331 | -0.9% | 1 → 1 | 1 → 1 | 27 → 27 |
+| `cleanup/speed_1_clean` | 902 → 922 | 419 → 428 | -2.1% | 1 → 1 | 1 → 1 | 36 → 36 |
+| `cleanup/pair_1_early` | 803 → 803 | 375 → 375 | +0.0% | 2 → 2 | 0 → 0 | 26 → 26 |
+| `cleanup/speed_1_early` | 1,879 → 1,313 | 864 → 640 | +35.0% | 2 → 2 | 1 → 1 | 64 → 64 |
+| `cleanup/pair_1_late` | 751 → 803 | 350 → 374 | -6.4% | 2 → 2 | 0 → 0 | 26 → 26 |
+| `cleanup/speed_1_late` | 1,256 → 1,267 | 580 → 585 | -0.9% | 2 → 2 | 1 → 1 | 64 → 64 |
+| `cleanup/pair_128_clean` | 43,986 → 40,809 | 20,063 → 18,621 | +7.7% | 1 → 1 | 1 → 1 | 4,521 → 4,521 |
+| `cleanup/speed_128_clean` | 70,809 → 70,174 | 32,300 → 32,023 | +0.9% | 1 → 1 | 1 → 1 | 5,673 → 5,673 |
+| `cleanup/pair_128_early` | 49,346 → 48,696 | 22,547 → 22,215 | +1.5% | 2 → 2 | 1 → 1 | 6,044 → 6,044 |
+| `cleanup/speed_128_early` | 75,980 → 72,764 | 34,672 → 33,270 | +4.2% | 2 → 2 | 1 → 1 | 7,580 → 7,580 |
+| `cleanup/pair_128_late` | 54,403 → 53,367 | 24,847 → 24,419 | +1.8% | 2 → 2 | 1 → 1 | 6,044 → 6,044 |
+| `cleanup/speed_128_late` | 83,114 → 81,465 | 38,038 → 37,228 | +2.2% | 2 → 2 | 1 → 1 | 7,580 → 7,580 |
+| `cleanup/pair_4096_clean` | 1,463,846 → 1,412,482 | 668,174 → 644,869 | +3.6% | 1 → 1 | 1 → 1 | 163,695 → 163,695 |
+| `cleanup/speed_4096_clean` | 2,310,938 → 2,301,407 | 1,054,614 → 1,052,117 | +0.2% | 1 → 1 | 1 → 1 | 200,559 → 200,559 |
+| `cleanup/pair_4096_early` | 1,869,852 → 1,875,118 | 853,564 → 855,799 | -0.3% | 2 → 2 | 1 → 1 | 218,276 → 218,276 |
+| `cleanup/speed_4096_early` | 2,491,650 → 2,324,523 | 1,145,341 → 1,061,104 | +7.9% | 2 → 2 | 1 → 1 | 267,428 → 267,428 |
+| `cleanup/pair_4096_late` | 1,843,087 → 1,800,565 | 841,638 → 821,807 | +2.4% | 2 → 2 | 1 → 1 | 218,276 → 218,276 |
+| `cleanup/speed_4096_late` | 2,733,328 → 2,717,625 | 1,249,106 → 1,240,487 | +0.7% | 2 → 2 | 1 → 1 | 267,428 → 267,428 |
+| `cleanup/0_ordered` | 904 → 913 | 420 → 424 | -0.9% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `cleanup/0_duplicates` | 904 → 913 | 420 → 424 | -0.9% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `cleanup/0_reverse` | 902 → 913 | 419 → 424 | -1.2% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `cleanup/1_ordered` | 4,588 → 4,023 | 2,098 → 1,842 | +13.9% | 14 → 14 | 0 → 0 | 192 → 192 |
+| `cleanup/1_duplicates` | 4,181 → 4,157 | 1,913 → 1,902 | +0.6% | 14 → 14 | 0 → 0 | 192 → 192 |
+| `cleanup/1_reverse` | 4,689 → 4,162 | 2,167 → 1,903 | +13.9% | 14 → 14 | 0 → 0 | 192 → 192 |
+| `cleanup/32_ordered` | 52,381 → 50,913 | 23,897 → 23,384 | +2.2% | 14 → 14 | 0 → 0 | 5,528 → 5,528 |
+| `cleanup/32_duplicates` | 49,438 → 48,970 | 22,551 → 22,337 | +1.0% | 14 → 14 | 0 → 0 | 4,600 → 4,600 |
+| `cleanup/32_reverse` | 57,643 → 58,398 | 26,291 → 26,655 | -1.4% | 24 → 24 | 0 → 0 | 10,136 → 10,136 |
+| `cleanup/4096_ordered` | 6,399,575 → 6,319,932 | 2,921,802 → 2,885,001 | +1.3% | 14 → 14 | 0 → 0 | 731,704 → 731,704 |
+| `cleanup/4096_duplicates` | 6,060,331 → 5,966,260 | 2,766,582 → 2,723,698 | +1.6% | 14 → 14 | 0 → 0 | 611,032 → 611,032 |
+| `cleanup/4096_reverse` | 38,810,418 → 38,926,716 | 17,749,295 → 17,775,747 | -0.1% | 24 → 24 | 0 → 0 | 1,321,528 → 1,321,528 |
+
+### Focused recheck
+
+These comparisons use the final sources and original executables with identical lifetimes: 20,000 iterations for every selected core/standard case, followed by 100,000 iterations for the five uniform 32-measure controls. Main samples remain above. The small single-output Simple case was 10.4% slower at 20,000 iterations and 3.1% slower at 100,000 (185 → 191 ns); adjacent Detailed/Partial/Total controls differ by 0–1.6%. This is a CPU tradeoff in the preserved collecting path, not a behavioral change or an allocation increase. All recheck allocation metrics remain non-increasing.
+
+### Focused results
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `stream/4096_single_detailed` | 6,523 → 6,501 | 2,978 → 2,966 | +0.4% | 2 → 2 | 0 → 0 | 24,582 → 24,582 |
+| `stream/4096_single_partial` | 6,502 → 6,473 | 2,968 → 2,954 | +0.5% | 2 → 2 | 0 → 0 | 24,582 → 24,582 |
+| `stream/4096_single_simple` | 8,321 → 7,805 | 4,626 → 3,671 | +26.0% | 2 → 2 | 0 → 0 | 24,582 → 24,582 |
+| `stream/4096_single_visit` | 5,790 → 5,705 | 2,643 → 2,605 | +1.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `stream_run/1` | 162 → 164 | 74 → 75 | -1.3% | 1 → 1 | 0 → 0 | 8 → 8 |
+| `stream_run/123` | 167 → 167 | 76 → 76 | +0.0% | 1 → 1 | 0 → 0 | 8 → 8 |
+| `stream_run/1234567` | 422 → 182 | 192 → 83 | +131.3% | 1 → 1 | 1 → 0 | 24 → 10 |
+| `stream_run/18446744073709551615` | 729 → 242 | 332 → 111 | +199.1% | 1 → 1 | 2 → 0 | 56 → 23 |
+| `stream/0_trailing_simple` | 150 → 157 | 69 → 72 | -4.2% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `stream/32_single_partial` | 387 → 388 | 177 → 178 | -0.6% | 2 → 2 | 0 → 0 | 414 → 414 |
+| `stream/32_single_simple` | 394 → 440 | 180 → 201 | -10.4% | 2 → 2 | 0 → 0 | 414 → 414 |
+| `stream/32_single_total` | 212 → 210 | 97 → 96 | +1.0% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `stream/32_mixed_visit` | 96 → 101 | 44 → 46 | -4.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `standard/uniform_total` | 6,540 → 5,813 | 2,984 → 2,652 | +12.5% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `standard/fragmented_total` | 5,828 → 5,788 | 2,660 → 2,641 | +0.7% | 1 → 1 | 0 → 0 | 26 → 26 |
+
+### Small uniform control recheck
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `stream/32_single_detailed` | 396 → 397 | 181 → 181 | +0.0% | 2 → 2 | 0 → 0 | 414 → 414 |
+| `stream/32_single_partial` | 407 → 402 | 186 → 183 | +1.6% | 2 → 2 | 0 → 0 | 414 → 414 |
+| `stream/32_single_simple` | 406 → 418 | 185 → 191 | -3.1% | 2 → 2 | 0 → 0 | 414 → 414 |
+| `stream/32_single_total` | 212 → 214 | 97 → 98 | -1.0% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `stream/32_single_three` | 692 → 547 | 316 → 250 | +26.4% | 4 → 3 | 0 → 0 | 426 → 12 |
+
+### Validation
+
+- Release regression tests: 149 core + 79 rssp + 29 integration tests = 257 passed, zero failed.
+- After confirming the optimizations: `cargo test --release --test all_parity -- --test-threads=22` — 30,489 passed, zero failed.
+- Strict release workspace Clippy for all targets, formatting, and diff whitespace checks pass.
+- Exact stream comparison exhausts all 4,096 twelve-measure stream/break patterns and the benchmark edge fixtures; decimal boundaries cover zero, digit transitions, an existing prefix, and `u64::MAX`.
+- Complete corpus output remains byte-identical: 30,843 files, 56,125 supported charts, 30,489 successes and 354 matched errors. Outputs include reports, hashes, timings, labels, durations and NPS. No golden data is changed.
+- Corpus: 174,790,323 UTF-8 bytes; SHA-256 `e7d2f22bd7b7f48c0335075d8d2ac355063b58809fdd77c42dcec23927a5759d`.
+- Core trace: 4,276 rows, 2,184,815 UTF-8 bytes; SHA-256 `ce3a83d70e36729241907bb26d070e391ac01ca12b439cb764a0a0c976ba1372`.
+- Leaf trace: 57 rows, 29,124,186 UTF-8 bytes; SHA-256 `aac4e521dea9affd1f0e1baa95991e7dd0fa7f4bb10d109b82bed5ff84d290d7`.
+
+### Reproduction
+
+Keep the current harness/fixtures and package version for both builds; restore only the modified production functions in `math.rs` and `streams.rs` to `3772598` for the original build. Keep the test module declarations and save original executables before rebuilding optimized sources. Use identical setup, output destruction and buffer reuse for both versions.
+
+```powershell
+cargo test --release -p rssp-core --lib
+cargo test --release -p rssp --lib
+cargo bench -p rssp --bench hotpath_perf --no-run
+$env:RSSP_PASS_FILTER='stream/4096_'
+$env:RSSP_PASS_ITERS='1000'
+.\saved-core.exe pass_edges --skip _trace --ignored --nocapture --test-threads=1
+# Use uint/ or decimal/ with 100000 iterations, stream_run/ with 20000.
+# Focused checks: selected core stream paths/symbols and standard callers use 20000.
+# The five uniform 32-measure core controls additionally use 100000.
+$env:RSSP_HOT_FILTER='standard/'
+$env:RSSP_HOT_ITERS='1000'
+.\saved-hotpath.exe
+# Alternate old/new, new/old, old/new; compare exact corpus and _trace outputs separately.
+cargo clippy --release --workspace --all-targets -- -D warnings
+cargo test --release --test optimization_edges
+cargo test --release --test all_parity -- --test-threads=22
+```

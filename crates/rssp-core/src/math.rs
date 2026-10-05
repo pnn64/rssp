@@ -1,5 +1,9 @@
 use std::fmt::Write;
 
+#[cfg(test)]
+#[path = "../../rssp/benches/support/number_edges.rs"]
+mod pass_edges;
+
 const POW10: [f64; 19] = [
     1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16,
     1e17, 1e18,
@@ -119,9 +123,9 @@ pub(crate) fn push_dec3_half_up(out: &mut String, value: f64) {
     out.push(char::from(b'0' + (frac % 10) as u8));
 }
 
-fn push_u64(out: &mut String, mut n: u64) {
-    if n == 0 {
-        out.push('0');
+pub(crate) fn push_u64(out: &mut String, mut n: u64) {
+    if n < 10 {
+        out.push(char::from(b'0' + n as u8));
         return;
     }
 
@@ -132,9 +136,8 @@ fn push_u64(out: &mut String, mut n: u64) {
         buf[i] = b'0' + (n % 10) as u8;
         n /= 10;
     }
-    for &b in &buf[i..] {
-        out.push(char::from(b));
-    }
+    // SAFETY: Every byte in this suffix was written as b'0'..=b'9' above.
+    out.push_str(unsafe { std::str::from_utf8_unchecked(&buf[i..]) });
 }
 
 #[inline(always)]
