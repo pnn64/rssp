@@ -119,6 +119,72 @@ fn summary_trace() {
 mod fixtures;
 
 #[test]
+fn normalized_pair_edges() {
+    for (raw, expected) in [
+        ("", ""),
+        (",bad, = ,", ""),
+        ("\u{2003}-1.25 = 2.5\u{2003}", "-1.250=2.500"),
+        ("\u{b}1\t=\u{85}2\n\u{b}", "1.000=2.000"),
+        (" 1=2,missing,3=4,=5,6= , ", "1.000=2.000,3.000=4.000"),
+        ("1=2=3,4=5", "4.000=5.000"),
+    ] {
+        assert_eq!(normalize_float_digits(raw), expected);
+    }
+}
+
+#[test]
+#[ignore = "explicit number normalization and snapshot benchmark"]
+fn normalize_hotpath() {
+    for count in [0, 1, 32, 128, 4096] {
+        for kind in ["clean", "first", "last"] {
+            let raw = fixtures::map(count, kind);
+            measure(&format!("normalize_pair/{count}_{kind}"), count, || {
+                black_box(normalize_float_digits(black_box(&raw)));
+            });
+            for fmt in [TimingFormat::Sm, TimingFormat::Ssc] {
+                let global = [Cow::Borrowed(raw.as_str()), Cow::Borrowed("2=-0.5,6=0.125")];
+                let chart = [None, None];
+                measure(
+                    &format!("snapshot_timing/{count}_{kind}_{fmt:?}"),
+                    count,
+                    || {
+                        black_box(bpm_snapshot_timing(
+                            black_box(&chart),
+                            black_box(&global),
+                            fmt,
+                            false,
+                        ));
+                    },
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "exact normalized-number and snapshot transcript"]
+fn normalize_trace() {
+    for count in [0, 1, 32, 128, 4096] {
+        for kind in ["clean", "first", "middle", "last"] {
+            let raw = fixtures::map(count, kind);
+            println!(
+                "decimal-output {count} {kind} {:?}",
+                normalize_float_digits(&raw)
+            );
+            for fmt in [TimingFormat::Sm, TimingFormat::Ssc] {
+                let global = [Cow::Borrowed(raw.as_str()), Cow::Borrowed("2=-0.5,6=0.125")];
+                let timing = bpm_snapshot_timing(&[None, None], &global, fmt, false);
+                println!(
+                    "decimal-output {count} {kind} {fmt:?} {:?} {:x?}",
+                    timing.bpms_formatted,
+                    [timing.bpm_min_raw.to_bits(), timing.bpm_max_raw.to_bits()]
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn timing_tag_edges() {
     for raw in [
         None,
@@ -366,5 +432,34 @@ fn bpm_trace() {
                 );
             }
         }
+    }
+}
+
+#[test]
+#[ignore = "explicit normalization parser benchmark"]
+fn decimal_hotpath() {
+    for (name, raw) in [
+        ("empty", ""),
+        ("integer", "120"),
+        ("fraction", "120.125"),
+        ("padded", " \u{2003}120.125\u{2003} "),
+        ("controls", "1\u{1}\u{85}2"),
+        ("unicode_control", "1\u{85}2"),
+        ("invalid", "not-a-number"),
+        ("nonfinite", "NaN"),
+        ("overflow", "1e40"),
+        ("underflow", "1e-50"),
+        (
+            "long",
+            "00000000000000000000000000000000000000000000000000000000000000000000120.125",
+        ),
+        (
+            "long_control",
+            "00000000000000000000000000000000000000000000000000000000000000000000120\u{1}.125",
+        ),
+    ] {
+        measure(&format!("normalize_decimal/{name}"), raw.len(), || {
+            black_box(parse_normalized_decimal(black_box(raw)));
+        });
     }
 }

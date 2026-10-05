@@ -334,9 +334,9 @@ fn tidy_quantized_edges() {
         for segment in &mut expected {
             segment.beat = note_row_to_beat(beat_to_note_row(segment.beat));
         }
-        expected.sort_by_key(segment_row);
+        expected.sort_by_key(|segment| beat_to_note_row(segment.beat));
         expected.dedup_by(|later, earlier| {
-            if segment_row(later) == segment_row(earlier) {
+            if beat_to_note_row(later.beat) == beat_to_note_row(earlier.beat) {
                 *earlier = *later;
                 true
             } else {
@@ -373,6 +373,7 @@ fn segments(count: usize, kind: &str) -> Vec<Segment> {
     (0..count)
         .map(|index| Segment {
             beat: match kind {
+                "mixed" => (((index * 37) % count) / 2) as f64 * 4.0,
                 "duplicates" => (index / 2) as f64 * 4.0,
                 "reverse" => (count - index) as f64 * 4.0,
                 _ => index as f64 * 4.0,
@@ -499,7 +500,7 @@ fn insert_hotpath() {
 #[ignore = "explicit timing cleanup benchmark"]
 fn tidy_hotpath() {
     for count in [0, 1, 32, 4096] {
-        for kind in ["ordered", "duplicates", "reverse"] {
+        for kind in ["ordered", "duplicates", "reverse", "mixed"] {
             let input = segments(count, kind);
             for (name, tidy) in [
                 (
@@ -559,7 +560,7 @@ fn tidy_hotpath() {
 #[ignore = "explicit timing cleanup output comparison"]
 fn tidy_trace() {
     for count in [0, 1, 32, 4096] {
-        for kind in ["ordered", "duplicates", "reverse"] {
+        for kind in ["ordered", "duplicates", "reverse", "mixed"] {
             let input = segments(count, kind);
             println!(
                 "tidy-output {count} {kind} rows {:?} scrolls {:?}",

@@ -440,6 +440,15 @@ fn tidy_row_segments(mut segments: Vec<Segment>) -> Vec<Segment> {
 
     if ordered {
         compact_row_segments(segments)
+    } else if segments.len() <= 32 {
+        // Stable sorting uses stack storage for these measured small maps.
+        segments.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+        compact_row_segments(segments)
+    } else if segments.windows(2).all(|pair| pair[0].beat >= pair[1].beat) {
+        // Compact before reversing so duplicate rows keep their final input value.
+        let mut segments = compact_row_segments(segments);
+        segments.reverse();
+        segments
     } else if segments.len() > u32::MAX as usize {
         tidy_wide_records(segments)
     } else {

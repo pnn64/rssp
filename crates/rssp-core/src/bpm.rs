@@ -7,7 +7,7 @@ use crate::parse::{
     parse_version,
 };
 use crate::timing::{
-    ROWS_PER_BEAT, TimingFormat, format_bpm_segments_f32_like_itg, parse_bpm_stops,
+    ROWS_PER_BEAT, TimingFormat, format_bpm_segments_like_itg, parse_bpm_stops,
     steps_timing_allowed, timing_format_from_ext,
 };
 
@@ -43,8 +43,12 @@ fn strip_control(s: &str) -> Cow<'_, str> {
 }
 
 fn parse_normalized_decimal(s: &str) -> Option<f64> {
+    // Successful numeric parsing already excludes interior controls.
+    if let Ok(value) = s.trim().parse() {
+        return Some(value);
+    }
     if !has_control(s) {
-        return s.trim().parse().ok();
+        return None;
     }
 
     let mut buf = [0u8; DECIMAL_STACK_BYTES];
@@ -598,14 +602,14 @@ fn bpm_snapshot_timing(
             if use_chart { chart[i].as_deref() } else { None },
         )
     });
-    let (bpms, _, _, _) = parse_bpm_stops(r[0].1, r[0].0, r[1].1, r[1].0, fmt, true);
-    // Match native segment precision without constructing the unused tables.
-    let bpms: Vec<_> = bpms
-        .into_iter()
-        .map(|(b, v)| (b as f32, v as f32))
-        .collect();
-    let bpms_formatted = format_bpm_segments_f32_like_itg(&bpms);
-    let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw_f32(&bpms);
+    let (mut bpms, _, _, _) = parse_bpm_stops(r[0].1, r[0].0, r[1].1, r[1].0, fmt, true);
+    // Round to native precision in the existing buffer; formatting/range need f64 again.
+    for (beat, value) in &mut bpms {
+        *beat = f64::from(*beat as f32);
+        *value = f64::from(*value as f32);
+    }
+    let bpms_formatted = format_bpm_segments_like_itg(&bpms);
+    let (bpm_min_raw, bpm_max_raw) = actual_bpm_range_raw(&bpms);
     BpmSnapshotTiming {
         bpms_formatted,
         bpm_min_raw,

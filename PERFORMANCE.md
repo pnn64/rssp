@@ -5046,3 +5046,259 @@ cargo clippy --release --workspace --all-targets -- -D warnings
 cargo test --release --test optimization_edges
 cargo test --release --test all_parity -- --test-threads=22
 ```
+
+## Performance pass 0.4.289
+
+Original production: `6015a0e` (0.4.288). Workspace patch increases exactly once to 0.4.289.
+
+1. Small unordered row maps use stable sorting of canonical beats followed by existing in-place compaction, avoiding two rebuild allocations for maps up to 32 entries. Larger descending maps compact duplicate rows before reversing the same buffer, eliminating key sorting and result reconstruction. Canonical beats come from i32 rows divided by 48; the mapping preserves row ordering and equality, and compaction preserves the last input value at duplicate rows. Larger shuffled maps retain the existing packed-key sorting path. An unrestricted stable-sort experiment reduced churn but slowed the 4,096-element shuffled fixture by about 60%, so it was rejected.
+2. BPM snapshots round the already-owned f64 tuple buffer to native f32 precision in place, then use the existing f64 formatting and range functions. This removes the temporary f32 Vec and its copy. The f32 conversion still precedes all formatting/range work, preserving native rounding, underflow, overflow and nonfinite behavior. The existing Vec capacity is retained; this measurement reports allocation churn, not peak RSS.
+3. Normalization attempts numeric parsing before scanning components for removable controls. Successful parsing already validates the numeric text and excludes interior controls, so valid numbers skip the redundant byte scan. On failure, the original control detection and stack-buffer cleanup remain, using the untrimmed component to preserve the legacy rule that an ASCII control can trigger removal of Unicode controls too. The original entry trim remains; removing it did not improve larger clean maps consistently.
+
+### Method
+
+Windows MSVC, Rust 1.98.1, Intel Xeon E5-2696 v4, System allocator, fat LTO, one codegen unit. Core/leaf tests are release; public caller benchmarks use the bench profile with debug symbols. Both builds have version 0.4.289 and the same benchmark fixtures. Production bodies come from `6015a0e` for the original executable; the test reference's row-key closure is equivalent on both sides and is never timed.
+
+The measured thread is pinned to logical CPU 2. Four warmups precede seven batches, whose median is reported per process. Three process pairs alternate original/optimized, optimized/original, original/optimized; the table combines their medians. CPU cycles use QueryThreadCycleTime and wall time uses Instant. Fixtures and input cloning are outside timing. Production operations, returned-output construction, and internal frees stay inside timing. Allocation counting runs separately, counting successful alloc/realloc requests and requested bytes. No own compilation, tests or corpus verification runs during timed comparisons. Fixtures are deterministic, including a fixed permutation with duplicate row keys.
+
+Direct number-parser benchmarks use 100,000 iterations; other direct core benchmarks use 3,000 iterations except 4,096-element cases use 100. Public benchmarks use 100, except analysis/JSON reports use 50 (Camellia analysis internally uses one tenth). Focused repeats and identical-original-executable calibration use 1,000 iterations, except 4,096-element direct cases use 300. No I/O occurs in timed loops. Complete tables retain slower samples as well as gains.
+
+### Representative results
+
+| Case | CPU cycles, original -> optimized | ns | Throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `tidy/rows/32_reverse` | 1,306 -> 633 | 597 -> 290 | +105.9% | 2 -> 0 | 0 -> 0 | 768 -> 0 |
+| `tidy/rows/4096_reverse` | 99,991 -> 62,244 | 45,634 -> 28,507 | +60.1% | 2 -> 0 | 0 -> 0 | 98,304 -> 0 |
+| `tidy/rows/4096_mixed` | 195,355 -> 204,194 | 89,276 -> 93,235 | -4.2% | 2 -> 2 | 0 -> 0 | 98,304 -> 98,304 |
+| `snapshot_timing/1_clean_Ssc` | 2,451 -> 2,155 | 1,118 -> 984 | +13.6% | 4 -> 3 | 0 -> 0 | 96 -> 88 |
+| `snapshot_timing/4096_clean_Ssc` | 5,513,333 -> 5,386,220 | 2,531,031 -> 2,458,853 | +2.9% | 4 -> 3 | 0 -> 0 | 240,240 -> 207,472 |
+| `normalize_decimal/integer` | 53 -> 51 | 24 -> 23 | +4.3% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `normalize_decimal/padded` | 104 -> 91 | 48 -> 41 | +17.1% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `normalize_decimal/long` | 401 -> 297 | 183 -> 136 | +34.6% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `normalize_decimal/controls` | 87 -> 130 | 40 -> 59 | -32.2% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `normalize_pair/1_clean` | 725 -> 730 | 336 -> 334 | +0.6% | 1 -> 1 | 1 -> 1 | 27 -> 27 |
+| `normalize_pair/128_clean` | 46,006 -> 43,864 | 20,998 -> 20,019 | +4.9% | 1 -> 1 | 1 -> 1 | 4,521 -> 4,521 |
+| `normalize_pair/4096_clean` | 1,605,566 -> 1,569,493 | 732,988 -> 716,928 | +2.2% | 1 -> 1 | 1 -> 1 | 163,695 -> 163,695 |
+| `snapshot_load/32_clean_ssc_local` | 150,658 -> 148,402 | 69,111 -> 67,757 | +2.0% | 17 -> 15 | 3 -> 3 | 8,091 -> 7,579 |
+| `hash_batch/128_repeat` | 222,817 -> 216,265 | 101,865 -> 98,923 | +3.0% | 29 -> 29 | 4 -> 4 | 19,178 -> 19,178 |
+
+The deterministic gains are two fewer allocations for small unordered/descending row cleanup and one fewer allocation for every BPM snapshot. The 4,096-entry snapshot saves 32,768 requested bytes per build. These are allocation-churn measurements; peak process memory was not measured.
+
+The numeric parser trades a redundant successful-input scan for an initial parse on exceptional inputs. The long valid-number case uses 25.9% fewer CPU cycles, while the short control-removal case uses 49.4% more (40 -> 59 ns). This is a measured fallback cost, not a behavioral change. The complete tables retain all slower samples; allocation counts/reallocations/requested bytes never increase. These results establish lower churn and faster specified workloads, not uniformly faster execution for every input or caller.
+
+### Complete comparisons (121 cases)
+
+### Timing row cleanup
+
+| Case | CPU cycles, original -> optimized | ns | Throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `tidy/rows/0_ordered` | 30 -> 29 | 14 -> 14 | +0.0% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `tidy/rows/0_duplicates` | 28 -> 28 | 13 -> 13 | +0.0% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `tidy/rows/0_reverse` | 28 -> 29 | 13 -> 14 | -7.1% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `tidy/rows/0_mixed` | 29 -> 29 | 14 -> 14 | +0.0% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `tidy/rows/1_ordered` | 50 -> 49 | 23 -> 23 | +0.0% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `tidy/rows/1_duplicates` | 50 -> 49 | 23 -> 23 | +0.0% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `tidy/rows/1_reverse` | 51 -> 51 | 24 -> 24 | +0.0% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `tidy/rows/1_mixed` | 50 -> 49 | 23 -> 23 | +0.0% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `tidy/rows/32_ordered` | 489 -> 447 | 225 -> 204 | +10.3% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `tidy/rows/32_duplicates` | 570 -> 491 | 261 -> 225 | +16.0% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `tidy/rows/32_reverse` | 1,306 -> 633 | 597 -> 290 | +105.9% | 2 -> 0 | 0 -> 0 | 768 -> 0 |
+| `tidy/rows/32_mixed` | 1,749 -> 1,328 | 800 -> 607 | +31.8% | 2 -> 0 | 0 -> 0 | 768 -> 0 |
+| `tidy/rows/4096_ordered` | 49,218 -> 51,238 | 22,497 -> 23,412 | -3.9% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `tidy/rows/4096_duplicates` | 49,197 -> 51,225 | 22,468 -> 23,389 | -3.9% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `tidy/rows/4096_reverse` | 99,991 -> 62,244 | 45,634 -> 28,507 | +60.1% | 2 -> 0 | 0 -> 0 | 98,304 -> 0 |
+| `tidy/rows/4096_mixed` | 195,355 -> 204,194 | 89,276 -> 93,235 | -4.2% | 2 -> 2 | 0 -> 0 | 98,304 -> 98,304 |
+
+### Direct BPM snapshot and number normalization
+
+| Case | CPU cycles, original -> optimized | ns | Throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `normalize_decimal/empty` | 25 -> 24 | 11 -> 11 | +0.0% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `normalize_decimal/integer` | 53 -> 51 | 24 -> 23 | +4.3% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `normalize_decimal/fraction` | 68 -> 66 | 31 -> 30 | +3.3% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `normalize_decimal/padded` | 104 -> 91 | 48 -> 41 | +17.1% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `normalize_decimal/controls` | 87 -> 130 | 40 -> 59 | -32.2% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `normalize_decimal/unicode_control` | 51 -> 50 | 23 -> 23 | +0.0% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `normalize_decimal/invalid` | 59 -> 60 | 27 -> 27 | +0.0% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `normalize_decimal/nonfinite` | 48 -> 45 | 22 -> 21 | +4.8% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `normalize_decimal/overflow` | 85 -> 81 | 39 -> 37 | +5.4% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `normalize_decimal/underflow` | 86 -> 81 | 39 -> 37 | +5.4% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `normalize_decimal/long` | 401 -> 297 | 183 -> 136 | +34.6% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `normalize_decimal/long_control` | 2,448 -> 2,687 | 1,117 -> 1,227 | -9.0% | 1 -> 1 | 4 -> 4 | 248 -> 248 |
+| `normalize_pair/0_clean` | 46 -> 48 | 21 -> 22 | -4.5% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `normalize_pair/0_first` | 47 -> 48 | 22 -> 22 | +0.0% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `normalize_pair/0_last` | 46 -> 59 | 21 -> 27 | -22.2% | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+| `snapshot_timing/0_clean_Sm` | 2,984 -> 3,052 | 1,362 -> 1,395 | -2.4% | 9 -> 8 | 0 -> 0 | 264 -> 256 |
+| `snapshot_timing/0_clean_Ssc` | 2,149 -> 1,838 | 981 -> 839 | +16.9% | 4 -> 3 | 0 -> 0 | 128 -> 120 |
+| `snapshot_timing/0_first_Sm` | 2,905 -> 2,892 | 1,326 -> 1,320 | +0.5% | 9 -> 8 | 0 -> 0 | 264 -> 256 |
+| `snapshot_timing/0_first_Ssc` | 2,128 -> 1,845 | 974 -> 842 | +15.7% | 4 -> 3 | 0 -> 0 | 128 -> 120 |
+| `snapshot_timing/0_last_Sm` | 2,862 -> 3,059 | 1,307 -> 1,397 | -6.4% | 9 -> 8 | 0 -> 0 | 264 -> 256 |
+| `snapshot_timing/0_last_Ssc` | 2,039 -> 1,923 | 932 -> 880 | +5.9% | 4 -> 3 | 0 -> 0 | 128 -> 120 |
+| `normalize_pair/1_clean` | 725 -> 730 | 336 -> 334 | +0.6% | 1 -> 1 | 1 -> 1 | 27 -> 27 |
+| `normalize_pair/1_first` | 500 -> 480 | 229 -> 220 | +4.1% | 1 -> 1 | 0 -> 0 | 13 -> 13 |
+| `normalize_pair/1_last` | 500 -> 479 | 228 -> 222 | +2.7% | 1 -> 1 | 0 -> 0 | 13 -> 13 |
+| `snapshot_timing/1_clean_Sm` | 3,341 -> 3,417 | 1,530 -> 1,567 | -2.4% | 9 -> 8 | 0 -> 0 | 232 -> 224 |
+| `snapshot_timing/1_clean_Ssc` | 2,451 -> 2,155 | 1,118 -> 984 | +13.6% | 4 -> 3 | 0 -> 0 | 96 -> 88 |
+| `snapshot_timing/1_first_Sm` | 3,445 -> 3,684 | 1,572 -> 1,681 | -6.5% | 9 -> 8 | 0 -> 0 | 232 -> 224 |
+| `snapshot_timing/1_first_Ssc` | 2,437 -> 2,188 | 1,113 -> 998 | +11.5% | 4 -> 3 | 0 -> 0 | 96 -> 88 |
+| `snapshot_timing/1_last_Sm` | 3,500 -> 3,498 | 1,605 -> 1,597 | +0.5% | 9 -> 8 | 0 -> 0 | 232 -> 224 |
+| `snapshot_timing/1_last_Ssc` | 2,445 -> 2,366 | 1,116 -> 1,080 | +3.3% | 4 -> 3 | 0 -> 0 | 96 -> 88 |
+| `normalize_pair/32_clean` | 12,602 -> 12,253 | 5,757 -> 5,595 | +2.9% | 1 -> 1 | 1 -> 1 | 1,065 -> 1,065 |
+| `normalize_pair/32_first` | 12,689 -> 12,329 | 5,796 -> 5,630 | +2.9% | 1 -> 1 | 1 -> 1 | 1,077 -> 1,077 |
+| `normalize_pair/32_last` | 12,681 -> 12,642 | 5,789 -> 5,774 | +0.3% | 1 -> 1 | 1 -> 1 | 1,077 -> 1,077 |
+| `snapshot_timing/32_clean_Sm` | 47,617 -> 45,158 | 21,746 -> 20,620 | +5.5% | 9 -> 8 | 0 -> 0 | 2,656 -> 2,400 |
+| `snapshot_timing/32_clean_Ssc` | 43,875 -> 42,520 | 20,037 -> 19,415 | +3.2% | 4 -> 3 | 0 -> 0 | 1,776 -> 1,520 |
+| `snapshot_timing/32_first_Sm` | 47,352 -> 44,053 | 21,632 -> 20,110 | +7.6% | 9 -> 8 | 0 -> 0 | 2,656 -> 2,400 |
+| `snapshot_timing/32_first_Ssc` | 43,555 -> 40,719 | 19,889 -> 18,590 | +7.0% | 4 -> 3 | 0 -> 0 | 1,776 -> 1,520 |
+| `snapshot_timing/32_last_Sm` | 45,920 -> 46,145 | 20,965 -> 21,076 | -0.5% | 9 -> 8 | 0 -> 0 | 2,656 -> 2,400 |
+| `snapshot_timing/32_last_Ssc` | 44,256 -> 44,781 | 20,270 -> 20,453 | -0.9% | 4 -> 3 | 0 -> 0 | 1,776 -> 1,520 |
+| `normalize_pair/128_clean` | 46,006 -> 43,864 | 20,998 -> 20,019 | +4.9% | 1 -> 1 | 1 -> 1 | 4,521 -> 4,521 |
+| `normalize_pair/128_first` | 45,588 -> 45,242 | 20,807 -> 20,655 | +0.7% | 1 -> 1 | 1 -> 1 | 4,533 -> 4,533 |
+| `normalize_pair/128_last` | 42,188 -> 46,017 | 19,264 -> 21,005 | -8.3% | 1 -> 1 | 1 -> 1 | 4,533 -> 4,533 |
+| `snapshot_timing/128_clean_Sm` | 157,877 -> 154,073 | 72,054 -> 70,311 | +2.5% | 9 -> 8 | 0 -> 0 | 10,336 -> 9,312 |
+| `snapshot_timing/128_clean_Ssc` | 162,874 -> 153,474 | 74,333 -> 70,034 | +6.1% | 4 -> 3 | 0 -> 0 | 7,152 -> 6,128 |
+| `snapshot_timing/128_first_Sm` | 167,175 -> 162,108 | 76,290 -> 74,002 | +3.1% | 9 -> 8 | 0 -> 0 | 10,336 -> 9,312 |
+| `snapshot_timing/128_first_Ssc` | 159,495 -> 162,264 | 72,793 -> 74,055 | -1.7% | 4 -> 3 | 0 -> 0 | 7,152 -> 6,128 |
+| `snapshot_timing/128_last_Sm` | 166,126 -> 167,947 | 75,842 -> 76,630 | -1.0% | 9 -> 8 | 0 -> 0 | 10,336 -> 9,312 |
+| `snapshot_timing/128_last_Ssc` | 159,698 -> 161,849 | 72,891 -> 73,883 | -1.3% | 4 -> 3 | 0 -> 0 | 7,152 -> 6,128 |
+| `normalize_pair/4096_clean` | 1,605,566 -> 1,569,493 | 732,988 -> 716,928 | +2.2% | 1 -> 1 | 1 -> 1 | 163,695 -> 163,695 |
+| `normalize_pair/4096_first` | 1,377,411 -> 1,541,347 | 628,646 -> 703,690 | -10.7% | 1 -> 1 | 1 -> 1 | 163,707 -> 163,707 |
+| `normalize_pair/4096_last` | 1,450,509 -> 1,620,173 | 661,983 -> 739,706 | -10.5% | 1 -> 1 | 1 -> 1 | 163,707 -> 163,707 |
+| `snapshot_timing/4096_clean_Sm` | 5,838,463 -> 5,628,136 | 2,665,660 -> 2,576,116 | +3.5% | 9 -> 8 | 0 -> 0 | 338,656 -> 305,888 |
+| `snapshot_timing/4096_clean_Ssc` | 5,513,333 -> 5,386,220 | 2,531,031 -> 2,458,853 | +2.9% | 4 -> 3 | 0 -> 0 | 240,240 -> 207,472 |
+| `snapshot_timing/4096_first_Sm` | 5,715,521 -> 5,978,726 | 2,618,416 -> 2,729,774 | -4.1% | 9 -> 8 | 0 -> 0 | 338,672 -> 305,904 |
+| `snapshot_timing/4096_first_Ssc` | 5,432,103 -> 5,516,086 | 2,479,977 -> 2,518,731 | -1.5% | 4 -> 3 | 0 -> 0 | 240,256 -> 207,488 |
+| `snapshot_timing/4096_last_Sm` | 5,539,091 -> 5,293,319 | 2,528,983 -> 2,416,188 | +4.7% | 9 -> 8 | 0 -> 0 | 338,672 -> 305,904 |
+| `snapshot_timing/4096_last_Ssc` | 5,479,971 -> 5,320,583 | 2,503,673 -> 2,428,596 | +3.1% | 4 -> 3 | 0 -> 0 | 240,256 -> 207,488 |
+
+### Composed snapshot and hash callers
+
+| Case | CPU cycles, original -> optimized | ns | Throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `snapshot_load/0_clean_sm_global` | 8,014 -> 7,693 | 3,664 -> 3,558 | +3.0% | 14 -> 13 | 0 -> 0 | 1,546 -> 1,538 |
+| `snapshot_load/0_clean_ssc_global` | 8,440 -> 8,165 | 3,855 -> 3,766 | +2.4% | 12 -> 11 | 0 -> 0 | 1,522 -> 1,514 |
+| `snapshot_load/0_clean_ssc_local` | 8,749 -> 8,798 | 3,995 -> 4,044 | -1.2% | 12 -> 11 | 0 -> 0 | 1,522 -> 1,514 |
+| `snapshot_load/0_last_sm_global` | 6,967 -> 7,112 | 3,184 -> 3,248 | -2.0% | 14 -> 13 | 0 -> 0 | 1,546 -> 1,538 |
+| `snapshot_load/0_last_ssc_global` | 10,137 -> 7,647 | 4,672 -> 3,492 | +33.8% | 12 -> 11 | 0 -> 0 | 1,522 -> 1,514 |
+| `snapshot_load/0_last_ssc_local` | 7,799 -> 7,994 | 3,610 -> 3,651 | -1.1% | 12 -> 11 | 0 -> 0 | 1,522 -> 1,514 |
+| `snapshot_load/1_clean_sm_global` | 8,618 -> 8,288 | 3,966 -> 3,784 | +4.8% | 17 -> 16 | 1 -> 1 | 1,568 -> 1,560 |
+| `snapshot_load/1_clean_ssc_global` | 9,083 -> 9,043 | 4,150 -> 4,130 | +0.5% | 15 -> 14 | 1 -> 1 | 1,544 -> 1,536 |
+| `snapshot_load/1_clean_ssc_local` | 12,931 -> 12,663 | 5,905 -> 5,781 | +2.1% | 17 -> 15 | 3 -> 3 | 1,617 -> 1,601 |
+| `snapshot_load/1_last_sm_global` | 9,021 -> 8,334 | 4,283 -> 3,929 | +9.0% | 18 -> 17 | 0 -> 0 | 1,567 -> 1,559 |
+| `snapshot_load/1_last_ssc_global` | 9,230 -> 9,632 | 4,247 -> 4,396 | -3.4% | 16 -> 15 | 0 -> 0 | 1,543 -> 1,535 |
+| `snapshot_load/1_last_ssc_local` | 12,891 -> 12,771 | 5,895 -> 5,826 | +1.2% | 20 -> 18 | 2 -> 2 | 1,642 -> 1,626 |
+| `snapshot_load/32_clean_sm_global` | 70,729 -> 73,372 | 32,612 -> 33,617 | -3.0% | 17 -> 16 | 1 -> 1 | 6,626 -> 6,370 |
+| `snapshot_load/32_clean_ssc_global` | 73,541 -> 72,900 | 33,670 -> 33,305 | +1.1% | 15 -> 14 | 1 -> 1 | 5,858 -> 5,602 |
+| `snapshot_load/32_clean_ssc_local` | 150,658 -> 148,402 | 69,111 -> 67,757 | +2.0% | 17 -> 15 | 3 -> 3 | 8,091 -> 7,579 |
+| `snapshot_load/32_last_sm_global` | 74,101 -> 75,163 | 34,064 -> 34,328 | -0.8% | 18 -> 17 | 1 -> 1 | 6,997 -> 6,741 |
+| `snapshot_load/32_last_ssc_global` | 71,463 -> 75,850 | 32,703 -> 34,724 | -5.8% | 16 -> 15 | 1 -> 1 | 6,229 -> 5,973 |
+| `snapshot_load/32_last_ssc_local` | 158,900 -> 166,205 | 72,685 -> 76,021 | -4.4% | 20 -> 18 | 3 -> 3 | 9,180 -> 8,668 |
+| `snapshot_load/4096_clean_sm_global` | 9,038,595 -> 8,839,715 | 4,136,909 -> 4,044,121 | +2.3% | 17 -> 16 | 1 -> 1 | 741,038 -> 708,270 |
+| `snapshot_load/4096_clean_ssc_global` | 8,540,620 -> 8,429,775 | 3,907,597 -> 3,857,163 | +1.3% | 15 -> 14 | 1 -> 1 | 642,734 -> 609,966 |
+| `snapshot_load/4096_clean_ssc_local` | 18,785,717 -> 18,746,523 | 8,595,218 -> 8,576,558 | +0.2% | 17 -> 15 | 3 -> 3 | 972,909 -> 907,373 |
+| `snapshot_load/4096_last_sm_global` | 8,873,797 -> 8,619,098 | 4,059,622 -> 3,942,782 | +3.0% | 18 -> 17 | 1 -> 1 | 795,619 -> 762,851 |
+| `snapshot_load/4096_last_ssc_global` | 8,768,382 -> 8,734,478 | 4,043,378 -> 3,996,829 | +1.2% | 16 -> 15 | 1 -> 1 | 697,315 -> 664,547 |
+| `snapshot_load/4096_last_ssc_local` | 20,249,454 -> 19,774,239 | 9,266,432 -> 9,045,296 | +2.4% | 20 -> 18 | 3 -> 3 | 1,136,628 -> 1,071,092 |
+| `hash_batch/1_global` | 25,431 -> 23,849 | 11,737 -> 10,885 | +7.8% | 28 -> 28 | 2 -> 2 | 5,283 -> 5,283 |
+| `hash_batch/1_repeat` | 27,086 -> 26,994 | 12,392 -> 12,533 | -1.1% | 29 -> 29 | 4 -> 4 | 5,318 -> 5,318 |
+| `hash_batch/1_vary` | 26,678 -> 27,444 | 12,195 -> 12,524 | -2.6% | 29 -> 29 | 4 -> 4 | 5,318 -> 5,318 |
+| `hash_batch/1_distinct` | 35,212 -> 34,573 | 16,059 -> 15,796 | +1.7% | 36 -> 36 | 18 -> 18 | 5,563 -> 5,563 |
+| `hash_batch/128_global` | 171,478 -> 167,031 | 78,441 -> 76,427 | +2.6% | 28 -> 28 | 2 -> 2 | 12,213 -> 12,213 |
+| `hash_batch/128_repeat` | 222,817 -> 216,265 | 101,865 -> 98,923 | +3.0% | 29 -> 29 | 4 -> 4 | 19,178 -> 19,178 |
+| `hash_batch/128_vary` | 214,956 -> 214,423 | 98,369 -> 98,138 | +0.2% | 29 -> 29 | 4 -> 4 | 19,178 -> 19,178 |
+| `hash_batch/128_distinct` | 551,349 -> 550,429 | 252,413 -> 252,066 | +0.1% | 36 -> 36 | 18 -> 18 | 67,933 -> 67,933 |
+
+### Timing builders and analysis controls
+
+| Case | CPU cycles, original -> optimized | ns | Throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `timing_cleanup/0_ordered` | 913 -> 944 | 425 -> 439 | -3.2% | 2 -> 2 | 0 -> 0 | 24 -> 24 |
+| `timing_cleanup/0_duplicates` | 913 -> 944 | 424 -> 439 | -3.4% | 2 -> 2 | 0 -> 0 | 24 -> 24 |
+| `timing_cleanup/0_reverse` | 911 -> 944 | 424 -> 439 | -3.4% | 2 -> 2 | 0 -> 0 | 24 -> 24 |
+| `timing_cleanup/1_ordered` | 4,089 -> 4,199 | 1,872 -> 1,984 | -5.6% | 14 -> 14 | 0 -> 0 | 192 -> 192 |
+| `timing_cleanup/1_duplicates` | 4,021 -> 4,783 | 1,840 -> 2,187 | -15.9% | 14 -> 14 | 0 -> 0 | 192 -> 192 |
+| `timing_cleanup/1_reverse` | 4,037 -> 4,414 | 1,847 -> 2,106 | -12.3% | 14 -> 14 | 0 -> 0 | 192 -> 192 |
+| `timing_cleanup/32_ordered` | 53,159 -> 52,862 | 24,299 -> 24,460 | -0.7% | 14 -> 14 | 0 -> 0 | 5,528 -> 5,528 |
+| `timing_cleanup/32_duplicates` | 50,500 -> 51,635 | 23,094 -> 23,574 | -2.0% | 14 -> 14 | 0 -> 0 | 4,600 -> 4,600 |
+| `timing_cleanup/32_reverse` | 60,452 -> 57,215 | 27,606 -> 26,170 | +5.5% | 24 -> 16 | 0 -> 0 | 10,136 -> 7,064 |
+| `timing_cleanup/4096_ordered` | 7,572,463 -> 7,425,305 | 3,469,680 -> 3,406,184 | +1.9% | 14 -> 14 | 0 -> 0 | 731,704 -> 731,704 |
+| `timing_cleanup/4096_duplicates` | 6,432,930 -> 6,272,678 | 2,945,396 -> 2,870,488 | +2.6% | 14 -> 14 | 0 -> 0 | 611,032 -> 611,032 |
+| `timing_cleanup/4096_reverse` | 40,468,166 -> 40,312,907 | 18,596,723 -> 18,461,912 | +0.7% | 24 -> 16 | 0 -> 0 | 1,321,528 -> 928,312 |
+| `analyze/fast_fake_lifts` | 708,454 -> 686,060 | 323,872 -> 314,058 | +3.1% | 31 -> 31 | 4 -> 4 | 59,028 -> 59,028 |
+| `analyze/camellia` | 480,277,897 -> 474,024,824 | 219,811,360 -> 216,867,540 | +1.4% | 110 -> 110 | 0 -> 0 | 5,263,624 -> 5,263,624 |
+| `analyze/fast_camellia` | 60,615,846 -> 60,245,595 | 27,741,000 -> 27,575,460 | +0.6% | 115 -> 115 | 0 -> 0 | 7,051,152 -> 7,051,152 |
+| `analyze/mixed_small` | 53,852 -> 56,354 | 24,612 -> 26,018 | -5.4% | 59 -> 59 | 3 -> 3 | 7,460 -> 7,460 |
+
+### Focused repeats
+
+| Case | CPU cycles, original -> optimized | ns | Throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `normalize_pair/1_clean` | 717 -> 700 | 328 -> 320 | +2.5% | 1 -> 1 | 1 -> 1 | 27 -> 27 |
+| `normalize_pair/32_clean` | 11,776 -> 11,373 | 5,384 -> 5,186 | +3.8% | 1 -> 1 | 1 -> 1 | 1,065 -> 1,065 |
+| `normalize_pair/128_clean` | 44,280 -> 43,257 | 20,204 -> 19,739 | +2.4% | 1 -> 1 | 1 -> 1 | 4,521 -> 4,521 |
+| `tidy/rows/32_mixed` | 1,567 -> 1,538 | 717 -> 703 | +2.0% | 2 -> 0 | 0 -> 0 | 768 -> 0 |
+| `snapshot_load/32_clean_ssc_local` | 132,506 -> 129,831 | 60,471 -> 59,267 | +2.0% | 17 -> 15 | 3 -> 3 | 8,091 -> 7,579 |
+| `hash_batch/128_repeat` | 198,413 -> 193,523 | 90,581 -> 88,512 | +2.3% | 29 -> 29 | 4 -> 4 | 19,178 -> 19,178 |
+| `analyze/mixed_small` | 46,460 -> 43,043 | 21,212 -> 19,648 | +8.0% | 59 -> 59 | 3 -> 3 | 7,460 -> 7,460 |
+| `normalize_pair/4096_clean` | 1,396,818 -> 1,475,276 | 637,517 -> 673,468 | -5.3% | 1 -> 1 | 1 -> 1 | 163,695 -> 163,695 |
+| `snapshot_timing/4096_clean_Ssc` | 5,026,350 -> 4,874,382 | 2,294,278 -> 2,224,710 | +3.1% | 4 -> 3 | 0 -> 0 | 240,240 -> 207,472 |
+| `tidy/rows/4096_reverse` | 88,555 -> 54,088 | 40,403 -> 24,685 | +63.7% | 2 -> 0 | 0 -> 0 | 98,304 -> 0 |
+| `tidy/rows/4096_mixed` | 182,149 -> 192,171 | 83,137 -> 87,739 | -5.2% | 2 -> 2 | 0 -> 0 | 98,304 -> 98,304 |
+
+`normalize_pair/4096_clean` changes by -5.3% throughput in the repeat (1,396,818 -> 1,475,276 cycles), with unchanged allocation metrics. This result limits the CPU-speed claim for that workload.
+
+`tidy/rows/4096_mixed` changes by -5.2% throughput in the repeat (182,149 -> 192,171 cycles), with unchanged allocation metrics. This result limits the CPU-speed claim for that workload.
+
+The repeated mixed-small analysis control changes by +8.0% throughput (46,460 -> 43,043 cycles). Original/original calibration below measures host variability and does not establish that every slower optimized sample is noise.
+
+### Original/original calibration
+
+Both sides use the identical original executable; these differences quantify host/process variability.
+
+| Case | CPU cycles, original -> optimized | ns | Throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `normalize_pair/128_clean` | 45,207 -> 45,709 | 20,626 -> 20,874 | -1.2% | 1 -> 1 | 1 -> 1 | 4,521 -> 4,521 |
+| `tidy/rows/32_mixed` | 1,497 -> 1,410 | 683 -> 644 | +6.1% | 2 -> 2 | 0 -> 0 | 768 -> 768 |
+| `snapshot_timing/1_clean_Ssc` | 2,044 -> 2,006 | 932 -> 915 | +1.9% | 4 -> 4 | 0 -> 0 | 96 -> 96 |
+| `hash_batch/128_repeat` | 191,449 -> 197,370 | 87,408 -> 90,122 | -3.0% | 29 -> 29 | 4 -> 4 | 19,178 -> 19,178 |
+| `analyze/mixed_small` | 49,224 -> 46,578 | 22,472 -> 21,262 | +5.7% | 59 -> 59 | 3 -> 3 | 7,460 -> 7,460 |
+
+### Validation
+
+- 155 core + 79 rssp + 31 integration release tests pass (265 total).
+- After the benchmarked optimizations were confirmed, `cargo test --release --test all_parity -- --test-threads=22`: 30,489 passed, zero failed.
+- Strict release workspace Clippy with all targets, formatting and whitespace checks pass.
+- Existing canonical-row, quantization, stable-order, snapshot precision and nonfinite tests pass. New normalization cases cover Unicode padding, controls, missing/extra equals signs and empty entries; explicit integration checks cover 34 descending duplicate entries and the ASCII/Unicode control trigger; mixed-order duplicates are included in direct benchmarks and output traces.
+- Original/optimized corpus output matches byte for byte: 30,843 files, 56,125 supported charts, 30,489 successes and 354 matching errors. No golden data changes.
+- corpus: 174,790,323 UTF-8 bytes; SHA-256 `e7d2f22bd7b7f48c0335075d8d2ac355063b58809fdd77c42dcec23927a5759d`.
+- core-trace: 18,557,083 UTF-8 bytes; SHA-256 `5b272380f1255a3f43d9f8148b88688057bb86ff1e92b9f3bb3cceb655698d07`.
+- leaf-trace: 29,475,978 UTF-8 bytes; SHA-256 `a4119df5e7f479587d617afd8e5117dd63d2232d10e467792f42ac92a2e2d29e`.
+
+
+### Reproduction
+
+Keep these fixtures and version 0.4.289 for both builds. Restore the production bodies of `bpm.rs` and `timing.rs` from `6015a0e` for the original build, retaining the new test support files. Save executables after each build before rebuilding the other production bodies.
+
+```powershell
+cargo test --release -p rssp-core --lib
+cargo test --release -p rssp --lib
+cargo bench -p rssp --bench hotpath_perf --no-run
+$env:RSSP_PASS_FILTER='tidy/rows/4096_'
+$env:RSSP_PASS_ITERS='100'
+.\saved-core.exe timing::pass_edges::tidy_hotpath --exact --ignored --nocapture --test-threads=1
+$env:RSSP_PASS_FILTER='normalize_pair/128_'
+$env:RSSP_PASS_ITERS='3000'
+.\saved-core.exe bpm::pass_edges::normalize_hotpath --exact --ignored --nocapture --test-threads=1
+# Use snapshot_timing/ with the same test for direct snapshot builds.
+$env:RSSP_PASS_FILTER='normalize_decimal/'
+$env:RSSP_PASS_ITERS='100000'
+.\saved-core.exe bpm::pass_edges::decimal_hotpath --exact --ignored --nocapture --test-threads=1
+$env:RSSP_HOT_FILTER='snapshot_load/'
+$env:RSSP_HOT_ITERS='100'
+.\saved-hotpath.exe
+# Also compare hash_batch/, timing_cleanup/, analyze/ and report/json/.
+# Alternate old/new, new/old, old/new; compare _trace and RSSP_HOT_VERIFY=1 separately.
+cargo clippy --release --workspace --all-targets -- -D warnings
+cargo test --release --test optimization_edges
+cargo test --release --test all_parity -- --test-threads=22
+```
