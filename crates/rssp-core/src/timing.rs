@@ -466,12 +466,11 @@ fn eq_segment(a: &Segment, b: &Segment) -> bool {
     float_eq(a.value, b.value)
 }
 
-fn add_scroll_segment_slow(out: &mut Vec<Segment>, seg: Segment, row: i32) {
-    let idx = {
-        let pos = out.partition_point(|s| segment_row(s) <= row);
-        if pos == 0 { 0 } else { pos - 1 }
-    };
-    let on_same_row = segment_row(&out[idx]) == row;
+fn add_scroll_segment_slow(out: &mut Vec<Segment>, seg: Segment) {
+    // The tidy prepass canonicalizes every beat, preserving note-row ordering.
+    let pos = out.partition_point(|s| s.beat <= seg.beat);
+    let idx = pos.saturating_sub(1);
+    let on_same_row = out[idx].beat == seg.beat;
     let prev_idx = if on_same_row && idx > 0 { idx - 1 } else { idx };
 
     if idx + 1 < out.len() {
@@ -508,8 +507,7 @@ fn add_scroll_segment_slow(out: &mut Vec<Segment>, seg: Segment, row: i32) {
             out[idx] = seg;
         }
     } else {
-        let insert_pos = out.partition_point(|s| segment_row(s) <= row);
-        out.insert(insert_pos, seg);
+        out.insert(pos, seg);
     }
 }
 
@@ -529,8 +527,7 @@ fn tidy_scroll_segments(mut segments: Vec<Segment>) -> Vec<Segment> {
             if out.is_empty() {
                 out.push(segment);
             } else {
-                let row = segment_row(&segment);
-                add_scroll_segment_slow(&mut out, segment, row);
+                add_scroll_segment_slow(&mut out, segment);
             }
         }
         return out;
@@ -562,21 +559,15 @@ fn tidy_scroll_segments(mut segments: Vec<Segment>) -> Vec<Segment> {
 }
 
 #[inline]
-fn speed_row(seg: &SpeedSegment) -> i32 {
-    beat_to_note_row(seg.beat)
-}
-
-#[inline]
 fn eq_speed(a: &SpeedSegment, b: &SpeedSegment) -> bool {
     float_eq(a.ratio, b.ratio) && float_eq(a.delay, b.delay) && a.unit == b.unit
 }
 
-fn add_speed_segment_slow(out: &mut Vec<SpeedSegment>, seg: SpeedSegment, row: i32) {
-    let idx = {
-        let pos = out.partition_point(|s| speed_row(s) <= row);
-        if pos == 0 { 0 } else { pos - 1 }
-    };
-    let on_same_row = speed_row(&out[idx]) == row;
+fn add_speed_segment_slow(out: &mut Vec<SpeedSegment>, seg: SpeedSegment) {
+    // The tidy prepass canonicalizes every beat, preserving note-row ordering.
+    let pos = out.partition_point(|s| s.beat <= seg.beat);
+    let idx = pos.saturating_sub(1);
+    let on_same_row = out[idx].beat == seg.beat;
     let prev_idx = if on_same_row && idx > 0 { idx - 1 } else { idx };
 
     if idx + 1 < out.len() {
@@ -613,8 +604,7 @@ fn add_speed_segment_slow(out: &mut Vec<SpeedSegment>, seg: SpeedSegment, row: i
             out[idx] = seg;
         }
     } else {
-        let insert_pos = out.partition_point(|s| speed_row(s) <= row);
-        out.insert(insert_pos, seg);
+        out.insert(pos, seg);
     }
 }
 
@@ -634,8 +624,7 @@ fn tidy_speed_segments(mut segments: Vec<SpeedSegment>) -> Vec<SpeedSegment> {
             if out.is_empty() {
                 out.push(segment);
             } else {
-                let row = speed_row(&segment);
-                add_speed_segment_slow(&mut out, segment, row);
+                add_speed_segment_slow(&mut out, segment);
             }
         }
         return out;
@@ -2550,7 +2539,7 @@ mod tests {
             if out.is_empty() {
                 out.push(seg);
             } else {
-                add_scroll_segment_slow(&mut out, seg, row);
+                add_scroll_segment_slow(&mut out, seg);
             }
         }
         out
@@ -2564,7 +2553,7 @@ mod tests {
             if out.is_empty() {
                 out.push(seg);
             } else {
-                add_speed_segment_slow(&mut out, seg, row);
+                add_speed_segment_slow(&mut out, seg);
             }
         }
         out

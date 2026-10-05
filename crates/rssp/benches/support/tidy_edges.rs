@@ -109,6 +109,119 @@ fn segments(count: usize, kind: &str) -> Vec<Segment> {
 }
 
 #[test]
+fn unordered_insert_edges() {
+    for (values, beat, value, expected) in [
+        (
+            [1.0, 2.0, 3.0],
+            2.0,
+            4.0,
+            vec![(0.0, 1.0), (2.0, 4.0), (4.0, 2.0), (8.0, 3.0)],
+        ),
+        (
+            [1.0, 2.0, 3.0],
+            12.0,
+            4.0,
+            vec![(0.0, 1.0), (4.0, 2.0), (8.0, 3.0), (12.0, 4.0)],
+        ),
+        (
+            [1.0, 2.0, 3.0],
+            4.0,
+            4.0,
+            vec![(0.0, 1.0), (4.0, 4.0), (8.0, 3.0)],
+        ),
+        ([1.0, 2.0, 3.0], 4.0, 1.0, vec![(0.0, 1.0), (8.0, 3.0)]),
+        ([1.0, 2.0, 3.0], 4.0, 3.0, vec![(0.0, 1.0), (4.0, 3.0)]),
+        ([1.0, 2.0, 1.0], 4.0, 1.0, vec![(0.0, 1.0)]),
+        (
+            [1.0, 2.0, 3.0],
+            -4.0,
+            4.0,
+            vec![(-4.0, 4.0), (0.0, 1.0), (4.0, 2.0), (8.0, 3.0)],
+        ),
+    ] {
+        let mut out: Vec<_> = values
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| Segment {
+                beat: index as f64 * 4.0,
+                value,
+            })
+            .collect();
+        let speed = |segment: &Segment| SpeedSegment {
+            beat: segment.beat,
+            ratio: segment.value,
+            delay: 0.5,
+            unit: SpeedUnit::Beats,
+        };
+        let mut speeds: Vec<_> = out.iter().map(speed).collect();
+        let seg = Segment { beat, value };
+        let expected: Vec<_> = expected
+            .into_iter()
+            .map(|(beat, value)| Segment { beat, value })
+            .collect();
+        add_scroll_segment_slow(&mut out, seg);
+        add_speed_segment_slow(&mut speeds, speed(&seg));
+        tests::assert_segment_bits_eq(&out, &expected);
+        tests::assert_speed_bits_eq(&speeds, &expected.iter().map(speed).collect::<Vec<_>>());
+    }
+}
+
+#[test]
+#[ignore = "explicit unordered timing insertion benchmark"]
+fn insert_hotpath() {
+    for count in [1, 32, 4096] {
+        for kind in ["append", "middle", "replace"] {
+            let input = segments(count, "ordered");
+            let beat = match kind {
+                "append" => count as f64 * 4.0,
+                "middle" => (count / 2) as f64 * 4.0 - 2.0,
+                _ => (count / 2) as f64 * 4.0,
+            };
+            let seg = Segment { beat, value: 9.0 };
+            measure_prepared(
+                &format!("insert/scrolls/{count}_{kind}"),
+                count,
+                || {
+                    let mut out = Vec::with_capacity(count + 1);
+                    out.extend_from_slice(&input);
+                    out
+                },
+                |out| {
+                    add_scroll_segment_slow(black_box(out), black_box(seg));
+                },
+            );
+            let speeds: Vec<_> = input
+                .iter()
+                .map(|s| SpeedSegment {
+                    beat: s.beat,
+                    ratio: s.value,
+                    delay: 0.5,
+                    unit: SpeedUnit::Beats,
+                })
+                .collect();
+            let seg = SpeedSegment {
+                beat,
+                ratio: 9.0,
+                delay: 0.5,
+                unit: SpeedUnit::Beats,
+            };
+            measure_prepared(
+                &format!("insert/speeds/{count}_{kind}"),
+                count,
+                || {
+                    let mut out = Vec::with_capacity(count + 1);
+                    out.extend_from_slice(&speeds);
+                    out
+                },
+                |out| {
+                    add_speed_segment_slow(black_box(out), black_box(seg));
+                },
+            );
+        }
+    }
+}
+
+#[test]
 #[ignore = "explicit timing cleanup benchmark"]
 fn tidy_hotpath() {
     for count in [0, 1, 32, 4096] {

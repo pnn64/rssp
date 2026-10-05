@@ -22,6 +22,9 @@ mod speed_perf;
 #[path = "support/cleanup_perf.rs"]
 mod cleanup_perf;
 
+#[path = "support/map_perf.rs"]
+mod map_perf;
+
 #[path = "support/course_load.rs"]
 mod course_load;
 
@@ -987,6 +990,7 @@ fn peak_work_cases(iters: usize) {
 )]
 fn verify_components() {
     cleanup_perf::verify();
+    map_perf::verify();
     course_load::verify();
     speed_perf::verify();
     verify_reports();
@@ -1137,6 +1141,7 @@ fn main() {
     cleanup_cases(iters);
     speed_perf::cases(iters);
     cleanup_perf::cases(iters);
+    map_perf::cases(iters);
     course_load::cases(iters);
     spacing_cases(iters);
     nps_stats_cases(iters);

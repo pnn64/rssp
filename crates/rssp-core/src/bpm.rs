@@ -14,6 +14,10 @@ use crate::timing::{
 const GIMMICK_BPM_THRESHOLD: f64 = 10000.0;
 const DECIMAL_STACK_BYTES: usize = 64;
 
+#[cfg(test)]
+#[path = "../../rssp/benches/support/bpm_edges.rs"]
+mod pass_edges;
+
 #[inline]
 pub(crate) fn is_display_bpm(bpm: f64) -> bool {
     bpm > 0.0 && bpm < GIMMICK_BPM_THRESHOLD
@@ -309,10 +313,25 @@ fn push_clean_entry(out: &mut String, entry: &str) -> Option<usize> {
     }
 }
 
+fn timing_tag_text(tag: Option<&[u8]>) -> Option<&str> {
+    let bytes = tag?;
+    let blank = |byte: &u8| matches!(*byte, b' ' | b'\t'..=b'\r');
+    if bytes.first().is_none_or(blank)
+        && bytes.last().is_none_or(blank)
+        && if bytes.len() < 32 {
+            bytes.iter().all(blank)
+        } else {
+            bytes.iter().fold(true, |all, byte| all & blank(byte))
+        }
+    {
+        return None;
+    }
+    std::str::from_utf8(bytes).ok()
+}
+
 #[must_use]
 pub fn chart_timing_tag_raw(tag: Option<&[u8]>) -> Option<String> {
-    let bytes = tag?;
-    let text = std::str::from_utf8(bytes).ok()?;
+    let text = timing_tag_text(tag)?;
     let cleaned = clean_timing_map(text);
     if cleaned.is_empty() {
         None
@@ -323,7 +342,7 @@ pub fn chart_timing_tag_raw(tag: Option<&[u8]>) -> Option<String> {
 
 #[must_use]
 pub fn chart_timing_tag_cow(tag: Option<&[u8]>) -> Option<Cow<'_, str>> {
-    let text = std::str::from_utf8(tag?).ok()?;
+    let text = timing_tag_text(tag)?;
     let cleaned = clean_timing_map_cow(text);
     if cleaned.is_empty() {
         None
@@ -513,6 +532,7 @@ fn chart_bpm_snapshot(
     fmt: TimingFormat,
     use_chart: bool,
     global_timing: &mut Option<BpmSnapshotTiming>,
+    last_chart: bool,
 ) -> Option<ChartBpmSnapshot> {
     if entry.field_count < 4 {
         return None;
@@ -531,6 +551,11 @@ fn chart_bpm_snapshot(
     let has_chart_timing = use_chart && chart.iter().any(Option::is_some);
     let timing = if has_chart_timing {
         bpm_snapshot_timing(&chart, global, fmt, true)
+    } else if last_chart {
+        // The cache ends with this chart; transfer its buffer into the result.
+        global_timing
+            .take()
+            .unwrap_or_else(|| bpm_snapshot_timing(&chart, global, fmt, false))
     } else {
         let cached =
             global_timing.get_or_insert_with(|| bpm_snapshot_timing(&chart, global, fmt, false));
@@ -635,7 +660,7 @@ pub fn chart_bpm_snapshots(data: &[u8], ext: &str) -> Result<Vec<ChartBpmSnapsho
     let bpms_norm = map_tag(parsed.bpms, normalize_float_digits);
     let mut snapshots = Vec::with_capacity(parsed.notes_list.len());
     let mut global_timing = None;
-    for entry in &parsed.notes_list {
+    for (index, entry) in parsed.notes_list.iter().enumerate() {
         if let Some(snapshot) = chart_bpm_snapshot(
             entry,
             &global,
@@ -643,6 +668,7 @@ pub fn chart_bpm_snapshots(data: &[u8], ext: &str) -> Result<Vec<ChartBpmSnapsho
             fmt,
             use_chart,
             &mut global_timing,
+            index + 1 == parsed.notes_list.len(),
         ) {
             snapshots.push(snapshot);
         }
