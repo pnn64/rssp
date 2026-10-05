@@ -2,6 +2,119 @@ use super::*;
 use crate::perf::{measure, measure_prepared};
 use std::hint::black_box;
 
+fn summary_map(len: usize, kind: &str) -> Vec<(f64, f64)> {
+    (0..len)
+        .map(|i| {
+            let value = match kind {
+                "uniform" => 120.0,
+                "reverse" => 240.0 - (i % 100) as f64,
+                "filtered" => [0.0, 120.0, 10_000.0, 180.0][i % 4],
+                "fallback" => -((i % 13) as f64) - 1.0,
+                // Mixed NaN comparisons are not a total order and already panic
+                // in the baseline's sort at 32 values. Keep that edge small.
+                "special" if len > 8 => f64::NAN,
+                "special" => [f64::NAN, f64::INFINITY, -0.0, f64::NEG_INFINITY][i % 4],
+                _ => ((i * 37) % 193) as f64 + 0.125,
+            };
+            (i as f64 * 4.0, value)
+        })
+        .collect()
+}
+
+#[test]
+fn short_summary_edges() {
+    for (map, expected) in [
+        (&[][..], (0, 0, 0.0, 0.0)),
+        (&[(0.0, 120.0)][..], (120, 120, 120.0, 120.0)),
+        (&[(0.0, 120.0), (4.0, 180.0)][..], (120, 180, 150.0, 150.0)),
+        (
+            &[(0.0, 10_000.0), (4.0, 240.0)][..],
+            (240, 240, 240.0, 240.0),
+        ),
+        (&[(0.0, -3.0), (4.0, -1.0)][..], (0, 0, -2.0, -2.0)),
+    ] {
+        assert_eq!(compute_bpm_range_and_stats(map), expected);
+        let mut scratch = vec![999.0; 64];
+        assert_eq!(
+            compute_bpm_range_and_stats_with_scratch(map, &mut scratch),
+            expected
+        );
+        assert_eq!(scratch.capacity(), 64);
+    }
+}
+
+#[test]
+#[ignore = "explicit BPM summary allocation benchmark"]
+fn summary_hotpath() {
+    for len in [0, 1, 2, 8, 32, 33, 128, 4096] {
+        for kind in [
+            "uniform", "reverse", "dense", "filtered", "fallback", "special",
+        ] {
+            let map = summary_map(len, kind);
+            let values: Vec<_> = map.iter().map(|&(_, value)| value).collect();
+            measure(&format!("bpm_summary/{len}_{kind}_values"), len, || {
+                black_box(compute_bpm_stats(black_box(&values)));
+            });
+            measure(&format!("bpm_summary/{len}_{kind}_map"), len, || {
+                black_box(compute_bpm_map_stats(black_box(&map)));
+            });
+            measure(&format!("bpm_summary/{len}_{kind}_owned"), len, || {
+                black_box(compute_bpm_range_and_stats(black_box(&map)));
+            });
+            measure_prepared(
+                &format!("bpm_summary/{len}_{kind}_cold"),
+                len,
+                Vec::new,
+                |scratch| {
+                    black_box(compute_bpm_range_and_stats_with_scratch(
+                        black_box(&map),
+                        scratch,
+                    ));
+                },
+            );
+            let mut scratch = Vec::with_capacity(len);
+            measure(&format!("bpm_summary/{len}_{kind}_warm"), len, || {
+                black_box(compute_bpm_range_and_stats_with_scratch(
+                    black_box(&map),
+                    black_box(&mut scratch),
+                ));
+            });
+        }
+    }
+}
+
+#[test]
+#[ignore = "exact original/optimized BPM summary transcript"]
+fn summary_trace() {
+    for len in [0, 1, 2, 8, 32, 33, 128, 4096] {
+        for kind in [
+            "uniform", "reverse", "dense", "filtered", "fallback", "special",
+        ] {
+            let map = summary_map(len, kind);
+            let values: Vec<_> = map.iter().map(|&(_, value)| value).collect();
+            let pairs = [compute_bpm_stats(&values), compute_bpm_map_stats(&map)];
+            println!(
+                "bpm-summary {len} {kind} stats {:x?}",
+                pairs.map(|(a, b)| [a.to_bits(), b.to_bits()])
+            );
+            for capacity in [0, 2, 32, 4096] {
+                let mut scratch = Vec::with_capacity(capacity);
+                let results = [
+                    compute_bpm_range_and_stats(&map),
+                    compute_bpm_range_and_stats_with_scratch(&map, &mut scratch),
+                ];
+                let selected: Vec<_> = scratch.iter().map(|value| value.to_bits()).collect();
+                for (min, max, median, average) in results {
+                    println!(
+                        "bpm-summary {len} {kind} {capacity} {min} {max} {:x?} {selected:x?}",
+                        [median.to_bits(), average.to_bits()]
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[path = "map_fixtures.rs"]
 mod fixtures;
 

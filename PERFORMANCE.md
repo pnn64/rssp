@@ -3679,3 +3679,860 @@ cargo clippy --release --workspace --all-targets -- -D warnings
 cargo test --release --test optimization_edges
 cargo test --release --test all_parity -- --test-threads=22
 ```
+
+## Pass 0.4.287: avoid temporary summary and timing storage
+
+Baseline: `b22ddef` (0.4.286). This pass increments the workspace patch version exactly once to **0.4.287** and retains three optimizations:
+
+1. **Use the existing 32-value stack selection for owned BPM summaries.** Fold the display range while collecting selected values through a monomorphized visitor; existing statistics-only calls use a no-op visitor. This removes the temporary vector for maps of 2–32 entries and non-finite singletons while preserving filtering, fallback ordering, median selection, and average accumulation. Delete the forwarding scratch wrapper and put its unchanged implementation under the public signature. Caller-owned scratch contents and capacity behavior are preserved.
+2. **Extend owned NPS stack selection to 128 measures.** Keep the existing 64-value buffer for inputs up to that boundary, and use a 128-value buffer for 65–128 measures. Both sizes share the same bounded selection function. The existing uniform/zero-majority scans still bypass median copying; larger inputs use the original heap path. Caller-owned scratch and in-place APIs retain their original behavior. Empty, singleton and pair results stay in a small scalar entry point.
+3. **Reuse a sole exact-sized owned timing source.** A delay, warp or fake vector already has the final packed layout when it is the only nonempty source. Return it with the corresponding prefix offsets rather than allocate a destination, copy it, and free it. A stop-only source already serves as the destination. Spare-capacity sources and mixed sources keep the original destination/reservation policy, preventing increased retained output storage.
+
+The two buffer functions are explicitly kept out of line. This measured layout keeps bounded array storage out of scalar entry points. An ordinary inlining hint did not remove the scalar overhead and was discarded. No sorting rule or numeric operation is replaced, and no cache, dependency or dynamic dispatch is introduced.
+
+### Representative final measurements
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `bpm_summary/8_dense_owned` | 253 → 135 | 115 → 62 | +85.5% | 1 → 0 | 0 → 0 | 64 → 0 |
+| `bpm_summary/32_reverse_owned` | 686 → 517 | 313 → 236 | +32.6% | 1 → 0 | 0 → 0 | 256 → 0 |
+| `nps_summary/65_dense_owned` | 955 → 802 | 437 → 365 | +19.7% | 1 → 0 | 0 → 0 | 520 → 0 |
+| `nps_summary/128_dense_owned` | 1,475 → 1,244 | 677 → 571 | +18.6% | 1 → 0 | 0 → 0 | 1,024 → 0 |
+| `pack_timing/4096_2_false` | 59,911 → 27,958 | 27,422 → 12,854 | +113.3% | 1 → 0 | 0 → 0 | 65,536 → 0 |
+| `pack_raw/32_2` | 8,442 → 7,910 | 3,855 → 3,611 | +6.8% | 4 → 3 | 0 → 0 | 1,168 → 656 |
+| `pack_raw/4096_2` | 1,033,347 → 834,600 | 471,613 → 381,044 | +23.8% | 4 → 3 | 0 → 0 | 147,472 → 81,936 |
+
+### Method
+
+Windows x86-64, Intel Xeon E5-2696 v4, 44 logical processors, benchmark thread pinned to CPU 2; rustc 1.98.1, LLVM 22.1.8. Original and final builds use the same current fixtures, harnesses and package version; the original build restores only the production implementations from `b22ddef`. Cargo release/bench profiles use fat LTO and one codegen unit.
+
+Four warmup calls and seven timed batches per process; three alternating process pairs (old/new, new/old, old/new). Tables report the median of the three batch medians. Windows `QueryThreadCycleTime` measures thread CPU cycles; wall-clock ns and derived call throughput are also shown. Rounded nanoseconds limit precision for tiny calls. The counting System allocator runs separately from timing; bytes are successful allocation/reallocation requests per call, **not peak live memory or RSS**.
+
+Fixture construction and labels stay outside measurement. Owned statistics and returned packed/built timing outputs are destroyed inside both timed loops. Cold scratch inputs are prepared empty before the timer and destroyed after each batch; warm buffers are prepared with capacity and reused. In-place inputs are cloned before timing. Raw timing parsing is deliberately included in the composed builder benchmark. No own builds, tests or corpus verification run during the final timed comparisons.
+
+The main sweep has 648 cases: 240 BPM summaries, 200 NPS summaries, 64 direct packing cases, 32 raw timing builders, and 112 stream/hash/analysis/report/cleanup controls. Summary and packing cases below 128 elements use 5,000 iterations; larger cases use 1,000, except 4,096-entry raw builders use 100. Stream/hash controls use 1,000; analysis/report/cleanup use 100 (existing Camellia full analysis uses 10). Longer scalar and summary checks use 100,000 iterations. Additional focused checks retain slower main samples instead of replacing them. All measured allocation counts, reallocations and requested bytes are non-increasing.
+
+Unrelated Cargo/rustc work in other repositories was observed on the host during control rechecks; it was left running. CPU samples on this host are variable, so the deterministic allocation reductions and exact-output comparisons provide stronger evidence than isolated percentage changes. Longer alternating rechecks below expose that variability rather than attributing every control change to this patch.
+
+The longer 8-entry warm BPM recheck is 139 -> 141 cycles (64 -> 65 ns), and the filtered 128-entry map recheck is 1,415 -> 1,444 cycles (646 -> 659 ns). The mixed delay/warp builder changes from a slower main/large sample to +4.3% throughput in its final recheck. Original/original calibration varies by up to 7.9% throughput on a stream control. These results do not justify a uniform CPU-speed claim.
+
+CPU gains depend on input and code layout. Some controls are slower, including tiny scalar BPM calls; the complete tables and rechecks below expose those costs. This pass claims lower allocation churn for the specified paths and unchanged observable outputs, not uniformly higher throughput for every call.
+
+The baseline sorter already panics on the 32-entry mixed NaN/infinity fallback fixture because its partial comparison does not define a total order. Mixed non-finite benchmark fixtures stay at 1, 2 and 8 entries; larger special BPM fixtures use homogeneous NaNs. The public BPM parser accepts non-finite values. This pass preserves the existing comparison behavior; it does not fix that pre-existing limitation.
+
+### BPM summary paths and controls
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `bpm_summary/0_uniform_values` | 12 → 12 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_uniform_map` | 14 → 14 | 7 → 6 | +16.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_uniform_owned` | 3 → 7 | 2 → 3 | -33.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_uniform_cold` | 20 → 21 | 10 → 10 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_uniform_warm` | 20 → 19 | 9 → 9 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_reverse_values` | 12 → 12 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_reverse_map` | 14 → 13 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_reverse_owned` | 3 → 6 | 2 → 3 | -33.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_reverse_cold` | 20 → 21 | 9 → 10 | -10.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_reverse_warm` | 19 → 20 | 9 → 9 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_dense_values` | 12 → 12 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_dense_map` | 13 → 13 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_dense_owned` | 3 → 7 | 2 → 3 | -33.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_dense_cold` | 21 → 21 | 10 → 10 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_dense_warm` | 20 → 19 | 9 → 9 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_filtered_values` | 12 → 12 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_filtered_map` | 13 → 14 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_filtered_owned` | 3 → 6 | 2 → 3 | -33.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_filtered_cold` | 20 → 24 | 9 → 12 | -25.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_filtered_warm` | 20 → 20 | 9 → 9 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_fallback_values` | 12 → 11 | 6 → 5 | +20.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_fallback_map` | 14 → 13 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_fallback_owned` | 3 → 6 | 2 → 3 | -33.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_fallback_cold` | 20 → 21 | 9 → 10 | -10.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_fallback_warm` | 18 → 20 | 9 → 9 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_special_values` | 12 → 12 | 5 → 6 | -16.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_special_map` | 14 → 13 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_special_owned` | 3 → 6 | 2 → 3 | -33.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_special_cold` | 21 → 20 | 10 → 9 | +11.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/0_special_warm` | 19 → 20 | 9 → 9 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_uniform_values` | 12 → 12 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_uniform_map` | 13 → 14 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_uniform_owned` | 21 → 24 | 10 → 11 | -9.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_uniform_cold` | 227 → 222 | 104 → 102 | +2.0% | 1 → 1 | 0 → 0 | 32 → 32 |
+| `bpm_summary/1_uniform_warm` | 41 → 48 | 19 → 22 | -13.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_reverse_values` | 12 → 12 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_reverse_map` | 13 → 13 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_reverse_owned` | 21 → 23 | 10 → 11 | -9.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_reverse_cold` | 236 → 222 | 109 → 101 | +7.9% | 1 → 1 | 0 → 0 | 32 → 32 |
+| `bpm_summary/1_reverse_warm` | 40 → 44 | 19 → 20 | -5.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_dense_values` | 12 → 12 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_dense_map` | 13 → 13 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_dense_owned` | 22 → 22 | 10 → 10 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_dense_cold` | 227 → 221 | 104 → 101 | +3.0% | 1 → 1 | 0 → 0 | 32 → 32 |
+| `bpm_summary/1_dense_warm` | 40 → 40 | 18 → 18 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_filtered_values` | 12 → 12 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_filtered_map` | 13 → 14 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_filtered_owned` | 21 → 22 | 10 → 10 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_filtered_cold` | 224 → 232 | 103 → 107 | -3.7% | 1 → 1 | 0 → 0 | 32 → 32 |
+| `bpm_summary/1_filtered_warm` | 38 → 39 | 18 → 18 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_fallback_values` | 12 → 12 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_fallback_map` | 14 → 14 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_fallback_owned` | 21 → 22 | 10 → 10 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_fallback_cold` | 226 → 220 | 103 → 101 | +2.0% | 1 → 1 | 0 → 0 | 32 → 32 |
+| `bpm_summary/1_fallback_warm` | 38 → 39 | 18 → 18 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_special_values` | 37 → 40 | 17 → 18 | -5.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_special_map` | 40 → 41 | 18 → 19 | -5.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_special_owned` | 169 → 61 | 77 → 28 | +175.0% | 1 → 0 | 0 → 0 | 8 → 0 |
+| `bpm_summary/1_special_cold` | 222 → 224 | 101 → 102 | -1.0% | 1 → 1 | 0 → 0 | 32 → 32 |
+| `bpm_summary/1_special_warm` | 39 → 40 | 18 → 18 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_uniform_values` | 53 → 55 | 24 → 25 | -4.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_uniform_map` | 59 → 57 | 27 → 26 | +3.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_uniform_owned` | 184 → 77 | 84 → 35 | +140.0% | 1 → 0 | 0 → 0 | 16 → 0 |
+| `bpm_summary/2_uniform_cold` | 251 → 257 | 114 → 118 | -3.4% | 1 → 1 | 0 → 0 | 32 → 32 |
+| `bpm_summary/2_uniform_warm` | 58 → 59 | 27 → 27 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_reverse_values` | 66 → 64 | 30 → 29 | +3.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_reverse_map` | 66 → 69 | 30 → 32 | -6.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_reverse_owned` | 200 → 80 | 91 → 37 | +145.9% | 1 → 0 | 0 → 0 | 16 → 0 |
+| `bpm_summary/2_reverse_cold` | 246 → 262 | 113 → 120 | -5.8% | 1 → 1 | 0 → 0 | 32 → 32 |
+| `bpm_summary/2_reverse_warm` | 65 → 63 | 30 → 29 | +3.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_dense_values` | 57 → 57 | 26 → 26 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_dense_map` | 61 → 57 | 28 → 26 | +7.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_dense_owned` | 187 → 69 | 85 → 32 | +165.6% | 1 → 0 | 0 → 0 | 16 → 0 |
+| `bpm_summary/2_dense_cold` | 252 → 261 | 115 → 119 | -3.4% | 1 → 1 | 0 → 0 | 32 → 32 |
+| `bpm_summary/2_dense_warm` | 58 → 58 | 27 → 26 | +3.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_filtered_values` | 36 → 37 | 17 → 17 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_filtered_map` | 42 → 41 | 19 → 19 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_filtered_owned` | 176 → 61 | 80 → 28 | +185.7% | 1 → 0 | 0 → 0 | 16 → 0 |
+| `bpm_summary/2_filtered_cold` | 223 → 232 | 102 → 106 | -3.8% | 1 → 1 | 0 → 0 | 32 → 32 |
+| `bpm_summary/2_filtered_warm` | 42 → 42 | 19 → 19 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_fallback_values` | 66 → 73 | 30 → 34 | -11.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_fallback_map` | 69 → 66 | 31 → 30 | +3.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_fallback_owned` | 193 → 89 | 88 → 41 | +114.6% | 1 → 0 | 0 → 0 | 16 → 0 |
+| `bpm_summary/2_fallback_cold` | 245 → 242 | 112 → 111 | +0.9% | 1 → 1 | 0 → 0 | 32 → 32 |
+| `bpm_summary/2_fallback_warm` | 63 → 60 | 29 → 27 | +7.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_special_values` | 62 → 59 | 28 → 27 | +3.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_special_map` | 57 → 57 | 26 → 26 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_special_owned` | 186 → 73 | 85 → 33 | +157.6% | 1 → 0 | 0 → 0 | 16 → 0 |
+| `bpm_summary/2_special_cold` | 258 → 245 | 120 → 113 | +6.2% | 1 → 1 | 0 → 0 | 32 → 32 |
+| `bpm_summary/2_special_warm` | 64 → 59 | 29 → 27 | +7.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/8_uniform_values` | 70 → 67 | 32 → 31 | +3.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/8_uniform_map` | 76 → 65 | 36 → 30 | +20.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/8_uniform_owned` | 246 → 129 | 112 → 61 | +83.6% | 1 → 0 | 0 → 0 | 64 → 0 |
+| `bpm_summary/8_uniform_cold` | 306 → 295 | 140 → 135 | +3.7% | 1 → 1 | 0 → 0 | 64 → 64 |
+| `bpm_summary/8_uniform_warm` | 119 → 101 | 55 → 46 | +19.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/8_reverse_values` | 111 → 114 | 51 → 53 | -3.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/8_reverse_map` | 99 → 104 | 45 → 47 | -4.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/8_reverse_owned` | 272 → 143 | 124 → 65 | +90.8% | 1 → 0 | 0 → 0 | 64 → 0 |
+| `bpm_summary/8_reverse_cold` | 346 → 363 | 158 → 166 | -4.8% | 1 → 1 | 0 → 0 | 64 → 64 |
+| `bpm_summary/8_reverse_warm` | 131 → 134 | 60 → 61 | -1.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/8_dense_values` | 85 → 96 | 39 → 44 | -11.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/8_dense_map` | 85 → 92 | 39 → 42 | -7.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/8_dense_owned` | 253 → 135 | 115 → 62 | +85.5% | 1 → 0 | 0 → 0 | 64 → 0 |
+| `bpm_summary/8_dense_cold` | 322 → 312 | 147 → 142 | +3.5% | 1 → 1 | 0 → 0 | 64 → 64 |
+| `bpm_summary/8_dense_warm` | 130 → 210 | 60 → 96 | -37.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/8_filtered_values` | 63 → 63 | 29 → 29 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/8_filtered_map` | 63 → 60 | 29 → 27 | +7.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/8_filtered_owned` | 218 → 84 | 100 → 39 | +156.4% | 1 → 0 | 0 → 0 | 64 → 0 |
+| `bpm_summary/8_filtered_cold` | 272 → 307 | 125 → 140 | -10.7% | 1 → 1 | 0 → 0 | 64 → 64 |
+| `bpm_summary/8_filtered_warm` | 76 → 75 | 35 → 34 | +2.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/8_fallback_values` | 113 → 99 | 52 → 45 | +15.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/8_fallback_map` | 98 → 105 | 45 → 48 | -6.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/8_fallback_owned` | 259 → 152 | 118 → 70 | +68.6% | 1 → 0 | 0 → 0 | 64 → 0 |
+| `bpm_summary/8_fallback_cold` | 406 → 369 | 185 → 169 | +9.5% | 1 → 1 | 0 → 0 | 64 → 64 |
+| `bpm_summary/8_fallback_warm` | 140 → 155 | 64 → 71 | -9.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/8_special_values` | 71 → 80 | 33 → 37 | -10.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/8_special_map` | 86 → 75 | 39 → 34 | +14.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/8_special_owned` | 245 → 108 | 112 → 49 | +128.6% | 1 → 0 | 0 → 0 | 64 → 0 |
+| `bpm_summary/8_special_cold` | 338 → 289 | 155 → 132 | +17.4% | 1 → 1 | 0 → 0 | 64 → 64 |
+| `bpm_summary/8_special_warm` | 107 → 104 | 49 → 48 | +2.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/32_uniform_values` | 289 → 295 | 132 → 135 | -2.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/32_uniform_map` | 286 → 291 | 131 → 133 | -1.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/32_uniform_owned` | 655 → 511 | 299 → 233 | +28.3% | 1 → 0 | 0 → 0 | 256 → 0 |
+| `bpm_summary/32_uniform_cold` | 877 → 866 | 400 → 398 | +0.5% | 1 → 1 | 0 → 0 | 256 → 256 |
+| `bpm_summary/32_uniform_warm` | 501 → 497 | 229 → 227 | +0.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/32_reverse_values` | 324 → 348 | 148 → 159 | -6.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/32_reverse_map` | 321 → 299 | 146 → 137 | +6.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/32_reverse_owned` | 686 → 517 | 313 → 236 | +32.6% | 1 → 0 | 0 → 0 | 256 → 0 |
+| `bpm_summary/32_reverse_cold` | 866 → 882 | 397 → 406 | -2.2% | 1 → 1 | 0 → 0 | 256 → 256 |
+| `bpm_summary/32_reverse_warm` | 520 → 504 | 237 → 231 | +2.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/32_dense_values` | 733 → 738 | 334 → 337 | -0.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/32_dense_map` | 724 → 757 | 332 → 347 | -4.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/32_dense_owned` | 1,121 → 950 | 511 → 434 | +17.7% | 1 → 0 | 0 → 0 | 256 → 0 |
+| `bpm_summary/32_dense_cold` | 1,320 → 1,328 | 605 → 608 | -0.5% | 1 → 1 | 0 → 0 | 256 → 256 |
+| `bpm_summary/32_dense_warm` | 981 → 973 | 448 → 444 | +0.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/32_filtered_values` | 201 → 199 | 92 → 91 | +1.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/32_filtered_map` | 187 → 208 | 86 → 95 | -9.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/32_filtered_owned` | 427 → 278 | 195 → 127 | +53.5% | 1 → 0 | 0 → 0 | 256 → 0 |
+| `bpm_summary/32_filtered_cold` | 619 → 644 | 283 → 294 | -3.7% | 1 → 1 | 0 → 0 | 256 → 256 |
+| `bpm_summary/32_filtered_warm` | 280 → 278 | 128 → 127 | +0.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/32_fallback_values` | 785 → 777 | 358 → 355 | +0.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/32_fallback_map` | 820 → 791 | 374 → 364 | +2.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/32_fallback_owned` | 1,171 → 1,021 | 534 → 465 | +14.8% | 1 → 0 | 0 → 0 | 256 → 0 |
+| `bpm_summary/32_fallback_cold` | 1,398 → 1,369 | 640 → 625 | +2.4% | 1 → 1 | 0 → 0 | 256 → 256 |
+| `bpm_summary/32_fallback_warm` | 1,039 → 1,065 | 474 → 486 | -2.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/32_special_values` | 263 → 267 | 121 → 122 | -0.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/32_special_map` | 300 → 269 | 137 → 123 | +11.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/32_special_owned` | 675 → 519 | 308 → 237 | +30.0% | 1 → 0 | 0 → 0 | 256 → 0 |
+| `bpm_summary/32_special_cold` | 873 → 873 | 399 → 399 | +0.0% | 1 → 1 | 0 → 0 | 256 → 256 |
+| `bpm_summary/32_special_warm` | 523 → 516 | 239 → 235 | +1.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/33_uniform_values` | 494 → 500 | 225 → 229 | -1.7% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_uniform_map` | 464 → 495 | 212 → 226 | -6.2% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_uniform_owned` | 665 → 688 | 304 → 314 | -3.2% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_uniform_cold` | 894 → 892 | 408 → 407 | +0.2% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_uniform_warm` | 502 → 499 | 229 → 227 | +0.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/33_reverse_values` | 534 → 521 | 244 → 238 | +2.5% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_reverse_map` | 502 → 499 | 229 → 228 | +0.4% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_reverse_owned` | 673 → 702 | 307 → 320 | -4.1% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_reverse_cold` | 913 → 862 | 417 → 394 | +5.8% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_reverse_warm` | 511 → 527 | 233 → 240 | -2.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/33_dense_values` | 1,387 → 1,319 | 633 → 603 | +5.0% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_dense_map` | 1,329 → 1,336 | 607 → 610 | -0.5% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_dense_owned` | 1,506 → 1,524 | 687 → 695 | -1.2% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_dense_cold` | 1,742 → 1,715 | 797 → 783 | +1.8% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_dense_warm` | 1,339 → 1,286 | 611 → 587 | +4.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/33_filtered_values` | 396 → 377 | 182 → 175 | +4.0% | 1 → 1 | 0 → 0 | 128 → 128 |
+| `bpm_summary/33_filtered_map` | 386 → 350 | 176 → 159 | +10.7% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_filtered_owned` | 437 → 454 | 200 → 207 | -3.4% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_filtered_cold` | 678 → 635 | 310 → 290 | +6.9% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_filtered_warm` | 275 → 275 | 126 → 125 | +0.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/33_fallback_values` | 1,140 → 1,173 | 520 → 535 | -2.8% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_fallback_map` | 1,184 → 1,193 | 540 → 544 | -0.7% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_fallback_owned` | 1,412 → 1,519 | 644 → 693 | -7.1% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_fallback_cold` | 1,657 → 1,662 | 757 → 759 | -0.3% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_fallback_warm` | 1,310 → 1,269 | 598 → 579 | +3.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/33_special_values` | 394 → 388 | 180 → 177 | +1.7% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_special_map` | 437 → 450 | 199 → 205 | -2.9% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_special_owned` | 691 → 725 | 315 → 331 | -4.8% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_special_cold` | 908 → 914 | 414 → 418 | -1.0% | 1 → 1 | 0 → 0 | 264 → 264 |
+| `bpm_summary/33_special_warm` | 544 → 566 | 249 → 258 | -3.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/128_uniform_values` | 1,829 → 1,799 | 834 → 823 | +1.3% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_uniform_map` | 1,743 → 1,715 | 795 → 782 | +1.7% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_uniform_owned` | 2,155 → 2,233 | 983 → 1,020 | -3.6% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_uniform_cold` | 3,105 → 3,137 | 1,420 → 1,431 | -0.8% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_uniform_warm` | 2,018 → 2,065 | 922 → 942 | -2.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/128_reverse_values` | 2,122 → 2,181 | 976 → 995 | -1.9% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_reverse_map` | 1,964 → 2,128 | 899 → 973 | -7.6% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_reverse_owned` | 2,510 → 2,466 | 1,147 → 1,127 | +1.8% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_reverse_cold` | 3,204 → 3,266 | 1,464 → 1,492 | -1.9% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_reverse_warm` | 2,298 → 2,377 | 1,048 → 1,085 | -3.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/128_dense_values` | 1,878 → 1,875 | 856 → 856 | +0.0% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_dense_map` | 1,745 → 1,791 | 796 → 817 | -2.6% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_dense_owned` | 2,240 → 2,302 | 1,023 → 1,051 | -2.7% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_dense_cold` | 3,139 → 3,028 | 1,435 → 1,383 | +3.8% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_dense_warm` | 2,061 → 2,107 | 941 → 965 | -2.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/128_filtered_values` | 1,636 → 1,537 | 749 → 701 | +6.8% | 1 → 1 | 0 → 0 | 512 → 512 |
+| `bpm_summary/128_filtered_map` | 1,018 → 1,408 | 465 → 642 | -27.6% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_filtered_owned` | 1,187 → 1,252 | 544 → 571 | -4.7% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_filtered_cold` | 1,955 → 1,984 | 893 → 908 | -1.7% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_filtered_warm` | 992 → 1,042 | 453 → 476 | -4.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/128_fallback_values` | 3,874 → 3,845 | 1,767 → 1,756 | +0.6% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_fallback_map` | 4,031 → 4,021 | 1,846 → 1,838 | +0.4% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_fallback_owned` | 5,074 → 5,119 | 2,316 → 2,341 | -1.1% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_fallback_cold` | 5,993 → 5,939 | 2,735 → 2,710 | +0.9% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_fallback_warm` | 4,972 → 4,927 | 2,270 → 2,248 | +1.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/128_special_values` | 905 → 908 | 413 → 415 | -0.5% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_special_map` | 979 → 1,054 | 447 → 481 | -7.1% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_special_owned` | 2,054 → 2,110 | 936 → 962 | -2.7% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_special_cold` | 2,988 → 2,971 | 1,365 → 1,368 | -0.2% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `bpm_summary/128_special_warm` | 1,943 → 1,908 | 886 → 870 | +1.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/4096_uniform_values` | 68,693 → 74,771 | 31,358 → 34,133 | -8.1% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `bpm_summary/4096_uniform_map` | 48,357 → 51,781 | 22,072 → 23,657 | -6.7% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `bpm_summary/4096_uniform_owned` | 61,538 → 61,527 | 28,088 → 28,080 | +0.0% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `bpm_summary/4096_uniform_cold` | 98,041 → 98,047 | 44,753 → 44,763 | -0.0% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `bpm_summary/4096_uniform_warm` | 59,261 → 60,191 | 27,056 → 27,466 | -1.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/4096_reverse_values` | 58,587 → 59,374 | 26,733 → 27,095 | -1.3% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `bpm_summary/4096_reverse_map` | 51,252 → 50,903 | 23,397 → 23,236 | +0.7% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `bpm_summary/4096_reverse_owned` | 63,367 → 63,704 | 28,920 → 29,088 | -0.6% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `bpm_summary/4096_reverse_cold` | 101,286 → 99,463 | 46,242 → 45,408 | +1.8% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `bpm_summary/4096_reverse_warm` | 63,321 → 61,620 | 28,894 → 28,112 | +2.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/4096_dense_values` | 56,797 → 55,445 | 25,922 → 25,299 | +2.5% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `bpm_summary/4096_dense_map` | 49,330 → 47,056 | 22,517 → 21,487 | +4.8% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `bpm_summary/4096_dense_owned` | 62,731 → 62,512 | 28,627 → 28,536 | +0.3% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `bpm_summary/4096_dense_cold` | 94,169 → 92,382 | 42,987 → 42,189 | +1.9% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `bpm_summary/4096_dense_warm` | 61,868 → 62,130 | 28,221 → 28,344 | -0.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/4096_filtered_values` | 33,473 → 34,295 | 15,294 → 15,649 | -2.3% | 1 → 1 | 0 → 0 | 16,384 → 16,384 |
+| `bpm_summary/4096_filtered_map` | 28,333 → 33,655 | 12,934 → 15,363 | -15.8% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `bpm_summary/4096_filtered_owned` | 32,119 → 31,960 | 14,651 → 14,590 | +0.4% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `bpm_summary/4096_filtered_cold` | 51,888 → 51,487 | 23,689 → 23,529 | +0.7% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `bpm_summary/4096_filtered_warm` | 31,068 → 30,611 | 14,179 → 13,972 | +1.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/4096_fallback_values` | 88,479 → 88,677 | 40,397 → 40,624 | -0.6% | 2 → 2 | 0 → 0 | 65,536 → 65,536 |
+| `bpm_summary/4096_fallback_map` | 88,800 → 85,162 | 40,517 → 38,859 | +4.3% | 2 → 2 | 0 → 0 | 65,536 → 65,536 |
+| `bpm_summary/4096_fallback_owned` | 121,791 → 120,523 | 55,569 → 55,017 | +1.0% | 2 → 2 | 0 → 0 | 65,536 → 65,536 |
+| `bpm_summary/4096_fallback_cold` | 157,107 → 158,115 | 71,737 → 72,172 | -0.6% | 2 → 2 | 0 → 0 | 65,536 → 65,536 |
+| `bpm_summary/4096_fallback_warm` | 124,933 → 122,468 | 57,050 → 55,889 | +2.1% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `bpm_summary/4096_special_values` | 27,904 → 26,202 | 12,729 → 11,973 | +6.3% | 2 → 2 | 0 → 0 | 65,536 → 65,536 |
+| `bpm_summary/4096_special_map` | 26,865 → 26,152 | 12,263 → 11,942 | +2.7% | 2 → 2 | 0 → 0 | 65,536 → 65,536 |
+| `bpm_summary/4096_special_owned` | 61,351 → 62,055 | 28,011 → 28,318 | -1.1% | 2 → 2 | 0 → 0 | 65,536 → 65,536 |
+| `bpm_summary/4096_special_cold` | 91,252 → 89,912 | 41,662 → 41,056 | +1.5% | 2 → 2 | 0 → 0 | 65,536 → 65,536 |
+| `bpm_summary/4096_special_warm` | 61,587 → 58,648 | 28,110 → 26,778 | +5.0% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+
+### NPS summary paths and controls
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `nps_summary/0_uniform_owned` | 17 → 3 | 8 → 2 | +300.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/0_uniform_cold` | 9 → 9 | 4 → 4 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/0_uniform_warm` | 5 → 5 | 2 → 2 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/0_uniform_in_place` | 3 → 3 | 2 → 2 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/0_dense_owned` | 16 → 3 | 7 → 2 | +250.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/0_dense_cold` | 9 → 9 | 4 → 4 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/0_dense_warm` | 5 → 5 | 2 → 2 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/0_dense_in_place` | 3 → 3 | 2 → 2 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/0_sparse_owned` | 16 → 3 | 8 → 2 | +300.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/0_sparse_cold` | 9 → 9 | 4 → 4 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/0_sparse_warm` | 5 → 5 | 2 → 2 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/0_sparse_in_place` | 3 → 3 | 2 → 2 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/0_negative_owned` | 17 → 3 | 8 → 2 | +300.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/0_negative_cold` | 10 → 9 | 5 → 4 | +25.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/0_negative_warm` | 5 → 5 | 2 → 2 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/0_negative_in_place` | 3 → 3 | 2 → 2 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/0_special_owned` | 17 → 3 | 8 → 2 | +300.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/0_special_cold` | 9 → 9 | 4 → 4 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/0_special_warm` | 5 → 5 | 2 → 2 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/0_special_in_place` | 3 → 3 | 2 → 2 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_uniform_owned` | 18 → 4 | 8 → 2 | +300.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_uniform_cold` | 9 → 9 | 4 → 4 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_uniform_warm` | 8 → 8 | 4 → 4 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_uniform_in_place` | 19 → 19 | 11 → 9 | +22.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_dense_owned` | 15 → 3 | 7 → 2 | +250.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_dense_cold` | 8 → 8 | 4 → 4 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_dense_warm` | 7 → 7 | 3 → 3 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_dense_in_place` | 18 → 19 | 9 → 9 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_sparse_owned` | 18 → 4 | 8 → 2 | +300.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_sparse_cold` | 9 → 9 | 4 → 4 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_sparse_warm` | 8 → 7 | 4 → 3 | +33.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_sparse_in_place` | 18 → 20 | 9 → 9 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_negative_owned` | 16 → 4 | 7 → 2 | +250.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_negative_cold` | 9 → 9 | 4 → 4 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_negative_warm` | 7 → 8 | 4 → 4 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_negative_in_place` | 18 → 17 | 9 → 8 | +12.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_special_owned` | 16 → 3 | 7 → 2 | +250.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_special_cold` | 8 → 9 | 4 → 4 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_special_warm` | 7 → 8 | 4 → 4 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_special_in_place` | 18 → 20 | 9 → 9 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_uniform_owned` | 26 → 8 | 12 → 4 | +200.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_uniform_cold` | 14 → 12 | 7 → 6 | +16.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_uniform_warm` | 14 → 13 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_uniform_in_place` | 33 → 36 | 15 → 17 | -11.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_dense_owned` | 21 → 7 | 10 → 3 | +233.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_dense_cold` | 14 → 12 | 7 → 6 | +16.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_dense_warm` | 13 → 13 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_dense_in_place` | 33 → 36 | 15 → 17 | -11.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_sparse_owned` | 20 → 8 | 9 → 4 | +125.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_sparse_cold` | 14 → 12 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_sparse_warm` | 13 → 13 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_sparse_in_place` | 32 → 36 | 15 → 17 | -11.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_negative_owned` | 20 → 7 | 9 → 3 | +200.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_negative_cold` | 14 → 12 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_negative_warm` | 14 → 14 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_negative_in_place` | 31 → 35 | 14 → 16 | -12.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_special_owned` | 21 → 6 | 10 → 3 | +233.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_special_cold` | 13 → 13 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_special_warm` | 12 → 13 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_special_in_place` | 33 → 35 | 15 → 16 | -6.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/8_uniform_owned` | 83 → 91 | 38 → 42 | -9.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/8_uniform_cold` | 280 → 261 | 128 → 119 | +7.6% | 1 → 1 | 0 → 0 | 64 → 64 |
+| `nps_summary/8_uniform_warm` | 60 → 60 | 28 → 28 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/8_uniform_in_place` | 58 → 61 | 27 → 28 | -3.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/8_dense_owned` | 122 → 129 | 56 → 59 | -5.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/8_dense_cold` | 286 → 323 | 131 → 149 | -12.1% | 1 → 1 | 0 → 0 | 64 → 64 |
+| `nps_summary/8_dense_warm` | 103 → 101 | 47 → 46 | +2.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/8_dense_in_place` | 96 → 97 | 44 → 45 | -2.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/8_sparse_owned` | 86 → 91 | 40 → 41 | -2.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/8_sparse_cold` | 273 → 281 | 125 → 129 | -3.1% | 1 → 1 | 0 → 0 | 64 → 64 |
+| `nps_summary/8_sparse_warm` | 60 → 62 | 28 → 29 | -3.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/8_sparse_in_place` | 58 → 61 | 27 → 28 | -3.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/8_negative_owned` | 141 → 145 | 64 → 67 | -4.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/8_negative_cold` | 355 → 339 | 162 → 155 | +4.5% | 1 → 1 | 0 → 0 | 64 → 64 |
+| `nps_summary/8_negative_warm` | 137 → 121 | 63 → 55 | +14.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/8_negative_in_place` | 115 → 115 | 53 → 53 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/8_special_owned` | 103 → 107 | 47 → 49 | -4.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/8_special_cold` | 295 → 316 | 135 → 144 | -6.2% | 1 → 1 | 0 → 0 | 64 → 64 |
+| `nps_summary/8_special_warm` | 128 → 101 | 59 → 48 | +22.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/8_special_in_place` | 76 → 77 | 35 → 36 | -2.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/32_uniform_owned` | 356 → 335 | 164 → 153 | +7.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/32_uniform_cold` | 741 → 843 | 339 → 385 | -11.9% | 1 → 1 | 0 → 0 | 256 → 256 |
+| `nps_summary/32_uniform_warm` | 301 → 302 | 137 → 139 | -1.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/32_uniform_in_place` | 304 → 328 | 139 → 150 | -7.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/32_dense_owned` | 426 → 468 | 195 → 213 | -8.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/32_dense_cold` | 804 → 837 | 369 → 382 | -3.4% | 1 → 1 | 0 → 0 | 256 → 256 |
+| `nps_summary/32_dense_warm` | 407 → 419 | 186 → 191 | -2.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/32_dense_in_place` | 408 → 411 | 186 → 188 | -1.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/32_sparse_owned` | 324 → 333 | 148 → 153 | -3.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/32_sparse_cold` | 727 → 814 | 332 → 372 | -10.8% | 1 → 1 | 0 → 0 | 256 → 256 |
+| `nps_summary/32_sparse_warm` | 303 → 304 | 138 → 139 | -0.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/32_sparse_in_place` | 308 → 314 | 140 → 144 | -2.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/32_negative_owned` | 340 → 353 | 155 → 161 | -3.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/32_negative_cold` | 734 → 797 | 336 → 364 | -7.7% | 1 → 1 | 0 → 0 | 256 → 256 |
+| `nps_summary/32_negative_warm` | 317 → 331 | 145 → 151 | -4.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/32_negative_in_place` | 321 → 339 | 147 → 155 | -5.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/32_special_owned` | 322 → 346 | 147 → 158 | -7.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/32_special_cold` | 714 → 799 | 326 → 365 | -10.7% | 1 → 1 | 0 → 0 | 256 → 256 |
+| `nps_summary/32_special_warm` | 312 → 323 | 143 → 147 | -2.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/32_special_in_place` | 300 → 349 | 137 → 160 | -14.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/64_uniform_owned` | 249 → 211 | 114 → 96 | +18.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/64_uniform_cold` | 203 → 202 | 93 → 92 | +1.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/64_uniform_warm` | 202 → 226 | 92 → 103 | -10.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/64_uniform_in_place` | 221 → 224 | 102 → 103 | -1.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/64_dense_owned` | 830 → 790 | 380 → 361 | +5.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/64_dense_cold` | 1,288 → 1,330 | 588 → 607 | -3.1% | 1 → 1 | 0 → 0 | 512 → 512 |
+| `nps_summary/64_dense_warm` | 794 → 790 | 362 → 360 | +0.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/64_dense_in_place` | 758 → 769 | 347 → 351 | -1.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/64_sparse_owned` | 212 → 211 | 97 → 97 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/64_sparse_cold` | 202 → 213 | 93 → 97 | -4.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/64_sparse_warm` | 205 → 212 | 94 → 98 | -4.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/64_sparse_in_place` | 225 → 240 | 103 → 110 | -6.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/64_negative_owned` | 709 → 736 | 324 → 336 | -3.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/64_negative_cold` | 1,207 → 1,288 | 551 → 588 | -6.3% | 1 → 1 | 0 → 0 | 512 → 512 |
+| `nps_summary/64_negative_warm` | 729 → 718 | 333 → 328 | +1.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/64_negative_in_place` | 679 → 675 | 310 → 308 | +0.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/64_special_owned` | 691 → 717 | 316 → 327 | -3.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/64_special_cold` | 1,244 → 1,222 | 569 → 558 | +2.0% | 1 → 1 | 0 → 0 | 512 → 512 |
+| `nps_summary/64_special_warm` | 693 → 749 | 316 → 341 | -7.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/64_special_in_place` | 681 → 722 | 311 → 330 | -5.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/65_uniform_owned` | 237 → 222 | 109 → 101 | +7.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/65_uniform_cold` | 233 → 210 | 107 → 97 | +10.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/65_uniform_warm` | 221 → 214 | 101 → 98 | +3.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/65_uniform_in_place` | 230 → 233 | 106 → 106 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/65_dense_owned` | 955 → 802 | 437 → 365 | +19.7% | 1 → 0 | 0 → 0 | 520 → 0 |
+| `nps_summary/65_dense_cold` | 1,335 → 1,290 | 610 → 588 | +3.7% | 1 → 1 | 0 → 0 | 520 → 520 |
+| `nps_summary/65_dense_warm` | 773 → 768 | 353 → 350 | +0.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/65_dense_in_place` | 750 → 724 | 343 → 331 | +3.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/65_sparse_owned` | 265 → 236 | 121 → 108 | +12.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/65_sparse_cold` | 248 → 216 | 114 → 99 | +15.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/65_sparse_warm` | 213 → 215 | 98 → 98 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/65_sparse_in_place` | 233 → 234 | 107 → 107 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/65_negative_owned` | 897 → 712 | 409 → 325 | +25.8% | 1 → 0 | 0 → 0 | 520 → 0 |
+| `nps_summary/65_negative_cold` | 1,184 → 1,196 | 541 → 546 | -0.9% | 1 → 1 | 0 → 0 | 520 → 520 |
+| `nps_summary/65_negative_warm` | 673 → 697 | 307 → 318 | -3.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/65_negative_in_place` | 676 → 680 | 309 → 311 | -0.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/65_special_owned` | 863 → 724 | 394 → 330 | +19.4% | 1 → 0 | 0 → 0 | 520 → 0 |
+| `nps_summary/65_special_cold` | 1,154 → 1,229 | 527 → 561 | -6.1% | 1 → 1 | 0 → 0 | 520 → 520 |
+| `nps_summary/65_special_warm` | 663 → 753 | 304 → 344 | -11.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/65_special_in_place` | 685 → 710 | 313 → 324 | -3.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/128_uniform_owned` | 426 → 418 | 195 → 191 | +2.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/128_uniform_cold` | 397 → 399 | 182 → 183 | -0.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/128_uniform_warm` | 399 → 403 | 183 → 185 | -1.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/128_uniform_in_place` | 441 → 457 | 203 → 210 | -3.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/128_dense_owned` | 1,475 → 1,244 | 677 → 571 | +18.6% | 1 → 0 | 0 → 0 | 1,024 → 0 |
+| `nps_summary/128_dense_cold` | 2,244 → 2,314 | 1,028 → 1,065 | -3.5% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `nps_summary/128_dense_warm` | 1,304 → 1,340 | 598 → 620 | -3.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/128_dense_in_place` | 1,214 → 1,281 | 558 → 589 | -5.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/128_sparse_owned` | 422 → 420 | 193 → 192 | +0.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/128_sparse_cold` | 398 → 399 | 182 → 183 | -0.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/128_sparse_warm` | 399 → 404 | 183 → 185 | -1.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/128_sparse_in_place` | 424 → 489 | 195 → 225 | -13.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/128_negative_owned` | 1,924 → 1,742 | 877 → 797 | +10.0% | 1 → 0 | 0 → 0 | 1,024 → 0 |
+| `nps_summary/128_negative_cold` | 2,749 → 2,950 | 1,257 → 1,348 | -6.8% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `nps_summary/128_negative_warm` | 1,726 → 1,889 | 787 → 862 | -8.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/128_negative_in_place` | 1,653 → 1,748 | 759 → 801 | -5.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/128_special_owned` | 1,524 → 1,400 | 695 → 641 | +8.4% | 1 → 0 | 0 → 0 | 1,024 → 0 |
+| `nps_summary/128_special_cold` | 2,508 → 2,674 | 1,144 → 1,220 | -6.2% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `nps_summary/128_special_warm` | 1,294 → 1,319 | 590 → 603 | -2.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/128_special_in_place` | 1,280 → 1,308 | 588 → 602 | -2.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/129_uniform_owned` | 427 → 437 | 195 → 200 | -2.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/129_uniform_cold` | 404 → 404 | 185 → 185 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/129_uniform_warm` | 402 → 408 | 184 → 187 | -1.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/129_uniform_in_place` | 426 → 430 | 196 → 198 | -1.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/129_dense_owned` | 1,355 → 1,365 | 618 → 623 | -0.8% | 1 → 1 | 0 → 0 | 1,032 → 1,032 |
+| `nps_summary/129_dense_cold` | 2,237 → 2,233 | 1,023 → 1,021 | +0.2% | 1 → 1 | 0 → 0 | 1,032 → 1,032 |
+| `nps_summary/129_dense_warm` | 1,144 → 1,128 | 522 → 515 | +1.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/129_dense_in_place` | 1,107 → 1,120 | 506 → 516 | -1.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/129_sparse_owned` | 429 → 439 | 196 → 201 | -2.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/129_sparse_cold` | 406 → 407 | 186 → 186 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/129_sparse_warm` | 406 → 409 | 186 → 187 | -0.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/129_sparse_in_place` | 427 → 433 | 196 → 199 | -1.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/129_negative_owned` | 1,505 → 1,475 | 687 → 675 | +1.8% | 1 → 1 | 0 → 0 | 1,032 → 1,032 |
+| `nps_summary/129_negative_cold` | 2,249 → 2,438 | 1,030 → 1,115 | -7.6% | 1 → 1 | 0 → 0 | 1,032 → 1,032 |
+| `nps_summary/129_negative_warm` | 1,291 → 1,320 | 591 → 605 | -2.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/129_negative_in_place` | 1,254 → 1,278 | 573 → 584 | -1.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/129_special_owned` | 1,421 → 1,380 | 650 → 630 | +3.2% | 1 → 1 | 0 → 0 | 1,032 → 1,032 |
+| `nps_summary/129_special_cold` | 2,119 → 2,338 | 968 → 1,070 | -9.5% | 1 → 1 | 0 → 0 | 1,032 → 1,032 |
+| `nps_summary/129_special_warm` | 1,185 → 1,240 | 541 → 569 | -4.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/129_special_in_place` | 1,157 → 1,227 | 529 → 564 | -6.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/4096_uniform_owned` | 12,574 → 12,303 | 5,744 → 5,617 | +2.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/4096_uniform_cold` | 12,441 → 12,540 | 5,682 → 5,720 | -0.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/4096_uniform_warm` | 12,420 → 12,255 | 5,700 → 5,599 | +1.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/4096_uniform_in_place` | 15,025 → 15,439 | 6,859 → 7,056 | -2.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/4096_dense_owned` | 46,915 → 49,382 | 21,424 → 22,578 | -5.1% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `nps_summary/4096_dense_cold` | 90,915 → 90,303 | 41,509 → 41,364 | +0.4% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `nps_summary/4096_dense_warm` | 43,445 → 43,455 | 19,833 → 19,841 | -0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/4096_dense_in_place` | 41,844 → 42,330 | 19,105 → 19,327 | -1.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/4096_sparse_owned` | 12,355 → 12,491 | 5,636 → 5,705 | -1.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/4096_sparse_cold` | 12,193 → 12,440 | 5,572 → 5,675 | -1.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/4096_sparse_warm` | 12,570 → 12,576 | 5,733 → 5,749 | -0.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/4096_sparse_in_place` | 15,058 → 15,596 | 6,918 → 7,122 | -2.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/4096_negative_owned` | 40,019 → 40,538 | 18,267 → 18,521 | -1.4% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `nps_summary/4096_negative_cold` | 75,692 → 80,276 | 34,558 → 36,664 | -5.7% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `nps_summary/4096_negative_warm` | 36,825 → 37,695 | 16,805 → 17,207 | -2.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/4096_negative_in_place` | 38,328 → 38,286 | 17,518 → 17,481 | +0.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/4096_special_owned` | 40,492 → 39,427 | 18,544 → 17,994 | +3.1% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `nps_summary/4096_special_cold` | 76,705 → 78,200 | 35,052 → 35,708 | -1.8% | 1 → 1 | 0 → 0 | 32,768 → 32,768 |
+| `nps_summary/4096_special_warm` | 39,861 → 40,511 | 18,210 → 18,491 | -1.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/4096_special_in_place` | 38,164 → 39,413 | 17,424 → 18,008 | -3.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+
+### Owned timing packing
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `pack_timing/0_0_false` | 57 → 51 | 26 → 24 | +8.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/0_0_true` | 50 → 51 | 23 → 24 | -4.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/0_1_false` | 49 → 45 | 23 → 21 | +9.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/0_1_true` | 57 → 45 | 26 → 21 | +23.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/0_2_false` | 50 → 46 | 23 → 21 | +9.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/0_2_true` | 53 → 49 | 24 → 23 | +4.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/0_4_false` | 50 → 53 | 24 → 25 | -4.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/0_4_true` | 50 → 51 | 23 → 24 | -4.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/0_8_false` | 57 → 44 | 27 → 21 | +28.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/0_8_true` | 50 → 50 | 23 → 23 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/0_3_false` | 50 → 46 | 23 → 21 | +9.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/0_3_true` | 50 → 45 | 23 → 21 | +9.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/0_6_false` | 52 → 46 | 24 → 21 | +14.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/0_6_true` | 50 → 51 | 23 → 24 | -4.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/0_15_false` | 50 → 49 | 23 → 23 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/0_15_true` | 50 → 46 | 24 → 21 | +14.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/1_0_false` | 48 → 43 | 22 → 20 | +10.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/1_0_true` | 48 → 43 | 22 → 20 | +10.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/1_1_false` | 128 → 122 | 59 → 56 | +5.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/1_1_true` | 144 → 138 | 66 → 63 | +4.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/1_2_false` | 273 → 124 | 125 → 57 | +119.3% | 1 → 0 | 0 → 0 | 16 → 0 |
+| `pack_timing/1_2_true` | 319 → 302 | 146 → 138 | +5.8% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `pack_timing/1_4_false` | 275 → 137 | 126 → 63 | +100.0% | 1 → 0 | 0 → 0 | 16 → 0 |
+| `pack_timing/1_4_true` | 330 → 302 | 151 → 138 | +9.4% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `pack_timing/1_8_false` | 279 → 123 | 128 → 57 | +124.6% | 1 → 0 | 0 → 0 | 16 → 0 |
+| `pack_timing/1_8_true` | 299 → 300 | 137 → 137 | +0.0% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `pack_timing/1_3_false` | 396 → 414 | 181 → 189 | -4.2% | 0 → 0 | 1 → 1 | 32 → 32 |
+| `pack_timing/1_3_true` | 224 → 232 | 103 → 106 | -2.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/1_6_false` | 346 → 350 | 158 → 160 | -1.2% | 1 → 1 | 0 → 0 | 32 → 32 |
+| `pack_timing/1_6_true` | 382 → 379 | 175 → 173 | +1.2% | 1 → 1 | 0 → 0 | 32 → 32 |
+| `pack_timing/1_15_false` | 546 → 583 | 250 → 266 | -6.0% | 0 → 0 | 1 → 1 | 64 → 64 |
+| `pack_timing/1_15_true` | 595 → 618 | 272 → 282 | -3.5% | 0 → 0 | 1 → 1 | 64 → 64 |
+| `pack_timing/32_0_false` | 48 → 43 | 22 → 20 | +10.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/32_0_true` | 48 → 49 | 22 → 23 | -4.3% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/32_1_false` | 342 → 332 | 156 → 152 | +2.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/32_1_true` | 555 → 546 | 255 → 249 | +2.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/32_2_false` | 511 → 333 | 234 → 152 | +53.9% | 1 → 0 | 0 → 0 | 512 → 0 |
+| `pack_timing/32_2_true` | 740 → 733 | 338 → 339 | -0.3% | 1 → 1 | 0 → 0 | 512 → 512 |
+| `pack_timing/32_4_false` | 518 → 323 | 237 → 148 | +60.1% | 1 → 0 | 0 → 0 | 512 → 0 |
+| `pack_timing/32_4_true` | 771 → 757 | 354 → 348 | +1.7% | 1 → 1 | 0 → 0 | 512 → 512 |
+| `pack_timing/32_8_false` | 536 → 330 | 247 → 151 | +63.6% | 1 → 0 | 0 → 0 | 512 → 0 |
+| `pack_timing/32_8_true` | 772 → 702 | 353 → 320 | +10.3% | 1 → 1 | 0 → 0 | 512 → 512 |
+| `pack_timing/32_3_false` | 916 → 884 | 418 → 405 | +3.2% | 0 → 0 | 1 → 1 | 1,024 → 1,024 |
+| `pack_timing/32_3_true` | 1,262 → 1,133 | 581 → 517 | +12.4% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/32_6_false` | 854 → 812 | 390 → 371 | +5.1% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `pack_timing/32_6_true` | 1,439 → 1,228 | 657 → 560 | +17.3% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `pack_timing/32_15_false` | 1,683 → 1,662 | 783 → 759 | +3.2% | 0 → 0 | 1 → 1 | 2,048 → 2,048 |
+| `pack_timing/32_15_true` | 3,130 → 3,201 | 1,428 → 1,463 | -2.4% | 0 → 0 | 1 → 1 | 2,048 → 2,048 |
+| `pack_timing/4096_0_false` | 48 → 44 | 23 → 21 | +9.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/4096_0_true` | 48 → 44 | 23 → 21 | +9.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/4096_1_false` | 25,137 → 25,405 | 11,476 → 11,616 | -1.2% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/4096_1_true` | 41,287 → 41,640 | 18,940 → 19,029 | -0.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/4096_2_false` | 59,911 → 27,958 | 27,422 → 12,854 | +113.3% | 1 → 0 | 0 → 0 | 65,536 → 0 |
+| `pack_timing/4096_2_true` | 43,739 → 68,937 | 19,974 → 31,638 | -36.9% | 1 → 1 | 0 → 0 | 65,536 → 65,536 |
+| `pack_timing/4096_4_false` | 24,910 → 1,882 | 11,384 → 861 | +1222.2% | 1 → 0 | 0 → 0 | 65,536 → 0 |
+| `pack_timing/4096_4_true` | 41,326 → 39,255 | 18,950 → 18,005 | +5.2% | 1 → 1 | 0 → 0 | 65,536 → 65,536 |
+| `pack_timing/4096_8_false` | 24,056 → 1,745 | 10,996 → 803 | +1269.4% | 1 → 0 | 0 → 0 | 65,536 → 0 |
+| `pack_timing/4096_8_true` | 42,833 → 39,638 | 19,559 → 18,177 | +7.6% | 1 → 1 | 0 → 0 | 65,536 → 65,536 |
+| `pack_timing/4096_3_false` | 80,692 → 70,174 | 40,138 → 32,114 | +25.0% | 0 → 0 | 1 → 1 | 131,072 → 131,072 |
+| `pack_timing/4096_3_true` | 113,502 → 117,435 | 51,830 → 53,688 | -3.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/4096_6_false` | 61,281 → 65,790 | 27,982 → 30,061 | -6.9% | 1 → 1 | 0 → 0 | 131,072 → 131,072 |
+| `pack_timing/4096_6_true` | 109,820 → 111,422 | 50,226 → 51,010 | -1.5% | 1 → 1 | 0 → 0 | 131,072 → 131,072 |
+| `pack_timing/4096_15_false` | 164,188 → 158,117 | 74,979 → 72,239 | +3.8% | 0 → 0 | 1 → 1 | 262,144 → 262,144 |
+| `pack_timing/4096_15_true` | 288,205 → 299,449 | 131,822 → 136,776 | -3.6% | 0 → 0 | 1 → 1 | 262,144 → 262,144 |
+
+### Raw timing builder
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `pack_raw/0_0` | 876 → 884 | 400 → 404 | -1.0% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `pack_raw/0_1` | 867 → 905 | 396 → 415 | -4.6% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `pack_raw/0_2` | 865 → 877 | 395 → 400 | -1.2% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `pack_raw/0_4` | 879 → 878 | 401 → 400 | +0.2% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `pack_raw/0_8` | 864 → 870 | 394 → 397 | -0.8% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `pack_raw/0_3` | 900 → 865 | 411 → 395 | +4.1% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `pack_raw/0_6` | 889 → 921 | 405 → 421 | -3.8% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `pack_raw/0_15` | 870 → 871 | 397 → 397 | +0.0% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `pack_raw/1_0` | 876 → 893 | 400 → 408 | -2.0% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `pack_raw/1_1` | 1,459 → 1,478 | 666 → 675 | -1.3% | 3 → 3 | 0 → 0 | 36 → 36 |
+| `pack_raw/1_2` | 1,664 → 1,465 | 760 → 668 | +13.8% | 4 → 3 | 0 → 0 | 52 → 36 |
+| `pack_raw/1_4` | 1,589 → 1,359 | 726 → 621 | +16.9% | 4 → 3 | 0 → 0 | 52 → 36 |
+| `pack_raw/1_8` | 1,610 → 1,432 | 734 → 653 | +12.4% | 4 → 3 | 0 → 0 | 52 → 36 |
+| `pack_raw/1_3` | 2,088 → 2,157 | 952 → 984 | -3.3% | 4 → 4 | 1 → 1 | 88 → 88 |
+| `pack_raw/1_6` | 1,995 → 2,072 | 910 → 947 | -3.9% | 5 → 5 | 0 → 0 | 88 → 88 |
+| `pack_raw/1_15` | 2,996 → 2,911 | 1,367 → 1,329 | +2.9% | 6 → 6 | 1 → 1 | 160 → 160 |
+| `pack_raw/32_0` | 889 → 841 | 408 → 386 | +5.7% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `pack_raw/32_1` | 8,464 → 8,449 | 3,865 → 3,857 | +0.2% | 3 → 3 | 0 → 0 | 656 → 656 |
+| `pack_raw/32_2` | 8,442 → 7,910 | 3,855 → 3,611 | +6.8% | 4 → 3 | 0 → 0 | 1,168 → 656 |
+| `pack_raw/32_4` | 8,522 → 7,799 | 3,892 → 3,558 | +9.4% | 4 → 3 | 0 → 0 | 1,168 → 656 |
+| `pack_raw/32_8` | 8,218 → 8,216 | 3,750 → 3,749 | +0.0% | 4 → 3 | 0 → 0 | 1,168 → 656 |
+| `pack_raw/32_3` | 16,225 → 15,985 | 7,407 → 7,298 | +1.5% | 4 → 4 | 1 → 1 | 2,320 → 2,320 |
+| `pack_raw/32_6` | 15,803 → 14,628 | 7,214 → 6,675 | +8.1% | 5 → 5 | 0 → 0 | 2,320 → 2,320 |
+| `pack_raw/32_15` | 30,486 → 30,464 | 13,912 → 13,903 | +0.1% | 6 → 6 | 1 → 1 | 4,624 → 4,624 |
+| `pack_raw/4096_0` | 766 → 786 | 356 → 365 | -2.5% | 1 → 1 | 0 → 0 | 16 → 16 |
+| `pack_raw/4096_1` | 823,735 → 823,518 | 376,065 → 375,845 | +0.1% | 3 → 3 | 0 → 0 | 81,936 → 81,936 |
+| `pack_raw/4096_2` | 1,033,347 → 834,600 | 471,613 → 381,044 | +23.8% | 4 → 3 | 0 → 0 | 147,472 → 81,936 |
+| `pack_raw/4096_4` | 962,402 → 836,016 | 439,267 → 381,620 | +15.1% | 4 → 3 | 0 → 0 | 147,472 → 81,936 |
+| `pack_raw/4096_8` | 877,939 → 849,371 | 400,730 → 387,655 | +3.4% | 4 → 3 | 0 → 0 | 147,472 → 81,936 |
+| `pack_raw/4096_3` | 1,770,320 → 2,054,630 | 808,256 → 939,244 | -13.9% | 4 → 4 | 1 → 1 | 294,928 → 294,928 |
+| `pack_raw/4096_6` | 1,654,213 → 2,002,132 | 755,003 → 914,301 | -17.4% | 5 → 5 | 0 → 0 | 294,928 → 294,928 |
+| `pack_raw/4096_15` | 3,236,258 → 3,738,634 | 1,477,256 → 1,706,819 | -13.4% | 6 → 6 | 1 → 1 | 589,840 → 589,840 |
+
+### Standard stream controls
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `standard/uniform_detailed` | 9,536 → 9,411 | 4,350 → 4,302 | +1.1% | 2 → 2 | 0 → 0 | 24,582 → 24,582 |
+| `standard/uniform_partial` | 6,782 → 7,168 | 3,096 → 3,269 | -5.3% | 2 → 2 | 0 → 0 | 24,582 → 24,582 |
+| `standard/uniform_simple` | 6,178 → 6,958 | 2,821 → 3,177 | -11.2% | 2 → 2 | 0 → 0 | 24,582 → 24,582 |
+| `standard/uniform_total` | 5,168 → 5,896 | 2,357 → 2,698 | -12.6% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `standard/uniform_three` | 4,997 → 5,230 | 2,279 → 2,384 | -4.4% | 3 → 3 | 0 → 0 | 16 → 16 |
+| `standard/fragmented_detailed` | 38,510 → 39,782 | 17,575 → 18,176 | -3.3% | 2 → 2 | 1 → 1 | 83,556 → 83,556 |
+| `standard/fragmented_partial` | 35,744 → 40,082 | 16,305 → 18,313 | -11.0% | 2 → 2 | 1 → 1 | 83,556 → 83,556 |
+| `standard/fragmented_simple` | 36,081 → 42,250 | 16,463 → 19,280 | -14.6% | 2 → 2 | 1 → 1 | 83,556 → 83,556 |
+| `standard/fragmented_total` | 5,439 → 5,955 | 2,480 → 2,716 | -8.7% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `standard/fragmented_three` | 71,156 → 70,479 | 32,468 → 32,186 | +0.9% | 3 → 3 | 0 → 0 | 29,484 → 29,484 |
+| `standard/empty_detailed` | 4,763 → 4,706 | 2,174 → 2,147 | +1.3% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `standard/empty_partial` | 5,008 → 4,833 | 2,292 → 2,205 | +3.9% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `standard/empty_simple` | 4,867 → 5,210 | 2,220 → 2,394 | -7.3% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `standard/empty_total` | 5,504 → 5,751 | 2,510 → 2,626 | -4.4% | 1 → 1 | 0 → 0 | 11 → 11 |
+| `standard/empty_three` | 5,205 → 5,121 | 2,374 → 2,336 | +1.6% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `standard/short_detailed` | 544 → 636 | 249 → 290 | -14.1% | 2 → 2 | 0 → 0 | 492 → 492 |
+| `standard/short_partial` | 580 → 568 | 265 → 260 | +1.9% | 2 → 2 | 0 → 0 | 492 → 492 |
+| `standard/short_simple` | 528 → 579 | 241 → 264 | -8.7% | 2 → 2 | 0 → 0 | 492 → 492 |
+| `standard/short_total` | 182 → 180 | 85 → 83 | +2.4% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `standard/short_three` | 980 → 1,095 | 450 → 500 | -10.0% | 3 → 3 | 0 → 0 | 252 → 252 |
+| `standard/leading_detailed` | 4,821 → 5,651 | 2,198 → 2,577 | -14.7% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `standard/leading_partial` | 5,470 → 5,754 | 2,497 → 2,630 | -5.1% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `standard/leading_simple` | 5,778 → 5,356 | 2,638 → 2,446 | +7.8% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `standard/leading_total` | 5,899 → 5,647 | 2,691 → 2,577 | +4.4% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `standard/leading_three` | 5,437 → 5,420 | 2,481 → 2,479 | +0.1% | 3 → 3 | 0 → 0 | 12 → 12 |
+
+### Stream and SN controls
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `streams/uniform_combined` | 23,269 → 22,358 | 10,620 → 10,196 | +4.2% | 6 → 6 | 0 → 0 | 33 → 33 |
+| `streams/uniform_cold` | 23,128 → 23,633 | 10,546 → 10,782 | -2.2% | 7 → 7 | 0 → 0 | 16,417 → 16,417 |
+| `streams/fragmented_combined` | 167,626 → 167,476 | 76,481 → 76,420 | +0.1% | 6 → 6 | 0 → 0 | 72,039 → 72,039 |
+| `streams/fragmented_cold` | 172,696 → 166,289 | 78,816 → 75,882 | +3.9% | 7 → 7 | 2 → 2 | 186,727 → 186,727 |
+| `streams/empty_combined` | 4,553 → 4,442 | 2,077 → 2,028 | +2.4% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `streams/empty_cold` | 4,847 → 4,561 | 2,210 → 2,083 | +6.1% | 3 → 3 | 0 → 0 | 33 → 33 |
+| `streams/short_combined` | 3,114 → 2,903 | 1,421 → 1,323 | +7.4% | 6 → 6 | 0 → 0 | 891 → 891 |
+| `streams/short_cold` | 3,704 → 3,556 | 1,690 → 1,623 | +4.1% | 7 → 7 | 0 → 0 | 1,403 → 1,403 |
+| `streams/leading_combined` | 6,107 → 5,782 | 2,785 → 2,637 | +5.6% | 6 → 6 | 0 → 0 | 33 → 33 |
+| `streams/leading_cold` | 6,216 → 6,419 | 2,854 → 2,953 | -3.4% | 7 → 7 | 0 → 0 | 1,569 → 1,569 |
+| `sn/uniform_detailed` | 10,874 → 10,719 | 4,960 → 4,894 | +1.3% | 1 → 1 | 0 → 0 | 160 → 160 |
+| `sn/uniform_partial` | 10,474 → 11,255 | 4,778 → 5,135 | -7.0% | 1 → 1 | 0 → 0 | 160 → 160 |
+| `sn/uniform_simple` | 10,724 → 10,711 | 4,893 → 4,901 | -0.2% | 1 → 1 | 0 → 0 | 160 → 160 |
+| `sn/uniform_three` | 10,400 → 12,062 | 4,751 → 5,502 | -13.6% | 3 → 3 | 0 → 0 | 480 → 480 |
+| `sn/fragmented_detailed` | 69,119 → 70,845 | 31,524 → 32,328 | -2.5% | 1 → 1 | 6 → 6 | 20,320 → 20,320 |
+| `sn/fragmented_partial` | 60,869 → 62,692 | 27,772 → 28,627 | -3.0% | 1 → 1 | 5 → 5 | 10,080 → 10,080 |
+| `sn/fragmented_simple` | 59,870 → 61,276 | 27,309 → 27,977 | -2.4% | 1 → 1 | 5 → 5 | 10,080 → 10,080 |
+| `sn/fragmented_three` | 120,455 → 122,452 | 54,967 → 55,866 | -1.6% | 3 → 3 | 16 → 16 | 40,480 → 40,480 |
+| `sn/empty_detailed` | 4,239 → 4,096 | 1,934 → 1,867 | +3.6% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `sn/empty_partial` | 4,442 → 3,975 | 2,029 → 1,812 | +12.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `sn/empty_simple` | 4,113 → 4,009 | 1,882 → 1,830 | +2.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `sn/empty_three` | 4,107 → 4,521 | 1,881 → 2,062 | -8.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `sn/short_detailed` | 805 → 830 | 368 → 379 | -2.9% | 1 → 1 | 0 → 0 | 155 → 155 |
+| `sn/short_partial` | 765 → 869 | 349 → 396 | -11.9% | 1 → 1 | 0 → 0 | 155 → 155 |
+| `sn/short_simple` | 783 → 984 | 359 → 449 | -20.0% | 1 → 1 | 0 → 0 | 155 → 155 |
+| `sn/short_three` | 2,048 → 1,795 | 934 → 820 | +13.9% | 3 → 3 | 0 → 0 | 465 → 465 |
+| `sn/leading_detailed` | 5,324 → 4,698 | 2,434 → 2,153 | +13.1% | 1 → 1 | 0 → 0 | 160 → 160 |
+| `sn/leading_partial` | 4,856 → 4,303 | 2,215 → 1,963 | +12.8% | 1 → 1 | 0 → 0 | 160 → 160 |
+| `sn/leading_simple` | 4,455 → 4,880 | 2,032 → 2,247 | -9.6% | 1 → 1 | 0 → 0 | 160 → 160 |
+| `sn/leading_three` | 5,035 → 5,347 | 2,296 → 2,440 | -5.9% | 3 → 3 | 0 → 0 | 480 → 480 |
+
+### Hash, analysis, report and cleanup controls
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `hash_batch/1_global` | 22,981 → 23,007 | 10,484 → 10,506 | -0.2% | 28 → 28 | 2 → 2 | 5,283 → 5,283 |
+| `hash_batch/1_repeat` | 23,386 → 23,391 | 10,669 → 10,697 | -0.3% | 29 → 29 | 4 → 4 | 5,318 → 5,318 |
+| `hash_batch/1_vary` | 23,315 → 23,622 | 10,639 → 10,778 | -1.3% | 29 → 29 | 4 → 4 | 5,318 → 5,318 |
+| `hash_batch/1_distinct` | 30,605 → 30,420 | 13,970 → 13,878 | +0.7% | 36 → 36 | 18 → 18 | 5,563 → 5,563 |
+| `hash_batch/128_global` | 148,365 → 148,392 | 67,717 → 67,746 | -0.0% | 28 → 28 | 2 → 2 | 12,213 → 12,213 |
+| `hash_batch/128_repeat` | 188,572 → 189,172 | 86,083 → 86,338 | -0.3% | 29 → 29 | 4 → 4 | 19,178 → 19,178 |
+| `hash_batch/128_vary` | 188,822 → 189,503 | 86,173 → 86,486 | -0.4% | 29 → 29 | 4 → 4 | 19,178 → 19,178 |
+| `hash_batch/128_distinct` | 473,193 → 473,755 | 216,024 → 216,201 | -0.1% | 36 → 36 | 18 → 18 | 67,933 → 67,933 |
+| `analyze/fast_fake_lifts` | 659,529 → 643,128 | 301,114 → 293,605 | +2.6% | 31 → 31 | 4 → 4 | 59,028 → 59,028 |
+| `analyze/camellia` | 453,408,375 → 436,460,122 | 207,023,900 → 199,244,180 | +3.9% | 110 → 110 | 0 → 0 | 5,263,624 → 5,263,624 |
+| `analyze/fast_camellia` | 56,789,524 → 57,600,202 | 25,932,280 → 26,306,660 | -1.4% | 115 → 115 | 0 → 0 | 7,051,152 → 7,051,152 |
+| `analyze/mixed_small` | 51,844 → 55,823 | 23,710 → 25,482 | -7.0% | 59 → 59 | 3 → 3 | 7,460 → 7,460 |
+| `report/json/16_clean` | 91,376 → 87,236 | 41,712 → 40,056 | +4.1% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/16_early` | 92,087 → 86,731 | 42,038 → 39,580 | +6.2% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/16_late` | 89,435 → 93,742 | 40,878 → 42,786 | -4.5% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/16_dense` | 90,089 → 94,857 | 41,176 → 43,346 | -5.0% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/16_comma` | 88,871 → 95,467 | 40,548 → 43,554 | -6.9% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/16_comma_quote` | 87,622 → 88,518 | 40,035 → 40,390 | -0.9% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/16_custom` | 92,717 → 88,775 | 42,300 → 40,510 | +4.4% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_clean` | 134,738 → 135,324 | 61,714 → 61,738 | -0.0% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_early` | 152,329 → 160,103 | 69,552 → 73,132 | -4.9% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_late` | 193,926 → 199,034 | 88,566 → 90,920 | -2.6% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_dense` | 334,474 → 337,947 | 152,753 → 154,238 | -1.0% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_comma` | 131,500 → 133,779 | 59,995 → 61,035 | -1.7% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_comma_quote` | 195,834 → 200,480 | 89,452 → 91,578 | -2.3% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/4096_custom` | 132,995 → 136,553 | 60,795 → 62,384 | -2.5% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `report/json/camellia` | 21,730,467 → 22,072,972 | 9,921,194 → 10,077,685 | -1.6% | 30 → 30 | 0 → 0 | 850 → 850 |
+| `cleanup/pair_1_clean` | 663 → 683 | 309 → 323 | -4.3% | 1 → 1 | 1 → 1 | 27 → 27 |
+| `cleanup/speed_1_clean` | 889 → 911 | 413 → 423 | -2.4% | 1 → 1 | 1 → 1 | 36 → 36 |
+| `cleanup/pair_1_early` | 777 → 775 | 362 → 362 | +0.0% | 2 → 2 | 0 → 0 | 26 → 26 |
+| `cleanup/speed_1_early` | 1,223 → 1,578 | 565 → 727 | -22.3% | 2 → 2 | 1 → 1 | 64 → 64 |
+| `cleanup/pair_1_late` | 777 → 801 | 363 → 373 | -2.7% | 2 → 2 | 0 → 0 | 26 → 26 |
+| `cleanup/speed_1_late` | 1,223 → 1,247 | 566 → 577 | -1.9% | 2 → 2 | 1 → 1 | 64 → 64 |
+| `cleanup/pair_128_clean` | 44,892 → 43,072 | 20,487 → 19,650 | +4.3% | 1 → 1 | 1 → 1 | 4,521 → 4,521 |
+| `cleanup/speed_128_clean` | 70,102 → 72,273 | 32,205 → 33,016 | -2.5% | 1 → 1 | 1 → 1 | 5,673 → 5,673 |
+| `cleanup/pair_128_early` | 50,566 → 51,578 | 23,065 → 23,538 | -2.0% | 2 → 2 | 1 → 1 | 6,044 → 6,044 |
+| `cleanup/speed_128_early` | 77,268 → 80,405 | 35,255 → 36,678 | -3.9% | 2 → 2 | 1 → 1 | 7,580 → 7,580 |
+| `cleanup/pair_128_late` | 55,290 → 57,412 | 25,276 → 26,203 | -3.5% | 2 → 2 | 1 → 1 | 6,044 → 6,044 |
+| `cleanup/speed_128_late` | 85,122 → 88,676 | 38,883 → 40,528 | -4.1% | 2 → 2 | 1 → 1 | 7,580 → 7,580 |
+| `cleanup/pair_4096_clean` | 1,419,926 → 1,501,938 | 648,100 → 685,582 | -5.5% | 1 → 1 | 1 → 1 | 163,695 → 163,695 |
+| `cleanup/speed_4096_clean` | 2,380,908 → 2,311,019 | 1,087,107 → 1,054,683 | +3.1% | 1 → 1 | 1 → 1 | 200,559 → 200,559 |
+| `cleanup/pair_4096_early` | 1,949,538 → 1,939,278 | 890,186 → 885,240 | +0.6% | 2 → 2 | 1 → 1 | 218,276 → 218,276 |
+| `cleanup/speed_4096_early` | 2,428,168 → 2,516,699 | 1,108,304 → 1,149,049 | -3.5% | 2 → 2 | 1 → 1 | 267,428 → 267,428 |
+| `cleanup/pair_4096_late` | 1,852,323 → 1,831,712 | 845,841 → 836,052 | +1.2% | 2 → 2 | 1 → 1 | 218,276 → 218,276 |
+| `cleanup/speed_4096_late` | 2,757,603 → 2,631,614 | 1,258,748 → 1,201,353 | +4.8% | 2 → 2 | 1 → 1 | 267,428 → 267,428 |
+| `cleanup/0_ordered` | 913 → 920 | 424 → 427 | -0.7% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `cleanup/0_duplicates` | 911 → 913 | 424 → 424 | +0.0% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `cleanup/0_reverse` | 911 → 913 | 424 → 425 | -0.2% | 2 → 2 | 0 → 0 | 24 → 24 |
+| `cleanup/1_ordered` | 4,175 → 4,289 | 1,911 → 1,963 | -2.6% | 14 → 14 | 0 → 0 | 192 → 192 |
+| `cleanup/1_duplicates` | 4,168 → 4,109 | 1,907 → 1,879 | +1.5% | 14 → 14 | 0 → 0 | 192 → 192 |
+| `cleanup/1_reverse` | 4,460 → 4,250 | 2,040 → 1,943 | +5.0% | 14 → 14 | 0 → 0 | 192 → 192 |
+| `cleanup/32_ordered` | 50,384 → 49,822 | 22,989 → 22,745 | +1.1% | 14 → 14 | 0 → 0 | 5,528 → 5,528 |
+| `cleanup/32_duplicates` | 50,257 → 47,381 | 22,924 → 21,690 | +5.7% | 14 → 14 | 0 → 0 | 4,600 → 4,600 |
+| `cleanup/32_reverse` | 58,464 → 56,348 | 26,688 → 25,702 | +3.8% | 24 → 24 | 0 → 0 | 10,136 → 10,136 |
+| `cleanup/4096_ordered` | 6,456,520 → 6,024,114 | 2,948,285 → 2,750,424 | +7.2% | 14 → 14 | 0 → 0 | 731,704 → 731,704 |
+| `cleanup/4096_duplicates` | 6,204,306 → 5,932,332 | 2,832,553 → 2,709,311 | +4.5% | 14 → 14 | 0 → 0 | 611,032 → 611,032 |
+| `cleanup/4096_reverse` | 39,148,530 → 39,010,771 | 17,916,580 → 17,805,024 | +0.6% | 24 → 24 | 0 → 0 | 1,321,528 → 1,321,528 |
+
+### Focused checks
+
+The scalar/selection table uses 100,000 iterations with the final core implementation. Packing checks use the main iteration counts. The large-buffer and unchanged-caller rechecks use the final binaries; their iteration counts are recorded in the reproduction commands below. These measurements do not supersede the main samples.
+
+### Scalar and selection recheck
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `bpm_summary/0_uniform_owned` | 3 → 6 | 1 → 3 | -66.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/1_uniform_owned` | 21 → 26 | 10 → 12 | -16.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_filtered_values` | 38 → 38 | 17 → 17 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_filtered_map` | 45 → 44 | 21 → 20 | +5.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/2_filtered_owned` | 187 → 58 | 85 → 26 | +226.9% | 1 → 0 | 0 → 0 | 16 → 0 |
+| `bpm_summary/8_dense_owned` | 272 → 145 | 124 → 66 | +87.9% | 1 → 0 | 0 → 0 | 64 → 0 |
+| `bpm_summary/32_reverse_owned` | 650 → 511 | 297 → 233 | +27.5% | 1 → 0 | 0 → 0 | 256 → 0 |
+| `nps_summary/0_uniform_owned` | 17 → 3 | 8 → 1 | +700.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/1_uniform_owned` | 17 → 4 | 8 → 2 | +300.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/2_uniform_owned` | 21 → 8 | 9 → 3 | +200.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/8_dense_owned` | 123 → 117 | 56 → 54 | +3.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/32_dense_owned` | 425 → 416 | 194 → 190 | +2.1% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/64_dense_owned` | 697 → 731 | 318 → 333 | -4.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/65_dense_owned` | 893 → 767 | 407 → 350 | +16.3% | 1 → 0 | 0 → 0 | 520 → 0 |
+| `nps_summary/128_dense_owned` | 1,317 → 1,210 | 601 → 552 | +8.9% | 1 → 0 | 0 → 0 | 1,024 → 0 |
+| `nps_summary/129_dense_owned` | 1,337 → 1,303 | 610 → 594 | +2.7% | 1 → 1 | 0 → 0 | 1,032 → 1,032 |
+| `nps_summary/2_uniform_warm` | 12 → 13 | 6 → 6 | +0.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+
+### Longer summary control recheck
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `bpm_summary/8_dense_warm` | 139 → 141 | 64 → 65 | -1.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `bpm_summary/128_filtered_map` | 1,415 → 1,444 | 646 → 659 | -2.0% | 1 → 1 | 0 → 0 | 1,024 → 1,024 |
+| `nps_summary/32_special_in_place` | 406 → 384 | 185 → 175 | +5.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/128_sparse_in_place` | 626 → 615 | 286 → 281 | +1.8% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/32_uniform_cold` | 777 → 786 | 355 → 359 | -1.1% | 1 → 1 | 0 → 0 | 256 → 256 |
+| `nps_summary/65_special_warm` | 703 → 713 | 321 → 326 | -1.5% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/8_dense_cold` | 341 → 342 | 156 → 156 | +0.0% | 1 → 1 | 0 → 0 | 64 → 64 |
+| `bpm_summary/8_dense_owned` | 300 → 157 | 137 → 72 | +90.3% | 1 → 0 | 0 → 0 | 64 → 0 |
+| `nps_summary/128_dense_owned` | 1,472 → 1,278 | 672 → 584 | +15.1% | 1 → 0 | 0 → 0 | 1,024 → 0 |
+
+### Packing and composed gains recheck
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `pack_timing/4096_2_false` | 53,194 → 24,704 | 24,345 → 11,283 | +115.8% | 1 → 0 | 0 → 0 | 65,536 → 0 |
+| `pack_timing/4096_4_false` | 54,595 → 26,046 | 24,941 → 11,888 | +109.8% | 1 → 0 | 0 → 0 | 65,536 → 0 |
+| `pack_timing/4096_8_false` | 53,190 → 26,416 | 24,295 → 12,061 | +101.4% | 1 → 0 | 0 → 0 | 65,536 → 0 |
+| `pack_timing/32_4_false` | 517 → 343 | 238 → 157 | +51.6% | 1 → 0 | 0 → 0 | 512 → 0 |
+| `pack_raw/32_2` | 8,740 → 8,340 | 3,988 → 3,807 | +4.8% | 4 → 3 | 0 → 0 | 1,168 → 656 |
+| `pack_raw/4096_2` | 1,038,569 → 1,016,494 | 474,185 → 464,036 | +2.2% | 4 → 3 | 0 → 0 | 147,472 → 81,936 |
+
+### Large buffers and mixed builders recheck
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `pack_timing/4096_2_true` | 72,837 → 70,020 | 33,384 → 31,980 | +4.4% | 1 → 1 | 0 → 0 | 65,536 → 65,536 |
+| `pack_timing/4096_3_true` | 156,322 → 150,796 | 71,505 → 68,854 | +3.9% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `pack_timing/4096_6_false` | 110,797 → 109,597 | 50,672 → 50,264 | +0.8% | 1 → 1 | 0 → 0 | 131,072 → 131,072 |
+| `pack_timing/4096_15_true` | 365,855 → 377,747 | 167,364 → 172,731 | -3.1% | 0 → 0 | 1 → 1 | 262,144 → 262,144 |
+| `pack_raw/4096_3` | 2,173,217 → 2,196,363 | 992,413 → 1,003,268 | -1.1% | 4 → 4 | 1 → 1 | 294,928 → 294,928 |
+| `pack_raw/4096_6` | 2,059,340 → 2,246,304 | 940,419 → 1,025,883 | -8.3% | 5 → 5 | 0 → 0 | 294,928 → 294,928 |
+| `pack_raw/4096_15` | 4,085,775 → 4,090,284 | 1,865,376 → 1,867,773 | -0.1% | 6 → 6 | 1 → 1 | 589,840 → 589,840 |
+| `cleanup/4096_ordered` | 7,216,280 → 7,056,879 | 3,295,537 → 3,222,831 | +2.3% | 14 → 14 | 0 → 0 | 731,704 → 731,704 |
+
+### Unchanged caller recheck
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `standard/leading_detailed` | 6,553 → 6,184 | 2,992 → 2,822 | +6.0% | 2 → 2 | 0 → 0 | 24,588 → 24,588 |
+| `standard/fragmented_simple` | 41,662 → 42,870 | 19,014 → 19,569 | -2.8% | 2 → 2 | 1 → 1 | 83,556 → 83,556 |
+| `standard/uniform_total` | 7,067 → 6,106 | 3,225 → 2,787 | +15.7% | 1 → 1 | 0 → 0 | 26 → 26 |
+| `standard/short_detailed` | 637 → 612 | 291 → 279 | +4.3% | 2 → 2 | 0 → 0 | 492 → 492 |
+| `sn/short_simple` | 1,002 → 1,018 | 457 → 464 | -1.5% | 1 → 1 | 0 → 0 | 155 → 155 |
+| `sn/uniform_three` | 12,329 → 12,733 | 5,628 → 5,810 | -3.1% | 3 → 3 | 0 → 0 | 480 → 480 |
+| `streams/uniform_combined` | 25,273 → 24,790 | 11,533 → 11,315 | +1.9% | 6 → 6 | 0 → 0 | 33 → 33 |
+| `report/json/16_dense` | 91,887 → 91,373 | 41,940 → 41,702 | +0.6% | 18 → 18 | 0 → 0 | 318 → 318 |
+| `cleanup/speed_1_early` | 1,298 → 1,355 | 592 → 620 | -4.5% | 2 → 2 | 1 → 1 | 64 → 64 |
+
+### Mixed delay/warp builder recheck
+
+| Case | CPU cycles, old → new | ns, old → new | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `pack_raw/4096_6` | 2,272,721 → 2,178,744 | 1,037,753 → 995,435 | +4.3% | 5 → 5 | 0 → 0 | 294,928 → 294,928 |
+
+### Timing variability calibration
+
+Both columns in the following table run the identical original executable, with the same fixtures and alternating order. Their CPU/time differences therefore measure host/process variability, not an implementation change. This control does not establish that every slower optimized sample is noise; the optimized/original samples remain above.
+
+### Original/original calibration
+
+| Case | CPU cycles, original A → original B | ns, original A → original B | Call throughput | Allocs | Reallocs | Requested bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `pack_raw/4096_6` | 2,083,439 → 2,061,801 | 950,933 → 941,344 | +1.0% | 5 → 5 | 0 → 0 | 294,928 → 294,928 |
+| `pack_timing/4096_2_true` | 68,458 → 68,645 | 31,372 → 31,425 | -0.2% | 1 → 1 | 0 → 0 | 65,536 → 65,536 |
+| `bpm_summary/8_dense_warm` | 138 → 132 | 63 → 60 | +5.0% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `nps_summary/65_special_warm` | 646 → 654 | 296 → 298 | -0.7% | 0 → 0 | 0 → 0 | 0 → 0 |
+| `standard/fragmented_simple` | 48,389 → 44,845 | 22,088 → 20,473 | +7.9% | 2 → 2 | 1 → 1 | 83,556 → 83,556 |
+
+### Validation
+
+- Release regression tests: 152 core + 79 rssp + 29 integration tests = 260 passed, zero failed.
+- After confirming all three optimizations: `cargo test --release --test all_parity -- --test-threads=22` — 30,489 passed, zero failed.
+- Strict release workspace Clippy for all targets, formatting and whitespace checks pass.
+- Explicit edge assertions and bitwise transcripts cover empty/singleton inputs, BPM filtering/fallback, non-finite values and signed zero, both NPS cutoffs, dirty scratch buffers and all 16 timing-source combinations with exact/spare capacity.
+- Complete corpus outputs, including reports, hashes, timings, labels, durations and NPS, remain byte-identical: 30,843 files, 56,125 supported charts, 30,489 successes and 354 matched errors. No golden data is changed.
+- Corpus: 174,790,323 UTF-8 bytes; SHA-256 `e7d2f22bd7b7f48c0335075d8d2ac355063b58809fdd77c42dcec23927a5759d`.
+- Core trace: 5,036 rows, 16,649,965 UTF-8 bytes; SHA-256 `546c1245fcc62d42c1e4f3dbec18d173c997fba0da68326b746a9ba373de2fe3`.
+- Leaf trace: 57 rows, 29,124,186 UTF-8 bytes; SHA-256 `aac4e521dea9affd1f0e1baa95991e7dd0fa7f4bb10d109b82bed5ff84d290d7`.
+
+### Reproduction
+
+Keep the current harness/fixtures and package version for both builds. For the original build, restore only production bodies in `bpm.rs`, `nps.rs` and `timing.rs` to `b22ddef`; keep the current test module declarations. Save original executables before rebuilding the final bodies. Use identical setup, output destruction and buffer reuse for both versions.
+
+```powershell
+cargo test --release -p rssp-core --lib
+cargo test --release -p rssp --lib
+cargo bench -p rssp --bench hotpath_perf --no-run
+$env:RSSP_PASS_FILTER='bpm_summary/32_'
+$env:RSSP_PASS_ITERS='5000'
+.\saved-core.exe bpm::pass_edges::summary_hotpath --exact --ignored --nocapture --test-threads=1
+# NPS: nps::pass_edges::summary_hotpath and nps_summary/{count}_
+# Packing/builders: timing::pass_edges::pack_hotpath and pack_timing/ or pack_raw/
+# Use the main iteration counts above; scalar/selection rechecks use 100000.
+$env:RSSP_HOT_FILTER='streams/'
+$env:RSSP_HOT_ITERS='1000'
+.\saved-hotpath.exe
+# Final unchanged-caller rechecks use 5000 for selected stream/SN/report cases;
+# cleanup/4096_ordered and the large core cases use their main counts.
+# Alternate old/new, new/old, old/new; compare corpus and _trace outputs separately.
+cargo clippy --release --workspace --all-targets -- -D warnings
+cargo test --release --test optimization_edges
+cargo test --release --test all_parity -- --test-threads=22
+```

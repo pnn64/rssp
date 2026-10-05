@@ -1605,16 +1605,25 @@ fn pack_segments(
     warps: Vec<Segment>,
     fakes: Vec<Segment>,
 ) -> (Vec<Segment>, [usize; 5]) {
-    let segment_count = stops.len() + delays.len() + warps.len() + fakes.len();
+    let lengths = [stops.len(), delays.len(), warps.len(), fakes.len()];
+    let mut offsets = [0; 5];
+    for (index, len) in lengths.into_iter().enumerate() {
+        offsets[index + 1] = offsets[index] + len;
+    }
+    // A sole exact-sized source already is the packed representation. Keep
+    // oversized sources on the original path so retained memory cannot grow.
+    match lengths {
+        [_, 0, 0, 0] => return (stops, offsets),
+        [0, len, 0, 0] if delays.capacity() == len => return (delays, offsets),
+        [0, 0, len, 0] if warps.capacity() == len => return (warps, offsets),
+        [0, 0, 0, len] if fakes.capacity() == len => return (fakes, offsets),
+        _ => {}
+    }
     let mut segments = stops;
-    segments.reserve_exact(segment_count - segments.len());
-    let mut offsets = [0, segments.len(), 0, 0, 0];
+    segments.reserve_exact(offsets[4] - segments.len());
     segments.extend(delays);
-    offsets[2] = segments.len();
     segments.extend(warps);
-    offsets[3] = segments.len();
     segments.extend(fakes);
-    offsets[4] = segments.len();
     (segments, offsets)
 }
 

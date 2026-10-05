@@ -1062,7 +1062,7 @@ pub fn compute_bpm_stats(values: &[f64]) -> (f64, f64) {
         });
     }
     if values.len() <= 32 {
-        return small_bpm_stats(values.iter().copied());
+        return small_bpm_stats(values.iter().copied(), |_| {});
     }
     let displayable_count = values.iter().filter(|&&bpm| is_display_bpm(bpm)).count();
     let all_values_are_displayable = displayable_count != 0;
@@ -1088,7 +1088,7 @@ pub fn compute_bpm_map_stats(map: &[(f64, f64)]) -> (f64, f64) {
         });
     }
     if map.len() <= 32 {
-        return small_bpm_stats(map.iter().map(|&(_, bpm)| bpm));
+        return small_bpm_stats(map.iter().map(|&(_, bpm)| bpm), |_| {});
     }
     let mut filtered = Vec::with_capacity(map.len());
     filtered.extend(
@@ -1103,16 +1103,21 @@ pub fn compute_bpm_map_stats(map: &[(f64, f64)]) -> (f64, f64) {
     bpm_stats_from_values::<false>(&mut filtered, all_values_are_displayable, 0.0)
 }
 
-fn small_bpm_stats(bpms: impl Iterator<Item = f64> + Clone) -> (f64, f64) {
+fn small_bpm_stats(
+    bpms: impl Iterator<Item = f64> + Clone,
+    mut visit: impl FnMut(f64),
+) -> (f64, f64) {
     let mut values = [0.0; 32];
     let mut len = 0;
     for bpm in bpms.clone().filter(|&bpm| is_display_bpm(bpm)) {
+        visit(bpm);
         values[len] = bpm;
         len += 1;
     }
     let can_select = len != 0;
     if !can_select {
         for bpm in bpms {
+            visit(bpm);
             values[len] = bpm;
             len += 1;
         }
@@ -1127,20 +1132,27 @@ pub fn compute_bpm_range_and_stats(map: &[(f64, f64)]) -> (i32, i32, f64, f64) {
             .first()
             .map_or((0, 0, 0.0, 0.0), |&(_, bpm)| bpm_summary_one(bpm));
     }
-    let mut values = Vec::with_capacity(map.len());
-    compute_bpm_range_and_stats_with_scratch(map, &mut values)
+    bpm_summary_buffered(map)
 }
 
-/// Computes display BPM range and statistics with reusable selection storage.
-///
-/// The buffer is cleared before use and retains enough capacity for subsequent
-/// maps, avoiding one temporary allocation per call in batch analysis.
-#[must_use]
-pub fn compute_bpm_range_and_stats_with_scratch(
-    map: &[(f64, f64)],
-    values: &mut Vec<f64>,
-) -> (i32, i32, f64, f64) {
-    compute_bpm_summary(map, values)
+// Keep buffer storage out of the scalar entry point.
+#[inline(never)]
+fn bpm_summary_buffered(map: &[(f64, f64)]) -> (i32, i32, f64, f64) {
+    if map.len() <= 32 {
+        let (mut min, mut max) = (f64::MAX, f64::MIN);
+        let (median, average) = small_bpm_stats(map.iter().map(|&(_, bpm)| bpm), |bpm| {
+            min = min.min(bpm);
+            max = max.max(bpm);
+        });
+        return (
+            min.max(0.0).round() as i32,
+            max.max(0.0).round() as i32,
+            median,
+            average,
+        );
+    }
+    let mut values = Vec::with_capacity(map.len());
+    compute_bpm_range_and_stats_with_scratch(map, &mut values)
 }
 
 const BPM_SELECTION_MIN: usize = 64;
@@ -1164,7 +1176,15 @@ fn fill_display_bpms<const SUM: bool>(
     (min, max, sum)
 }
 
-fn compute_bpm_summary(map: &[(f64, f64)], values: &mut Vec<f64>) -> (i32, i32, f64, f64) {
+/// Computes display BPM range and statistics with reusable selection storage.
+///
+/// The buffer is cleared before use and retains enough capacity for subsequent
+/// maps, avoiding one temporary allocation per call in batch analysis.
+#[must_use]
+pub fn compute_bpm_range_and_stats_with_scratch(
+    map: &[(f64, f64)],
+    values: &mut Vec<f64>,
+) -> (i32, i32, f64, f64) {
     values.clear();
     if map.is_empty() {
         return (0, 0, 0.0, 0.0);

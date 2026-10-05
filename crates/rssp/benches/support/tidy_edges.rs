@@ -1,6 +1,109 @@
 use super::*;
 use crate::perf::{measure, measure_prepared};
+use std::fmt::Write as _;
 use std::hint::black_box;
+
+fn pack_fixture(count: usize, mask: usize, spare: bool) -> [Vec<Segment>; 4] {
+    std::array::from_fn(|source| {
+        let len = if mask & (1 << source) == 0 { 0 } else { count };
+        let mut values = Vec::with_capacity(len * if spare { 2 } else { 1 });
+        values.extend((0..len).map(|i| Segment {
+            beat: i as f64 * 4.0,
+            value: (source * 10 + i % 7 + 1) as f64,
+        }));
+        values
+    })
+}
+
+#[test]
+fn packed_sources_edges() {
+    for mask in 0..16 {
+        for spare in [false, true] {
+            let sources = pack_fixture(3, mask, spare);
+            let [stops, delays, warps, fakes] = pack_fixture(3, mask, spare);
+            let (actual, offsets) = pack_segments(stops, delays, warps, fakes);
+            assert_eq!(offsets[0], 0);
+            assert_eq!(offsets[4], actual.len());
+            for (i, expected) in sources.iter().enumerate() {
+                tests::assert_segment_bits_eq(&actual[offsets[i]..offsets[i + 1]], expected);
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "explicit timing packing benchmark"]
+fn pack_hotpath() {
+    for count in [0, 1, 32, 4096] {
+        for mask in [0, 1, 2, 4, 8, 3, 6, 15] {
+            for spare in [false, true] {
+                measure_prepared(
+                    &format!("pack_timing/{count}_{mask}_{spare}"),
+                    count,
+                    || pack_fixture(count, mask, spare),
+                    |sources| {
+                        let [stops, delays, warps, fakes] = std::mem::take(sources);
+                        black_box(pack_segments(stops, delays, warps, fakes));
+                    },
+                );
+            }
+            let mut text = String::with_capacity(count * 8);
+            for i in 0..count {
+                write!(text, "{}=1,", i * 4).expect("writing to String cannot fail");
+            }
+            let text = text.trim_end_matches(',');
+            let selected = |i: usize| {
+                if mask & (1usize << i) == 0usize {
+                    ""
+                } else {
+                    text
+                }
+            };
+            measure(&format!("pack_raw/{count}_{mask}"), count, || {
+                black_box(timing_data_from_chart_data(
+                    0.0,
+                    0.0,
+                    None,
+                    "0=120",
+                    None,
+                    black_box(selected(0)),
+                    None,
+                    black_box(selected(1)),
+                    None,
+                    black_box(selected(2)),
+                    None,
+                    "",
+                    None,
+                    "",
+                    None,
+                    black_box(selected(3)),
+                    TimingFormat::Ssc,
+                    true,
+                ));
+            });
+        }
+    }
+}
+
+#[test]
+#[ignore = "exact original/optimized timing packing transcript"]
+fn pack_trace() {
+    for count in [0, 1, 32, 4096] {
+        for mask in 0..16 {
+            for spare in [false, true] {
+                let [stops, delays, warps, fakes] = pack_fixture(count, mask, spare);
+                let (values, offsets) = pack_segments(stops, delays, warps, fakes);
+                println!(
+                    "packed-timing {count} {mask} {spare} {offsets:?} {:x?}",
+                    values
+                        .iter()
+                        .map(|s| [s.beat.to_bits(), s.value.to_bits()])
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+}
 
 #[test]
 fn canonical_rows_are_exact() {

@@ -1,5 +1,9 @@
 use std::cmp::Ordering;
 
+#[cfg(test)]
+#[path = "../../rssp/benches/support/nps_edges.rs"]
+mod pass_edges;
+
 use crate::bpm::{chart_map_mode, clean_map_mode, is_display_bpm};
 use crate::math::lrint_f32;
 use crate::parse::{
@@ -383,18 +387,31 @@ pub fn get_nps_stats(nps: &[f64]) -> (f64, f64) {
         [] => (0.0, 0.0),
         [value] => (scan_nps(nps).0, *value),
         &[first, second] => (scan_nps(nps).0, median_in_place(&mut [first, second])),
-        small if small.len() <= NPS_MEDIAN_SCAN_MIN => {
-            let (max, median) = scan_nps(small);
-            let median = median.unwrap_or_else(|| {
-                let mut values = [0.0; NPS_MEDIAN_SCAN_MIN];
-                let values = &mut values[..small.len()];
-                values.copy_from_slice(small);
-                median_in_place(values)
-            });
-            (max, median)
-        }
-        _ => get_nps_stats_with_scratch(nps, &mut Vec::new()),
+        _ => nps_stats_buffered(nps),
     }
+}
+
+// Keep the bounded arrays out of empty, one- and two-measure calls.
+#[inline(never)]
+fn nps_stats_buffered(nps: &[f64]) -> (f64, f64) {
+    if nps.len() <= NPS_MEDIAN_SCAN_MIN {
+        small_nps_stats::<NPS_MEDIAN_SCAN_MIN>(nps)
+    } else if nps.len() <= 128 {
+        small_nps_stats::<128>(nps)
+    } else {
+        get_nps_stats_with_scratch(nps, &mut Vec::new())
+    }
+}
+
+fn small_nps_stats<const N: usize>(nps: &[f64]) -> (f64, f64) {
+    let (max, median) = scan_nps(nps);
+    let median = median.unwrap_or_else(|| {
+        let mut values = [0.0; N];
+        let values = &mut values[..nps.len()];
+        values.copy_from_slice(nps);
+        median_in_place(values)
+    });
+    (max, median)
 }
 
 /// Computes NPS statistics using caller-owned median-selection storage.
