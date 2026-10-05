@@ -288,6 +288,10 @@ fn decode_trim_owned(bytes: &[u8]) -> String {
 
 const RADAR_CATEGORY_NOTES: usize = 5;
 
+#[cfg(test)]
+#[path = "../benches/support/radar_edges.rs"]
+mod pass_edges;
+
 fn parse_radar_values_bytes(
     raw: Option<&[u8]>,
     split_players: bool,
@@ -304,30 +308,14 @@ fn parse_radar_values_str(raw: &str, split_players: bool) -> Option<[f32; RADAR_
         return None;
     }
 
+    let mut values = cleaned
+        .split(',')
+        .filter_map(|part| part.trim().parse::<f32>().ok());
     let mut out = [0.0f32; RADAR_CATEGORY_COUNT];
-    let mut filled = 0usize;
-    let mut total = 0usize;
-
-    for part in cleaned.split(',') {
-        if part.is_empty() {
-            continue;
-        }
-        let Ok(value) = part.trim().parse::<f32>() else {
-            continue;
-        };
-        if filled < RADAR_CATEGORY_COUNT {
-            out[filled] = value;
-            filled += 1;
-        }
-        total += 1;
+    for value in &mut out {
+        *value = values.next()?;
     }
-
-    let needed = if split_players {
-        RADAR_CATEGORY_COUNT * 2
-    } else {
-        RADAR_CATEGORY_COUNT
-    };
-    if total < needed {
+    if split_players && values.nth(RADAR_CATEGORY_COUNT - 1).is_none() {
         return None;
     }
     if out

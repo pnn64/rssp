@@ -1169,12 +1169,12 @@ fn parse_meter(meter: &str) -> i32 {
     meter.trim().parse::<i32>().unwrap_or(0)
 }
 
-fn avg_meter(meters: &[i32]) -> i32 {
-    if meters.is_empty() {
+fn avg_meter(entries: &[CourseEntrySummary]) -> i32 {
+    if entries.is_empty() {
         return 0;
     }
-    let sum: i32 = meters.iter().sum();
-    (f64::from(sum) / (meters.len() as f64)).round() as i32
+    let sum: i32 = entries.iter().map(|entry| parse_meter(&entry.rating)).sum();
+    (f64::from(sum) / (entries.len() as f64)).round() as i32
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
@@ -1416,7 +1416,6 @@ fn analyze_crs_path_impl(
     let mut bpm_neutral_hash_list = Vec::new();
     let mut bpm_neutral_hash_seen = CourseHashSet::default();
     let hash_in_loop = entry_count > ADAPTIVE_HASH_MAX;
-    let mut meters = Vec::with_capacity(entry_count);
     let mut measure_nps_all = Vec::new();
     let mut analysis_scratch = AnalysisScratch::default();
 
@@ -1505,7 +1504,6 @@ fn analyze_crs_path_impl(
             );
         }
 
-        meters.push(parse_meter(&chart.rating_str));
         if measure_nps_all.capacity() == 0 {
             // Worker-local and single-course: estimate the final measure count from
             // the first chart, then release this buffer before returning to gameplay.
@@ -1534,7 +1532,7 @@ fn analyze_crs_path_impl(
     if let Some(meter) = course_meter(&course.meters, course_diff) {
         total.rating_str = meter.to_string();
     } else {
-        total.rating_str = avg_meter(&meters).to_string();
+        total.rating_str = avg_meter(&entries).to_string();
     }
     total.mono_total = total.facing_left + total.facing_right;
     total.mono_percent = if total.stats.total_steps > 0 {
@@ -1884,6 +1882,57 @@ mod tests {
         assert!(summary.chart.custom_patterns.is_empty());
         assert!(!summary.pattern_counts_enabled);
         assert!(!summary.tech_counts_enabled);
+    }
+
+    #[test]
+    fn course_meter_edges() {
+        let root = TempRoot::new();
+        let songs = root.path().join("Songs");
+        for name in ["A", "B"] {
+            std::fs::create_dir_all(songs.join("Group").join(name)).expect("fixture directory");
+        }
+        let path = root.path().join("test.crs");
+        for (first, second, expected) in [
+            ("8", "9", "9"),
+            ("-8", "-9", "-9"),
+            ("bad", "+9", "5"),
+            ("2147483648", "0", "0"),
+            ("2147483647", "0", "1073741824"),
+            (" \u{2003}8 ", "9", "9"),
+        ] {
+            for (name, meter) in [("A", first), ("B", second)] {
+                let data = format!(
+                    "#VERSION:0.83;#BPMS:0=120;#NOTEDATA:;#STEPSTYPE:dance-single;#DIFFICULTY:Hard;#METER:{meter};#NOTES:1000;"
+                );
+                std::fs::write(songs.join("Group").join(name).join("test.ssc"), data)
+                    .expect("fixture simfile");
+            }
+            for explicit in [false, true] {
+                let meter = if explicit { "#METER:Medium:17;" } else { "" };
+                std::fs::write(
+                    &path,
+                    format!("#COURSE:Test;{meter}#SONG:Group/A:Hard:;#SONG:Group/B:Hard:;"),
+                )
+                .expect("fixture course");
+                let summary = analyze_crs_path(
+                    &path,
+                    Some(&songs),
+                    "dance-single",
+                    "Medium",
+                    crate::AnalysisOptions {
+                        compute_tech_counts: false,
+                        compute_pattern_counts: false,
+                        ..crate::AnalysisOptions::default()
+                    },
+                )
+                .expect("valid course");
+                assert_eq!(
+                    summary.chart.rating_str,
+                    if explicit { "17" } else { expected }
+                );
+                assert_eq!(summary.entries.len(), 2);
+            }
+        }
     }
 }
 

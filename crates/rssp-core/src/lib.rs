@@ -34,3 +34,7 @@ pub use meta::{
 };
 pub use nps::{ChartNpsInfo, compute_chart_peak_nps};
 pub use step_parity::{Foot, RowAnnotation, TechCounts};
+
+#[cfg(test)]
+#[path = "../../rssp/benches/support/private_perf.rs"]
+mod perf;

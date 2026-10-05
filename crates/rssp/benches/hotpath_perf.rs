@@ -19,6 +19,12 @@ mod course_perf;
 #[path = "support/speed_perf.rs"]
 mod speed_perf;
 
+#[path = "support/cleanup_perf.rs"]
+mod cleanup_perf;
+
+#[path = "support/course_load.rs"]
+mod course_load;
+
 struct CountingAllocator;
 static COUNT: AtomicBool = AtomicBool::new(false);
 static ALLOCS: AtomicU64 = AtomicU64::new(0);
@@ -980,6 +986,8 @@ fn peak_work_cases(iters: usize) {
     reason = "emit an ordered component transcript for original/final byte comparison"
 )]
 fn verify_components() {
+    cleanup_perf::verify();
+    course_load::verify();
     speed_perf::verify();
     verify_reports();
     metadata_perf::verify();
@@ -1128,6 +1136,8 @@ fn main() {
     breakdown_cases(iters);
     cleanup_cases(iters);
     speed_perf::cases(iters);
+    cleanup_perf::cases(iters);
+    course_load::cases(iters);
     spacing_cases(iters);
     nps_stats_cases(iters);
     custom_cases(iters);

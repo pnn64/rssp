@@ -59,6 +59,10 @@ pub type ScrollSegment = Segment;
 
 type BpmStopResult = (Vec<(f64, f64)>, Vec<Segment>, Vec<Segment>, f64);
 
+#[cfg(test)]
+#[path = "../../rssp/benches/support/tidy_edges.rs"]
+mod pass_edges;
+
 // --- Core math ---
 #[inline(always)]
 #[must_use]
@@ -368,8 +372,8 @@ fn has_row(rows: &[i32], row: i32) -> bool {
 fn compact_row_segments(mut segments: Vec<Segment>) -> Vec<Segment> {
     let mut write = 0;
     for read in 0..segments.len() {
-        let row = segment_row(&segments[read]);
-        if write != 0 && segment_row(&segments[write - 1]) == row {
+        // tidy_row_segments has already converted every beat to a canonical row value.
+        if write != 0 && segments[write - 1].beat == segments[read].beat {
             segments[write - 1] = segments[read];
         } else {
             if write != read {
@@ -542,7 +546,7 @@ fn tidy_scroll_segments(mut segments: Vec<Segment>) -> Vec<Segment> {
         }
 
         let last = write - 1;
-        if segment_row(&segment) > segment_row(&segments[last]) {
+        if segment.beat > segments[last].beat {
             if !eq_segment(&segment, &segments[last]) {
                 segments[write] = segment;
                 write += 1;
@@ -647,7 +651,7 @@ fn tidy_speed_segments(mut segments: Vec<SpeedSegment>) -> Vec<SpeedSegment> {
         }
 
         let last = write - 1;
-        if speed_row(&segment) > speed_row(&segments[last]) {
+        if segment.beat > segments[last].beat {
             if !eq_speed(&segment, &segments[last]) {
                 segments[write] = segment;
                 write += 1;
@@ -2538,7 +2542,7 @@ mod tests {
         }
         rows
     }
-    fn tidy_scroll_segments_slow(segments: Vec<Segment>) -> Vec<Segment> {
+    pub(super) fn tidy_scroll_segments_slow(segments: Vec<Segment>) -> Vec<Segment> {
         let mut out = Vec::with_capacity(segments.len());
         for mut seg in segments {
             let row = beat_to_note_row(seg.beat);
@@ -2552,7 +2556,7 @@ mod tests {
         out
     }
 
-    fn tidy_speed_segments_slow(segments: Vec<SpeedSegment>) -> Vec<SpeedSegment> {
+    pub(super) fn tidy_speed_segments_slow(segments: Vec<SpeedSegment>) -> Vec<SpeedSegment> {
         let mut out = Vec::with_capacity(segments.len());
         for mut seg in segments {
             let row = beat_to_note_row(seg.beat);
@@ -2565,7 +2569,7 @@ mod tests {
         }
         out
     }
-    fn assert_segment_bits_eq(actual: &[Segment], expected: &[Segment]) {
+    pub(super) fn assert_segment_bits_eq(actual: &[Segment], expected: &[Segment]) {
         assert_eq!(actual.len(), expected.len());
         for (actual, expected) in actual.iter().zip(expected) {
             assert_eq!(actual.beat.to_bits(), expected.beat.to_bits());
@@ -2621,7 +2625,7 @@ mod tests {
         }
     }
 
-    fn assert_speed_bits_eq(actual: &[SpeedSegment], expected: &[SpeedSegment]) {
+    pub(super) fn assert_speed_bits_eq(actual: &[SpeedSegment], expected: &[SpeedSegment]) {
         assert_eq!(actual.len(), expected.len());
         for (actual, expected) in actual.iter().zip(expected) {
             assert_eq!(actual.beat.to_bits(), expected.beat.to_bits());
