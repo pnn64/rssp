@@ -1328,7 +1328,7 @@ mod tests {
 
         std::fs::write(temp.0.join("Second.mkv"), [])
             .expect("second asset test movie should be writable");
-        assert!(resolve_background_changes_like_itg(&temp.0, b"").is_empty());
+        assert_eq!(resolve_background_changes_like_itg(&temp.0, b""), []);
     }
 
     fn png_header(width: u32, height: u32) -> [u8; 24] {

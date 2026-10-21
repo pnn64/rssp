@@ -2371,7 +2371,7 @@ mod tests {
         assert_eq!(scratch.row_capacity(), capacity);
 
         let empty = minimize_rows_typed_in(b"", &mut scratch);
-        assert!(scratch.rows().is_empty());
+        assert_eq!(scratch.rows(), [] as [[u8; L]; 0]);
         assert_eq!(
             empty,
             (Vec::new(), ArrowStats::default(), vec![0], Vec::new(), 0.0)

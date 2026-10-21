@@ -1890,7 +1890,7 @@ mod tests {
             summary.chart.bpm_neutral_hash,
             summary.bpm_neutral_sha1_hashes[0]
         );
-        assert!(summary.chart.custom_patterns.is_empty());
+        assert_eq!(summary.chart.custom_patterns, []);
         assert!(!summary.pattern_counts_enabled);
         assert!(!summary.tech_counts_enabled);
     }

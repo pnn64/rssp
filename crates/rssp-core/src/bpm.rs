@@ -1502,7 +1502,7 @@ mod tests {
 
     #[test]
     fn parse_bpm_map_preserves_empty_and_sparse_component_behavior() {
-        assert!(parse_bpm_map("").is_empty());
+        assert_eq!(parse_bpm_map(""), []);
         assert_eq!(
             parse_bpm_map(" , 0=120, missing, 4=150, =180, 8=nope, "),
             vec![(0.0, 120.0), (4.0, 150.0)]

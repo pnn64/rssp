@@ -4403,7 +4403,7 @@ mod tests {
             &mut reused,
         );
         assert_eq!(empty_counts, TechCounts::default());
-        assert!(reused.is_empty());
+        assert_eq!(reused, []);
         assert_eq!(reused.capacity(), capacity);
     }
 
@@ -4483,7 +4483,7 @@ mod tests {
 1000
 ;";
         let (_counts, annotations) = annotations_for(data);
-        assert!(!annotations.is_empty());
+        assert_ne!(annotations, []);
         // Beats are strictly non-decreasing and every annotated row carries at
         // least one foot-bearing column.
         let mut prev_beat = f32::NEG_INFINITY;
@@ -4509,6 +4509,6 @@ mod tests {
             false,
             &mut scratch,
         );
-        assert!(annotations.is_empty());
+        assert_eq!(annotations, []);
     }
 }

@@ -48,7 +48,7 @@ fn positive_filter_edges() {
     );
     assert_eq!(segments.fakes, [(3.0, 1.0), (6.0, 0.0), (8.0, 2.0)]);
     assert_eq!(segments.bpms, [(0.0, 120.0)]);
-    assert!(segments.stops.is_empty());
+    assert_eq!(segments.stops, []);
     let padded = compute_timing_segments(
         None,
         "0=120",

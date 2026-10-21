@@ -1284,11 +1284,10 @@ mod tests {
         let rows: Vec<_> = bitmasks.iter().copied().map(row_from_mask).collect();
         let empty = super::compiled_custom_empty();
 
-        assert!(detect_custom_patterns_compiled(&bitmasks, &empty).is_empty());
-        assert!(
-            analyze_patterns_from_rows(&rows, 2, &empty)
-                .custom_patterns
-                .is_empty()
+        assert_eq!(detect_custom_patterns_compiled(&bitmasks, &empty), []);
+        assert_eq!(
+            analyze_patterns_from_rows(&rows, 2, &empty).custom_patterns,
+            []
         );
     }
 

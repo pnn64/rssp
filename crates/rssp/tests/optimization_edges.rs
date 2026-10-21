@@ -1,8 +1,3 @@
-#![expect(
-    clippy::float_cmp,
-    reason = "regressions must preserve exact numeric outputs"
-)]
-
 use rssp::bpm::{chart_bpm_snapshots, compute_tier_bpm};
 use rssp::nps::compute_chart_peak_nps;
 
@@ -414,8 +409,8 @@ fn small_bpm_keeps_bits() {
 #[test]
 fn stream_gaps_match() {
     use rssp::streams::{StreamSegment, stream_sequences, visit_stream_sequences};
-    assert!(stream_sequences(&[]).is_empty());
-    assert!(stream_sequences(&[0, 15, 0, 8]).is_empty());
+    assert_eq!(stream_sequences(&[]), []);
+    assert_eq!(stream_sequences(&[0, 15, 0, 8]), []);
     assert_eq!(
         stream_sequences(&[0, 0, 16, 0, 32, 0, 0]),
         vec![
