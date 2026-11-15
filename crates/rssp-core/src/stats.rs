@@ -313,12 +313,27 @@ fn next_line<'a>(data: &'a [u8], offset: &mut usize) -> Option<&'a [u8]> {
     }
     let start = *offset;
     let end = find_byte(&data[start..], b'\n').map_or(data.len(), |rel| start + rel);
+    // Measures are separated by commas, including immediately after a row.
+    // Keep delimiters as separate tokens for every raw/minimized row consumer;
+    // ignore delimiters in trailing comments.
+    let content_end = data[start..end]
+        .windows(2)
+        .position(|s| s == b"//")
+        .map_or(end, |rel| start + rel);
+    if let Some(rel) = data[start..content_end]
+        .iter()
+        .position(|b| matches!(b, b',' | b';'))
+    {
+        let delimiter = start + rel;
+        *offset = delimiter + usize::from(delimiter == start);
+        return Some(&data[start..*offset]);
+    }
     *offset = if end == data.len() {
         data.len() + 1
     } else {
         end + 1
     };
-    Some(&data[start..end])
+    Some(&data[start..content_end])
 }
 
 // ============================================================================
@@ -2221,6 +2236,35 @@ fn fill_densities_impl<const L: usize>(data: &[u8], densities: &mut Vec<usize>) 
 mod tests {
     use super::*;
     use crate::timing::{TimingFormat, timing_data_from_chart_data};
+
+    #[test]
+    fn inline_measure_delimiters_preserve_rows_and_timing() {
+        let inline = b"1000\n0000,0100\n0000,0010; // , ignored\n";
+        let lines = b"1000\n0000\n,\n0100\n0000\n,\n0010\n;\n";
+        assert_eq!(
+            minimize_chart_count_rows(inline, 4),
+            minimize_chart_count_rows(lines, 4)
+        );
+        assert_eq!(
+            minimize_chart_and_count_with_lanes(inline, 4),
+            minimize_chart_and_count_with_lanes(lines, 4)
+        );
+        assert_eq!(
+            minimize_chart_for_hash(inline, 4),
+            minimize_chart_for_hash(lines, 4)
+        );
+        assert_eq!(chart_last_beat(inline, 4), 8.0);
+        assert_eq!(measure_densities(inline, 4), vec![1, 1, 1]);
+        assert_eq!(
+            measure_equally_spaced(inline, 4),
+            measure_equally_spaced(lines, 4)
+        );
+        let comments = b"1000 // ,; ignored\n,\n0100;";
+        assert_eq!(
+            minimize_chart_count_rows(comments, 4),
+            minimize_chart_count_rows(b"1000\n,\n0100\n;", 4)
+        );
+    }
 
     #[test]
     fn raw_chart_notes_remain_compact() {
