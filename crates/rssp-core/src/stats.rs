@@ -306,34 +306,58 @@ fn find_byte(slice: &[u8], needle: u8) -> Option<usize> {
     None
 }
 
+// First newline, delimiter, or slash. Each needle's lowest SWAR hit is exact,
+// so the lowest combined hit is too.
+#[inline(always)]
+fn find_line_stop(slice: &[u8]) -> Option<usize> {
+    let (chunks, rem) = slice.as_chunks::<8>();
+    for (i, chunk) in chunks.iter().enumerate() {
+        let word = u64::from_le_bytes(*chunk);
+        let hits = byte_hits(word, b'\n')
+            | byte_hits(word, b',')
+            | byte_hits(word, b';')
+            | byte_hits(word, b'/');
+        if hits != 0 {
+            return Some(i * 8 + hits.trailing_zeros() as usize / 8);
+        }
+    }
+    let tail = rem
+        .iter()
+        .position(|b| matches!(b, b'\n' | b',' | b';' | b'/'));
+    tail.map(|rel| chunks.len() * 8 + rel)
+}
+
 #[inline(always)]
 fn next_line<'a>(data: &'a [u8], offset: &mut usize) -> Option<&'a [u8]> {
-    if *offset > data.len() {
-        return None;
-    }
     let start = *offset;
-    let end = find_byte(&data[start..], b'\n').map_or(data.len(), |rel| start + rel);
+    let rest = data.get(start..)?;
     // Measures are separated by commas, including immediately after a row.
     // Keep delimiters as separate tokens for every raw/minimized row consumer;
-    // ignore delimiters in trailing comments.
-    let content_end = data[start..end]
-        .windows(2)
-        .position(|s| s == b"//")
-        .map_or(end, |rel| start + rel);
-    if let Some(rel) = data[start..content_end]
-        .iter()
-        .position(|b| matches!(b, b',' | b';'))
-    {
-        let delimiter = start + rel;
-        *offset = delimiter + usize::from(delimiter == start);
-        return Some(&data[start..*offset]);
+    // ignore delimiters in trailing comments. One scan stops at the first
+    // newline, delimiter, or comment; a lone slash resumes it.
+    let mut pos = 0;
+    while let Some(rel) = find_line_stop(&rest[pos..]) {
+        let stop = pos + rel;
+        match rest[stop] {
+            b'\n' => {
+                *offset = start + stop + 1;
+                return Some(&rest[..stop]);
+            }
+            b',' | b';' => {
+                let end = stop + usize::from(stop == 0);
+                *offset = start + end;
+                return Some(&rest[..end]);
+            }
+            _ if rest.get(stop + 1) == Some(&b'/') => {
+                let end = find_byte(&rest[stop..], b'\n').map_or(rest.len(), |rel| stop + rel);
+                *offset = start + end + 1;
+                return Some(&rest[..stop]);
+            }
+            _ => pos = stop + 1,
+        }
     }
-    *offset = if end == data.len() {
-        data.len() + 1
-    } else {
-        end + 1
-    };
-    Some(&data[start..content_end])
+    *offset = data.len() + 1;
+    Some(rest)
 }
 
 // ============================================================================
@@ -378,18 +402,42 @@ fn track_holds_core<const L: usize>(
 
 pub(crate) fn parse_minimized_rows<const L: usize>(data: &[u8]) -> Vec<[u8; L]> {
     let mut rows = Vec::with_capacity(data.len() / (L + 1));
-    visit_min_rows::<L>(data, |row| rows.push(*row));
+    rows.extend(min_rows::<L>(data).copied());
     rows
 }
 
-fn visit_min_rows<const L: usize>(data: &[u8], mut visit: impl FnMut(&[u8; L])) {
-    for raw in data.split(|&b| b == b'\n') {
-        let line = trim_cr(raw);
-        if let Some(row) = line.first_chunk::<L>()
-            && !matches!(line.first(), Some(b',' | b';') | None)
-        {
-            visit(row);
+fn min_rows<const L: usize>(data: &[u8]) -> MinRows<'_, L> {
+    MinRows { data, pos: 0 }
+}
+
+// Lines of `data`, split as `slice::split` yields them, that still hold an
+// `L`-byte row after a trailing CR is dropped and are not delimiters.
+struct MinRows<'a, const L: usize> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl<'a, const L: usize> Iterator for MinRows<'a, L> {
+    type Item = &'a [u8; L];
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(rest) = self.data.get(self.pos..) {
+            // Minimized rows are usually exactly `L` bytes and a newline.
+            let len = if rest.get(L) == Some(&b'\n') && !rest[..L].contains(&b'\n') {
+                L
+            } else {
+                rest.iter().position(|&b| b == b'\n').unwrap_or(rest.len())
+            };
+            self.pos += len + 1;
+            let line = trim_cr(&rest[..len]);
+            if let Some(row) = line.first_chunk::<L>()
+                && !matches!(line[0], b',' | b';')
+            {
+                return Some(row);
+            }
         }
+        None
     }
 }
 
@@ -646,8 +694,6 @@ fn count_tap_mask<const L: usize>(
         };
     }
 
-    let counts = u32::from(TAP_MASK_COUNTS[mask as usize]);
-    let notes = counts & 0x0f;
     let mut active_mask = mask;
     while active_mask != 0 {
         let c = active_mask.trailing_zeros() as usize;
@@ -656,6 +702,19 @@ fn count_tap_mask<const L: usize>(
         active_mask &= active_mask - 1;
     }
 
+    let holding = stats.holding;
+    add_tap_counts(stats, mask, holding);
+    RowCount {
+        density: true,
+        object: true,
+    }
+}
+
+// Counts a nonempty tap-only row against `active` held arrows.
+#[inline(always)]
+fn add_tap_counts(stats: &mut ArrowStats, mask: u8, active: i32) {
+    let counts = u32::from(TAP_MASK_COUNTS[mask as usize]);
+    let notes = counts & 0x0f;
     stats.total_arrows += notes;
     stats.left += (counts >> 4) & 0x03;
     stats.down += (counts >> 6) & 0x03;
@@ -665,13 +724,8 @@ fn count_tap_mask<const L: usize>(
     if notes >= 2 {
         stats.jumps += 1;
     }
-    if notes as i32 + stats.holding >= 3 {
+    if notes as i32 + active >= 3 {
         stats.hands += 1;
-    }
-
-    RowCount {
-        density: true,
-        object: true,
     }
 }
 
@@ -1725,10 +1779,16 @@ pub fn compute_timing_aware_stats_with_row_to_beat(
     timing: &TimingData,
     beats: &[f32],
 ) -> ArrowStats {
+    // Judgable charts stream rows from the text; only repair needs them stored.
     macro_rules! compute {
         ($lanes:literal) => {{
-            let rows = parse_minimized_rows::<$lanes>(data);
-            compute_timing_aware_stats_from_rows_with_row_to_beat(&rows, timing, beats)
+            if has_nonjudgable_rows(timing) {
+                let rows = parse_minimized_rows::<$lanes>(data);
+                compute_timing_aware_stats_from_rows_with_row_to_beat(&rows, timing, beats)
+            } else {
+                judgable_stats(min_rows::<$lanes>(data))
+                    .unwrap_or_else(|| recalc_judgable_stats(&parse_minimized_rows::<$lanes>(data)))
+            }
         }};
     }
     match lanes {
@@ -1755,19 +1815,14 @@ pub fn compute_no_hold_stats(
             let mut stats = ArrowStats::default();
             if has_nonjudgable_rows(timing) {
                 let mut judgable = JudgableRowCursor::new(timing);
-                let mut idx = 0;
-                visit_min_rows::<$lanes>(data, |row| {
-                    process_timing_row_no_holds(
-                        row,
-                        judgable.is_judgable(beat_to_note_row_f32(beats[idx])),
-                        &mut stats,
-                    );
-                    idx += 1;
-                });
+                for (idx, row) in min_rows::<$lanes>(data).enumerate() {
+                    let judged = judgable.is_judgable(beat_to_note_row_f32(beats[idx]));
+                    process_timing_row_no_holds(row, judged, &mut stats);
+                }
             } else {
-                visit_min_rows::<$lanes>(data, |row| {
-                    process_timing_row_no_holds_judgable(row, &mut stats)
-                });
+                for row in min_rows::<$lanes>(data) {
+                    process_timing_row_no_holds_judgable(row, &mut stats);
+                }
             }
             stats
         }};
@@ -1837,17 +1892,38 @@ fn process_timing_rows_no_holds<'a, const L: usize>(
     stats
 }
 
+fn process_rows_judgable<const L: usize>(rows: &[[u8; L]]) -> ArrowStats {
+    judgable_stats(rows.iter()).unwrap_or_else(|| recalc_judgable_stats(rows))
+}
+
 // Single-pass row state machine: keeping hold depth, active-hold hand counts,
 // and fallback triggers together avoids hold-end allocations on ordinary charts.
-fn process_rows_judgable<const L: usize>(rows: &[[u8; L]]) -> ArrowStats {
+// `None` means the rows need the cold repair pass.
+#[allow(clippy::too_many_lines)]
+fn judgable_stats<'a, const L: usize>(
+    rows: impl Iterator<Item = &'a [u8; L]>,
+) -> Option<ArrowStats> {
     let mut stats = ArrowStats::default();
     let mut depths = [0u8; L];
+    // Columns with nonzero depth, kept for the four- and eight-lane tap path.
+    let mut held = 0u8;
     let mut active = 0i32;
     let mut prev_ends = 0i32;
 
     for line in rows {
         active -= prev_ends;
         prev_ends = 0;
+
+        // Tap-only rows count from one mask; a tap inside a hold needs repair.
+        if let Some(mask) = tap_line_mask(line) {
+            if mask & held != 0 {
+                return None;
+            }
+            if mask != 0 {
+                add_tap_counts(&mut stats, mask, active);
+            }
+            continue;
+        }
 
         let (mut notes, mut new_holds) = (0u32, 0i32);
         let mut has_note = false;
@@ -1856,7 +1932,7 @@ fn process_rows_judgable<const L: usize>(rows: &[[u8; L]]) -> ArrowStats {
             match ch {
                 b'1' => {
                     if depths[c] != 0 {
-                        return recalc_judgable_stats(rows);
+                        return None;
                     }
                     has_note = true;
                     notes += 1;
@@ -1865,9 +1941,12 @@ fn process_rows_judgable<const L: usize>(rows: &[[u8; L]]) -> ArrowStats {
                 }
                 b'2' | b'4' => {
                     if depths[c] as usize == HOLD_STACK_CAP {
-                        return recalc_judgable_stats(rows);
+                        return None;
                     }
                     depths[c] += 1;
+                    if L <= 8 {
+                        held |= 1 << c;
+                    }
                     has_note = true;
                     notes += 1;
                     new_holds += 1;
@@ -1882,12 +1961,15 @@ fn process_rows_judgable<const L: usize>(rows: &[[u8; L]]) -> ArrowStats {
                 b'3' => {
                     if depths[c] != 0 {
                         depths[c] -= 1;
+                        if L <= 8 && depths[c] == 0 {
+                            held &= !(1 << c);
+                        }
                         prev_ends += 1;
                     }
                 }
                 b'L' => {
                     if depths[c] != 0 {
-                        return recalc_judgable_stats(rows);
+                        return None;
                     }
                     has_note = true;
                     notes += 1;
@@ -1904,7 +1986,7 @@ fn process_rows_judgable<const L: usize>(rows: &[[u8; L]]) -> ArrowStats {
                 }
                 b'M' | b'F' => {
                     if depths[c] != 0 {
-                        return recalc_judgable_stats(rows);
+                        return None;
                     }
                     has_note = true;
                     if ch == b'M' {
@@ -1939,11 +2021,7 @@ fn process_rows_judgable<const L: usize>(rows: &[[u8; L]]) -> ArrowStats {
         active += new_holds;
     }
 
-    if depths.iter().any(|&d| d != 0) {
-        return recalc_judgable_stats(rows);
-    }
-
-    stats
+    depths.iter().all(|&d| d == 0).then_some(stats)
 }
 
 // Keep allocation and repair code out of the ordinary chart's hot state machine.
@@ -2263,6 +2341,39 @@ mod tests {
         assert_eq!(
             minimize_chart_count_rows(comments, 4),
             minimize_chart_count_rows(b"1000\n,\n0100\n;", 4)
+        );
+    }
+
+    #[test]
+    fn lone_slashes_keep_rows_and_delimiters() {
+        let slashes = b"1000/\n0/00,0010\n;";
+        assert_eq!(
+            minimize_chart_count_rows(slashes, 4),
+            minimize_chart_count_rows(b"1000/\n0/00\n,\n0010\n;", 4)
+        );
+        assert_eq!(measure_densities(slashes, 4), vec![1, 1]);
+    }
+
+    #[test]
+    fn streamed_text_repairs_taps_inside_holds() {
+        // The tap blocks the open head, so the head is not a hold or an arrow.
+        let expected = |down: u32, left: u32| ArrowStats {
+            total_arrows: 2,
+            left,
+            down,
+            total_steps: 2,
+            ..Default::default()
+        };
+        let timing = timing(None);
+        let four = b"2000\n1000\n3000\n0100\n";
+        assert_eq!(
+            compute_timing_aware_stats_with_row_to_beat(four, 4, &timing, &[]),
+            expected(1, 1)
+        );
+        let eight = b"00000200\n00000100\n00000300\n00000100\n";
+        assert_eq!(
+            compute_timing_aware_stats_with_row_to_beat(eight, 8, &timing, &[]),
+            expected(2, 0)
         );
     }
 

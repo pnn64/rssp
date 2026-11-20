@@ -298,6 +298,43 @@ fn timing_cases<const L: usize>(iters: usize) {
     }
 }
 
+// Taps cycle over the leading lanes with a jump every eighth row. Hold cases
+// keep the last lane held for half of every 16 rows, so those rows take the
+// general hold DP path instead of the single-tap path.
+fn parity_cases<const L: usize>(iters: usize) {
+    let timing = timing_data("");
+    let beats: Vec<_> = (0..4096).map(|index| index as f32 / 4.0).collect();
+    for (name, holds) in [("taps", false), ("holds", true)] {
+        let rows: Vec<_> = (0..4096)
+            .map(|index| {
+                let mut row = [b'0'; L];
+                row[index % (L - 1)] = b'1';
+                if index % 8 == 4 {
+                    row[(index + 1) % (L - 1)] = b'1';
+                }
+                if holds {
+                    row[L - 1] = match index % 16 {
+                        0 => b'2',
+                        7 => b'3',
+                        _ => b'0',
+                    };
+                }
+                row
+            })
+            .collect();
+        let mut scratch =
+            rssp::step_parity::timing_rows_scratch::<L>().expect("parity supports the lane count");
+        measure(&format!("parity{L}/{name}"), rows.len(), iters, || {
+            black_box(rssp::step_parity::analyze_timing_rows(
+                black_box(&rows),
+                black_box(&beats),
+                black_box(&timing),
+                &mut scratch,
+            ));
+        });
+    }
+}
+
 fn timing_data(fakes: &str) -> rssp::timing::TimingData {
     rssp::timing::timing_data_from_chart_data(
         0.0,
@@ -1131,6 +1168,8 @@ fn main() {
     row_cases::<8>(iters);
     timing_cases::<4>(iters);
     timing_cases::<8>(iters);
+    parity_cases::<4>(iters);
+    parity_cases::<8>(iters);
     fast_timing_case(iters);
     batch_timing_cases(iters);
     tier_cases(iters);

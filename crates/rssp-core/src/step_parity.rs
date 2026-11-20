@@ -2590,32 +2590,7 @@ fn parity_result_key8_with_holds(
         }
     }
 
-    let moved_left = moved_mask & LEFT_FOOT_MASK != 0;
-    let moved_right = moved_mask & RIGHT_FOOT_MASK != 0;
-    let mut combined = 0u32;
-    for (column, &placed) in cols.iter().enumerate().take(MAX_COLUMNS) {
-        let placed = if active_mask & (1u8 << column) != 0 {
-            placed
-        } else {
-            Foot::None
-        };
-        let foot = if placed == Foot::None {
-            let previous = initial.combined_columns[column];
-            match previous {
-                Foot::LeftHeel | Foot::RightHeel
-                    if moved_mask & FOOT_MASKS[foot_idx(previous)] == 0 =>
-                {
-                    previous
-                }
-                Foot::LeftToe if !moved_left => previous,
-                Foot::RightToe if !moved_right => previous,
-                _ => Foot::None,
-            }
-        } else {
-            placed
-        };
-        combined |= (foot as u32) << (column * 3);
-    }
+    let combined = parity_combined_key::<MAX_COLUMNS>(initial, cols, active_mask, moved_mask);
 
     (
         hit,
@@ -2623,28 +2598,45 @@ fn parity_result_key8_with_holds(
     )
 }
 
+// Bit `foot` is set when an unplaced foot keeps its column for a moved mask:
+// a heel stays unless it moved; a toe stays unless its foot moved.
+const KEPT_FEET: [u8; 16] = {
+    let mut table = [0u8; 16];
+    let mut moved = 0;
+    while moved < 16 {
+        let kept = [
+            false,
+            moved & FOOT_MASKS[1] as usize == 0,
+            moved & LEFT_FOOT_MASK as usize == 0,
+            moved & FOOT_MASKS[3] as usize == 0,
+            moved & RIGHT_FOOT_MASK as usize == 0,
+        ];
+        let mut foot = 0;
+        while foot < NUM_FEET {
+            table[moved] |= (kept[foot] as u8) << foot;
+            foot += 1;
+        }
+        moved += 1;
+    }
+    table
+};
+
+// Packs each column's placed foot, or the previous foot that stays there.
 #[inline(always)]
-fn parity_combined_key4(initial: &State, cols: &FootPlacement, moved_mask: u8) -> u32 {
-    let moved_left = moved_mask & LEFT_FOOT_MASK != 0;
-    let moved_right = moved_mask & RIGHT_FOOT_MASK != 0;
+fn parity_combined_key<const COLS: usize>(
+    initial: &State,
+    cols: &FootPlacement,
+    placed_mask: u8,
+    moved_mask: u8,
+) -> u32 {
+    let kept = KEPT_FEET[usize::from(moved_mask & 0x0f)];
     let mut combined = 0u32;
-    for (i, &placed) in cols.iter().enumerate().take(4) {
-        let foot = if placed == Foot::None {
-            let previous = initial.combined_columns[i];
-            match previous {
-                Foot::LeftHeel | Foot::RightHeel
-                    if moved_mask & FOOT_MASKS[foot_idx(previous)] == 0 =>
-                {
-                    previous
-                }
-                Foot::LeftToe if !moved_left => previous,
-                Foot::RightToe if !moved_right => previous,
-                _ => Foot::None,
-            }
-        } else {
-            placed
-        };
-        combined |= (foot as u32) << (i * 3);
+    for (i, &placed) in cols.iter().enumerate().take(COLS) {
+        let previous = initial.combined_columns[i] as u8;
+        let stays = previous * ((kept >> previous) & 1);
+        let placed = placed as u8 * ((placed_mask >> i) & 1);
+        let foot = if placed == 0 { stays } else { placed };
+        combined |= u32::from(foot) << (i * 3);
     }
     combined
 }
@@ -2689,7 +2681,7 @@ fn parity_result_key4<const HAS_HOLDS: bool>(
         }
     }
 
-    let combined = parity_combined_key4(initial, cols, moved_mask);
+    let combined = parity_combined_key::<SINGLE_COLS>(initial, cols, u8::MAX, moved_mask);
 
     (
         hit,
